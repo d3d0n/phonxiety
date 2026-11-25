@@ -4,7 +4,6 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
-import android.os.SystemClock
 import android.util.Log
 import com.phonxiety.bridge.AppStorage
 import com.phonxiety.bridge.BridgeConfig
@@ -55,19 +54,14 @@ internal object IrohSupport {
     private const val SECRET_KEY_FILE = "iroh-secret.key"
     private const val SECRET_KEY_BYTES = 32
     private const val NETWORK_WAIT_MS = 30_000L
-    private const val RECYCLE_MIN_INTERVAL_MS = 5 * 60_000L
 
     /** ALPN of the device protocol, per the iroh link contract. */
     val ALPN: ByteArray = "phonxiety/device/1".toByteArray(Charsets.UTF_8)
 
     private val contextInstalled = AtomicBoolean(false)
     private val endpointMutex = Mutex()
-    private val recycleLock = Any()
 
     @Volatile private var endpointRef: Endpoint? = null
-
-    /** `elapsedRealtime` of the last endpoint recycle; 0 until the first one. */
-    private var lastRecycleElapsed = 0L
 
     /** Binds the endpoint on first use; safe to call from several links. */
     suspend fun endpoint(context: Context): Endpoint {
@@ -177,29 +171,47 @@ internal object IrohSupport {
     }
 
     /**
-     * Whether a relay-only link may recycle the endpoint now.  Marks the
-     * recycle time when it returns true, so at most one happens per five
-     * minutes.  Call [recycleEndpoint] after reporting the link down.
-     */
-    fun reserveRecycle(): Boolean {
-        val now = SystemClock.elapsedRealtime()
-        synchronized(recycleLock) {
-            if (lastRecycleElapsed != 0L && now - lastRecycleElapsed < RECYCLE_MIN_INTERVAL_MS) {
-                return false
-            }
-            lastRecycleElapsed = now
-        }
-        return true
-    }
-
-    /**
      * Clears the process-wide endpoint so the next link binds a fresh one, and
-     * shuts the old one down without blocking the caller.
+     * shuts the old one down without blocking the caller.  Done when Android's
+     * default network changes: an endpoint bound on the old network can stay on
+     * the relay or wedged in reconnects (iroh#4588, iroh#4476), a fresh one finds
+     * the paths of the new network.
      */
     fun recycleEndpoint() {
         val endpoint = endpointRef ?: return
         endpointRef = null
         stopAsync(endpoint, "phonxiety-iroh-recycle")
+    }
+
+    /**
+     * Calls [onChange] whenever Android's default network is lost or replaced by
+     * another one, until the returned function unregisters the callback.  The
+     * network current at registration does not count as a change.
+     */
+    fun watchNetwork(context: Context, onChange: (String) -> Unit): () -> Unit {
+        val manager = context.getSystemService(ConnectivityManager::class.java) ?: return {}
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            private var current: Network? = null
+
+            override fun onAvailable(network: Network) {
+                val previous = current
+                current = network
+                if (previous != null && previous != network) onChange("network_changed")
+            }
+
+            override fun onLost(network: Network) {
+                if (network == current) {
+                    current = null
+                    onChange("network_lost")
+                }
+            }
+        }
+        return try {
+            manager.registerDefaultNetworkCallback(callback)
+            ({ unregister(manager, callback) })
+        } catch (_: Exception) {
+            {}
+        }
     }
 
     private fun stopAsync(endpoint: Endpoint, name: String) {
@@ -263,7 +275,6 @@ private class IrohLink(
     private companion object {
         const val TAG = "PhonxietyBridge"
         const val ROUTE_INTERVAL_MS = 1_000L
-        const val RELAY_ONLY_RECYCLE_MS = 20_000L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -274,6 +285,7 @@ private class IrohLink(
 
     @Volatile private var connection: Connection? = null
     @Volatile private var route: DeviceLink.Route? = null
+    @Volatile private var unwatchNetwork: () -> Unit = {}
 
     override val backlogBytes: Long get() = backlog.get()
 
@@ -309,7 +321,9 @@ private class IrohLink(
                 val reason = runCatching { link.closed() }.getOrDefault("closed")
                 fail(listener, reason.ifEmpty { "closed" })
             }
-            scope.launch { sampleRoute(link, listener) }
+            scope.launch { sampleRoute(link) }
+            unwatchNetwork = IrohSupport.watchNetwork(context) { reason -> onNetworkChange(reason, listener) }
+            if (cancelled.get()) unwatchNetwork()
         } catch (t: Throwable) {
             if (!cancelled.get()) {
                 Log.w(TAG, "iroh connect failed: ${t.javaClass.simpleName}")
@@ -367,14 +381,26 @@ private class IrohLink(
         }
     }
 
-    private suspend fun sampleRoute(link: Connection, listener: DeviceLink.Listener) {
-        // An endpoint bound before the network settles can stay on the relay
-        // forever; a fresh endpoint finds the direct path again.  Measure from
-        // the open so only a continuous relay-only path triggers a recycle.
-        var relaySince = 0L
+    /**
+     * The default network changed under a live link: drop the link and the
+     * endpoint so the reconnect binds afresh on the new network.  During a call
+     * iroh keeps migrating the connection instead; dropping it would end the call.
+     */
+    private fun onNetworkChange(reason: String, listener: DeviceLink.Listener) {
+        if (cancelled.get() || downOnce.get()) return
+        if (ownsCall()) {
+            Log.i(TAG, "$reason during a call: keeping the iroh endpoint")
+            return
+        }
+        Log.i(TAG, "$reason: recreating the iroh endpoint")
+        // Before reporting down, so the reconnect cannot pick up the old endpoint.
+        IrohSupport.recycleEndpoint()
+        fail(listener, reason)
+    }
+
+    private suspend fun sampleRoute(link: Connection) {
         var lastPath: String? = null
         while (scope.isActive && !cancelled.get()) {
-            val now = SystemClock.elapsedRealtime()
             try {
                 val selected = link.paths().firstOrNull { it.isSelected }
                 val path = selected?.let { (if (it.isRelay) "relay " else "direct ") + it.remoteAddr }
@@ -382,27 +408,9 @@ private class IrohLink(
                     lastPath = path
                     Log.i(TAG, "iroh path: ${path ?: "none"}")
                 }
-                if (selected == null) {
-                    route = null
-                    relaySince = 0L
-                } else {
-                    val rtt = selected.rttMs.toLong()
-                    route = DeviceLink.Route(
-                        relay = selected.isRelay,
-                        rttMs = if (rtt > 0L) rtt else null,
-                    )
-                    if (selected.isRelay) {
-                        if (relaySince == 0L) relaySince = now
-                        if (now - relaySince >= RELAY_ONLY_RECYCLE_MS && !ownsCall()) {
-                            if (IrohSupport.reserveRecycle()) {
-                                fail(listener, "relay_only")
-                                IrohSupport.recycleEndpoint()
-                                return
-                            }
-                        }
-                    } else {
-                        relaySince = 0L
-                    }
+                route = selected?.let {
+                    val rtt = it.rttMs.toLong()
+                    DeviceLink.Route(relay = it.isRelay, rttMs = if (rtt > 0L) rtt else null)
                 }
             } catch (_: Throwable) {
                 return
@@ -437,6 +445,7 @@ private class IrohLink(
     private fun fail(listener: DeviceLink.Listener, reason: String) {
         if (cancelled.get()) return
         if (!downOnce.compareAndSet(false, true)) return
+        unwatchNetwork()
         Log.w(TAG, "iroh paths at link down ($reason): ${describePaths()}")
         route = null
         runCatching { connection?.close(0, reason.toByteArray(Charsets.UTF_8)) }
@@ -457,6 +466,7 @@ private class IrohLink(
     override fun cancel() {
         if (!cancelled.compareAndSet(false, true)) return
         downOnce.set(true)
+        unwatchNetwork()
         route = null
         outbound.close()
         val link = connection
