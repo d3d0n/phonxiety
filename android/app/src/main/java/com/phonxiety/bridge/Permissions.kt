@@ -13,12 +13,13 @@ object Permissions {
     const val CALL_PHONE = "android.permission.CALL_PHONE"
     const val READ_PHONE_STATE = "android.permission.READ_PHONE_STATE"
     const val POST_NOTIFICATIONS = "android.permission.POST_NOTIFICATIONS"
+    const val ACCESS_LOCAL_NETWORK = "android.permission.ACCESS_LOCAL_NETWORK"
     const val CAPTURE_AUDIO_OUTPUT = "android.permission.CAPTURE_AUDIO_OUTPUT"
     const val MODIFY_PHONE_STATE = "android.permission.MODIFY_PHONE_STATE"
     const val CONTROL_INCALL_EXPERIENCE = "android.permission.CONTROL_INCALL_EXPERIENCE"
 
     /** Requested from the user at runtime. */
-    val RUNTIME = listOf(RECORD_AUDIO, CALL_PHONE, READ_PHONE_STATE, POST_NOTIFICATIONS)
+    val RUNTIME = listOf(RECORD_AUDIO, CALL_PHONE, READ_PHONE_STATE, POST_NOTIFICATIONS, ACCESS_LOCAL_NETWORK)
 
     /** Granted only by the Magisk privapp allowlist. */
     val PRIVILEGED = listOf(CAPTURE_AUDIO_OUTPUT, MODIFY_PHONE_STATE, CONTROL_INCALL_EXPERIENCE)
@@ -36,6 +37,7 @@ object Permissions {
         CALL_PHONE -> R.string.permission_call_phone
         READ_PHONE_STATE -> R.string.permission_phone_state
         POST_NOTIFICATIONS -> R.string.permission_notifications
+        ACCESS_LOCAL_NETWORK -> R.string.permission_local_network
         CAPTURE_AUDIO_OUTPUT -> R.string.permission_capture_audio_output
         MODIFY_PHONE_STATE -> R.string.permission_modify_phone_state
         CONTROL_INCALL_EXPERIENCE -> R.string.permission_control_incall_experience

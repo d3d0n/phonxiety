@@ -67,6 +67,7 @@
     <string name="permission_call_phone">Place calls</string>
     <string name="permission_phone_state">Phone state</string>
     <string name="permission_notifications">Notifications</string>
+    <string name="permission_local_network">Local network (direct link to the Mac)</string>
     <string name="permission_capture_audio_output">Capture call audio (CAPTURE_AUDIO_OUTPUT)</string>
     <string name="permission_modify_phone_state">Modify phone state (MODIFY_PHONE_STATE)</string>
     <string name="permission_control_incall_experience">Control in-call experience (CONTROL_INCALL_EXPERIENCE)</string>

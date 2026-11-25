@@ -23,6 +23,9 @@
     <uses-permission android:name="android.permission.CALL_PHONE" />
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- Android 17: without it the app cannot send to or receive from LAN
+         addresses, so iroh never finds the direct path to a daemon on the same Wi-Fi. -->
+    <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
 
     <!-- Signature|privileged permissions granted by the Magisk privapp allowlist. -->
     <uses-permission
