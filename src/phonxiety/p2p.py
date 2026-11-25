@@ -80,6 +80,8 @@ class IrohLink:
         self._send = stream.send()
         self._recv = stream.recv()
         self.peer = f"iroh:{connection.remote_id().fmt_short()}"
+        # The full id is what a relay allowlist needs.
+        log.info("iroh connection from endpoint %s", connection.remote_id())
 
     def route(self) -> str | None:
         """Selected path: `direct` with the phone's address or `relay` with the relay, and its round trip."""
