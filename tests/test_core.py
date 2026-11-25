@@ -9,6 +9,7 @@ import wave
 from array import array
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from phonxiety.controller import CallController
 from phonxiety.models import CallRequest, CallState
@@ -392,6 +393,16 @@ class ControllerTests(_ControllerCase):
         self.assertEqual(left.count(16), 3 * 960)
         self.assertEqual(right.count(1000), 960)
         self.assertFalse(list(archive.glob("*.part")))
+
+    async def test_an_unavailable_recorder_does_not_drop_the_answered_call(self) -> None:
+        with mock.patch("phonxiety.controller.CallRecorder", side_effect=OSError("read-only file system")):
+            call_id, _ = await self._active()
+        self.assertEqual(self.store.state(call_id), CallState.ACTIVE)
+        self.assertFalse(self.device.disconnect_requested.is_set())
+        await self.controller.hangup_call(call_id)
+        await self.controller.wait_call_result(call_id, wait_s=2)
+        record = json.loads((Path(self.directory.name) / "archive" / f"{call_id}.json").read_text())
+        self.assertIn("read-only file system", record["recording"]["error"])
 
     async def test_phone_end_does_not_report_summary_ready_early(self) -> None:
         call_id, voice = await self._active()

@@ -339,8 +339,13 @@ class CallController:
                 try:
                     audio_format = self.device.begin_stream(call_id, self._epoch)
                     call.audio_codec = audio_format["codec"]
-                    if self._archive_dir is not None and call.recorder is None:
-                        call.recorder = CallRecorder(self._archive_dir, call_id)
+                    if self._archive_dir is not None and call.recorder is None and call.recording is None:
+                        try:
+                            call.recorder = CallRecorder(self._archive_dir, call_id)
+                        except OSError as exc:
+                            # No recording is no reason to drop an answered call.
+                            log.warning("call %s: recording unavailable: %s", call_id, exc)
+                            call.recording = {"file": None, "error": f"recording_unavailable: {exc}"}
                     started = await self.device.command("start_audio", call_id, epoch=self._epoch, **audio_format)
                     if started.get("codec", "pcm") != audio_format["codec"]:
                         raise DeviceError(f"audio_codec_mismatch: phone started {started.get('codec', 'pcm')}")
