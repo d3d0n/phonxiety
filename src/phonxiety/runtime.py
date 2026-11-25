@@ -31,12 +31,12 @@ def voice_factory(settings: Settings, auth: Any) -> Callable[[str, str, Any], An
             instructions, callbacks, options, initial_context=brief,
         )
     if settings.voice_backend == "gemini":
-        from .gemini import GeminiOptions, GeminiVoiceSession
+        from .gemini import DEFAULT_MODEL, DEFAULT_VOICE, GeminiOptions, GeminiVoiceSession
 
         gemini = GeminiOptions(
             api_key=secret(settings.state_dir, "GEMINI_API_KEY", "gemini-api-key"),
-            model=os.environ.get("PHONXIETY_GEMINI_MODEL", GeminiOptions.model),
-            voice=os.environ.get("PHONXIETY_GEMINI_VOICE", GeminiOptions.voice),
+            model=os.environ.get("PHONXIETY_GEMINI_MODEL", DEFAULT_MODEL),
+            voice=os.environ.get("PHONXIETY_GEMINI_VOICE", DEFAULT_VOICE),
         )
         return lambda instructions, brief, callbacks: GeminiVoiceSession(
             instructions, callbacks, gemini, initial_context=brief,

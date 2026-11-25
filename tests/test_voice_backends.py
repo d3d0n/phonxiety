@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import tempfile
 import time
 import unittest
+from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from phonxiety.deepgram import DeepgramOptions, DeepgramVoiceSession
 from phonxiety.interfaces import VoiceCallbacks
 from phonxiety.realtime import FRAME_BYTES, PacedOutput, Resampler
+from phonxiety.runtime import voice_factory
+from phonxiety.settings import Settings
 
 
 class _Socket:
@@ -91,6 +97,21 @@ class DeepgramEventTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.socket.sent[-1], {
             "type": "FunctionCallResponse", "id": "fc_1", "name": "client_delegation", "content": "FINAL_RESULT: pressed 1",
         })
+
+
+class VoiceFactoryTests(unittest.TestCase):
+    def test_gemini_without_model_overrides_uses_the_default_model_and_voice(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "gemini-api-key").write_text("test-key\n")
+            settings = Settings(state_dir=Path(directory), device_token="d", host_token="h", voice_backend="gemini")
+            environment = {k: v for k, v in os.environ.items()
+                           if k not in ("GEMINI_API_KEY", "PHONXIETY_GEMINI_MODEL", "PHONXIETY_GEMINI_VOICE")}
+            with mock.patch.dict(os.environ, environment, clear=True):
+                session = voice_factory(settings, None)("Be brief.", "Brief.", _Events().callbacks())
+        setup = json.loads(json.dumps(session._setup()))["setup"]
+        self.assertEqual(setup["model"], "models/gemini-3.8-live")
+        self.assertEqual(setup["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"], "Puck")
+        self.assertEqual(session._options.api_key, "test-key")
 
 
 if __name__ == "__main__":

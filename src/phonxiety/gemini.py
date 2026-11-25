@@ -35,13 +35,15 @@ INPUT_RATE = 16_000
 OUTPUT_RATE = 24_000
 CONNECT_TIMEOUT_S = 15.0
 DELEGATION_FUNCTION = "client_delegation"
+DEFAULT_MODEL = "gemini-3.8-live"
+DEFAULT_VOICE = "Puck"
 
 
 @dataclass(frozen=True, slots=True)
 class GeminiOptions:
     api_key: str
-    model: str = "gemini-3.8-live"
-    voice: str = "Puck"
+    model: str = DEFAULT_MODEL
+    voice: str = DEFAULT_VOICE
 
 
 class GeminiVoiceSession:
