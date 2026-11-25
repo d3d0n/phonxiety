@@ -158,6 +158,8 @@ class _Device:
 
 
 class _Voice:
+    review_at_turn_end = False
+
     def __init__(self, callbacks: Any, start_gate: asyncio.Event | None) -> None:
         self.callbacks = callbacks
         self.start_gate = start_gate
@@ -482,6 +484,38 @@ class ControllerTests(_ControllerCase):
         final = await self.controller.wait_call_result(call_id, wait_s=1)
         self.assertEqual(final["result_status"], "ready")
         self.assertEqual(final["task_outcome"], "incomplete")
+
+    async def _goodbye_with_review(self, voice: _Voice) -> int:
+        """The agent says goodbye; how many reviews ran within half a second (each finishes the call)."""
+        reviews = 0
+
+        async def review(transcript: list[dict], tools: dict) -> str:
+            nonlocal reviews
+            reviews += 1
+            await tools["finish_call"]({
+                "outcome": "succeeded", "summary": "Said goodbye", "fields": {}, "farewell_pending": False,
+            })
+            return ""
+
+        self.tasks.review_handler = review
+        self.device.allow_drain.set()
+        await voice.callbacks.transcript("assistant", "Спасибо, до свидания.", True)
+        await voice.callbacks.turn_done("assistant")
+        await asyncio.sleep(0.5)
+        return reviews
+
+    async def test_a_voice_that_cannot_hang_up_is_hung_up_right_after_its_goodbye(self) -> None:
+        call_id, voice = await self._active()
+        voice.review_at_turn_end = True
+        self.assertEqual(await self._goodbye_with_review(voice), 1)  # long before the 30 s quiet review
+        result = await self.controller.wait_call_result(call_id, wait_s=2)
+        self.assertEqual((result["state"], result["task_outcome"]), ("ended", "succeeded"))
+        self.assertTrue(self.device.disconnect_requested.is_set())
+
+    async def test_a_voice_that_hangs_up_itself_gets_no_review_at_turn_end(self) -> None:
+        call_id, voice = await self._active()
+        self.assertEqual(await self._goodbye_with_review(voice), 0)
+        self.assertFalse(self.device.disconnect_requested.is_set())
 
 
 class QuietLineTests(_ControllerCase):

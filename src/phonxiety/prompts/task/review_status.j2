@@ -1,1 +1,1 @@
-Nobody has spoken for {{ quiet_s }} seconds. The voice agent has not asked for any action.
+{% if quiet_s == "0" %}The voice agent has just finished speaking.{% else %}Nobody has spoken for {{ quiet_s }} seconds.{% endif %} The voice agent has not asked for any action.

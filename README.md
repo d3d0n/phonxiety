@@ -148,7 +148,7 @@ uv run phonxiety link-test   # load the link like a call, without dialing
 Settings:
 
 - `PHONXIETY_CODEX_TASK_MODEL` — the Codex text model that supervises the line (task agent), for every voice backend.
-- `PHONXIETY_VOICE_BACKEND` — who talks on the line: `codex` (default, Codex realtime over WebRTC, any language), `deepgram` (Deepgram Voice Agent: nova-3 listen, an OpenAI think model hosted by Deepgram, aura-2 speak; English voices by default) or `gemini` (Gemini Live native audio). Keypresses and hanging up are line actions the daemon executes directly: Gemini and Deepgram call the `send_dtmf` and `end_call` tools, Codex sends the delegations `DTMF <digits>` and `END_CALL`. Anything else goes to the task agent.
+- `PHONXIETY_VOICE_BACKEND` — who talks on the line: `codex` (default, Codex realtime over WebRTC, any language), `deepgram` (Deepgram Voice Agent: nova-3 listen, an OpenAI think model hosted by Deepgram, aura-2 speak; English voices by default) or `gemini` (Gemini Live native audio). Keypresses and hanging up are line actions the daemon executes directly: Gemini and Deepgram call the `send_dtmf` and `end_call` tools; Codex sends the delegation `DTMF <digits>` for keys and, having no tools, never asks to hang up: it only says goodbye, and the task agent, asked at the end of each of its turns, ends the call. Anything else goes to the task agent.
 - `DEEPGRAM_API_KEY` / `GEMINI_API_KEY` — keys for those backends, or the files `deepgram-api-key` / `gemini-api-key` in the state directory. Optional models: `PHONXIETY_DEEPGRAM_LANGUAGE` (`en`), `PHONXIETY_DEEPGRAM_LISTEN_MODEL` (`nova-3`), `PHONXIETY_DEEPGRAM_THINK_MODEL` (`gpt-4o-mini`), `PHONXIETY_DEEPGRAM_SPEAK_MODEL` (`aura-2-thalia-en`), `PHONXIETY_GEMINI_MODEL` (`gemini-3.8-live`), `PHONXIETY_GEMINI_VOICE` (`Puck`).
 - `PHONXIETY_CODEX_VOICE` — the Codex voice, `sol` by default. `PHONXIETY_CODEX_AUTH_FILE` — the daemon's own Codex login file.
 - `PHONXIETY_AUDIO_CODEC` — call audio on the phone link: `opus` by default, or `pcm`. Opus is used only when the phone app offers it.
@@ -194,7 +194,7 @@ Limits per call: `max_duration_s` (10 to 3600, default 900) and `ring_timeout_s`
 
 1. **No dial without a line check.** Before dialing, the daemon sends a second of call-sized frames to the phone and counts what comes back. If the link cannot carry audio, it waits up to 90 s, then fails with `phone_link_not_ready` and rings nobody.
 2. **The brief is fixed before the call.** Your assistant hands it over once and is not in the loop for each reply. Constraints travel with it.
-3. **Someone watches the line.** A text model reads the transcript whenever the line goes quiet and decides whether the task is done. The voice model does not have to remember to hang up.
+3. **Someone watches the line.** A text model reads the transcript whenever the line goes quiet, and with Codex after every turn of the agent, and decides whether the task is done. The voice model does not have to remember to hang up.
 4. **A lost link ends the call.** The daemon pings the phone every 2 s; the phone hangs up after 10 s without its computer. Nobody is left on a dead line.
 5. **Hard limits.** Ring timeout and maximum duration are enforced by the daemon, not by the model.
 6. **What was confirmed wins.** The other side's words reach the transcript through speech recognition and can be misheard. When the agent repeated a name or a number aloud and was not corrected, that version goes into the result.

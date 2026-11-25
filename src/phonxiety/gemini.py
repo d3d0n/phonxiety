@@ -51,6 +51,8 @@ class GeminiOptions:
 
 
 class GeminiVoiceSession:
+    review_at_turn_end = False  # the model calls end_call itself
+
     def __init__(
         self, instructions: str, callbacks: VoiceCallbacks, options: GeminiOptions, *, initial_context: str = ""
     ) -> None:

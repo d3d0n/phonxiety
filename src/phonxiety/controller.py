@@ -46,6 +46,9 @@ class _Call:
     ended: asyncio.Event = field(default_factory=asyncio.Event)
     media_changed: asyncio.Event = field(default_factory=asyncio.Event)
     assistant_turns: int = 0
+    # Set at an assistant turn end when the voice cannot hang up itself: review the line now.
+    review_now: bool = False
+    review_wake: asyncio.Event = field(default_factory=asyncio.Event)
     last_voice_activity: float = 0
     last_activity: float = 0
     finish_requested_at: float | None = None
@@ -430,6 +433,9 @@ class CallController:
         if role == "assistant":
             call.assistant_turns += 1
             call.media_changed.set()
+            if call.voice is not None and call.voice.review_at_turn_end:
+                call.review_now = True
+                call.review_wake.set()
 
     async def _voice_error(self, call: _Call, message: str) -> None:
         if self._owned(call) and not call.finalizing and not self._closing:
@@ -480,10 +486,9 @@ class CallController:
         self._cancel(call.work_task)
         generation = call.generation
         log.info(
-            "call %s: delegation %s accepted as action generation %d (%d chars)",
-            call.call_id, delegation_id, generation, len(request),
+            "call %s: delegation %s accepted as action generation %d: %r",
+            call.call_id, delegation_id, generation, request[:200],
         )
-        log.debug("call %s: delegation %s request: %s", call.call_id, delegation_id, request)
         call.work_is_review = False
         call.last_activity = time.monotonic()
         if action is not None and action[0] == "dtmf":
@@ -501,10 +506,11 @@ class CallController:
             self._cancel(call.work_task)
 
     async def _supervise(self, call: _Call) -> None:
-        """Review the line whenever it goes quiet.
+        """Review the line whenever it goes quiet, and after every assistant turn if asked to.
 
         The voice model does not reliably ask the backend to press keys or to
-        disconnect, so call control cannot depend on its delegations alone.
+        disconnect, so call control cannot depend on its delegations alone. A voice that
+        cannot hang up itself just says goodbye; the review at the end of its turn hangs up.
         """
         seen: float | None = None
         interval = self._review_quiet
@@ -521,8 +527,15 @@ class CallController:
                 interval = self._review_quiet
                 due = seen + interval
             now = time.monotonic()
+            if call.review_now:
+                call.review_now = False
+                due = now
             if now < due:
-                await asyncio.sleep(min(due - now, self._review_quiet))
+                call.review_wake.clear()
+                try:
+                    await asyncio.wait_for(call.review_wake.wait(), min(due - now, self._review_quiet))
+                except TimeoutError:
+                    pass
                 continue
             transcript = self.store.transcript(call.call_id)
             if not transcript:

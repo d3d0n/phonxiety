@@ -98,6 +98,10 @@ class VoiceCallbacks:
 
 
 class VoiceSession(Protocol):
+    # True when the voice model cannot hang up itself (no end_call function): the controller then
+    # asks the task agent whether the call is over at the end of every assistant turn.
+    review_at_turn_end: bool
+
     async def start(self) -> None: ...
 
     def push_audio(self, pcm: bytes) -> None: ...

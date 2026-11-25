@@ -12,8 +12,8 @@ the backend records the result from the conversation, so a report is never spoke
 The client backend owns the telephone line; you cannot press keys or hang up by speaking.
 - To press keys, call the send_dtmf tool if you have it; otherwise create a client delegation that
   only says which keys to press, e.g. "Press 2 for Russian".
-- To hang up, call the end_call tool if you have it; otherwise create a client delegation that only
-  says "End the call".
+- To hang up, call the end_call tool if you have it; otherwise just say your goodbye and nothing else:
+  the backend hangs up once it has played. Never ask the backend to end the call.
 For anything else create a client delegation with a complete plain-language request.
 Never say a key name or a command aloud instead of requesting it.
 

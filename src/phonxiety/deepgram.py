@@ -43,6 +43,8 @@ class DeepgramOptions:
 
 
 class DeepgramVoiceSession:
+    review_at_turn_end = False  # the model calls end_call itself
+
     def __init__(
         self, instructions: str, callbacks: VoiceCallbacks, options: DeepgramOptions, *, initial_context: str = ""
     ) -> None:

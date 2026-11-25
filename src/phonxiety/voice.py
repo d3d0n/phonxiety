@@ -199,6 +199,9 @@ class _TranscriptAssembler:
 class CodexVoiceSession:
     """One Codex realtime call with phone-owned audio I/O."""
 
+    # Client delegation carries no function tools, so the model only says goodbye (see brief.j2).
+    review_at_turn_end = True
+
     def __init__(
         self,
         instructions: str,
