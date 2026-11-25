@@ -23,6 +23,7 @@ import iroh
 
 from .framing import BINARY, HEADER_BYTES, TEXT, FrameError, frame, parse_header
 from .link import LinkClosed, LinkSink, LinkUnavailable
+from .tunnel import open_stream
 
 log = logging.getLogger(__name__)
 ALPN = b"phonxiety/device/2"
@@ -76,17 +77,28 @@ class IrohLink:
         log.info("iroh connection from endpoint %s", connection.remote_id())
 
     async def open_audio(self) -> None:
-        """After auth: take the phone's audio stream, open ours, start the readers."""
-        audio_recv = await self._connection.accept_uni()
+        """After auth: open our audio stream and start the readers.
+
+        A QUIC stream reaches the peer only with its first bytes, so the phone's audio
+        stream is accepted by its reader whenever the phone first sends audio, and the
+        phone sees ours only once the daemon sends some. Nothing here waits for either.
+        """
         self._audio_send = await self._connection.open_uni()
         with contextlib.suppress(AttributeError, iroh.IrohError):
-            self._control_send.set_priority(1)
-            self._audio_send.set_priority(0)
+            await self._control_send.set_priority(1)
+            await self._audio_send.set_priority(0)
         self._readers = [
             asyncio.create_task(self._read(self._control_recv, TEXT), name="iroh-control"),
-            asyncio.create_task(self._read(audio_recv, BINARY), name="iroh-audio"),
+            asyncio.create_task(self._read_audio(), name="iroh-audio"),
             asyncio.create_task(self._read_datagrams(), name="iroh-datagrams"),
         ]
+
+    async def _read_audio(self) -> None:
+        try:
+            stream = await self._connection.accept_uni()
+        except iroh.IrohError:
+            return  # the connection is closing; the control reader reports it
+        await self._read(stream, BINARY)
 
     def route(self) -> str | None:
         """Selected path: `direct` with the phone's address or `relay` with the relay, and its round trip."""
@@ -156,11 +168,18 @@ class IrohLink:
         except iroh.IrohError as exc:
             raise LinkClosed() from exc
 
+    async def open_tunnel(self, service: str) -> tuple[Any, Any]:
+        """An extra stream to a phone service such as adb (see `tunnel.py`)."""
+        try:
+            return await open_stream(self._connection, service)
+        except iroh.IrohError as exc:
+            raise LinkClosed() from exc
+
     async def send_datagram(self, data: bytes) -> bool:
         try:
             if len(data) > (self._connection.max_datagram_size() or 0):
                 return False
-            await self._connection.send_datagram(data)
+            self._connection.send_datagram(data)  # synchronous in iroh-ffi: queues the datagram
             return True
         except iroh.IrohError:
             return False

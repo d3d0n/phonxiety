@@ -114,6 +114,7 @@ class Settings:
     opus_bitrate: int = DEFAULT_OPUS_BITRATE
     iroh_relays: tuple[str, ...] = ()
     voice_backend: str = "codex"
+    adb_port: int = 15555  # local port that reaches the phone's adbd through the iroh link
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -138,6 +139,7 @@ class Settings:
             opus_bitrate=_opus_bitrate(),
             iroh_relays=_iroh_relays(state_dir),
             voice_backend=_voice_backend(),
+            adb_port=_port("PHONXIETY_ADB_PORT", 15555),
         )
 
     @property

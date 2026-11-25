@@ -48,3 +48,25 @@ Not done in this stage: each needs the daemon and the phone app updated together
 | Recreate the iroh endpoint on Android network changes instead of after 20 s on the relay | Faster recovery after Wi-Fi/cellular switches; no timer heuristic | [smelt#340](https://github.com/smelt-ai/smelt/pull/340), [hand#1356](https://github.com/atqamz/hand/pull/1356) | Phone-only, not a wire change, but changes link behaviour: needs testing on the phone. |
 
 Recommended next stage, with the phone on the cable: separate control and audio streams first, together with an audio-stream end marker for the playback barrier, then measure datagrams for audio with `link_test` before deciding.
+
+## Stage 2: link v2 (measured on the phone)
+
+**Direct path.** Mac and phone were on the same Wi-Fi yet always talked through the relay. Cause, from tcpdump on the phone and iroh traces on the Mac: Android 17 blocks LAN traffic for apps targeting API 37 unless they hold [`ACCESS_LOCAL_NETWORK`](https://developer.android.com/privacy-and-security/local-network-permission). The phone received the Mac's hole-punch probes on `wlan0` but never answered them, and probed only non-local addresses. With the permission declared and granted the selected path is `direct`, 6–13 ms round trip (relay: 180–600 ms).
+
+**Network changes.** The relay-only recycle timer is gone. `IrohSupport.watchNetwork` listens to Android's default network; when it is lost or replaced (and no call is owned) the link is dropped and the endpoint recreated, so the reconnect binds on the new network. Wi-Fi off/on ×3: link back in 4.0–4.5 s on cellular and 9.3–10.1 s on Wi-Fi, direct again each time. Airplane mode on/off ×2: back in 17.7–17.9 s after airplane mode is switched off (Wi-Fi association plus reconnect backoff, which reaches 8 s while there is no network).
+
+**Reconnect takeover.** A new link from the same phone and boot replaces a stale one instead of being refused with `1013`; after `am force-stop` + start the daemon had the phone back in 2.5 s.
+
+**Protocol v2.** ALPN `phonxiety/device/2`: control on the phone's bidirectional stream (higher send priority), audio on one unidirectional stream each way, probe frames optionally as QUIC datagrams. The playback barrier is a `PXMK` mark frame after the last audio on the audio stream; the phone reports `drained_mark` in its playback events once everything before the mark has played.
+
+`phonxiety link-test --codec opus`, 15 s runs, ping = control round trip measured while call-rate audio flows, ms (median / p95 / max):
+
+| Condition | v1 one stream | v2 separate streams | v2 audio as datagrams |
+|---|---|---|---|
+| LAN, no added impairment | 13–15 / 17–145 / 163–194 | 13–17 / 32–159 / 93–206 | 13–14 / 21–54 / 104–110 |
+| Direct, netem 80±20 ms delay + 5 % loss on the phone | 130–145 / 221–300 / 245–524 | 109–113 / 274–276 / 283–402 | 106–110 / 191–262 / 360–374 |
+| Relay, netem 5 % loss | 205–252 / 292–352 / 318–517 | 203–225 / 327–353 / 403–628 | not measured |
+
+Audio frames in the same runs: direct with delay + loss, frame median 112–123 ms on v1 and 121–134 ms on v2 streams, 103–104 ms as datagrams with 5–6 % of frames lost (stream frames are never lost, they wait).
+
+Reading: separate streams lower the typical control delay behind audio on a lossy direct path (median −15 to −20 %) but not its tail, and change nothing on the relay, whose leg to the relay server is TCP and blocks every stream on a loss. Datagrams lower audio delay and its tail at the price of losing late frames; the phone side would need loss concealment (Opus PLC) before carrying call audio that way.

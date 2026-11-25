@@ -133,6 +133,7 @@ def create_app(settings: Settings) -> Starlette:
     from .net.iroh import IrohListener
     from .net.link import LinkUnavailable
     from .net.tls import device_identity, server_context
+    from .net.tunnel import TunnelListener
     from .net.websocket import WebSocketListener
     from .runtime import create_controller
 
@@ -317,6 +318,7 @@ def create_app(settings: Settings) -> Starlette:
     device_tls = server_context(cert_path, key_path)
     address_link = WebSocketListener(controller.device, settings.device_token)
     iroh_link = IrohListener(controller.device, settings.device_token, settings.state_dir, settings.iroh_relays)
+    adb_tunnel = TunnelListener(controller.device, "adb")
 
     @asynccontextmanager
     async def controller_lifespan(_app: Any) -> AsyncIterator[None]:
@@ -333,9 +335,15 @@ def create_app(settings: Settings) -> Starlette:
             except (IrohError, OSError) as exc:
                 # The address link keeps working; pairing by endpoint id reports the failure.
                 LOGGER.error("iroh phone link unavailable: %s", exc)
+            try:
+                await adb_tunnel.start("127.0.0.1", settings.adb_port)
+                LOGGER.info("phone adb reachable at 127.0.0.1:%s (adb connect 127.0.0.1:%s)", settings.adb_port, settings.adb_port)
+            except OSError as exc:
+                LOGGER.error("adb tunnel port unavailable: %s", exc)
             yield
         finally:
             await controller.close()
+            await adb_tunnel.close()
             await iroh_link.close()
             await address_link.close()
             # Last: a daemon started right after this one must find the ports free.

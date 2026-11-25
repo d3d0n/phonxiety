@@ -417,6 +417,16 @@ class DeviceHub:
             )
             await link.close(1011, "Device heartbeat failed")
 
+    async def open_tunnel(self, service: str) -> tuple[Any, Any]:
+        """A raw stream to a phone service over the current link, when the phone offers it."""
+        link = self._link
+        opener = getattr(link, "open_tunnel", None)
+        if link is None or not self.connected or opener is None:
+            raise DeviceError("device_not_connected" if link is None else "tunnel_unsupported_by_link")
+        if not self.info.get("capabilities", {}).get(f"{service}_tunnel"):
+            raise DeviceError(f"{service}_tunnel_unsupported_by_phone")
+        return await opener(service)
+
     async def link_test(self, seconds: float, codec: str | None = None, *, datagrams: bool = False) -> dict[str, Any]:
         """Load the idle link like a call and time it.
 

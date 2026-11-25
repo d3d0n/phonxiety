@@ -82,7 +82,7 @@ class _Connection:
     def max_datagram_size(self) -> int:
         return 1200
 
-    async def send_datagram(self, data: bytes) -> None:
+    def send_datagram(self, data: bytes) -> None:
         self.datagrams.append(data)
 
     def close(self, code: int, reason: bytes) -> None:
