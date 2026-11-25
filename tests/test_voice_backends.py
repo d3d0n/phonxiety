@@ -13,7 +13,7 @@ from unittest import mock
 from phonxiety import far_end
 from phonxiety.deepgram import DeepgramOptions, DeepgramVoiceSession
 from phonxiety.gemini import GeminiOptions, GeminiVoiceSession
-from phonxiety.interfaces import VoiceCallbacks, function_request
+from phonxiety.interfaces import VoiceCallbacks, function_request, line_action
 from phonxiety.realtime import FRAME_BYTES, PacedOutput, Resampler
 from phonxiety.runtime import voice_factory
 from phonxiety.settings import Settings
@@ -99,6 +99,24 @@ class DeepgramEventTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.socket.sent[-1], {
             "type": "FunctionCallResponse", "id": "fc_1", "name": "client_delegation", "content": "FINAL_RESULT: pressed 1",
         })
+
+
+class LineActionTests(unittest.TestCase):
+    def test_complete_commands_are_actions_and_qualified_ones_are_not(self) -> None:
+        cases = {
+            "Press 2 for Russian": ("dtmf", "2"),
+            "Нажмите 1, 2, 3": ("dtmf", "123"),
+            "DTMF 2": ("dtmf", "2"),
+            "Please end the call.": ("end_call", ""),
+            "Заверши звонок, разговор окончен": ("end_call", ""),
+            "End the call only if the customer agrees": None,
+            "Press 2 and then enter my contract number": None,
+            "Press 2 if the menu asks": None,
+            "Should I hang up?": None,
+            "Ask about the price": None,
+        }
+        for request, expected in cases.items():
+            self.assertEqual(line_action(request), expected, request)
 
 
 class CallFunctionTests(unittest.IsolatedAsyncioTestCase):

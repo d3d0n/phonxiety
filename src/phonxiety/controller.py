@@ -52,7 +52,8 @@ class _Call:
     audio_codec: str | None = None
     recorder: CallRecorder | None = None
     recording: dict[str, Any] | None = None
-    last_keypress: tuple[str, float] | None = None
+    last_keypress: tuple[str, float] | None = None  # digits and when they finished
+    keypress_in_flight: str | None = None
     far_end: str | None = None  # "ivr" or "voicemail" once the wording gives it away
     farewell_pending: bool = False
     proposed_result: dict[str, Any] | None = None
@@ -464,6 +465,15 @@ class CallController:
             log.info("call %s: delegation %s ignored in state %s", call.call_id, delegation_id, state.value)
             return
         call.delegation_ids.add(delegation_id)
+        if action is not None and action[0] == "dtmf" and self._repeated_keypress(call, action[1]):
+            # The same keys again while they are being pressed, or just after: one request heard
+            # twice. Answer it without cancelling the keypress in flight.
+            log.info("call %s: keypress %s repeated within the cooldown, not sent again", call.call_id, action[1])
+            if call.voice:
+                await call.voice.append_context(
+                    f"Already pressed {action[1]}; wait for the menu.", delegation_id=delegation_id, commentary=True,
+                )
+            return
         call.generation += 1
         self._cancel(call.work_task)
         generation = call.generation
@@ -590,20 +600,23 @@ class CallController:
         call.ending_task = self._spawn(self._graceful_finish(call), f"farewell:{call.call_id}")
         await self._notify()
 
+    @staticmethod
+    def _repeated_keypress(call: _Call, digits: str) -> bool:
+        if call.keypress_in_flight == digits:
+            return True
+        last = call.last_keypress
+        return last is not None and last[0] == digits and time.monotonic() - last[1] < KEYPRESS_COOLDOWN_S
+
     async def _run_keypress(self, call: _Call, generation: int, delegation_id: str, digits: str) -> None:
-        """Press keys the voice agent asked for. The same keys again within a few seconds
-        are one request heard twice, not a second menu step, so they are not resent."""
+        """Press keys the voice agent asked for; repeats are answered in _delegation."""
+        # Marked before sending, so a repeat that arrives mid-sequence does not cancel it.
+        call.keypress_in_flight = digits
         try:
-            now = time.monotonic()
-            if call.last_keypress is not None and call.last_keypress[0] == digits and now - call.last_keypress[1] < KEYPRESS_COOLDOWN_S:
-                log.info("call %s: keypress %s repeated within the cooldown, not sent again", call.call_id, digits)
-                result = f"Already pressed {digits}; wait for the menu."
-            else:
-                await self.device.command("cancel_actions", call.call_id, action_generation=generation)
-                self._check_work(call, generation)
-                await self._phone_tools(call, generation, review=False)["send_dtmf"]({"digits": digits})
-                call.last_keypress = (digits, time.monotonic())
-                result = f"Pressed {digits}."
+            await self.device.command("cancel_actions", call.call_id, action_generation=generation)
+            self._check_work(call, generation)
+            await self._phone_tools(call, generation, review=False)["send_dtmf"]({"digits": digits})
+            call.last_keypress = (digits, time.monotonic())
+            result = f"Pressed {digits}."
             # Commentary: the agent learns it is done but does not announce it to a menu.
             if call.voice:
                 await call.voice.append_context(result, delegation_id=delegation_id, commentary=True)
@@ -613,6 +626,9 @@ class CallController:
             log.warning("call %s: keypress %s failed: %s", call.call_id, digits, exc)
             if self._owned(call) and not call.finalizing and generation == call.generation and call.voice:
                 await call.voice.append_context(f"The keypress failed: {str(exc)[:300]}", delegation_id=delegation_id)
+        finally:
+            if call.keypress_in_flight == digits:
+                call.keypress_in_flight = None
 
     async def _run_delegation(self, call: _Call, generation: int, delegation_id: str, request: str) -> None:
         try:

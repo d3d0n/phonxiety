@@ -55,13 +55,18 @@ def function_request(name: str, arguments: dict[str, Any]) -> str | None:
 
 _KEYPRESS = re.compile(
     r"^\s*(?:dtmf|(?:please\s+)?press(?:\s+the)?(?:\s+(?:key|digit|button)s?)?|нажми(?:те)?|нажать|bos(?:ing)?)"
-    r"\s+(?P<digits>[0-9*#A-D](?:[\s,]*[0-9*#A-D])*)"
-    r"(?:\s+(?:for|to|для|чтобы|-|—)\b.*)?[\s.!]*$",
+    r"\s+(?P<digits>[0-9*#A-D](?:[\s,]*[0-9*#A-D])*)(?P<rest>.*)$",
     re.IGNORECASE,
 )
 _HANG_UP = re.compile(
     r"^\s*(?:end_call|(?:please\s+)?(?:end|finish)\s+(?:the|this)\s+call|(?:please\s+)?hang\s+up"
-    r"|(?:пожалуйста,?\s+)?(?:заверши(?:те)?|положи(?:те)?)\s+(?:звонок|трубку))\b[^?0-9]*$",
+    r"|(?:пожалуйста,?\s+)?(?:заверши(?:те)?|положи(?:те)?)\s+(?:звонок|трубку))(?P<rest>.*)$",
+    re.IGNORECASE,
+)
+# Anything that makes a command conditional or one step of several sends it to the task agent.
+_QUALIFIED = re.compile(
+    r"[?0-9]|\b(?:if|only|unless|when|after|before|then|and|but|wait|если|только|когда|после|потом"
+    r"|затем|и|но|подожд\w*|agar|keyin)\b",
     re.IGNORECASE,
 )
 
@@ -69,13 +74,14 @@ _HANG_UP = re.compile(
 def line_action(request: str) -> tuple[str, str] | None:
     """("dtmf", digits) or ("end_call", "") for a request the daemon executes itself, else None.
 
-    Only short, unambiguous requests qualify; anything with more steps or a question goes to
-    the task agent.
+    Only a complete, unqualified command qualifies ("Press 2 for Russian", "End the call.");
+    a condition, a question or a second step sends the request to the task agent instead.
     """
-    if _HANG_UP.match(request):
+    match = _HANG_UP.match(request)
+    if match and not _QUALIFIED.search(match["rest"]):
         return ("end_call", "")
     match = _KEYPRESS.match(request)
-    if match:
+    if match and not _QUALIFIED.search(match["rest"]):
         digits = re.sub(r"[\s,]", "", match["digits"]).upper()
         if len(digits) <= 32:
             return ("dtmf", digits)

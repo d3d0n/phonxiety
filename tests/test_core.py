@@ -394,13 +394,17 @@ class ControllerTests(_ControllerCase):
             return "WAIT"
 
         self.tasks.run_handler = run
-        await voice.callbacks.delegation("k1", "DTMF 2")
-        await self.controller._calls[call_id].work_task
-        await voice.callbacks.delegation("k2", "DTMF 2")  # the same request heard twice
-        await self.controller._calls[call_id].work_task
+        self.device.dtmf_gate = asyncio.Event()
+        await voice.callbacks.delegation("k1", "Press 1 2 3 for the menu")
+        pressing = self.controller._calls[call_id].work_task
+        await asyncio.sleep(0.05)  # the first press is now in flight on the phone
+        await voice.callbacks.delegation("k2", "DTMF 123")  # the same request heard twice
+        self.assertFalse(pressing.done())  # not cancelled by the repeat
+        self.device.dtmf_gate.set()
+        await pressing
         sent = [payload["digits"] for command, _, payload in self.device.commands if command == "dtmf"]
-        self.assertEqual((sent, asked), (["2"], []))
-        self.assertEqual([delegation for _, delegation in voice.contexts if delegation], ["k1", "k2"])
+        self.assertEqual((sent, asked), (["123"], []))
+        self.assertEqual(sorted(delegation for _, delegation in voice.contexts if delegation), ["k1", "k2"])
         await self.controller.hangup_call(call_id)
         await self.controller.wait_call_result(call_id, wait_s=2)
 
