@@ -1,14 +1,16 @@
 """Audio and model events shared by the controller and voice backend."""
 
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 ToolHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
-# Line actions the daemon performs itself, without asking the task agent. A voice backend
-# reports them as delegations with these exact requests; backends that let us declare
-# functions (Gemini, Deepgram) expose them as tools, Codex sends the text itself.
+# Line actions the daemon performs itself, without asking the task agent. Gemini and
+# Deepgram call them as tools (`send_dtmf`, `end_call`), which arrive as delegations with
+# these exact requests. Codex can only delegate in plain language, so short plain requests
+# such as "Press 2 for Russian" or "Please end the call" are recognised too (line_action).
 END_CALL_REQUEST = "END_CALL"
 DTMF_REQUEST = "DTMF"  # followed by a space and the digits, e.g. "DTMF 2"
 DTMF_DIGITS = "0123456789*#ABCD"
@@ -48,6 +50,35 @@ def function_request(name: str, arguments: dict[str, Any]) -> str | None:
     if name == "client_delegation":
         request = arguments.get("request")
         return request.strip() if isinstance(request, str) and request.strip() else None
+    return None
+
+
+_KEYPRESS = re.compile(
+    r"^\s*(?:dtmf|(?:please\s+)?press(?:\s+the)?(?:\s+(?:key|digit|button)s?)?|нажми(?:те)?|нажать|bos(?:ing)?)"
+    r"\s+(?P<digits>[0-9*#A-D](?:[\s,]*[0-9*#A-D])*)"
+    r"(?:\s+(?:for|to|для|чтобы|-|—)\b.*)?[\s.!]*$",
+    re.IGNORECASE,
+)
+_HANG_UP = re.compile(
+    r"^\s*(?:end_call|(?:please\s+)?(?:end|finish)\s+(?:the|this)\s+call|(?:please\s+)?hang\s+up"
+    r"|(?:пожалуйста,?\s+)?(?:заверши(?:те)?|положи(?:те)?)\s+(?:звонок|трубку))\b[^?0-9]*$",
+    re.IGNORECASE,
+)
+
+
+def line_action(request: str) -> tuple[str, str] | None:
+    """("dtmf", digits) or ("end_call", "") for a request the daemon executes itself, else None.
+
+    Only short, unambiguous requests qualify; anything with more steps or a question goes to
+    the task agent.
+    """
+    if _HANG_UP.match(request):
+        return ("end_call", "")
+    match = _KEYPRESS.match(request)
+    if match:
+        digits = re.sub(r"[\s,]", "", match["digits"]).upper()
+        if len(digits) <= 32:
+            return ("dtmf", digits)
     return None
 
 

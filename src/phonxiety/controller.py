@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 from . import far_end
 from .device import DeviceError, DeviceHub
-from .interfaces import DTMF_REQUEST, END_CALL_REQUEST, ToolHandler, VoiceCallbacks, VoiceSession
+from .interfaces import ToolHandler, VoiceCallbacks, VoiceSession, line_action
 from .models import CallRequest, CallState, TERMINAL_STATES
 from .prompts import render
 from .recording import CallRecorder, write_call_record
@@ -194,9 +194,7 @@ class CallController:
 
     @staticmethod
     def _brief(request: CallRequest) -> str:
-        return render(
-            "voice/brief", request=request, dtmf_request=DTMF_REQUEST, end_call_request=END_CALL_REQUEST,
-        )
+        return render("voice/brief", request=request)
 
     async def _prepare(self, call: _Call) -> None:
         try:
@@ -443,7 +441,8 @@ class CallController:
             log.info("call %s: delegation %s ignored (finalizing or repeated)", call.call_id, delegation_id)
             return
         state = self.store.state(call.call_id)
-        if request.strip().upper().startswith(END_CALL_REQUEST):
+        action = line_action(request)
+        if action is not None and action[0] == "end_call":
             # The voice agent has just said goodbye and asks to hang up: no model decides this,
             # the line drops once the goodbye has played and the summary comes later. A repeat
             # while the call is already ending changes nothing.
@@ -475,10 +474,9 @@ class CallController:
         log.debug("call %s: delegation %s request: %s", call.call_id, delegation_id, request)
         call.work_is_review = False
         call.last_activity = time.monotonic()
-        words = request.split()
-        if len(words) == 2 and words[0].upper() == DTMF_REQUEST:
+        if action is not None and action[0] == "dtmf":
             # A plain keypress: the daemon presses it, no model is asked.
-            work = self._run_keypress(call, generation, delegation_id, words[1].upper())
+            work = self._run_keypress(call, generation, delegation_id, action[1])
         else:
             work = self._run_delegation(call, generation, delegation_id, request)
         call.work_task = self._spawn(work, f"delegation:{call.call_id}:{generation}")
