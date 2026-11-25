@@ -7,11 +7,13 @@ import contextlib
 import logging
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
 from .device import DeviceError, DeviceHub
 from .interfaces import ToolHandler, VoiceCallbacks, VoiceSession
 from .models import CallRequest, CallState, TERMINAL_STATES
+from .recording import CallRecorder, write_call_record
 from .store import CallStore
 
 log = logging.getLogger(__name__)
@@ -44,6 +46,9 @@ class _Call:
     finish_requested_at: float | None = None
     finish_turn_base: int = 0
     finish_speech_seen: bool = False
+    audio_codec: str | None = None
+    recorder: CallRecorder | None = None
+    recording: dict[str, Any] | None = None
     farewell_pending: bool = False
     proposed_result: dict[str, Any] | None = None
     end_reason: str | None = None
@@ -63,6 +68,7 @@ class CallController:
         *,
         singleton_file: Any = None,
         keep_awake: Callable[[], Callable[[], None] | None] | None = None,
+        archive_dir: Path | None = None,
         device_wait: float = 15,
         link_wait: float = 90,
         farewell_timeout: float = 12,
@@ -76,6 +82,7 @@ class CallController:
         self.task_agent = task_agent
         self._singleton_file = singleton_file
         self._keep_awake = keep_awake
+        self._archive_dir = archive_dir
         self._device_wait = device_wait
         self._link_wait = link_wait
         self._farewell_timeout = farewell_timeout
@@ -331,6 +338,9 @@ class CallController:
                 self._epoch = (self._epoch + 1) & 0xFFFFFFFF or 1
                 try:
                     audio_format = self.device.begin_stream(call_id, self._epoch)
+                    call.audio_codec = audio_format["codec"]
+                    if self._archive_dir is not None and call.recorder is None:
+                        call.recorder = CallRecorder(self._archive_dir, call_id)
                     started = await self.device.command("start_audio", call_id, epoch=self._epoch, **audio_format)
                     if started.get("codec", "pcm") != audio_format["codec"]:
                         raise DeviceError(f"audio_codec_mismatch: phone started {started.get('codec', 'pcm')}")
@@ -376,8 +386,11 @@ class CallController:
 
     async def on_device_audio(self, call_id: str, pcm: bytes) -> None:
         call = self._calls.get(call_id)
-        if call and call.voice and not call.finalizing and self.store.state(call_id) in (CallState.ACTIVE, CallState.ENDING):
-            call.voice.push_audio(pcm)
+        if call and not call.finalizing and self.store.state(call_id) in (CallState.ACTIVE, CallState.ENDING):
+            if call.recorder is not None:
+                call.recorder.remote(pcm)
+            if call.voice:
+                call.voice.push_audio(pcm)
 
     async def _voice_audio(self, call: _Call, pcm: bytes) -> None:
         if not self._owned(call) or call.finalizing:
@@ -393,6 +406,8 @@ class CallController:
             return
         try:
             self.device.send_audio(call.call_id, pcm)
+            if call.recorder is not None:
+                call.recorder.agent(pcm)
         except DeviceError as exc:
             if call.error is None:
                 call.error = str(exc)
@@ -681,6 +696,11 @@ class CallController:
                     await call.voice.close()
             except Exception:
                 call.error = call.error or "voice_close_failed"
+        if call.recorder is not None:
+            try:
+                call.recording = await asyncio.to_thread(call.recorder.close)
+            except Exception:
+                log.exception("call %s: recording could not be written", call.call_id)
         transcript = self.store.transcript(call.call_id)
         result = call.proposed_result
         if result is None and transcript and not self._closing:
@@ -709,12 +729,28 @@ class CallController:
             transcript_complete=call.error is None and not self.store.partials(call.call_id),
             error=call.error,
         )
+        if self._archive_dir is not None:
+            try:
+                await asyncio.to_thread(write_call_record, self._archive_dir, self._call_record(call))
+            except Exception:
+                log.exception("call %s: call record could not be written", call.call_id)
         if call.release_awake is not None:
             call.release_awake()
             call.release_awake = None
         if self._calls.get(call.call_id) is call:
             del self._calls[call.call_id]
         await self._notify()
+
+    def _call_record(self, call: _Call) -> dict[str, Any]:
+        """Everything known about a finished call, for its archive file."""
+        record = self.store.snapshot(call.call_id)
+        for paging in ("current_partials", "next_cursor", "has_more"):
+            record.pop(paging)
+        record["transcript"] = self.store.transcript(call.call_id)
+        record["request"] = call.request.model_dump(mode="json")
+        record["audio_codec"] = call.audio_codec
+        record["recording"] = call.recording
+        return record
 
     def _owned(self, call: _Call) -> bool:
         return self._calls.get(call.call_id) is call

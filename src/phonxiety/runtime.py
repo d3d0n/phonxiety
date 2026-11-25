@@ -42,6 +42,7 @@ def create_controller(settings: Settings) -> CallController:
             task_agent,
             singleton_file=lock,
             keep_awake=hold_awake,
+            archive_dir=settings.state_dir / "calls",
         )
     except BaseException:
         lock.close()

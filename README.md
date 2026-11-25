@@ -212,7 +212,7 @@ How one call goes:
 1. `place_call` stores the request and returns. The daemon waits for the phone, checks the line, opens a voice session and tells the phone to dial.
 2. When the line is answered, the phone streams the downlink audio to the daemon and plays the agent's voice into the uplink. Audio is 48 kHz mono in 20 ms frames: Opus by default (~32 kbit/s), raw PCM (~768 kbit/s) with `PHONXIETY_AUDIO_CODEC=pcm` or with a phone app that predates Opus.
 3. The voice model talks. The task agent steps in on silence, on a request from the voice model, and once at the end.
-4. The daemon disconnects, writes the summary and fields, and keeps them by `call_id`.
+4. The daemon disconnects, writes the summary and fields, and keeps them by `call_id`. It also archives every call in `~/.local/share/phonxiety/calls/`: `<call_id>.json` with the request, timings, outcomes, fields and full transcript, and for connected calls `<call_id>.wav`, 48 kHz stereo with the other party on the left and the agent on the right. Nothing on the call announces the recording.
 
 Calls, keys, tokens and the daemon log live under `~/.local/share/phonxiety/`. At the end of every call both sides log how many frames went each way; on a link loss they log the counters of every iroh path.
 

@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import tempfile
 import unittest
+import wave
+from array import array
 from pathlib import Path
 from typing import Any
 
@@ -221,6 +224,7 @@ class _ControllerCase(unittest.IsolatedAsyncioTestCase):
         self.controller = CallController(
             self.store, self.device, factory, self.tasks, keep_awake=keep_awake, device_wait=0.3, link_wait=0.4,
             farewell_timeout=2, farewell_quiet=0.01, review_quiet=self.review_quiet,
+            archive_dir=Path(self.directory.name) / "archive",
         )
         await self.controller.start()
 
@@ -358,6 +362,33 @@ class ControllerTests(_ControllerCase):
         self.assertEqual(result["state"], "ended")
         self.assertIn("opus encoder unavailable", result["error"])
         self.assertTrue(self.device.disconnect_requested.is_set())
+
+    async def test_finished_call_is_archived_with_both_sides_and_transcript(self) -> None:
+        call_id, voice = await self._active()
+        remote, agent = b"\x10\x00" * 960, b"\xe8\x03" * 960
+        for _ in range(3):
+            await self.controller.on_device_audio(call_id, remote)
+        await voice.callbacks.audio(agent)
+        await voice.callbacks.transcript("user", "Hello?", True)
+        await voice.callbacks.transcript("assistant", "Hi, this is a test.", True)
+        await self.controller.hangup_call(call_id)
+        await self.controller.wait_call_result(call_id, wait_s=2)
+
+        archive = Path(self.directory.name) / "archive"
+        record = json.loads((archive / f"{call_id}.json").read_text())
+        self.assertEqual([(item["role"], item["text"]) for item in record["transcript"]],
+                         [("user", "Hello?"), ("assistant", "Hi, this is a test.")])
+        self.assertEqual((record["state"], record["request"]["destination"], record["audio_codec"]),
+                         ("ended", request().destination, "pcm"))
+        self.assertEqual(record["recording"]["channels"], ["remote", "agent"])
+
+        with wave.open(str(archive / record["recording"]["file"])) as recording:
+            self.assertEqual((recording.getnchannels(), recording.getframerate()), (2, 48_000))
+            frames = array("h", recording.readframes(recording.getnframes()))
+        left, right = frames[0::2], frames[1::2]
+        self.assertEqual(left.count(16), 3 * 960)
+        self.assertEqual(right.count(1000), 960)
+        self.assertFalse(list(archive.glob("*.part")))
 
     async def test_phone_end_does_not_report_summary_ready_early(self) -> None:
         call_id, voice = await self._active()
