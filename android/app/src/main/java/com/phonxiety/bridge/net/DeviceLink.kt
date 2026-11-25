@@ -1,13 +1,13 @@
-package com.phonxiety.bridge
+package com.phonxiety.bridge.net
 
 import okio.ByteString
 
 /**
  * One transport carrying the device protocol.
  *
- * [BridgeEngine] owns the protocol rules and the single live link; a [DeviceLink]
- * only moves whole messages.  Each implementation reports every terminal event
- * at most once through [Listener.onLinkDown] and stops sending after that.
+ * [LinkSupervisor] owns the single live link; a [DeviceLink] only moves whole
+ * messages.  Each implementation reports every terminal event at most once
+ * through [Listener.onLinkDown] and stops sending after that.
  */
 internal interface DeviceLink {
     /** Route the link currently uses, or null when the transport has no route. */
@@ -33,7 +33,7 @@ internal interface DeviceLink {
     val backlogBytes: Long
 
     /**
-     * Stops the link without reporting down: the engine initiated the close.
+     * Stops the link without reporting down: the owner initiated the close.
      */
     fun cancel()
 

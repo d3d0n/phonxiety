@@ -12,6 +12,11 @@ import android.telecom.PhoneAccountHandle
 import android.telecom.TelecomManager
 import android.telephony.TelephonyManager
 import android.util.Log
+import com.phonxiety.bridge.net.DeviceLink
+import com.phonxiety.bridge.net.ExecutorLinkScheduler
+import com.phonxiety.bridge.net.IrohLinkFactory
+import com.phonxiety.bridge.net.LinkSupervisor
+import com.phonxiety.bridge.net.WebSocketLinkFactory
 import okio.ByteString
 import okio.ByteString.Companion.encodeUtf8
 import org.json.JSONObject
@@ -33,9 +38,9 @@ import java.util.concurrent.atomic.AtomicLong
  * callbacks.
  *
  * The link is a TLS WebSocket to the paired daemon or an iroh stream; see
- * [DeviceLink].  The engine keeps the protocol rules and reconnect policy, the
- * transport only moves messages.  [onLinkState] receives a string resource id
- * for the foreground-service notification.
+ * [LinkSupervisor] and [DeviceLink].  The engine keeps the protocol and call
+ * control, the supervisor keeps the link lifecycle.  [onLinkState] receives a
+ * string resource id for the foreground-service notification.
  */
 class BridgeEngine(
     context: Context,
@@ -45,16 +50,11 @@ class BridgeEngine(
     companion object {
         private const val TAG = "PhonxietyBridge"
         private const val PROTOCOL_VERSION = 1
-        private const val HOST_TIMEOUT_MS = 10_000L
-        private const val RECONNECT_MAX_MS = 8_000L
         private const val PENDING_DIAL_TIMEOUT_MS = 120_000L
         private const val MAX_RECENT_CALLS = 32
         private const val ORPHAN_CANCEL_TTL_MS = 10 * 60_000L
         private const val DIAL_CORRELATION_WINDOW_MS = 10_000L
         private const val MAX_CONTROL_CHARS = 64 * 1024
-        // 500 ms of 48 kHz mono PCM16: above this backlog a live capture frame
-        // is dropped instead of turning a network stall into growing latency.
-        private const val MAX_AUDIO_BACKLOG_BYTES = 48_000L
         private const val EXTRA_CALL_ID = "com.phonxiety.bridge.extra.CALL_ID"
         private const val EXTRA_OWNER = "com.phonxiety.bridge.extra.OWNER"
         private val DESTINATION = Regex("^[+*#0-9]{1,32}$")
@@ -81,10 +81,15 @@ class BridgeEngine(
     private val callbackThread = HandlerThread("phonxiety-callbacks").apply { start() }
     private val callbackHandler = Handler(callbackThread.looper)
 
-    private val transport: DeviceLinkFactory = when (config) {
-        is BridgeConfig.Address -> WebSocketLinkFactory(config)
-        is BridgeConfig.Iroh -> IrohLinkFactory(appContext, config) { ownsCall() }
-    }
+    private val links = LinkSupervisor(
+        factory = when (config) {
+            is BridgeConfig.Address -> WebSocketLinkFactory(config)
+            is BridgeConfig.Iroh -> IrohLinkFactory(appContext, config) { ownsCall() }
+        },
+        callbacks = LinkCallbacks(),
+        scheduler = ExecutorLinkScheduler(scheduler),
+        clock = { SystemClock.elapsedRealtime() },
+    )
 
     private val telecom: TelecomManager? = appContext.getSystemService(TelecomManager::class.java)
     private val wakeLock: PowerManager.WakeLock? =
@@ -93,12 +98,6 @@ class BridgeEngine(
             ?.apply { setReferenceCounted(false) }
 
     @Volatile private var running = false
-    @Volatile private var linkUp = false
-
-    private var link: DeviceLink? = null
-    private var reconnectScheduled = false
-    private var reconnectDelayMs = 1_000L
-    private var lastHostActivity = 0L
 
     private var owned: OwnedCall? = null
     private val recent = LinkedHashMap<String, RecentCall>()
@@ -117,26 +116,20 @@ class BridgeEngine(
             scheduler.schedule({
                 safe { adoptExistingCalls() }
                 safe { restoreAbandonedMuteAtStartup() }
-                safe { connect() }
+                safe { links.start() }
             }, 0, TimeUnit.MILLISECONDS)
         } catch (_: RejectedExecutionException) {
             return
         }
-        scheduler.scheduleWithFixedDelay({ safe { watchdog() } }, 1, 1, TimeUnit.SECONDS)
+        scheduler.scheduleWithFixedDelay({ safe { links.tick() } }, 1, 1, TimeUnit.SECONDS)
         scheduler.scheduleWithFixedDelay({ safe { emitPlayback() } }, 500, 500, TimeUnit.MILLISECONDS)
         scheduler.scheduleWithFixedDelay({ safe { expirePendingDial() } }, 5, 5, TimeUnit.SECONDS)
     }
 
     fun close() {
         if (!closeOnce.compareAndSet(false, true)) return
-        synchronized(lock) {
-            running = false
-            linkUp = false
-            lastHostActivity = 0L
-            val current = link
-            link = null
-            if (current != null) runCatching { current.cancel() }
-        }
+        synchronized(lock) { running = false }
+        links.cancel()
         scheduler.shutdownNow()
         abortOwnedOnShutdown()
         commandExecutor.shutdownNow()
@@ -144,7 +137,7 @@ class BridgeEngine(
         dtmfExecutor.shutdownNow()
         callbackThread.quitSafely()
         runCatching { if (wakeLock?.isHeld == true) wakeLock?.release() }
-        runCatching { transport.shutdown() }
+        links.shutdown()
     }
 
     /** `dialing`, `active` or `ending` while this engine owns a call. */
@@ -153,12 +146,10 @@ class BridgeEngine(
         if (current.finished) null else current.state
     }
 
-    fun linkIsUp(): Boolean = synchronized(lock) { linkUp }
+    fun linkIsUp(): Boolean = links.isUp()
 
     /** Route of the live link for the UI, or null while down. */
-    internal fun currentRoute(): DeviceLink.Route? = synchronized(lock) {
-        if (!linkUp) null else link?.route()
-    }
+    internal fun currentRoute(): DeviceLink.Route? = links.route()
 
     // ------------------------------------------------------------------
     // Device link
@@ -182,108 +173,33 @@ class BridgeEngine(
         current != null && !current.finished
     }
 
-    private fun connect() {
-        synchronized(lock) {
-            if (!running || link != null) return
-        }
-        val attempt = transport.create()
-        val installed = synchronized(lock) {
-            if (!running) {
-                false
-            } else if (link == null) {
-                link = attempt
-                true
-            } else {
-                false
-            }
-        }
-        if (!installed) {
-            runCatching { attempt.cancel() }
-            return
-        }
-        attempt.start(LinkListener(attempt))
-    }
-
-    /** Binds one transport attempt to its engine-side callbacks. */
-    private inner class LinkListener(private val owner: DeviceLink) : DeviceLink.Listener {
-        override fun onLinkOpened() {
-            this@BridgeEngine.onOpen(owner)
+    /**
+     * The engine side of the link: sends `hello` once a link is live, turns
+     * received JSON into commands and binary into the audio/link-test path.
+     * Owner checks, activity bookkeeping and reconnects live in
+     * [LinkSupervisor]; every callback here is for the current link only.
+     */
+    private inner class LinkCallbacks : LinkSupervisor.Callbacks {
+        override fun onLinkOpened(): Boolean {
+            onLinkState(R.string.notification_link_connected)
+            return sendHello()
         }
 
         override fun onLinkText(text: String) {
-            this@BridgeEngine.onText(owner, text)
+            this@BridgeEngine.onText(text)
         }
 
         override fun onLinkBinary(bytes: ByteString) {
-            this@BridgeEngine.onBinary(owner, bytes)
+            this@BridgeEngine.onBinary(bytes)
         }
 
         override fun onLinkDown(reason: String) {
-            this@BridgeEngine.onLinkDown(owner, reason)
+            onLinkState(R.string.notification_link_waiting)
+            abortOwnedForLinkLoss()
         }
     }
 
-    private fun scheduleReconnect() {
-        val delay = synchronized(lock) {
-            if (!running || reconnectScheduled) return
-            reconnectScheduled = true
-            val next = reconnectDelayMs
-            reconnectDelayMs = minOf(reconnectDelayMs * 2, RECONNECT_MAX_MS)
-            next
-        }
-        try {
-            scheduler.schedule({
-                synchronized(lock) { reconnectScheduled = false }
-                safe { connect() }
-            }, delay, TimeUnit.MILLISECONDS)
-        } catch (_: RejectedExecutionException) {
-            synchronized(lock) { reconnectScheduled = false }
-        }
-    }
-
-    private fun onOpen(owner: DeviceLink) {
-        synchronized(lock) {
-            if (!running) {
-                runCatching { owner.cancel() }
-                return
-            }
-            if (link != null && link !== owner) {
-                runCatching { owner.cancel() }
-                return
-            }
-            link = owner
-            linkUp = true
-            reconnectScheduled = false
-            reconnectDelayMs = 1_000L
-            lastHostActivity = SystemClock.elapsedRealtime()
-        }
-        onLinkState(R.string.notification_link_connected)
-        sendHello(owner)
-    }
-
-    private fun onLinkDown(owner: DeviceLink, reason: String) {
-        val shouldHandle = synchronized(lock) {
-            if (link === owner) {
-                link = null
-            } else if (link != null) {
-                return
-            }
-            linkUp = false
-            lastHostActivity = 0L
-            running
-        }
-        if (!shouldHandle) return
-        Log.w(TAG, "device link down: $reason")
-        onLinkState(R.string.notification_link_waiting)
-        abortOwnedForLinkLoss()
-        scheduleReconnect()
-    }
-
-    private fun onText(owner: DeviceLink, text: String) {
-        synchronized(lock) {
-            if (link !== owner) return
-            lastHostActivity = SystemClock.elapsedRealtime()
-        }
+    private fun onText(text: String) {
         if (text.length > MAX_CONTROL_CHARS) {
             Log.w(TAG, "ignoring oversized control message")
             return
@@ -304,37 +220,22 @@ class BridgeEngine(
         }
     }
 
-    private fun onBinary(owner: DeviceLink, bytes: ByteString) {
-        synchronized(lock) {
-            if (link !== owner) return
-            lastHostActivity = SystemClock.elapsedRealtime()
-        }
+    private fun onBinary(bytes: ByteString) {
         if (bytes.size < 16 || bytes.size > MAX_CONTROL_CHARS) return
         val audio = synchronized(lock) { owned?.audio }
         if (audio != null) {
             audio.offerFrame(bytes)
         } else if (bytes.startsWith(LINK_TEST_MAGIC)) {
             // The daemon times an idle link under call load: return its frame.
-            sendFrame(bytes.toByteArray(), bytes.size)
+            links.sendFrame(bytes.toByteArray(), bytes.size)
         }
     }
 
     private fun sendText(message: JSONObject) {
-        val target = synchronized(lock) { if (linkUp) link else null } ?: return
-        target.sendText(message.toString())
+        links.sendText(message.toString())
     }
 
-    /** False when the frame was discarded: no link, or a backlog above the cap. */
-    private fun sendFrame(frame: ByteArray, length: Int): Boolean {
-        val target = synchronized(lock) { if (linkUp) link else null } ?: return false
-        // Live capture: never let a stalled network turn into growing latency.
-        // Control messages use sendText and are never dropped.
-        if (target.backlogBytes > MAX_AUDIO_BACKLOG_BYTES) return false
-        target.sendBinary(frame, length)
-        return true
-    }
-
-    private fun sendHello(owner: DeviceLink) {
+    private fun sendHello(): Boolean {
         val busy = hasUnrelatedLiveCall()
         val callControl = Permissions.granted(appContext, Permissions.CALL_PHONE) &&
             Permissions.granted(appContext, Permissions.CONTROL_INCALL_EXPERIENCE)
@@ -364,7 +265,7 @@ class BridgeEngine(
                 .put("link_test", true)
                 .put("audio_codecs", org.json.JSONArray().put("pcm").put("opus")))
             .put("active_call", active)
-        if (!owner.sendText(hello.toString())) onLinkDown(owner, "hello_failed")
+        return links.sendText(hello.toString())
     }
 
     private fun bootId(): String {
@@ -394,19 +295,6 @@ class BridgeEngine(
             // No stable identity is available from this process.
         }
         throw IllegalStateException("boot_identity_unavailable")
-    }
-
-    private fun watchdog() {
-        val now = SystemClock.elapsedRealtime()
-        val stale = synchronized(lock) {
-            if (!running || !linkUp) return
-            if (now - lastHostActivity <= HOST_TIMEOUT_MS) return
-            link
-        }
-        val owner = stale ?: return
-        Log.w(TAG, "host activity deadline expired")
-        onLinkDown(owner, "host_timeout")
-        runCatching { owner.cancel() }
     }
 
     private fun emitPlayback() {
@@ -471,7 +359,7 @@ class BridgeEngine(
         var reserved: OwnedCall? = null
         synchronized(lock) {
             if (!running) throw CommandException("stopped")
-            if (!linkUp) throw CommandException("link_down")
+            if (!links.isUp()) throw CommandException("link_down")
             val current = owned
             if (current != null) {
                 if (current.callId != callId) throw CommandException("busy")
@@ -543,7 +431,7 @@ class BridgeEngine(
         extras.putString(EXTRA_OWNER, ownerPackage)
         val reservedCall = reserved
         val stillOwned = synchronized(lock) {
-            running && linkUp && reservedCall != null && owned === reservedCall
+            running && links.isUp() && reservedCall != null && owned === reservedCall
         }
         if (!stillOwned) {
             clearFailedDial(callId)
@@ -675,7 +563,7 @@ class BridgeEngine(
         synchronized(lock) {
             val current = owned
             if (current == null || current.callId != callId) throw CommandException("not_owned")
-            if (!linkUp) throw CommandException("link_down")
+            if (!links.isUp()) throw CommandException("link_down")
             if (current.call == null || current.telecomState != Call.STATE_ACTIVE) throw CommandException("not_active")
             if (epoch < current.lastEpoch) throw CommandException("stale_epoch")
             if (current.audio != null && current.epoch == epoch) {
@@ -704,7 +592,7 @@ class BridgeEngine(
             callId,
             epoch,
             opusBitrate,
-            { frame, length -> sendFrame(frame, length) },
+            { frame, length -> links.sendFrame(frame, length) },
             { reason -> postAudioFatal(callId, epoch, reason) },
         )
         try {
@@ -720,7 +608,7 @@ class BridgeEngine(
 
         var attached = false
         synchronized(lock) {
-            if (running && linkUp && owned === current && !current.finished &&
+            if (running && links.isUp() && owned === current && !current.finished &&
                 current.telecomState == Call.STATE_ACTIVE && current.audio == null
             ) {
                 current.audio = audio

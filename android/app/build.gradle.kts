@@ -43,6 +43,18 @@ android {
         kotlin.srcDir("src/main/java")
         kotlin.srcDir("src/iroh/kotlin")
     }
+    // JVM unit tests for the network module (framing, link supervisor).
+    sourceSets.named("test") {
+        kotlin.srcDir("src/test/java")
+    }
+
+    testOptions {
+        // android.util.Log and friends are stubs on the JVM; return defaults
+        // instead of throwing so the net/ code stays unit-testable.
+        unitTests {
+            isReturnDefaultValues = true
+        }
+    }
 
     packaging {
         jniLibs {
@@ -100,4 +112,6 @@ dependencies {
     // The generated bindings expose suspend functions; 1.9.0 is the version
     // iroh-ffi 1.2.0 itself builds and tests against.
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+
+    testImplementation("junit:junit:4.13.2")
 }
