@@ -208,6 +208,10 @@ def _status_lines(payload: dict[str, Any], *, color: bool) -> list[str]:
         kind = path_kind(str(peer)) if peer else "none"
         route = f"  {device['route']}" if device.get("route") else ""
         rows.append(("path", f"{tone(kind, good if kind in ('iroh', 'lan', 'tailscale') else warn)}{route}"))
+        if kind == "iroh":
+            iroh_path = link.get("iroh_path")
+            label = str(iroh_path) if iroh_path else "unknown"
+            rows.append(("iroh", tone(label, good if iroh_path == "direct" else warn)))
     else:
         rows.append(("path", tone("offline", warn)))
     call = device.get("active_call")

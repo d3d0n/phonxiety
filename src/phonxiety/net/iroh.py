@@ -165,6 +165,16 @@ class IrohLink:
             return None
         return f"{'relay' if selected.is_relay else 'direct'} {selected.remote_addr}, {selected.rtt_ms} ms"
 
+    def selected_path_kind(self) -> str | None:
+        """Which transport carries the data: ``direct``, ``relay``, or None when nothing is selected."""
+        try:
+            selected = next((path for path in self._connection.paths() if path.is_selected), None)
+        except iroh.IrohError:
+            return None
+        if selected is None:
+            return None
+        return "relay" if selected.is_relay else "direct"
+
     def paths(self) -> list[str]:
         """Every open path, the selected one starred, with its transport counters."""
         try:
