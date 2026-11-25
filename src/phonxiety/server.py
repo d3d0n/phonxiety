@@ -7,6 +7,7 @@ work is scoped to a request.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 import sys
@@ -287,6 +288,9 @@ def create_app(settings: Settings) -> Starlette:
             "endpoint_id": iroh_link.endpoint_id,
             "address_port": settings.device_port,
             "certificate": fingerprint,
+            # `direct`/`relay` for the attached iroh connection; null when
+            # disconnected, on another transport, or not yet known.
+            "iroh_path": controller.device.iroh_path,
         }
         return JSONResponse(payload)
 
@@ -294,7 +298,7 @@ def create_app(settings: Settings) -> Starlette:
         if not _matches_token(request.headers.get("authorization"), settings.host_token):
             return _unauthorized()
         try:
-            addresses = addresses_for(settings.device_port)
+            addresses = await asyncio.to_thread(addresses_for, settings.device_port)
             return JSONResponse({
                 "iroh": await iroh_link.ticket(),
                 "endpoint_id": iroh_link.endpoint_id,

@@ -141,6 +141,19 @@ class DeviceHub:
     def connected(self) -> bool:
         return self._link is not None and self._ready.is_set()
 
+    @property
+    def iroh_path(self) -> str | None:
+        """Which iroh transport carries the attached phone: ``direct``, ``relay``, or None.
+
+        None also covers a link that is not iroh and a path the transport cannot
+        name, so the health document never has to guess.
+        """
+        link = self._link
+        if link is None or not self.connected:
+            return None
+        kind = getattr(link, "selected_path_kind", None)
+        return kind() if callable(kind) else None
+
     async def wait_connected(self, timeout: float) -> bool:
         """Give a phone that is reconnecting, e.g. after a daemon start, time to arrive."""
         try:

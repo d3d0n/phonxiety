@@ -12,13 +12,18 @@ import com.phonxiety.bridge.model.ControlEnvelope
 import com.phonxiety.bridge.model.DeviceAuth
 import computer.iroh.Connection
 import computer.iroh.Endpoint
+import computer.iroh.EndpointAddr
 import computer.iroh.EndpointOptions
 import computer.iroh.EndpointTicket
 import computer.iroh.IrohAndroid
+import computer.iroh.NetworkChangeCallback
+import computer.iroh.PathChangeCallback
+import computer.iroh.PathSnapshot
 import computer.iroh.RecvStream
 import computer.iroh.RelayMode
 import computer.iroh.SecretKey
 import computer.iroh.SendStream
+import computer.iroh.WatchHandle
 import computer.iroh.presetN0
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
@@ -295,7 +300,14 @@ internal class IrohLinkFactory(
     private val config: BridgeConfig.Iroh,
     private val ownsCall: () -> Boolean
 ) : DeviceLinkFactory {
-    override fun create(): DeviceLink = IrohLink(context, config, ownsCall)
+    /**
+     * Escalation history for the paired endpoint: one instance outlives every
+     * link this factory creates and every endpoint recycle, so the recycle
+     * window and the cooldown are measured across reconnects.
+     */
+    private val policy = IrohEscalationPolicy(clock = { System.nanoTime() / 1_000_000L })
+
+    override fun create(): DeviceLink = IrohLink(context, config, ownsCall, policy)
 
     override fun shutdown() {
         IrohSupport.shutdownAsync()
@@ -318,7 +330,8 @@ internal class IrohLinkFactory(
 private class IrohLink(
     private val context: Context,
     private val config: BridgeConfig.Iroh,
-    private val ownsCall: () -> Boolean
+    private val ownsCall: () -> Boolean,
+    private val policy: IrohEscalationPolicy
 ) : DeviceLink {
     private companion object {
         const val TAG = "PhonxietyBridge"
@@ -346,6 +359,12 @@ private class IrohLink(
     @Volatile private var route: DeviceLink.Route? = null
 
     @Volatile private var unwatchNetwork: () -> Unit = {}
+
+    /** Relay-only watchdog for this link; null until the connection is up. */
+    @Volatile private var monitor: IrohPathMonitor? = null
+
+    /** The endpoint's own network-change subscription; belongs to the endpoint in use. */
+    @Volatile private var endpointWatch: WatchHandle? = null
 
     override val backlogBytes: Long get() = backlog.get()
 
@@ -379,7 +398,7 @@ private class IrohLink(
             val endpoint = IrohSupport.endpoint(context)
             val link = EndpointTicket.fromString(config.ticket).use { ticket ->
                 ticket.endpointAddr().use { addr ->
-                    endpoint.connect(addr, IrohSupport.ALPN)
+                    endpoint.connect(dialAddress(endpoint, addr), IrohSupport.ALPN)
                 }
             }
             connection = link
@@ -409,15 +428,63 @@ private class IrohLink(
                 val reason = runCatching { link.closed() }.getOrDefault("closed")
                 fail(listener, reason.ifEmpty { "closed" })
             }
-            scope.launch { sampleRoute(link) }
             scope.launch { datagramLoop(link) }
+            // The relay-only watchdog: push updates from watchPaths plus the 1 s sample.
+            val pathMonitor = IrohPathMonitor(
+                policy = policy,
+                scheduler = CoroutineLinkScheduler(scope),
+                ownsCall = ownsCall,
+                onEscalate = { escalation -> onRelayOnly(escalation, listener) }
+            )
+            monitor = pathMonitor
+            pathMonitor.start(pathSource(link))
+            scope.launch { samplePaths(link, pathMonitor) }
+            endpointWatch = endpoint.watchNetworkChange(object : NetworkChangeCallback {
+                override suspend fun onChange() = onNetworkChange("iroh_network_changed", listener)
+            })
             unwatchNetwork = IrohSupport.watchNetwork(context) { reason -> onNetworkChange(reason, listener) }
-            if (cancelled.get()) unwatchNetwork()
+            if (cancelled.get()) {
+                unwatchNetwork()
+                stopEndpointWatch()
+                pathMonitor.cancel()
+            }
         } catch (t: Throwable) {
             if (!cancelled.get()) {
                 BridgeLog.w(TAG, "iroh connect failed: ${t.javaClass.simpleName}")
                 fail(listener, "connect_failed")
             }
+        }
+    }
+
+    /**
+     * The address the phone dials: the ticket's endpoint id, its relay, and the
+     * direct addresses merged from the ticket and the endpoint's cache (see
+     * [IrohAddressPlanner]).  A cache miss is not an error: the ticket alone
+     * still reaches the daemon over the relay.
+     */
+    private suspend fun dialAddress(endpoint: Endpoint, ticketAddr: EndpointAddr): EndpointAddr {
+        val id = ticketAddr.id()
+        val cached = runCatching { endpoint.remoteAddr(id) }.getOrNull()
+        val cachedAddresses = cached?.let { runCatching { it.directAddresses() }.getOrNull() }
+        val cachedRelay = cached?.let { runCatching { it.relayUrl() }.getOrNull() }
+        cached?.close()
+        val plan = IrohAddressPlanner.plan(
+            ticketAddresses = ticketAddr.directAddresses(),
+            ticketRelay = ticketAddr.relayUrl(),
+            cachedAddresses = cachedAddresses,
+            cachedRelay = cachedRelay,
+            subnets = activeSubnets()
+        )
+        return EndpointAddr(id, plan.relayUrl, plan.addresses)
+    }
+
+    /** Prefixes of the active network, or null when the platform cannot say. */
+    private fun activeSubnets(): List<IrohSubnet>? {
+        val manager = context.getSystemService(ConnectivityManager::class.java) ?: return null
+        val network = manager.activeNetwork ?: return null
+        val properties = manager.getLinkProperties(network) ?: return null
+        return properties.linkAddresses.map { linkAddress ->
+            IrohSubnet(linkAddress.address.address, linkAddress.prefixLength)
         }
     }
 
@@ -522,9 +589,12 @@ private class IrohLink(
      * The default network changed under a live link: drop the link and the
      * endpoint so the reconnect binds afresh on the new network.  During a call
      * iroh keeps migrating the connection instead; dropping it would end the call.
+     * Either way the escalation cooldown restarts, so a network that just moved
+     * is never judged by the evidence from before the move.
      */
     private fun onNetworkChange(reason: String, listener: DeviceLink.Listener) {
         if (cancelled.get() || downOnce.get()) return
+        monitor?.networkChanged()
         if (ownsCall()) {
             BridgeLog.i(TAG, "$reason during a call: keeping the iroh endpoint")
             return
@@ -535,11 +605,31 @@ private class IrohLink(
         fail(listener, reason)
     }
 
-    private suspend fun sampleRoute(link: Connection) {
+    /** Subscribes the monitor to the connection's own path-change events. */
+    private fun pathSource(link: Connection): IrohPathSource = IrohPathSource { onPath ->
+        val handle = link.watchPaths(object : PathChangeCallback {
+            override suspend fun onChange(paths: List<PathSnapshot>) = onPath(kindOf(paths))
+        })
+        IrohPathWatch { runCatching { handle.close() } }
+    }
+
+    private fun kindOf(paths: List<PathSnapshot>): IrohPathKind = when (paths.firstOrNull { it.isSelected }?.isRelay) {
+        null -> IrohPathKind.UNKNOWN
+        true -> IrohPathKind.RELAY
+        false -> IrohPathKind.DIRECT
+    }
+
+    /**
+     * The fallback the push events cannot replace: one snapshot per second that
+     * keeps [route] for the UI fresh and feeds the same path kind to the
+     * relay-only monitor, so a lost watcher event never hides a relay residence.
+     */
+    private suspend fun samplePaths(link: Connection, monitor: IrohPathMonitor) {
         var lastPath: String? = null
         while (scope.isActive && !cancelled.get()) {
             try {
-                val selected = link.paths().firstOrNull { it.isSelected }
+                val snapshots = link.paths()
+                val selected = snapshots.firstOrNull { it.isSelected }
                 val path = selected?.let { (if (it.isRelay) "relay " else "direct ") + it.remoteAddr }
                 if (path != lastPath) {
                     lastPath = path
@@ -549,11 +639,30 @@ private class IrohLink(
                     val rtt = it.rttMs.toLong()
                     DeviceLink.Route(relay = it.isRelay, rttMs = if (rtt > 0L) rtt else null)
                 }
+                monitor.observe(kindOf(snapshots))
             } catch (_: Throwable) {
                 return
             }
             delay(ROUTE_INTERVAL_MS)
         }
+    }
+
+    /**
+     * The policy says the relay only would no longer do: recycle the endpoint
+     * when this is a repeated escalation, then report down so LinkSupervisor
+     * re-dials through the usual backoff.
+     */
+    private fun onRelayOnly(escalation: IrohEscalation, listener: DeviceLink.Listener) {
+        BridgeLog.w(
+            TAG,
+            if (escalation.recycleEndpoint) {
+                "relay only again: recycling the iroh endpoint before reconnecting"
+            } else {
+                "relay only: reconnecting the iroh link"
+            }
+        )
+        if (escalation.recycleEndpoint) IrohSupport.recycleEndpoint()
+        fail(listener, "relay_only")
     }
 
     override fun sendText(message: String): Boolean {
@@ -583,6 +692,9 @@ private class IrohLink(
         if (cancelled.get()) return
         if (!downOnce.compareAndSet(false, true)) return
         unwatchNetwork()
+        stopEndpointWatch()
+        monitor?.cancel()
+        monitor = null
         BridgeLog.w(TAG, "iroh paths at link down ($reason): ${describePaths()}")
         route = null
         runCatching { connection?.close(0, reason.toByteArray(Charsets.UTF_8)) }
@@ -590,6 +702,13 @@ private class IrohLink(
         audioOutbound.close()
         listener.onLinkDown(reason)
         scope.cancel()
+    }
+
+    /** Drops the endpoint's network-change subscription, if any. */
+    private fun stopEndpointWatch() {
+        val handle = endpointWatch ?: return
+        endpointWatch = null
+        runCatching { handle.close() }
     }
 
     /** Every open path, the selected one starred, with its transport counters. */
@@ -605,6 +724,9 @@ private class IrohLink(
         if (!cancelled.compareAndSet(false, true)) return
         downOnce.set(true)
         unwatchNetwork()
+        stopEndpointWatch()
+        monitor?.cancel()
+        monitor = null
         route = null
         controlOutbound.close()
         audioOutbound.close()
