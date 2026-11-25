@@ -154,6 +154,9 @@ class ComposerViewModel @Inject constructor(
             requestId = "app-$suffix"
         )
         _state.update { it.copy(placing = true, error = null) }
+        // From this moment the in-call screen Telecom draws may cover the composer, and only this
+        // phone's own placement may pull the live screen back over it.
+        LiveCallFront.expectPlacement()
         viewModelScope.launch {
             when (val outcome = api.placeCall(payload)) {
                 is ApiOutcome.Ok -> {
@@ -165,12 +168,15 @@ class ComposerViewModel @Inject constructor(
                     }
                 }
 
-                is ApiOutcome.Failure -> _state.update {
-                    it.copy(
-                        placing = false,
-                        confirming = false,
-                        error = "${outcome.message} (${outcome.code})"
-                    )
+                is ApiOutcome.Failure -> {
+                    LiveCallFront.cancelPlacement()
+                    _state.update {
+                        it.copy(
+                            placing = false,
+                            confirming = false,
+                            error = "${outcome.message} (${outcome.code})"
+                        )
+                    }
                 }
             }
         }
