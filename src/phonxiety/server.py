@@ -128,11 +128,13 @@ def create_app(settings: Settings) -> Starlette:
     from iroh import IrohError
 
     from .audio.opus import CODECS
-    from .device import DeviceError, WebSocketListener
+    from .device import DeviceError
     from .models import CallLimits, CallRequest
-    from .p2p import IrohListener
+    from .net.iroh import IrohListener
+    from .net.link import LinkUnavailable
+    from .net.tls import device_identity, server_context
+    from .net.websocket import WebSocketListener
     from .runtime import create_controller
-    from .tls import device_identity, server_context
 
     controller = create_controller(settings)
 
@@ -290,7 +292,7 @@ def create_app(settings: Settings) -> Starlette:
             return _unauthorized()
         try:
             return JSONResponse({"iroh": await iroh_link.ticket(), "endpoint_id": iroh_link.endpoint_id})
-        except DeviceError:
+        except LinkUnavailable:
             return JSONResponse({"error": "iroh_link_unavailable"}, status_code=503)
 
     async def link_test(request: Request) -> JSONResponse:

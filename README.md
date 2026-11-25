@@ -235,14 +235,16 @@ Calls, keys, tokens and the daemon log live under `~/.local/share/phonxiety/`. A
 - `controller.py` — call lifecycle, line check before dialing, quiet-line supervision, result
 - `voice.py`, `auth.py` — Codex voice session over WebRTC and its sign-in
 - `task_agent.py` — the text model: reviews, keypad digits, summary
-- `device.py`, `p2p.py`, `tls.py` — phone protocol, iroh link, TLS WebSocket link
+- `device.py` — the phone protocol: commands, events, call-audio stream, link test
+- `net/` — the phone link: iroh and TLS WebSocket transports, framing, TLS identity
+- `audio/` — Opus, conversion, pacing, recording, the shareable copy
 - `store.py`, `models.py`, `settings.py`, `runtime.py`, `power.py` — SQLite, request models, settings, wiring, keeping the Mac awake
 
 **Phone** (`android/app/src/main/java/com/phonxiety/bridge/`)
 
-- `BridgeEngine.kt` — link to the daemon, commands, call ownership
+- `BridgeEngine.kt` — the device protocol on the phone: hello, commands, call ownership
 - `PhoneAudio.kt`, `HandsetMute.kt` — call audio in and out, microphone state
-- `IrohLink.kt`, `WebSocketLink.kt`, `DeviceLink.kt` — the two transports
+- `net/` — the phone link: `LinkSupervisor` (connect, reconnect, host watchdog), iroh and WebSocket transports, framing
 - `BridgeService.kt`, `BridgeInCallService.kt`, `BootReceiver.kt` — foreground service, Telecom, start on boot
 - `MainActivity.kt`, `BridgeConfig.kt`, `AppStorage.kt`, `CallLedger.kt` — status screen, pairing, storage
 

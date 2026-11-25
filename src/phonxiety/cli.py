@@ -396,7 +396,7 @@ def _cmd_pair(args: argparse.Namespace) -> None:
 
     settings = _settings()
     if args.host or args.lan or args.tailscale:
-        from .tls import device_identity
+        from .net.tls import device_identity
 
         _, _, fingerprint = device_identity(settings.state_dir)
         if args.tailscale:

@@ -6,8 +6,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from phonxiety.device import DeviceError, DeviceHub
-from phonxiety.p2p import IrohLink, IrohListener, frame, parse_header
+from phonxiety.device import DeviceHub
+from phonxiety.net.framing import FrameError, frame, parse_header
+from phonxiety.net.iroh import IrohLink, IrohListener
 
 TOKEN = "device-secret"
 HELLO = json.dumps({"type": "hello", "version": 1, "device": "test", "capabilities": {}})
@@ -90,7 +91,7 @@ class FramingTests(unittest.TestCase):
 
     def test_rejects_unknown_kind_empty_and_oversized_frames(self) -> None:
         for header in (b"\x03\x00\x00\x00\x01", b"\x01\x00\x00\x00\x00", b"\x02\x00\x02\x00\x01"):
-            with self.assertRaises(DeviceError):
+            with self.assertRaises(FrameError):
                 parse_header(header)
 
 

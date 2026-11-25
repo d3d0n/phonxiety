@@ -2,12 +2,9 @@
 
 iroh finds a direct path between the two endpoints (same network or hole
 punched) and falls back to a relay, so neither side needs a VPN app or a
-reachable address. The device protocol travels on one bidirectional stream:
-
-    frame = kind (1 byte) | length (uint32 big-endian) | payload
-    kind 1: UTF-8 JSON text    kind 2: binary (PX01 PCM, PX02 Opus, PXLT probe)
-
-The first frame from the phone is ``{"type": "auth", "token": ...}``.
+reachable address. The device protocol travels on one bidirectional stream in
+the frames of `framing.py`; the first frame from the phone is
+``{"type": "auth", "token": ...}``.
 """
 
 from __future__ import annotations
@@ -24,27 +21,13 @@ from typing import Any
 
 import iroh
 
-from .device import MAX_MESSAGE_BYTES, DeviceError, DeviceHub, LinkClosed
+from .framing import HEADER_BYTES, TEXT, frame, parse_header
+from .link import LinkClosed, LinkSink, LinkUnavailable
 
 log = logging.getLogger(__name__)
 ALPN = b"phonxiety/device/1"
 KEY_NAME = "link.key"
-TEXT, BINARY = 1, 2
 HANDSHAKE_TIMEOUT_S = 10
-
-
-def frame(message: str | bytes) -> bytes:
-    kind, payload = (TEXT, message.encode("utf-8")) if isinstance(message, str) else (BINARY, bytes(message))
-    if not 1 <= len(payload) <= MAX_MESSAGE_BYTES:
-        raise DeviceError("Invalid link frame size")
-    return bytes((kind,)) + len(payload).to_bytes(4, "big") + payload
-
-
-def parse_header(header: bytes) -> tuple[int, int]:
-    kind, length = header[0], int.from_bytes(header[1:5], "big")
-    if kind not in (TEXT, BINARY) or not 1 <= length <= MAX_MESSAGE_BYTES:
-        raise DeviceError("Invalid link frame")
-    return kind, length
 
 
 def _secret_key(state_dir: Path) -> bytes:
@@ -108,7 +91,7 @@ class IrohLink:
 
     async def recv(self) -> str | bytes:
         try:
-            kind, length = parse_header(await self._recv.read_exact(5))
+            kind, length = parse_header(await self._recv.read_exact(HEADER_BYTES))
             payload = await self._recv.read_exact(length)
         except iroh.IrohError as exc:
             raise LinkClosed() from exc
@@ -126,7 +109,7 @@ class IrohLink:
 
 
 class IrohListener:
-    def __init__(self, hub: DeviceHub, token: str, state_dir: Path, relay_urls: tuple[str, ...] = ()) -> None:
+    def __init__(self, hub: LinkSink, token: str, state_dir: Path, relay_urls: tuple[str, ...] = ()) -> None:
         self._hub = hub
         self._token = token
         self._state_dir = state_dir
@@ -153,7 +136,7 @@ class IrohListener:
         """Address the phone dials: endpoint id plus the relay and addresses known right now."""
         endpoint = self._endpoint
         if endpoint is None:
-            raise DeviceError("iroh_link_unavailable")
+            raise LinkUnavailable("iroh_link_unavailable")
         # A ticket issued before the home relay is known would only work on the local network.
         with contextlib.suppress(TimeoutError):
             async with asyncio.timeout(5):
@@ -182,7 +165,7 @@ class IrohListener:
                 await link.close(4401, "unauthorized")
                 return
             await self._hub.attach(link)
-        except (LinkClosed, TimeoutError, ValueError, DeviceError, iroh.IrohError) as exc:
+        except (LinkClosed, TimeoutError, ValueError, iroh.IrohError) as exc:  # ValueError: bad frame or JSON
             log.info("iroh peer handshake failed: %s", type(exc).__name__)
             if connection is not None:
                 with contextlib.suppress(iroh.IrohError):
