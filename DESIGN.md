@@ -475,5 +475,5 @@ mise run daemon:install          # автозапуск через launchd; daem
 uv run --project /path/to/phonxiety phonxiety-mcp
 ```
 
-MCP и health — `127.0.0.1:18762` (`PHONXIETY_PORT`). Адресный device link — `0.0.0.0:18763` (`PHONXIETY_DEVICE_HOST`, `PHONXIETY_DEVICE_PORT`); iroh портов не требует. Состояние — `~/.local/share/phonxiety` либо `PHONXIETY_STATE_DIR`. Отдельный Codex login — `~/.local/state/phonxiety/auth.json` либо `PHONXIETY_AUTH_FILE`. Текстовая модель выбирается через `PHONXIETY_TASK_MODEL` или `model` в конфигурации Codex. Android SDK и NDK — `.tools/android-sdk` (`ANDROID_HOME`).
+MCP и health — `127.0.0.1:18762` (`PHONXIETY_PORT`). Адресный device link — `0.0.0.0:18763` (`PHONXIETY_DEVICE_HOST`, `PHONXIETY_DEVICE_PORT`); iroh портов не требует. Состояние — `~/.local/share/phonxiety` либо `PHONXIETY_STATE_DIR`. Отдельный Codex login — `~/.local/state/phonxiety/auth.json` либо `PHONXIETY_CODEX_AUTH_FILE`. Текстовая модель выбирается через `PHONXIETY_CODEX_TASK_MODEL` или `model` в конфигурации Codex; голос Codex — `PHONXIETY_CODEX_VOICE`. Настройки каждого голосового бэкенда носят его префикс: `PHONXIETY_CODEX_*`, `PHONXIETY_GEMINI_*`, `PHONXIETY_DEEPGRAM_*`. Android SDK и NDK — `.tools/android-sdk` (`ANDROID_HOME`).
 

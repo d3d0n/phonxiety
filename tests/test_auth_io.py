@@ -58,9 +58,9 @@ def test_missing_own_login_does_not_consume_cli_credentials(
 def test_auth_paths_follow_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("PHONXIETY_AUTH_FILE", str(tmp_path / "one.json"))
+    monkeypatch.setenv("PHONXIETY_CODEX_AUTH_FILE", str(tmp_path / "one.json"))
     assert default_auth_path() == tmp_path / "one.json"
-    monkeypatch.delenv("PHONXIETY_AUTH_FILE")
+    monkeypatch.delenv("PHONXIETY_CODEX_AUTH_FILE")
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     assert default_auth_path() == tmp_path / "state" / "phonxiety" / "auth.json"
 

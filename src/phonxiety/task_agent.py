@@ -185,13 +185,13 @@ def resolve_task_model(explicit: str | None = None) -> str:
     """Resolve the text model without inventing a model id."""
     if explicit is not None and explicit.strip():
         return explicit.strip()
-    configured = os.environ.get("PHONXIETY_TASK_MODEL", "").strip()
+    configured = os.environ.get("PHONXIETY_CODEX_TASK_MODEL", "").strip()
     if configured:
         return configured
     path = default_config_path()
     if not path.is_file():
         raise TaskModelConfigError(
-            "no task model configured: set PHONXIETY_TASK_MODEL or add `model` "
+            "no task model configured: set PHONXIETY_CODEX_TASK_MODEL or add `model` "
             f"to {path}"
         )
     try:
@@ -204,7 +204,7 @@ def resolve_task_model(explicit: str | None = None) -> str:
     if isinstance(model, str) and model.strip():
         return model.strip()
     raise TaskModelConfigError(
-        f"no `model` in {path}; set PHONXIETY_TASK_MODEL explicitly"
+        f"no `model` in {path}; set PHONXIETY_CODEX_TASK_MODEL explicitly"
     )
 
 

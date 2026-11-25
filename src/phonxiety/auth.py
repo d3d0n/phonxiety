@@ -104,7 +104,7 @@ class CodexCredentials:
 
 def default_auth_path() -> Path:
     """Dedicated credential file, never the Codex CLI's own file."""
-    configured = os.environ.get("PHONXIETY_AUTH_FILE", "").strip()
+    configured = os.environ.get("PHONXIETY_CODEX_AUTH_FILE", "").strip()
     if configured:
         return Path(configured).expanduser()
     state_home = os.environ.get("XDG_STATE_HOME", "").strip()
@@ -356,7 +356,7 @@ class CodexAuth:
     def _check_owned_path(self) -> None:
         if self.path.resolve() == codex_cli_auth_path().resolve():
             raise CodexAuthError(
-                "PHONXIETY_AUTH_FILE must be a daemon-owned path; run `phonxiety auth` "
+                "PHONXIETY_CODEX_AUTH_FILE must be a daemon-owned path; run `phonxiety auth` "
                 "to create an independent login"
             )
 

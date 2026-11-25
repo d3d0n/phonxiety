@@ -107,9 +107,9 @@ class Settings:
     port: int = 18762
     device_host: str = "0.0.0.0"
     device_port: int = 18763
-    auth_path: Path | None = None
-    task_model: str | None = None
-    voice: str = "sol"
+    codex_auth_path: Path | None = None
+    codex_task_model: str | None = None
+    codex_voice: str = "sol"
     audio_codec: str = "opus"
     opus_bitrate: int = DEFAULT_OPUS_BITRATE
     iroh_relays: tuple[str, ...] = ()
@@ -123,7 +123,7 @@ class Settings:
         device_port = _port("PHONXIETY_DEVICE_PORT", 18763)
         if device_port == port:
             raise ValueError("PHONXIETY_DEVICE_PORT must differ from PHONXIETY_PORT")
-        auth_path = os.environ.get("PHONXIETY_AUTH_FILE")
+        codex_auth_path = os.environ.get("PHONXIETY_CODEX_AUTH_FILE")
         return cls(
             state_dir=state_dir,
             device_token=os.environ.get("PHONXIETY_DEVICE_TOKEN") or tokens["device_token"],
@@ -131,9 +131,9 @@ class Settings:
             port=port,
             device_host=os.environ.get("PHONXIETY_DEVICE_HOST") or "0.0.0.0",
             device_port=device_port,
-            auth_path=Path(auth_path).expanduser() if auth_path else None,
-            task_model=os.environ.get("PHONXIETY_TASK_MODEL") or None,
-            voice=os.environ.get("PHONXIETY_VOICE", "sol"),
+            codex_auth_path=Path(codex_auth_path).expanduser() if codex_auth_path else None,
+            codex_task_model=os.environ.get("PHONXIETY_CODEX_TASK_MODEL") or None,
+            codex_voice=os.environ.get("PHONXIETY_CODEX_VOICE", "sol"),
             audio_codec=_codec(),
             opus_bitrate=_opus_bitrate(),
             iroh_relays=_iroh_relays(state_dir),

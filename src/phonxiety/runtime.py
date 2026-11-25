@@ -44,7 +44,7 @@ def voice_factory(settings: Settings, auth: Any) -> Callable[[str, str, Any], An
     from .voice import CodexVoiceSession
 
     return lambda instructions, brief, callbacks: CodexVoiceSession(
-        instructions, callbacks, auth=auth, voice=settings.voice, initial_context=brief,
+        instructions, callbacks, auth=auth, voice=settings.codex_voice, initial_context=brief,
     )
 
 
@@ -64,8 +64,8 @@ def create_controller(settings: Settings) -> CallController:
     lock.write(str(os.getpid()))
     lock.flush()
     try:
-        auth = CodexAuth(settings.auth_path)
-        task_agent = TaskAgent(auth, settings.task_model)
+        auth = CodexAuth(settings.codex_auth_path)
+        task_agent = TaskAgent(auth, settings.codex_task_model)
         store = CallStore(settings.state_dir / "calls.sqlite3")
         device = DeviceHub(audio_codec=settings.audio_codec, opus_bitrate=settings.opus_bitrate)
         return CallController(

@@ -30,12 +30,12 @@ async def _lines(chunks: list[str]):
 def test_resolve_task_model_precedence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("PHONXIETY_TASK_MODEL", "env-model")
+    monkeypatch.setenv("PHONXIETY_CODEX_TASK_MODEL", "env-model")
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     assert resolve_task_model("explicit-model") == "explicit-model"
     assert resolve_task_model(None) == "env-model"
 
-    monkeypatch.delenv("PHONXIETY_TASK_MODEL")
+    monkeypatch.delenv("PHONXIETY_CODEX_TASK_MODEL")
     (tmp_path / "config.toml").write_text('model = "config-model"\n', encoding="utf-8")
     assert resolve_task_model(None) == "config-model"
 
@@ -43,7 +43,7 @@ def test_resolve_task_model_precedence(
 def test_missing_task_model_is_explicit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("PHONXIETY_TASK_MODEL", raising=False)
+    monkeypatch.delenv("PHONXIETY_CODEX_TASK_MODEL", raising=False)
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     with pytest.raises(TaskModelConfigError):
         resolve_task_model(None)
@@ -52,7 +52,7 @@ def test_missing_task_model_is_explicit(
 def test_task_agent_construction_is_lazy_but_run_fails_clearly(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("PHONXIETY_TASK_MODEL", raising=False)
+    monkeypatch.delenv("PHONXIETY_CODEX_TASK_MODEL", raising=False)
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     agent = TaskAgent(auth=object(), model=None)  # type: ignore[arg-type]
     assert agent.configured_model is None
