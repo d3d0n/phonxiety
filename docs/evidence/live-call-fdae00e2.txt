@@ -1,0 +1,7 @@
+ended answered succeeded None {'code': 2, 'label': '', 'reason': 'LOCAL'} {}
+  assistant : Hi, I'm testing a call from the app. Can you say a short phrase for me?
+  user : One, two, three
+  assistant : You said, "one, two, three." Thanks for the test, goodbye.
+ partials: []
+ remote: peak 2569, non-silent 0.029
+ agent: peak 9959, non-silent 0.298
