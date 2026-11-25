@@ -16,6 +16,7 @@ import logging
 import os
 import secrets
 import tempfile
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,9 @@ log = logging.getLogger(__name__)
 ALPN = b"phonxiety/device/2"
 KEY_NAME = "link.key"
 HANDSHAKE_TIMEOUT_S = 10
+
+# A phone-opened bulk stream: the parsed first frame and the stream's two halves.
+AttachmentHandler = Callable[[dict[str, Any], Any, Any], Awaitable[None]]
 
 
 def _secret_key(state_dir: Path) -> bytes:
@@ -63,15 +67,28 @@ class IrohLink:
     first) and a unidirectional audio stream to the daemon; the daemon opens one audio
     stream back. A lost packet on an audio stream therefore never holds back a command
     or a ping. Probe frames may also travel as QUIC datagrams (`send_datagram`).
+
+    The phone may also open further bidirectional streams for bulk data (recordings,
+    diagnostics bundles): the first frame names the attachment and the daemon writes the
+    bytes on that stream, so bulk never queues behind a command or audio.
     """
 
-    def __init__(self, connection: Any, control: Any) -> None:
+    supports_attachments = True
+
+    def __init__(
+        self,
+        connection: Any,
+        control: Any,
+        attachment_handler: AttachmentHandler | None = None,
+    ) -> None:
         self._connection = connection
         self._control_send = control.send()
         self._control_recv = control.recv()
         self._audio_send: Any = None
         self._inbox: asyncio.Queue[str | bytes | BaseException] = asyncio.Queue(maxsize=256)
         self._readers: list[asyncio.Task[None]] = []
+        self._attachments: set[asyncio.Task[None]] = set()
+        self._attachment_handler = attachment_handler
         self.peer = f"iroh:{connection.remote_id().fmt_short()}"
         # The full id is what a relay allowlist needs.
         log.info("iroh connection from endpoint %s", connection.remote_id())
@@ -92,6 +109,44 @@ class IrohLink:
             asyncio.create_task(self._read_audio(), name="iroh-audio"),
             asyncio.create_task(self._read_datagrams(), name="iroh-datagrams"),
         ]
+        if self._attachment_handler is not None:
+            # Nothing accepts the phone's bulk streams when no handler is wired, so the
+            # transport keeps only the streams the device protocol itself uses.
+            self._readers.append(asyncio.create_task(self._read_attachments(), name="iroh-attachments"))
+
+    async def _read_attachments(self) -> None:
+        """Accept phone-opened bulk streams for the life of the link."""
+        try:
+            while True:
+                stream = await self._connection.accept_bi()
+                task = asyncio.create_task(self._serve_attachment(stream), name="iroh-attachment")
+                self._attachments.add(task)
+                task.add_done_callback(self._attachments.discard)
+        except asyncio.CancelledError:
+            raise
+        except iroh.IrohError:
+            return  # the connection is closing; the control reader reports it
+
+    async def _serve_attachment(self, stream: Any) -> None:
+        send, recv = stream.send(), stream.recv()
+        try:
+            kind, payload = await self._frame(recv)
+            header = json.loads(payload) if kind == TEXT else None
+            if not isinstance(header, dict) or header.get("type") != "attachment" or self._attachment_handler is None:
+                raise ValueError("attachments_unavailable")
+            await self._attachment_handler(header, send, recv)
+        except asyncio.CancelledError:
+            raise
+        except (LinkClosed, FrameError, ValueError, json.JSONDecodeError):
+            with contextlib.suppress(Exception):
+                await send.write_all(frame(json.dumps({
+                    "type": "error", "code": "attachments_unavailable", "message": "the daemon cannot serve this stream",
+                })))
+        except Exception:  # noqa: BLE001 - one bad stream must not end the link
+            log.exception("Attachment stream failed")
+        finally:
+            with contextlib.suppress(Exception):
+                await send.finish()
 
     async def _read_audio(self) -> None:
         try:
@@ -187,6 +242,8 @@ class IrohLink:
     async def close(self, code: int, reason: str) -> None:
         for reader in self._readers:
             reader.cancel()
+        for task in tuple(self._attachments):
+            task.cancel()
         with contextlib.suppress(iroh.IrohError):
             self._connection.close(code, reason.encode("utf-8")[:120])
         # The readers are gone, so nobody else will wake a recv() waiting on the inbox.
@@ -204,6 +261,13 @@ class IrohListener:
         self._endpoint: Any = None
         self._accepting: asyncio.Task[None] | None = None
         self._serving: set[asyncio.Task[None]] = set()
+
+    def _attachments(self, header: dict[str, Any], send: Any, recv: Any) -> None:
+        """Hand one bulk stream to the hub, which owns the app API's answer."""
+        sink = getattr(self._hub, "serve_attachment", None)
+        if sink is None:
+            raise ValueError("attachments_unavailable")
+        sink(header, send, recv)
 
     @property
     def endpoint_id(self) -> str | None:
@@ -244,7 +308,12 @@ class IrohListener:
         try:
             async with asyncio.timeout(HANDSHAKE_TIMEOUT_S):
                 connection = await (await incoming.accept()).connect()
-                link = IrohLink(connection, await connection.accept_bi())
+                handler = (
+                    self._attachments
+                    if getattr(self._hub, "on_attachment", None) is not None
+                    else None
+                )
+                link = IrohLink(connection, await connection.accept_bi(), attachment_handler=handler)
                 auth = json.loads(await link.recv())
             presented = auth.get("token") if isinstance(auth, dict) and auth.get("type") == "auth" else None
             if not isinstance(presented, str) or not secrets.compare_digest(presented.encode(), self._token.encode()):

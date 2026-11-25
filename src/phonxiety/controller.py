@@ -67,6 +67,9 @@ class _Call:
     release_awake: Callable[[], None] | None = None
     # Not dialed yet and waiting for a usable link: a link drop is part of the wait, not a failure.
     awaiting_link: bool = False
+    # Paused from the phone: the agent keeps talking into the session but nothing reaches the line.
+    muted: bool = False
+    marks: list[dict[str, Any]] = field(default_factory=list)
 
 
 class CallController:
@@ -104,6 +107,7 @@ class CallController:
         self._tasks: set[asyncio.Task[Any]] = set()
         self._lock = asyncio.Lock()
         self._changed = asyncio.Condition()
+        self._revision = 0  # bumped by every state or transcript change the app API may report
         self._closing = False
         self._epoch = 0
         device.on_event = self.on_device_event
@@ -121,8 +125,26 @@ class CallController:
             log.error("Background operation %s failed: %s", task.get_name(), task.exception())
 
     async def _notify(self) -> None:
+        self._revision += 1
         async with self._changed:
             self._changed.notify_all()
+
+    @property
+    def revision(self) -> int:
+        return self._revision
+
+    async def wait_change(self, since: int, timeout: float) -> int:
+        """Block until the call state moves past `since`, or the timeout; return the revision.
+
+        The app API's long-poll uses this instead of polling the store.
+        """
+        try:
+            async with asyncio.timeout(timeout):
+                async with self._changed:
+                    await self._changed.wait_for(lambda: self._revision > since)
+        except TimeoutError:
+            pass
+        return self._revision
 
     def health(self) -> dict[str, Any]:
         return {
@@ -193,6 +215,102 @@ class CallController:
                 call.ending_task = self._spawn(self._disconnect(call, flush=True), f"hangup:{call_id}")
         await self._notify()
         return self.store.snapshot(call_id)
+
+    # -- supervision from the phone app ---------------------------------
+
+    def live_call(self, call_id: str) -> dict[str, Any] | None:
+        """The in-memory view of a call the daemon still owns, or None."""
+        call = self._calls.get(call_id)
+        if call is None:
+            return None
+        work = call.work_task
+        return {
+            "call_id": call_id,
+            "finalizing": call.finalizing,
+            "muted": call.muted,
+            "audio_ready": call.audio_ready,
+            "awaiting_link": call.awaiting_link,
+            "far_end": call.far_end,
+            "audio_codec": call.audio_codec,
+            "assistant_turns": call.assistant_turns,
+            "marks": list(call.marks),
+            "agent_activity": "working" if work is not None and not work.done() else "idle",
+            "recording": call.recording,
+            "error": call.error,
+        }
+
+    def _live_call_or_error(self, call_id: str) -> _Call:
+        call = self._calls.get(call_id)
+        if call is None or call.finalizing:
+            raise RuntimeError("call_not_active")
+        return call
+
+    async def set_output_muted(self, call_id: str, muted: bool) -> dict[str, Any]:
+        """Stop or resume sending the agent's speech to the phone.
+
+        Backend-agnostic: the voice session keeps running and the line keeps the far end,
+        only the daemon's outgoing audio is withheld, so no backend has to support pausing.
+        """
+        call = self._live_call_or_error(call_id)
+        if self.store.state(call_id) not in (CallState.ACTIVE, CallState.ENDING):
+            raise RuntimeError("call_not_active")
+        call.muted = bool(muted)
+        log.info("call %s: agent speech %s from the app", call_id, "paused" if muted else "resumed")
+        await self._notify()
+        return {"call_id": call_id, "muted": call.muted, "state": self.store.state(call_id).value}
+
+    async def inject_instruction(self, call_id: str, text: str) -> dict[str, Any]:
+        """Hand a supervisor directive to the voice session without speaking it.
+
+        The text goes in as commentary so the model treats it as guidance, never as
+        something to read out; the task agent also sees it in the history.
+        """
+        call = self._live_call_or_error(call_id)
+        if call.voice is None or self.store.state(call_id) not in (CallState.ACTIVE, CallState.ENDING):
+            raise RuntimeError("call_not_active")
+        await call.voice.append_context(f"Supervisor instruction: {text}", commentary=True)
+        call.actions.append({"role": "supervisor", "text": text, "at": time.time()})
+        await self._notify()
+        return {"call_id": call_id, "delivered": True}
+
+    async def summarize_now(self, call_id: str, timeout: float = 90) -> dict[str, Any]:
+        """Ask the task agent for summary and fields now; the call keeps running."""
+        call = self._live_call_or_error(call_id)
+        async with asyncio.timeout(timeout):
+            result = await self.task_agent.summarize(call.request.model_dump(mode="json"), self._history(call))
+        if result.get("task_outcome") not in {"succeeded", "declined", "incomplete", "needs_user", "unknown"}:
+            raise ValueError("invalid_summary: unknown task outcome")
+        if not isinstance(result.get("summary"), str) or not isinstance(result.get("fields", {}), dict):
+            raise ValueError("invalid_summary: summary and fields are required")
+        call.proposed_result = {
+            "task_outcome": result["task_outcome"],
+            "summary": result["summary"],
+            "fields": result.get("fields", {}),
+        }
+        await self._notify()
+        return {"call_id": call_id, **call.proposed_result}
+
+    async def send_dtmf(self, call_id: str, digits: str) -> dict[str, Any]:
+        """Press keys from the phone; the same command the agent's keypress uses."""
+        call = self._live_call_or_error(call_id)
+        if self.store.state(call_id) != CallState.ACTIVE:
+            raise RuntimeError("call_not_active")
+        result = await self.device.command("dtmf", call_id, action_generation=call.generation, digits=digits, timeout=15)
+        call.actions.append({"role": "phone", "text": f"keypad digits sent: {digits}", "at": time.time()})
+        await self._notify()
+        return {"call_id": call_id, "digits": digits, "result": result}
+
+    async def add_mark(self, call_id: str, mark: str, note: str | None = None) -> list[dict[str, Any]] | None:
+        """Store a mark in a live call's record; None when the call is not in memory."""
+        call = self._calls.get(call_id)
+        if call is None:
+            return None
+        entry = {"mark": mark, "at": time.time()}
+        if note:
+            entry["note"] = note
+        call.marks.append(entry)
+        await self._notify()
+        return list(call.marks)
 
     @staticmethod
     def _instructions() -> str:
@@ -399,7 +517,7 @@ class CallController:
             if call.finish_requested_at is not None:
                 call.finish_speech_seen = True
         call.media_changed.set()
-        if not call.audio_ready or not call.output_open:
+        if call.muted or not call.audio_ready or not call.output_open:
             return
         try:
             self.device.send_audio(call.call_id, pcm)
@@ -418,6 +536,7 @@ class CallController:
             return
         self.store.append_transcript(call.call_id, role, text, final)
         self._activity(call, time.monotonic())
+        await self._notify()
         if role == "user" and final and call.far_end is None:
             label = far_end.classify(text)
             if label is not None:
@@ -827,6 +946,7 @@ class CallController:
         record["audio_codec"] = call.audio_codec
         record["far_end"] = call.far_end or "person"
         record["recording"] = call.recording
+        record["marks"] = list(call.marks)
         return record
 
     def _owned(self, call: _Call) -> bool:

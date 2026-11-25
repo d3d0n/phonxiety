@@ -410,8 +410,18 @@ def _cmd_pair(args: argparse.Namespace) -> None:
         if ":" in host and not host.startswith("["):
             host = f"[{host}]"
         url = f"wss://{host}:{settings.device_port}/device"
-        config = {"url": url, "token": settings.device_token, "cert_sha256": fingerprint}
-        query = {"url": url, "token": settings.device_token, "cert": fingerprint}
+        config = {
+            "url": url,
+            "token": settings.device_token,
+            "app_token": settings.app_token,
+            "cert_sha256": fingerprint,
+        }
+        query = {
+            "url": url,
+            "token": settings.device_token,
+            "app_token": settings.app_token,
+            "cert": fingerprint,
+        }
         summary = [f"Daemon address:      {url}", f"Certificate SHA-256: {fingerprint}"]
     else:
         _ensure_daemon(settings)
@@ -424,7 +434,10 @@ def _cmd_pair(args: argparse.Namespace) -> None:
         ticket = pairing.get("iroh") if isinstance(pairing, dict) else None
         if not isinstance(ticket, str) or not ticket:
             raise CliError("daemon returned no pairing ticket")
-        config = query = {"iroh": ticket, "token": settings.device_token}
+        app_token = pairing.get("app_token") if isinstance(pairing, dict) else None
+        if not isinstance(app_token, str) or not app_token:
+            app_token = settings.app_token
+        config = query = {"iroh": ticket, "token": settings.device_token, "app_token": app_token}
         summary = [
             f"Daemon endpoint: {pairing.get('endpoint_id')}",
             "The phone dials this id over iroh: no address, no VPN app.",

@@ -20,6 +20,9 @@ DEVICE_PATH = "/device"
 
 
 class _WebSocketLink:
+    # One TCP stream carries control and audio: bulk data uses the paged base64 form.
+    supports_attachments = False
+
     def __init__(self, connection: ServerConnection) -> None:
         self._connection = connection
         address = connection.remote_address

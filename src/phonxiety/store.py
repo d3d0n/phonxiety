@@ -198,6 +198,11 @@ class CallStore:
             "SELECT sequence,role,text,at FROM transcript WHERE call_id=? ORDER BY sequence", (call_id,)
         )]
 
+    def recent_count(self, since: float) -> int:
+        """Calls created at or after `since`, for the app API's hourly cap."""
+        row = self.db.execute("SELECT COUNT(*) FROM calls WHERE created_at>=?", (since,)).fetchone()
+        return int(row[0]) if row is not None else 0
+
     def partials(self, call_id: str) -> list[dict[str, Any]]:
         return [dict(row) for row in self.db.execute(
             "SELECT role,text,at FROM partials WHERE call_id=? ORDER BY at", (call_id,)

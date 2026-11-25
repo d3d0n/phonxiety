@@ -7,6 +7,7 @@ The hub speaks the device protocol over any authenticated message link from
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import statistics
@@ -18,6 +19,7 @@ from typing import Any
 
 from .audio.format import FRAME_SAMPLES
 from .audio.opus import DEFAULT_OPUS_BITRATE, OpusDecoder, OpusEncoder
+from .net.framing import frame
 from .net.link import MAX_CONTROL_CHARS, DeviceLink, LinkClosed
 
 log = logging.getLogger(__name__)
@@ -26,13 +28,27 @@ AUDIO_MAGIC = b"PX01"  # PCM s16le
 OPUS_MAGIC = b"PX02"  # one 20 ms Opus packet
 PROBE_MAGIC = b"PXLT"
 MARK_MAGIC = b"PXMK"  # no payload; the phone reports it drained once everything before it played
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
+# The phone may still speak 2: a hello without the v3 fields is accepted during the transition.
+PROTOCOL_VERSIONS = (2, 3)
+HELLO_FIELDS = ("device", "boot_id", "capabilities", "active_call")
+HELLO_V3_FIELDS = ("app_api", "preferred_codec", "max_bitrate", "control_caps")
+MAX_API_RESULT_CHARS = 256 * 1024  # one api_result must fit the phone's page limit
+API_CONCURRENCY = 8
 FRAME_PCM_BYTES = 1920
 MAX_PCM_BYTES = 19200
 
 
 class DeviceError(RuntimeError):
     pass
+
+
+def _error_code(exc: BaseException) -> str:
+    code = getattr(exc, "code", None)
+    if isinstance(code, str) and code:
+        return code
+    text = str(exc).split(":", 1)[0].strip()
+    return text if text and all(char.isalnum() or char == "_" for char in text) else "attachment_failed"
 
 
 def _spread(values: list[float]) -> dict[str, int] | None:
@@ -81,6 +97,36 @@ class DeviceHub:
         self.info: dict[str, Any] = {}
         self.on_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None
         self.on_audio: Callable[[str, bytes], Awaitable[None]] | None = None
+        # App API: one injected handler answers `{"type": "api"}` messages, concurrency-bounded
+        # so a slow request never holds the read loop or a second request.
+        self.on_api: Callable[[dict[str, Any]], Awaitable[tuple[int, dict[str, Any]]]] | None = None
+        # Bulk data on its own phone-opened stream (iroh only); the hub hands it the header
+        # and the two stream halves, and the handler writes the frames.
+        self.on_attachment: Callable[[dict[str, Any], Any, Any], Awaitable[None]] | None = None
+        self._api_slots = asyncio.Semaphore(API_CONCURRENCY)
+        self._api_tasks: set[asyncio.Task[None]] = set()
+        self._attachment_tasks: set[asyncio.Task[None]] = set()
+        self.connected_since: float | None = None
+        self.reconnects = 0
+        self.last_error: str | None = None
+        self._ever_connected = False
+
+    def counters(self) -> dict[str, int]:
+        return {
+            "frames_out": self._frames_out,
+            "frames_in": self._frames_in,
+            "submitted_samples": self._submitted_samples,
+            "dropped_samples": self._dropped_samples,
+            "played_samples": self._played_samples,
+            "queued_samples": self._queued_samples,
+            "send_wait_ms": round(self._send_wait * 1000),
+            "ping_wait_ms": round(self._ping_wait * 1000),
+        }
+
+    @property
+    def supports_attachments(self) -> bool:
+        """Whether the current link carries bulk data on its own stream (iroh), not paged."""
+        return self.connected and bool(getattr(self._link, "supports_attachments", False))
 
     @property
     def connected(self) -> bool:
@@ -106,14 +152,22 @@ class DeviceHub:
 
     def status(self) -> dict[str, Any]:
         link = self._link
+        connected = self.connected
         return {
-            "connected": self.connected,
+            "connected": connected,
             "device": self.info.get("device"),
-            "peer": link.peer if link is not None and self.connected else None,
-            "route": link.route() if link is not None and self.connected else None,
+            "peer": link.peer if link is not None and connected else None,
+            "route": link.route() if link is not None and connected else None,
             "capabilities": self.info.get("capabilities", {}),
             "active_call": self.info.get("active_call"),
-            "audio_codec": self.stream_codec() if self.connected else None,
+            "audio_codec": self.stream_codec() if connected else None,
+            "protocol": self.info.get("version"),
+            "app_api": self.info.get("app_api"),
+            "control_caps": self.info.get("control_caps"),
+            "connected_since": self.connected_since,
+            "reconnects": self.reconnects,
+            "last_error": self.last_error,
+            "attachments": "stream" if self.supports_attachments else "paged",
         }
 
     async def attach(self, link: DeviceLink) -> None:
@@ -129,7 +183,7 @@ class DeviceHub:
         except (LinkClosed, TimeoutError, ValueError):
             await link.close(1002, "Device handshake failed")
             return
-        if not isinstance(hello, dict) or hello.get("type") != "hello" or hello.get("version") != PROTOCOL_VERSION:
+        if not isinstance(hello, dict) or hello.get("type") != "hello" or hello.get("version") not in PROTOCOL_VERSIONS:
             await link.close(1002, "Incompatible device handshake")
             return
         async with self._attach_lock:
@@ -154,8 +208,12 @@ class DeviceHub:
         self._ready.clear()
         workers: list[asyncio.Task[Any]] = []
         try:
-            self.info = {key: hello.get(key) for key in ("device", "boot_id", "capabilities", "active_call")}
+            self._record_hello(hello)
             self._ready.set()
+            self.reconnects = self.reconnects + 1 if self._ever_connected else 0
+            self._ever_connected = True
+            self.connected_since = time.time()
+            self.last_error = None
             log.info("Phone %s connected from %s", self.info.get("device"), link.peer)
             workers = [
                 asyncio.create_task(self._dispatch_events(), name="device-events"),
@@ -176,14 +234,16 @@ class DeviceHub:
                     await self._receive_event(event)
         except (LinkClosed, asyncio.CancelledError):
             pass
-        except Exception:
+        except Exception as exc:
             log.exception("Device link failed")
+            self.last_error = f"device_protocol_error: {exc}"[:300]
             await link.close(1002, "Device protocol error")
         finally:
             if self._link is link:
                 log.info("Phone disconnected")
                 self._link = None
                 self._ready.clear()
+                self.connected_since = None
                 self.info = {}
                 self.stop_stream()
                 for future in tuple(self._pending.values()):
@@ -192,13 +252,25 @@ class DeviceHub:
                 self._pending.clear()
                 for worker in workers:
                     worker.cancel()
-                await asyncio.gather(*workers, return_exceptions=True)
+                for task in tuple(self._api_tasks) + tuple(self._attachment_tasks):
+                    task.cancel()
+                await asyncio.gather(*workers, *tuple(self._api_tasks), *tuple(self._attachment_tasks), return_exceptions=True)
                 self._clear(self._events)
                 async with self._progress:
                     self._progress.notify_all()
                 if self.on_event is not None:
                     await self.on_event({"type": "device_disconnected"})
                 self._link_free.set()
+
+    def _record_hello(self, hello: dict[str, Any]) -> None:
+        """Keep the fields the rest of the daemon reads, and v3's preferences when present."""
+        self.info = {key: hello.get(key) for key in HELLO_FIELDS}
+        self.info["version"] = hello.get("version")
+        for key in HELLO_V3_FIELDS:
+            if hello.get(key) is not None:
+                self.info[key] = hello[key]
+        if isinstance(hello.get("app_api"), int):
+            self.info["app_api"] = hello["app_api"]
 
     async def _receive_event(self, event: dict[str, Any]) -> None:
         kind = event.get("type")
@@ -225,6 +297,11 @@ class DeviceHub:
                 async with self._progress:
                     self._progress.notify_all()
             return
+        if kind == "api":
+            # Never awaited here: a request that waits on a slow operation must not hold
+            # the read loop, which also carries playback marks and command responses.
+            self._accept_api(event)
+            return
         if kind == "call_state":
             self.info["active_call"] = None if event.get("state") == "ended" else {
                 "call_id": event.get("call_id"), "state": event.get("state")
@@ -233,6 +310,98 @@ class DeviceHub:
             self._events.put_nowait(event)
         except asyncio.QueueFull as exc:
             raise DeviceError("Device control event overflow") from exc
+
+    def _accept_api(self, message: dict[str, Any]) -> None:
+        request_id = message.get("id")
+        if not isinstance(request_id, str) or not request_id or len(request_id) > 128:
+            return  # nothing to address an answer to
+        task = asyncio.create_task(self._serve_api(message), name=f"app-api:{request_id[:24]}")
+        self._api_tasks.add(task)
+        task.add_done_callback(self._api_tasks.discard)
+
+    async def _serve_api(self, message: dict[str, Any]) -> None:
+        request_id = str(message.get("id"))
+        status, payload = 500, {"code": "internal_error", "message": "the daemon could not answer"}
+        try:
+            async with self._api_slots:
+                handler = self.on_api
+                if handler is None:
+                    status, payload = 503, {"code": "api_unavailable", "message": "the app API is not running"}
+                else:
+                    status, payload = await handler(message)
+                    if not isinstance(status, int) or not isinstance(payload, dict):
+                        status, payload = 500, {"code": "internal_error", "message": "invalid handler result"}
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("App API request failed")
+            status, payload = 500, {"code": "internal_error", "message": "the daemon could not answer"}
+        await self._send_api_result(request_id, status, payload)
+
+    async def _send_api_result(self, request_id: str, status: int, payload: dict[str, Any]) -> None:
+        result: dict[str, Any] = {"type": "api_result", "id": request_id, "status": status}
+        if 200 <= status < 300:
+            result["result"] = payload
+        else:
+            result["error"] = payload if "code" in payload else {"code": "error", "message": str(payload)[:300]}
+        try:
+            text = json.dumps(result, separators=(",", ":"))
+        except (TypeError, ValueError):
+            log.exception("App API result is not serializable")
+            text = json.dumps({
+                "type": "api_result", "id": request_id, "status": 500,
+                "error": {"code": "internal_error", "message": "the result was not serializable"},
+            })
+        if len(text) > MAX_API_RESULT_CHARS:
+            text = json.dumps({
+                "type": "api_result", "id": request_id, "status": 500,
+                "error": {"code": "result_too_large", "message": "page the data and try again"},
+            })
+        try:
+            await self.send_control(text)
+        except DeviceError:
+            log.info("App API answer for %s dropped: the phone is gone", request_id)
+
+    async def send_control(self, message: str) -> None:
+        """Send one control message; the api path shares the command path's ordering lock."""
+        link = self._link
+        if link is None or not self.connected:
+            raise DeviceError("device_not_connected")
+        async with self._send_lock:
+            if self._link is not link:
+                raise DeviceError("device_replaced")
+            try:
+                await link.send(message)
+            except LinkClosed as exc:
+                raise DeviceError("device_disconnected") from exc
+
+    async def serve_attachment(self, header: dict[str, Any], send: Any, recv: Any) -> None:
+        """Take a phone-opened bulk stream off the transport's accept loop.
+
+        Returns as soon as the work is scheduled: the hub keeps serving control messages
+        while a large attachment is written.
+        """
+        task = asyncio.create_task(self._serve_attachment(header, send, recv), name="app-attachment")
+        self._attachment_tasks.add(task)
+        task.add_done_callback(self._attachment_tasks.discard)
+
+    async def _serve_attachment(self, header: dict[str, Any], send: Any, recv: Any) -> None:
+        handler = self.on_attachment
+        try:
+            if handler is None:
+                raise DeviceError("attachments_unavailable")
+            await handler(header, send, recv)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning("App attachment failed: %s", exc)
+            with contextlib.suppress(Exception):
+                await send.write_all(frame(json.dumps({
+                    "type": "error", "code": _error_code(exc), "message": str(exc)[:300],
+                })))
+        finally:
+            with contextlib.suppress(Exception):
+                await send.finish()
 
     async def _receive_audio(self, frame: bytes) -> None:
         size = len(frame) - AUDIO_HEADER.size

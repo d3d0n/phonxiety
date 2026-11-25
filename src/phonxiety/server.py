@@ -128,6 +128,7 @@ def create_app(settings: Settings) -> Starlette:
     from iroh import IrohError
 
     from .audio.opus import CODECS
+    from .app_api import APP_API_VERSION, AppApi
     from .device import DeviceError
     from .models import CallLimits, CallRequest
     from .net.iroh import IrohListener
@@ -292,7 +293,13 @@ def create_app(settings: Settings) -> Starlette:
         if not _matches_token(request.headers.get("authorization"), settings.host_token):
             return _unauthorized()
         try:
-            return JSONResponse({"iroh": await iroh_link.ticket(), "endpoint_id": iroh_link.endpoint_id})
+            return JSONResponse({
+                "iroh": await iroh_link.ticket(),
+                "endpoint_id": iroh_link.endpoint_id,
+                # The app's own credential: the QR carries it so the phone can call /app/v1.
+                "app_token": app_api.app_token,
+                "app_api": APP_API_VERSION,
+            })
         except LinkUnavailable:
             return JSONResponse({"error": "iroh_link_unavailable"}, status_code=503)
 
@@ -319,6 +326,19 @@ def create_app(settings: Settings) -> Starlette:
     address_link = WebSocketListener(controller.device, settings.device_token)
     iroh_link = IrohListener(controller.device, settings.device_token, settings.state_dir, settings.iroh_relays)
     adb_tunnel = TunnelListener(controller.device, "adb")
+
+    def link_info() -> dict[str, Any]:
+        return {
+            "endpoint_id": iroh_link.endpoint_id,
+            "address_port": settings.device_port,
+            "certificate": fingerprint,
+            "iroh_available": iroh_link.endpoint_id is not None,
+        }
+
+    app_api = AppApi(settings, controller, link_info=link_info)
+    # The phone's app API and bulk streams arrive on the same authenticated link.
+    controller.device.on_api = app_api.handle
+    controller.device.on_attachment = app_api.serve_attachment
 
     @asynccontextmanager
     async def controller_lifespan(_app: Any) -> AsyncIterator[None]:
@@ -361,6 +381,7 @@ def create_app(settings: Settings) -> Starlette:
     )
     app.state.controller = controller
     app.state.settings = settings
+    app.state.app_api = app_api
     return app
 
 
