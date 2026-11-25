@@ -33,10 +33,12 @@ class ComposerViewModelTest {
     @Before
     fun setUp() {
         Dispatchers.setMain(dispatcher)
+        LiveCallFront.resetForTest()
     }
 
     @After
     fun tearDown() {
+        LiveCallFront.resetForTest()
         Dispatchers.resetMain()
     }
 
@@ -189,5 +191,44 @@ class ComposerViewModelTest {
 
         assertEquals("+998901234567", viewModel.state.value.destination)
         assertEquals("Something else", viewModel.state.value.goal)
+    }
+
+    @Test
+    fun placingArmsTheOneShotReturnForThePlacedCall() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        api.info = ApiOutcome.Ok(200, DaemonInfo())
+        api.validation = ApiOutcome.Ok(200, ValidationResult(valid = true))
+        api.place = ApiOutcome.Ok(200, snapshot(state = "dialing"))
+
+        val viewModel = ComposerViewModel(api)
+        advanceUntilIdle()
+        viewModel.onDestinationChange("+998901234567")
+        viewModel.onGoalChange("Book a table for two on Thursday")
+        advanceUntilIdle()
+
+        viewModel.confirm()
+        advanceUntilIdle()
+
+        assertEquals("call-2026-11-26", LiveCallFront.pendingCallId())
+    }
+
+    @Test
+    fun aFailedPlacementLeavesNoReturnToken() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        api.info = ApiOutcome.Ok(200, DaemonInfo())
+        api.validation = ApiOutcome.Ok(200, ValidationResult(valid = true))
+        api.place = ApiOutcome.Failure(502, "link_down", "the daemon is unreachable")
+
+        val viewModel = ComposerViewModel(api)
+        advanceUntilIdle()
+        viewModel.onDestinationChange("+998901234567")
+        viewModel.onGoalChange("Book a table for two on Thursday")
+        advanceUntilIdle()
+
+        viewModel.confirm()
+        advanceUntilIdle()
+
+        assertNull(LiveCallFront.pendingCallId())
+        assertFalse(LiveCallFront.awaitsCover())
     }
 }

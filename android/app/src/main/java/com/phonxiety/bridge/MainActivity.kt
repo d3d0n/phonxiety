@@ -13,30 +13,28 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
-import com.phonxiety.bridge.feature.livecall.LiveCallFront
-import com.phonxiety.bridge.model.CallPhase
+import com.phonxiety.bridge.feature.livecall.CallFrontReturn
 import dagger.hilt.android.AndroidEntryPoint
 
 /**
  * The single activity. It owns no screen state: intents become [AppSignal]s, the Navigation 3 host
  * renders the back stack, and every piece of screen state lives in a ViewModel or in the wizard's
  * on-disk journal, so process death and configuration changes do not lose a setup step.
+ *
+ * The one-shot return over Telecom's in-call screen after a call placed here is
+ * [CallFrontReturn]; the lifecycle simply forwards to it.
  */
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     private var signal by mutableStateOf<AppSignal?>(null)
     private val handler = Handler(Looper.getMainLooper())
 
-    /** Set between [onUserLeaveHint] and the next resume: the user walked away on purpose. */
-    private var userLeft = false
-
-    /** The call phase this activity has already come back for; each phase is returned to once. */
-    private var returnedForPhase: String? = null
-
-    /** How many more times the return may wait for the placement reply. */
-    private var returnAttemptsLeft = 0
-
-    private val returnTick = Runnable { attemptReturn() }
+    private val callFront = CallFrontReturn(
+        handler = handler,
+        call = { BridgeRuntime.state.value.call },
+        screenInteractive = { getSystemService(PowerManager::class.java)?.isInteractive != false },
+        openFront = ::bringToFront
+    )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -66,88 +64,27 @@ class MainActivity : ComponentActivity() {
         if (BridgeConfigLoader.loadOrNull(this) != null && BridgeRuntime.engine == null) {
             BridgeService.start(this)
         }
-        val placed = LiveCallFront.placedCallId
-        if (placed != null && BridgeRuntime.state.value.call?.let { it.callId == placed && it.phase == CallPhase.ENDED } == true) {
-            LiveCallFront.forget(placed)
-            returnedForPhase = null
-        }
+        callFront.onStart()
     }
 
     override fun onResume() {
         super.onResume()
-        userLeft = false
-        handler.removeCallbacks(returnTick)
+        callFront.onResume()
     }
 
     override fun onStop() {
         super.onStop()
-        scheduleReturn()
+        callFront.onStop(canReturn = !isFinishing && !isChangingConfigurations)
     }
 
     override fun onDestroy() {
-        handler.removeCallbacks(returnTick)
+        callFront.onDestroy()
         super.onDestroy()
     }
 
-    /** Home and Recents; the system in-call screen appearing is not a user leave. */
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        userLeft = true
-    }
-
-    /**
-     * Telecom's in-call screen is an activity drawn above every app, so a call placed from this
-     * phone covers the live call. Starting an activity from the background is restricted, and the
-     * one route that fits is the app-switch grace window: a start that follows this activity's own
-     * stop counts as the caller still being in a foreground task, which is why the attempt happens
-     * here rather than from a service. [onUserLeaveHint] tells the two covers apart: it fires for
-     * Home and Recents, never when another app or the system takes the foreground, so the screen
-     * comes back only when the in-call UI covered it. At most once per phase — dialing and
-     * connected — so the user can walk away afterwards, and a call the computer placed is never
-     * pulled forward.
-     *
-     * The delay covers the placement reply: the daemon answers the composer only after Telecom has
-     * already drawn its screen, so the call is marked as this phone's a moment after this stop.
-     */
-    private fun scheduleReturn() {
-        if (isFinishing || isChangingConfigurations) return
-        returnAttemptsLeft = RETURN_ATTEMPTS
-        handler.removeCallbacks(returnTick)
-        handler.postDelayed(returnTick, RETURN_DELAY_MS)
-    }
-
-    private fun attemptReturn() {
-        if (isFinishing || isDestroyed || userLeft) return
-        val placed = LiveCallFront.placedCallId
-        val call = BridgeRuntime.state.value.call
-        if (placed == null) {
-            // A computer-placed call never gets the marker; give the reply a few ticks to land.
-            if (call != null && call.phase != CallPhase.ENDED) retryReturn()
-            return
-        }
-        if (call == null || call.callId != placed) {
-            retryReturn()
-            return
-        }
-        if (call.phase == CallPhase.ENDED) {
-            LiveCallFront.forget(placed)
-            returnedForPhase = null
-            return
-        }
-        // The dialer can take the foreground again when the call starts and when it connects.
-        // Both are covers worth coming back from; ending, or a phase already returned for, is not.
-        if (call.phase != CallPhase.DIALING && call.phase != CallPhase.ACTIVE) return
-        val phaseKey = "${call.callId}:${call.phase.name}"
-        if (returnedForPhase == phaseKey) return
-        if (getSystemService(PowerManager::class.java)?.isInteractive == false) return
-        returnedForPhase = phaseKey
-        bringToFront()
-    }
-
-    private fun retryReturn() {
-        if (returnAttemptsLeft <= 0) return
-        returnAttemptsLeft--
-        handler.postDelayed(returnTick, RETURN_RETRY_MS)
+        callFront.onUserLeaveHint()
     }
 
     private fun bringToFront() {
@@ -192,12 +129,6 @@ class MainActivity : ComponentActivity() {
         private const val PAIR_SCHEME = "phonxiety"
         private const val PAIR_HOST = "pair"
 
-        /** Long enough for the in-call screen to settle, short enough to still count as a cover. */
-        private const val RETURN_DELAY_MS = 400L
-
-        /** The placement reply can be a link round-trip behind the system screen. */
-        private const val RETURN_RETRY_MS = 300L
-        private const val RETURN_ATTEMPTS = 10
         const val EXTRA_ROUTE = "phonxiety.route"
         const val ROUTE_DOCTOR = "doctor"
     }
