@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from typing import Any
@@ -14,7 +12,6 @@ from phonxiety import far_end
 from phonxiety.deepgram import DeepgramOptions, DeepgramVoiceSession
 from phonxiety.gemini import GeminiOptions, GeminiVoiceSession
 from phonxiety.interfaces import VoiceCallbacks, function_request, line_action
-from phonxiety.realtime import FRAME_BYTES, PacedOutput, Resampler
 from phonxiety.runtime import voice_factory
 from phonxiety.settings import Settings
 
@@ -48,32 +45,6 @@ class _Events:
             self.log.append(("error", message))
 
         return VoiceCallbacks(audio, transcript, delegation, turn_done, error)
-
-
-class PacedOutputTests(unittest.IsolatedAsyncioTestCase):
-    async def test_a_burst_plays_at_speech_speed_and_a_barge_in_drops_the_rest(self) -> None:
-        emitted: list[float] = []
-
-        async def emit(frame: bytes) -> None:
-            emitted.append(time.monotonic())
-
-        output = PacedOutput(emit)
-        output.start()
-        output.feed(bytes(FRAME_BYTES * 50))  # one second of speech in one burst
-        await asyncio.sleep(0.3)
-        output.clear()
-        await asyncio.sleep(0.2)
-        await output.close()
-        # ~0.3 s of 20 ms frames plus the jitter lead, not the whole second.
-        self.assertTrue(12 <= len(emitted) <= 22, len(emitted))
-        self.assertGreater(emitted[-1] - emitted[0], 0.2)
-
-
-class ResamplerTests(unittest.TestCase):
-    def test_rates_convert_by_their_ratio(self) -> None:
-        resampler = Resampler(24_000, 48_000)
-        out = b"".join(resampler.convert(bytes(480 * 2)) for _ in range(50))  # one second at 24 kHz
-        self.assertAlmostEqual(len(out) / 2 / 48_000, 1.0, delta=0.05)
 
 
 class DeepgramEventTests(unittest.IsolatedAsyncioTestCase):

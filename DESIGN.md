@@ -199,7 +199,7 @@ APK собран с targetSdk 37; текущий framework backend не вызы
 
 1. Загружает и обновляет Codex OAuth credentials.
 2. Создаёт [aiortc](https://github.com/aiortc/aiortc) peer: один sendrecv Opus audio track и data channel `oai-events`; собирает SDP offer.
-3. Отправляет `POST ${CODEX_BASE_URL}/codex/realtime/calls?intent=quicksilver&architecture=avas` с `sdp` и `session`. В session — `gpt-live-1-codex`, стиль разговора в `instructions`, голос, client delegation и `initial_items`: developer-сообщение с целью, контекстом, условиями и правилами телефонных действий. Этот brief передаётся при создании сессии; `instructions` после инициализации не обновляются.
+3. Отправляет `POST ${CODEX_BASE_URL}/codex/realtime/calls?intent=quicksilver&architecture=avas` с `sdp` и `session`. В session — `gpt-live-1.1-codex`, стиль разговора в `instructions`, голос, client delegation без голосовой заглушки (`ack_filler: false`) и `initial_items`: developer-сообщение с целью, контекстом, условиями и правилами телефонных действий. Этот brief передаётся при создании сессии; `instructions` после инициализации не обновляются.
 4. Применяет SDP answer; сохраняет `rtc_*` из `Location`. Подключает sideband `wss://api.openai.com/v1/live/<call_id>` с соответствующими auth/session headers.
 5. Передаёт PCM downlink в custom audio track; читает `remote_track.recv()` и отправляет декодированный звук в телефонный uplink.
 6. Обрабатывает `session.started`, transcripts, `turn.done`, delegation и ошибки. Для завершения отправляет `session.close`, закрывает peer и согласует teardown с call controller.

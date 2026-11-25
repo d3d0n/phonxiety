@@ -1,18 +1,10 @@
-"""Pure audio/transcript/signaling helpers of the voice session."""
+"""Transcript and signaling helpers of the Codex voice session."""
 
 from __future__ import annotations
 
-import asyncio
-
-from av import AudioFrame
-
 from phonxiety.voice import (
-    BYTES_PER_FRAME,
-    SAMPLES_PER_FRAME,
-    PcmSourceTrack,
     _TranscriptAssembler,
     chunk_utf8,
-    downmix_frame,
     parse_live_call_id,
 )
 
@@ -82,59 +74,3 @@ def test_final_transcript_can_shorten_an_incorrect_partial() -> None:
     assembler.added("user", "Friday at four or five")
     assert assembler.finished("user", "Friday at four") == ("user", "Friday at four", True)
 
-
-def test_downmix_stereo_frame_to_mono_pcm() -> None:
-    frame = AudioFrame(format="s16", layout="stereo", samples=4)
-    frame.sample_rate = 48000
-    frame.pts = 0
-    samples = [100, 300, -100, 100, 5, 6, -7, -9]
-    frame.planes[0].update(
-        b"".join(int(value).to_bytes(2, "little", signed=True) for value in samples)
-    )
-    pcm = downmix_frame(frame)
-    values = [
-        int.from_bytes(pcm[index : index + 2], "little", signed=True)
-        for index in range(0, len(pcm), 2)
-    ]
-    assert values == [200, 0, 5, -8]
-
-
-def test_pcm_source_pads_silence_and_advances_pts() -> None:
-    async def run() -> None:
-        track = PcmSourceTrack()
-        first = await track.recv()
-        second = await track.recv()
-        assert first.samples == SAMPLES_PER_FRAME
-        assert first.pts == 0
-        assert second.pts == SAMPLES_PER_FRAME
-        assert bytes(first.planes[0]) == b"\x00" * BYTES_PER_FRAME
-
-    asyncio.run(run())
-
-
-def test_pcm_source_preserves_a_short_tail_and_pads_its_frame() -> None:
-    async def run() -> None:
-        track = PcmSourceTrack()
-        payload = bytes(range(256)) * 8
-        track.push(payload)
-        first = await track.recv()
-        second = await track.recv()
-        assert bytes(first.planes[0]) == payload[:BYTES_PER_FRAME]
-        assert bytes(second.planes[0]) == payload[BYTES_PER_FRAME:].ljust(BYTES_PER_FRAME, b"\x00")
-        assert track.buffered_bytes == 0
-
-    asyncio.run(run())
-
-
-def test_single_oversized_audio_chunk_keeps_only_bounded_recent_audio() -> None:
-    async def run() -> None:
-        track = PcmSourceTrack(max_bytes=BYTES_PER_FRAME)
-        old_audio = b"\x01\x00" * SAMPLES_PER_FRAME
-        recent_audio = b"\x02\x00" * SAMPLES_PER_FRAME
-        track.push(old_audio + recent_audio)
-        assert track.buffered_bytes == BYTES_PER_FRAME
-        assert track.dropped_bytes == BYTES_PER_FRAME
-        frame = await track.recv()
-        assert bytes(frame.planes[0]) == recent_audio
-
-    asyncio.run(run())

@@ -22,8 +22,9 @@ from typing import Any
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed
 
+from .audio.format import SAMPLE_RATE
+from .audio.pacing import PacedOutput
 from .interfaces import CALL_FUNCTIONS, VoiceCallbacks, function_request
-from .realtime import SAMPLE_RATE, PacedOutput
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +43,8 @@ class DeepgramOptions:
 
 
 class DeepgramVoiceSession:
+    review_at_turn_end = False  # the model calls end_call itself
+
     def __init__(
         self, instructions: str, callbacks: VoiceCallbacks, options: DeepgramOptions, *, initial_context: str = ""
     ) -> None:

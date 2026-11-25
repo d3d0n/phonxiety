@@ -148,7 +148,7 @@ uv run phonxiety link-test   # load the link like a call, without dialing
 Settings:
 
 - `PHONXIETY_CODEX_TASK_MODEL` — the Codex text model that supervises the line (task agent), for every voice backend.
-- `PHONXIETY_VOICE_BACKEND` — who talks on the line: `codex` (default, Codex realtime over WebRTC, any language), `deepgram` (Deepgram Voice Agent: nova-3 listen, an OpenAI think model hosted by Deepgram, aura-2 speak; English voices by default) or `gemini` (Gemini Live native audio). Keypresses and hanging up are line actions the daemon executes directly: Gemini and Deepgram call the `send_dtmf` and `end_call` tools, Codex sends the delegations `DTMF <digits>` and `END_CALL`. Anything else goes to the task agent.
+- `PHONXIETY_VOICE_BACKEND` — who talks on the line: `codex` (default, Codex realtime over WebRTC, any language), `deepgram` (Deepgram Voice Agent: nova-3 listen, an OpenAI think model hosted by Deepgram, aura-2 speak; English voices by default) or `gemini` (Gemini Live native audio). Keypresses and hanging up are line actions the daemon executes directly: Gemini and Deepgram call the `send_dtmf` and `end_call` tools; Codex sends the delegation `DTMF <digits>` for keys and, having no tools, never asks to hang up: it only says goodbye, and the task agent, asked at the end of each of its turns, ends the call. Anything else goes to the task agent.
 - `DEEPGRAM_API_KEY` / `GEMINI_API_KEY` — keys for those backends, or the files `deepgram-api-key` / `gemini-api-key` in the state directory. Optional models: `PHONXIETY_DEEPGRAM_LANGUAGE` (`en`), `PHONXIETY_DEEPGRAM_LISTEN_MODEL` (`nova-3`), `PHONXIETY_DEEPGRAM_THINK_MODEL` (`gpt-4o-mini`), `PHONXIETY_DEEPGRAM_SPEAK_MODEL` (`aura-2-thalia-en`), `PHONXIETY_GEMINI_MODEL` (`gemini-3.8-live`), `PHONXIETY_GEMINI_VOICE` (`Puck`).
 - `PHONXIETY_CODEX_VOICE` — the Codex voice, `sol` by default. `PHONXIETY_CODEX_AUTH_FILE` — the daemon's own Codex login file.
 - `PHONXIETY_AUDIO_CODEC` — call audio on the phone link: `opus` by default, or `pcm`. Opus is used only when the phone app offers it.
@@ -194,7 +194,7 @@ Limits per call: `max_duration_s` (10 to 3600, default 900) and `ring_timeout_s`
 
 1. **No dial without a line check.** Before dialing, the daemon sends a second of call-sized frames to the phone and counts what comes back. If the link cannot carry audio, it waits up to 90 s, then fails with `phone_link_not_ready` and rings nobody.
 2. **The brief is fixed before the call.** Your assistant hands it over once and is not in the loop for each reply. Constraints travel with it.
-3. **Someone watches the line.** A text model reads the transcript whenever the line goes quiet and decides whether the task is done. The voice model does not have to remember to hang up.
+3. **Someone watches the line.** A text model reads the transcript whenever the line goes quiet, and with Codex after every turn of the agent, and decides whether the task is done. The voice model does not have to remember to hang up.
 4. **A lost link ends the call.** The daemon pings the phone every 2 s; the phone hangs up after 10 s without its computer. Nobody is left on a dead line.
 5. **Hard limits.** Ring timeout and maximum duration are enforced by the daemon, not by the model.
 6. **What was confirmed wins.** The other side's words reach the transcript through speech recognition and can be misheard. When the agent repeated a name or a number aloud and was not corrected, that version goes into the result.
@@ -218,7 +218,9 @@ How one call goes:
 1. `place_call` stores the request and returns. The daemon waits for the phone, checks the line, opens a voice session and tells the phone to dial.
 2. When the line is answered, the phone streams the downlink audio to the daemon and plays the agent's voice into the uplink. Audio is 48 kHz mono in 20 ms frames: Opus by default (~32 kbit/s), raw PCM (~768 kbit/s) with `PHONXIETY_AUDIO_CODEC=pcm` or with a phone app that predates Opus.
 3. The voice model talks, presses keys and hangs up through the daemon. The task agent steps in on silence, on any other request from the voice model, and once at the end.
-4. The daemon disconnects, writes the summary and fields, and keeps them by `call_id`. It also archives every call in `~/.local/share/phonxiety/calls/`: `<call_id>.json` with the request, timings, outcomes, fields, full transcript and who answered (`far_end`: `person`, `ivr` or `voicemail`, from the wording of the other side), and for connected calls `<call_id>.wav`, 48 kHz stereo with the other party on the left and the agent on the right, plus `<call_id>.m4a`, a small copy to share: both sides in one channel, long pauses cut (needs `ffmpeg`). Nothing on the call announces the recording.
+4. The daemon disconnects, writes the summary and fields, and keeps them by `call_id`. It also archives every call in `~/.local/share/phonxiety/calls/`: `<call_id>.json` with the request, timings, outcomes, fields, full transcript and who answered (`far_end`: `person`, `ivr` or `voicemail`, from the wording of the other side), and for connected calls `<call_id>.wav`, 48 kHz stereo with the other party on the left and the agent on the right, plus `<call_id>.m4a`, a small copy to share: both sides in one channel, long pauses cut. Nothing on the call announces the recording.
+
+All audio handling (Opus, conversion, pacing, recording, the shareable copy) lives in `src/phonxiety/audio/` and runs on PyAV's bundled FFmpeg; `docs/audio-research.md` explains which parts use a library and why.
 
 Every text a model reads is a Jinja template in `src/phonxiety/prompts/`: the voice agent's instructions and brief, the context lines it receives during a call, and the task agent's prompts.
 

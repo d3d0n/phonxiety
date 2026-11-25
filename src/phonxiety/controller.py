@@ -11,11 +11,13 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import far_end
+from .archive import write_call_record
+from .audio.recording import CallRecorder
+from .audio.share import make_shareable
 from .device import DeviceError, DeviceHub
 from .interfaces import ToolHandler, VoiceCallbacks, VoiceSession, line_action
 from .models import CallRequest, CallState, TERMINAL_STATES
 from .prompts import render
-from .recording import CallRecorder, compress, write_call_record
 from .store import CallStore
 
 log = logging.getLogger(__name__)
@@ -44,6 +46,9 @@ class _Call:
     ended: asyncio.Event = field(default_factory=asyncio.Event)
     media_changed: asyncio.Event = field(default_factory=asyncio.Event)
     assistant_turns: int = 0
+    # Set at an assistant turn end when the voice cannot hang up itself: review the line now.
+    review_now: bool = False
+    review_wake: asyncio.Event = field(default_factory=asyncio.Event)
     last_voice_activity: float = 0
     last_activity: float = 0
     finish_requested_at: float | None = None
@@ -428,6 +433,9 @@ class CallController:
         if role == "assistant":
             call.assistant_turns += 1
             call.media_changed.set()
+            if call.voice is not None and call.voice.review_at_turn_end:
+                call.review_now = True
+                call.review_wake.set()
 
     async def _voice_error(self, call: _Call, message: str) -> None:
         if self._owned(call) and not call.finalizing and not self._closing:
@@ -478,10 +486,9 @@ class CallController:
         self._cancel(call.work_task)
         generation = call.generation
         log.info(
-            "call %s: delegation %s accepted as action generation %d (%d chars)",
-            call.call_id, delegation_id, generation, len(request),
+            "call %s: delegation %s accepted as action generation %d: %r",
+            call.call_id, delegation_id, generation, request[:200],
         )
-        log.debug("call %s: delegation %s request: %s", call.call_id, delegation_id, request)
         call.work_is_review = False
         call.last_activity = time.monotonic()
         if action is not None and action[0] == "dtmf":
@@ -494,15 +501,18 @@ class CallController:
     def _activity(self, call: _Call, now: float) -> None:
         """Record speech or transcript progress; a review of the quiet line is stale after it."""
         call.last_activity = now
+        # A turn-end review not started yet is stale too: _turn_done sets it after this call.
+        call.review_now = False
         if call.work_is_review and call.work_task is not None and not call.work_task.done():
             call.generation += 1
             self._cancel(call.work_task)
 
     async def _supervise(self, call: _Call) -> None:
-        """Review the line whenever it goes quiet.
+        """Review the line whenever it goes quiet, and after every assistant turn if asked to.
 
         The voice model does not reliably ask the backend to press keys or to
-        disconnect, so call control cannot depend on its delegations alone.
+        disconnect, so call control cannot depend on its delegations alone. A voice that
+        cannot hang up itself just says goodbye; the review at the end of its turn hangs up.
         """
         seen: float | None = None
         interval = self._review_quiet
@@ -519,8 +529,15 @@ class CallController:
                 interval = self._review_quiet
                 due = seen + interval
             now = time.monotonic()
+            if call.review_now:
+                call.review_now = False
+                due = now
             if now < due:
-                await asyncio.sleep(min(due - now, self._review_quiet))
+                call.review_wake.clear()
+                try:
+                    await asyncio.wait_for(call.review_wake.wait(), min(due - now, self._review_quiet))
+                except TimeoutError:
+                    pass
                 continue
             transcript = self.store.transcript(call.call_id)
             if not transcript:
@@ -755,7 +772,7 @@ class CallController:
                 call.recording = await asyncio.to_thread(call.recorder.close)
                 if call.recording and call.recording.get("file"):
                     wav = call.recorder.path
-                    call.recording["compressed"] = await asyncio.to_thread(compress, wav)
+                    call.recording["compressed"] = await asyncio.to_thread(make_shareable, wav)
             except Exception as exc:
                 log.exception("call %s: recording could not be written", call.call_id)
                 call.recording = {"file": None, "error": f"recording_export_failed: {exc}"}

@@ -1,8 +1,10 @@
-"""Shared plumbing for websocket voice backends (Gemini Live, Deepgram Voice Agent).
+"""Paced speech output for websocket voice backends (Gemini Live, Deepgram Voice Agent).
 
 Those APIs deliver speech in bursts, much faster than it plays. The phone link and the
 phone's ring buffer hold well under a second, so output is paced here: 20 ms frames of
 48 kHz mono PCM leave on the wall clock, and a barge-in drops what has not played yet.
+Frames come out of an `av.AudioFifo`; the pacing loop is ours because Pipecat and LiveKit
+pace only inside their own transports (see docs/audio-research.md).
 """
 
 from __future__ import annotations
@@ -12,37 +14,12 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 
-from av import AudioFrame, AudioResampler
+import av
+
+from .format import FRAME_SAMPLES, SAMPLE_RATE, frame_bytes, mono_frame, whole_samples
 
 log = logging.getLogger(__name__)
-
-SAMPLE_RATE = 48_000
-FRAME_SAMPLES = 960
-FRAME_BYTES = FRAME_SAMPLES * 2
 LEAD_S = 0.06  # keep this much audio ahead of the playhead to ride out network jitter
-
-
-class Resampler:
-    """Mono s16le PCM from one rate to another, streaming."""
-
-    def __init__(self, source_rate: int, target_rate: int) -> None:
-        self._source_rate = source_rate
-        self._resampler = AudioResampler(format="s16", layout="mono", rate=target_rate)
-        self._pending = b""
-
-    def convert(self, pcm: bytes) -> bytes:
-        data = self._pending + pcm
-        usable = len(data) - len(data) % 2
-        self._pending = data[usable:]
-        if not usable:
-            return b""
-        frame = AudioFrame(format="s16", layout="mono", samples=usable // 2)
-        frame.planes[0].update(data[:usable])
-        frame.sample_rate = self._source_rate
-        out = bytearray()
-        for converted in self._resampler.resample(frame):
-            out += bytes(converted.planes[0])[: converted.samples * 2]
-        return bytes(out)
 
 
 class PacedOutput:
@@ -55,7 +32,8 @@ class PacedOutput:
     ) -> None:
         self._emit = emit
         self._on_drained = on_drained
-        self._buffer = bytearray()
+        self._fifo = av.AudioFifo()
+        self._pending = b""
         self._ready = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._notify_drain = False
@@ -64,12 +42,15 @@ class PacedOutput:
         self._task = asyncio.create_task(self._run(), name="voice-paced-output")
 
     def feed(self, pcm: bytes) -> None:
-        self._buffer += pcm
-        self._ready.set()
+        whole, self._pending = whole_samples(self._pending, pcm)
+        if whole:
+            self._fifo.write(mono_frame(whole))
+            self._ready.set()
 
     def clear(self) -> None:
         """Barge-in: drop everything not yet handed to the phone."""
-        self._buffer.clear()
+        self._fifo = av.AudioFifo()
+        self._pending = b""
         self._notify_drain = False
 
     def drain_then_notify(self) -> None:
@@ -79,12 +60,12 @@ class PacedOutput:
 
     @property
     def pending(self) -> bool:
-        return bool(self._buffer)
+        return self._fifo.samples > 0
 
     async def _run(self) -> None:
         playhead: float | None = None
         while True:
-            if not self._buffer:
+            if not self._fifo.samples:
                 playhead = None
                 if self._notify_drain:
                     self._notify_drain = False
@@ -99,11 +80,10 @@ class PacedOutput:
             if playhead - now > LEAD_S:
                 await asyncio.sleep(playhead - now - LEAD_S)
                 continue
-            frame = bytes(self._buffer[:FRAME_BYTES])
-            del self._buffer[:FRAME_BYTES]
-            playhead += len(frame) / 2 / SAMPLE_RATE
+            frame = self._fifo.read(min(FRAME_SAMPLES, self._fifo.samples))
+            playhead += frame.samples / SAMPLE_RATE
             try:
-                await self._emit(frame)
+                await self._emit(frame_bytes(frame))
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - sink failure must not stop the voice
@@ -114,4 +94,4 @@ class PacedOutput:
         if task is not None:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-        self._buffer.clear()
+        self.clear()
