@@ -36,7 +36,8 @@ class RootShellProcessTest {
         assertTrue(output.truncated)
         assertTrue(output.stdout.startsWith("HEAD-MARKER"))
         assertTrue(output.stdout.endsWith("TAIL-MARKER"))
-        assertEquals(2 * ProcessBuilderProcessRunner.DEFAULT_CAPTURE_LIMIT_BYTES, output.stdout.length)
+        assertTrue(output.stdout.contains("\n[… ") && output.stdout.contains(" bytes omitted …]\n"))
+        assertEquals(1, Regex("bytes omitted").findAll(output.stdout).count())
         assertTrue(output.stderr.isEmpty())
         assertTrue("draining took ${elapsedMs}ms", elapsedMs < FAST_RUN_MS)
     }
@@ -52,7 +53,7 @@ class RootShellProcessTest {
         assertTrue(output.truncated)
         assertTrue(output.stderr.startsWith("HEAD-MARKER"))
         assertTrue(output.stderr.endsWith("TAIL-MARKER"))
-        assertEquals(2 * ProcessBuilderProcessRunner.DEFAULT_CAPTURE_LIMIT_BYTES, output.stderr.length)
+        assertTrue(output.stderr.contains(" bytes omitted …]\n"))
         assertTrue(output.stdout.isEmpty())
         assertTrue("draining took ${elapsedMs}ms", elapsedMs < FAST_RUN_MS)
     }
@@ -73,15 +74,28 @@ class RootShellProcessTest {
 
     @Test
     fun givesUpOnAPipeHeldByABackgroundedGrandchildInsteadOfHanging() = runTest {
-        val started = System.nanoTime()
-        val output = runner.run(listOf("/bin/sh", "-c", "sleep 3 & echo started"), timeoutMs = HOLDING_BUDGET_MS)
-        val elapsedMs = (System.nanoTime() - started) / 1_000_000
+        val pidFile = kotlin.io.path.createTempFile("rootshell-grandchild", ".pid").toFile()
+        try {
+            val started = System.nanoTime()
+            // The grandchild holds the pipes far longer than the runner may take to return.
+            val script = "sleep 30 & echo \$! > ${pidFile.absolutePath}; echo started"
+            val output = runner.run(listOf("/bin/sh", "-c", script), timeoutMs = HOLDING_BUDGET_MS)
+            val elapsedMs = (System.nanoTime() - started) / 1_000_000
 
-        assertEquals(0, output.exitCode)
-        assertFalse(output.timedOut)
-        assertFalse(output.truncated)
-        assertEquals("started\n", output.stdout)
-        assertTrue("took ${elapsedMs}ms", elapsedMs < HOLDING_BUDGET_MS + ABANDON_GRACE_MS)
+            assertEquals(0, output.exitCode)
+            assertFalse(output.timedOut)
+            assertFalse(output.truncated)
+            assertEquals("started\n", output.stdout)
+            assertTrue("took ${elapsedMs}ms", elapsedMs < HOLDING_BUDGET_MS + ABANDON_GRACE_MS)
+        } finally {
+            pidFile.readText().trim().toIntOrNull()?.let { ProcessHandle.of(it.toLong()).ifPresent { handle -> handle.destroyForcibly() } }
+            pidFile.delete()
+        }
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun refusesAZeroReaderGrace() {
+        ProcessBuilderProcessRunner(readerGraceMs = 0)
     }
 
     @Test

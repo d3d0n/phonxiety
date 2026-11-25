@@ -60,6 +60,11 @@ class ProcessBuilderProcessRunner(
     private val captureLimitBytes: Int = DEFAULT_CAPTURE_LIMIT_BYTES,
     private val readerGraceMs: Long = READER_GRACE_MS
 ) : ProcessRunner {
+    init {
+        // Thread.join(0) waits forever; a positive grace keeps the whole-run deadline.
+        require(readerGraceMs > 0) { "reader grace must be positive" }
+    }
+
     override suspend fun run(command: List<String>, timeoutMs: Long): ShellOutput = withContext(Dispatchers.IO) {
         val process = try {
             ProcessBuilder(command).redirectErrorStream(false).start()
@@ -203,6 +208,11 @@ internal class BoundedStreamCapture(private val limitBytes: Int) {
         val first = head.toByteArray()
         if (total <= limitBytes) return String(first, Charsets.UTF_8)
         val kept = tailBytes()
+        if (total > 2L * limitBytes) {
+            // The middle is gone: say so on its own line so head and tail never read as one line.
+            val dropped = total - first.size - kept.size
+            return String(first, Charsets.UTF_8) + "\n[… $dropped bytes omitted …]\n" + String(kept, Charsets.UTF_8)
+        }
         // The head and the tail overlap while the stream is shorter than twice the limit.
         val uniqueTail = (total - first.size).coerceIn(0L, kept.size.toLong()).toInt()
         val bytes = ByteArray(first.size + uniqueTail)
