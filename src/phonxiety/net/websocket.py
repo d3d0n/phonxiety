@@ -15,6 +15,7 @@ from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request, Response
 
 from .link import MAX_MESSAGE_BYTES, LinkClosed, LinkSink
+from .mdns import MdnsAdvertiser
 
 DEVICE_PATH = "/device"
 
@@ -54,12 +55,29 @@ class _WebSocketLink:
 
 
 class WebSocketListener:
-    """TLS WebSocket endpoint for phones that reach the daemon by address."""
+    """TLS WebSocket endpoint for phones that reach the daemon by address.
 
-    def __init__(self, hub: LinkSink, token: str) -> None:
+    When the certificate pin and the protocol version are given, the listener
+    also advertises itself over mDNS so a phone on the same network can find it
+    without a typed address; the advertisement goes away with the listener.
+    """
+
+    def __init__(
+        self,
+        hub: LinkSink,
+        token: str,
+        *,
+        certificate: str | None = None,
+        protocol: int | None = None,
+        advertise: bool = True,
+    ) -> None:
         self._hub = hub
         self._token = token
+        self._certificate = certificate
+        self._protocol = protocol
+        self._advertise = advertise
         self._server: Server | None = None
+        self._mdns: MdnsAdvertiser | None = None
 
     @property
     def port(self) -> int | None:
@@ -79,6 +97,16 @@ class WebSocketListener:
             ping_interval=None,
             close_timeout=2,
         )
+        self._advertise_mdns()
+
+    def _advertise_mdns(self) -> None:
+        """Publish the listener on the LAN; a failure only costs the phone a shortcut."""
+        port = self.port
+        if not self._advertise or self._certificate is None or self._protocol is None or port is None:
+            return
+        advertiser = MdnsAdvertiser(port, self._certificate, self._protocol)
+        if advertiser.start():
+            self._mdns = advertiser
 
     def _authorize(self, connection: ServerConnection, request: Request) -> Response | None:
         if request.path != DEVICE_PATH:
@@ -89,6 +117,10 @@ class WebSocketListener:
         return None
 
     async def close(self) -> None:
+        mdns = self._mdns
+        self._mdns = None
+        if mdns is not None:
+            mdns.stop()
         server = self._server
         self._server = None
         if server is not None:

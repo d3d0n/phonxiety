@@ -70,3 +70,66 @@ Recommended next stage, with the phone on the cable: separate control and audio 
 Audio frames in the same runs: direct with delay + loss, frame median 112–123 ms on v1 and 121–134 ms on v2 streams, 103–104 ms as datagrams with 5–6 % of frames lost (stream frames are never lost, they wait).
 
 Reading: separate streams lower the typical control delay behind audio on a lossy direct path (median −15 to −20 %) but not its tail, and change nothing on the relay, whose leg to the relay server is TCP and blocks every stream on a loss. Datagrams lower audio delay and its tail at the price of losing late frames; the phone side would need loss concealment (Opus PLC) before carrying call audio that way.
+
+## Stage 3: connection options and the embedded-tailnet decision
+
+The phone can now open more than one kind of link to the same daemon, and the choice is measured
+rather than assumed. What exists:
+
+| Path | How the phone reaches the daemon | What the daemon does |
+|---|---|---|
+| iroh | QUIC to the endpoint ticket, direct or through a relay | runs the iroh endpoint; `iroh_relays` picks the relays |
+| LAN | `wss://<lan-address>:18763/device`, certificate pinned | advertises `_phonxiety._tcp` over mDNS (TXT: `cert`, `proto`; SRV: port) and reports its LAN addresses on `/app/v1/info` |
+| Tailscale app | `wss://100.x.y.z:18763/device` (or `*.ts.net`), same pinned WebSocket | reports its tailnet addresses on `/app/v1/info` and `/pairing` when the `tailscale` CLI answers |
+
+Selection lives in `com.phonxiety.bridge.net`: a candidate's base score is 100 for LAN, 90 for
+iroh direct, 80 for a tailnet address and 50 for iroh through a relay, minus a quarter of the probed
+round trip (at most 50). A candidate must pass three consecutive probes — a TLS handshake with the
+pinned certificate and the bearer token in the upgrade request, closed before any device frame, so a
+probe can never replace the live link. The incumbent is kept unless a challenger wins by 15 % for two
+consecutive rounds, and selection is not consulted at all while a call is owned: a dead path ends the
+call rather than migrating audio mid-sentence. An address learned from mDNS is used only when its
+certificate equals the pairing pin; mDNS itself is unauthenticated and the device token is what a
+hostile advert would collect.
+
+The relay choice is applied where iroh builds its endpoint
+(`EndpointOptions.relayMode`, iroh-ffi `RelayMode.defaultMode/customFromUrls/disabled`): preset
+relays, the daemon's `iroh_relays` list mirrored to the phone, the phone's own list, or none. A
+change recycles the endpoint only when no call is owned, so it takes effect on the next bind.
+
+### Embedded tailnet (tsnet in-process): decision
+
+Not implemented, and the honest reason is that it duplicates the path that already works for a cost
+the rest of the system does not pay.
+
+What embedding would require, from the plan and the library's own documentation
+([libtailscale](https://github.com/tailscale/libtailscale), [tsnet.Server](https://tailscale.com/docs/reference/tsnet-server-api)):
+
+1. `libtailscale` is a Go library; on Android it ships as a c-shared/.aar build of a Go runtime. That
+   is a second runtime in the process (the app already carries the iroh Rust runtime through JNA),
+   ~31 MB of `.so` per ABI, and a Go runtime with its own signal, thread and memory behaviour inside
+   an app that holds a call audio thread.
+2. tsnet reads routes and interfaces from `/proc/net/*`; Android's SELinux policy denies that to
+   untrusted apps, so the wrapper needs a synthetic `android0` interface and a `VpnService` for
+   `NETLINK_ROUTE` — i.e. the same `VpnService` the official Tailscale app already runs, but owned by
+   this app and by the user's battery budget.
+3. Android sockets cannot be handed an fd, so the app dials a `127.0.0.1` proxy that tsnet serves;
+   every audio frame then crosses one more loopback hop and the proxy becomes part of the latency and
+   the failure surface during a call.
+4. Authentication is an `AuthKey` or an OAuth client secret, because tsnet has no browser sign-in.
+   That is a tailnet admin credential living on a phone, next to a daemon token.
+
+Against that, the Tailscale-app path delivers the same reachability with zero new code in the audio
+path: the official app owns the `VpnService`, the daemon reports its tailnet address, and the phone
+opens the same pinned WebSocket it opens on the LAN. The measured cost of the app path is one extra
+app the user may already have; the measured cost of embedding is a second runtime plus a proxy in
+front of every frame.
+
+The criterion that would bring embedded tsnet back: a tailnet path that works with no separate app
+installed *and* carries a 60 s call with the same loss and p95 as iroh on the same network, from a
+cold start to first byte in ≤ 10 s. If that is ever measured, the work is the four items above; until
+then the app path is the whole feature.
+
+Related and deliberately not done: WireGuard (`com.wireguard.android:tunnel`) needs its own endpoint,
+key management and route generation on the daemon, which is what iroh plus a tailnet already provide;
+WebRTC for the audio leg waits on the datagram measurements in stage 2.

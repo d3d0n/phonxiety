@@ -28,6 +28,10 @@
         android:networkSecurityConfig="@xml/network_security_config"
         android:supportsRtl="true">
 
+        <!-- Macrobenchmark and the baseline-profile generator profile this
+             process through the shell; the release build is not debuggable. -->
+        <profileable android:shell="true" />
+
         <!--
             The whole control surface: Compose, Navigation 3, the setup wizard and the dashboard.
             The bridge components themselves are declared by :core:device and merged from its

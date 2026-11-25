@@ -45,6 +45,7 @@ from .auth import default_auth_path
 from .device import PROTOCOL_VERSION, PROTOCOL_VERSIONS, DeviceError
 from .models import CallLimits, CallRequest, TERMINAL_STATES
 from .net.framing import frame
+from .net.tailnet import addresses_for, path_kind, tailscale_addresses
 from .settings import (
     MAX_CONSTRAINTS_CHARS,
     MAX_DURATION_RANGE,
@@ -459,6 +460,8 @@ class AppApi:
         device = getattr(self.controller, "device", None)
         info = getattr(device, "info", {}) or {}
         stream = bool(getattr(device, "supports_attachments", False))
+        link = self._link_info() or {}
+        addresses = addresses_for(self.settings.device_port)
         return 200, {
             "daemon_version": __version__,
             "protocol": PROTOCOL_VERSION,
@@ -498,6 +501,13 @@ class AppApi:
                 "calls_per_hour": self.hourly_call_cap,
             },
             "mark_kinds": list(MARK_KINDS),
+            # Where else the phone can reach this daemon; the phone stores these as candidates.
+            "connection": {
+                "device_port": link.get("address_port") or self.settings.device_port,
+                "certificate": link.get("certificate"),
+                "lan": addresses["lan"],
+                "tailscale": addresses["tailscale"],
+            },
         }
 
     async def _status(self, query: dict[str, Any], body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
@@ -640,11 +650,13 @@ class AppApi:
                     if available else "the iroh endpoint is not bound on this daemon",
                 })
             elif name == "lan":
+                addresses = addresses_for(self.settings.device_port)["lan"]
                 answers.append({
                     "name": "lan",
                     "available": True,
-                    "reachable": connected,
+                    "reachable": connected and self._path_kind() == "lan",
                     "rtt_ms": rtt,
+                    "addresses": addresses,
                     "detail": f"certificate-pinned listener on port {self.settings.device_port}",
                 })
             elif name == "tailscale":
@@ -654,23 +666,24 @@ class AppApi:
                                 "reason": "unknown_candidate"})
         return 200, {"candidates": answers, "checked_at": _iso(time.time())}
 
-    @staticmethod
-    def _tailscale_candidate(rtt: float | None, connected: bool) -> dict[str, Any]:
-        binary = shutil.which("tailscale")
-        if binary is None:
+    def _path_kind(self) -> str:
+        """How the connected phone reached the daemon: iroh, lan, tailscale or address."""
+        status = getattr(self.controller.device, "status", None)
+        peer = (status() or {}).get("peer") if callable(status) else None
+        return path_kind(peer)
+
+    def _tailscale_candidate(self, rtt: float | None, connected: bool) -> dict[str, Any]:
+        if shutil.which("tailscale") is None:
             return {"name": "tailscale", "available": False, "reachable": False, "rtt_ms": None,
                     "reason": "not_installed"}
-        try:
-            result = subprocess.run([binary, "ip", "-4"], capture_output=True, text=True, timeout=5)
-        except (OSError, subprocess.TimeoutExpired):
-            return {"name": "tailscale", "available": False, "reachable": False, "rtt_ms": None,
-                    "reason": "command_failed"}
-        address = result.stdout.split()[0] if result.returncode == 0 and result.stdout.strip() else None
-        if address is None:
+        addresses = tailscale_addresses()
+        if not addresses:
             return {"name": "tailscale", "available": False, "reachable": False, "rtt_ms": None,
                     "reason": "not_connected"}
-        return {"name": "tailscale", "available": True, "reachable": connected, "rtt_ms": rtt,
-                "address": address, "detail": "pair by this address with `phonxiety pair --tailscale`"}
+        reachable = connected and self._path_kind() == "tailscale"
+        return {"name": "tailscale", "available": True, "reachable": reachable, "rtt_ms": rtt,
+                "addresses": addresses,
+                "detail": "pair by this address with `phonxiety pair --tailscale`"}
 
     # -- calls: place, validate, test -----------------------------------
 

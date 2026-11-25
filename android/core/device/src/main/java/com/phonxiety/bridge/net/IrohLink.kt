@@ -16,6 +16,7 @@ import computer.iroh.EndpointOptions
 import computer.iroh.EndpointTicket
 import computer.iroh.IrohAndroid
 import computer.iroh.RecvStream
+import computer.iroh.RelayMode
 import computer.iroh.SecretKey
 import computer.iroh.SendStream
 import computer.iroh.presetN0
@@ -64,6 +65,11 @@ object IrohSupport {
     private val contextInstalled = AtomicBoolean(false)
     private val endpointMutex = Mutex()
 
+    /** Relays the phone's endpoint uses; [RelayModeSetting.DEFAULT] leaves the preset in charge. */
+    @Volatile private var relayMode: RelayModeSetting = RelayModeSetting.DEFAULT
+
+    @Volatile private var relayUrls: List<String> = emptyList()
+
     @Volatile private var endpointRef: Endpoint? = null
 
     /** Binds the endpoint on first use; safe to call from several links. */
@@ -82,7 +88,8 @@ object IrohSupport {
             Endpoint.bind(
                 EndpointOptions(
                     preset = presetN0(),
-                    secretKey = key
+                    secretKey = key,
+                    relayMode = relayOption()
                 )
             )
         }
@@ -164,6 +171,39 @@ object IrohSupport {
             BridgeLog.w(TAG, "could not persist the iroh secret key: ${e.javaClass.simpleName}")
         }
         return generated
+    }
+
+    /**
+     * Sets the relay choice the next endpoint bind uses and reports whether it
+     * differs from the one in force.  A bound endpoint keeps its relays until
+     * it is recycled: the engine does that right away when no call is owned,
+     * so a change from the settings screen takes effect on the next bind
+     * without cutting a call mid-sentence.
+     */
+    fun configureRelays(mode: RelayModeSetting, urls: List<String>): Boolean {
+        val clean = RelayOptions.sanitize(urls)
+        synchronized(this) {
+            if (mode == relayMode && clean == relayUrls) return false
+            relayMode = mode
+            relayUrls = clean
+            return true
+        }
+    }
+
+    /** The iroh relay option for the current settings; null means the preset's own map. */
+    private fun relayOption(): RelayMode? = try {
+        when (relayMode) {
+            RelayModeSetting.DEFAULT -> null
+
+            RelayModeSetting.DISABLED -> RelayMode.disabled()
+
+            RelayModeSetting.DAEMON, RelayModeSetting.CUSTOM ->
+                relayUrls.takeIf { it.isNotEmpty() }?.let { RelayMode.customFromUrls(it) }
+        }
+    } catch (t: Throwable) {
+        // A malformed URL is refused by the bindings; the preset map still works.
+        BridgeLog.w(TAG, "iroh relay settings refused: ${t.javaClass.simpleName}")
+        null
     }
 
     /** Shuts the endpoint down without blocking the caller. */

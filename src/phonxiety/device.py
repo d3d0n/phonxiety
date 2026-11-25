@@ -108,6 +108,10 @@ class DeviceHub:
         # Bulk data on its own phone-opened stream (iroh only); the hub hands it the header
         # and the two stream halves, and the handler writes the frames.
         self.on_attachment: Callable[[dict[str, Any], Any, Any], Awaitable[None]] | None = None
+        # The app API credential for the phone. Sent over the authenticated link on every
+        # v3 connect, so a phone paired before the app API existed (or after a rotation)
+        # gets the current token without scanning a new pairing code.
+        self.app_token_source: Callable[[], str | None] | None = None
         self._api_slots = asyncio.Semaphore(API_CONCURRENCY)
         self._api_tasks: set[asyncio.Task[None]] = set()
         self._attachment_tasks: set[asyncio.Task[None]] = set()
@@ -225,6 +229,7 @@ class DeviceHub:
                 asyncio.create_task(self._write_audio(link), name="device-audio"),
                 asyncio.create_task(self._heartbeat(link), name="device-heartbeat"),
             ]
+            await self._offer_app_access(link, hello)
             self._events.put_nowait(hello)
             while True:
                 message = await link.recv()
@@ -266,6 +271,13 @@ class DeviceHub:
                 if self.on_event is not None:
                     await self.on_event({"type": "device_disconnected"})
                 self._link_free.set()
+
+    async def _offer_app_access(self, link: DeviceLink, hello: dict[str, Any]) -> None:
+        source = self.app_token_source
+        token = source() if source is not None else None
+        if not token or not isinstance(hello.get("app_api"), int):
+            return
+        await self.send_control(json.dumps({"type": "app_access", "app_token": token}))
 
     def _record_hello(self, hello: dict[str, Any]) -> None:
         """Keep the fields the rest of the daemon reads, and v3's preferences when present."""

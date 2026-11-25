@@ -9,8 +9,14 @@ import com.phonxiety.bridge.PhoneSettings
 import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.BridgeStateRepository
 import com.phonxiety.bridge.data.DaemonApi
+import com.phonxiety.bridge.model.ConnectionInfo
 import com.phonxiety.bridge.model.LinkState
 import com.phonxiety.bridge.model.PathKind
+import com.phonxiety.bridge.net.CandidateStore
+import com.phonxiety.bridge.net.ConnectionMode
+import com.phonxiety.bridge.net.RelayModeSetting
+import com.phonxiety.bridge.net.RelayOptions
+import com.phonxiety.bridge.net.StoredCandidate
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
@@ -48,6 +54,7 @@ class SettingsViewModel @Inject constructor(
         encodeDefaults = true
     }
     private val changeLog = AutoTuneLogStore(File(context.filesDir, "settings/auto-tune.json"))
+    private val candidateStore = CandidateStore.of(context)
     private val _state = MutableStateFlow(SettingsUiState())
     val state: StateFlow<SettingsUiState> = _state.asStateFlow()
 
@@ -67,6 +74,10 @@ class SettingsViewModel @Inject constructor(
         }
         viewModelScope.launch { loadDaemonSettings() }
         viewModelScope.launch {
+            _state.update { it.copy(connection = it.connection.copy(candidates = candidateStore.load())) }
+            refreshCandidates()
+        }
+        viewModelScope.launch {
             bridgeState.state.collect { bridge -> onBridgeState(bridge) }
         }
     }
@@ -75,6 +86,10 @@ class SettingsViewModel @Inject constructor(
 
     fun refreshDaemonSettings() {
         viewModelScope.launch { loadDaemonSettings() }
+        viewModelScope.launch {
+            _state.update { it.copy(connection = it.connection.copy(candidates = candidateStore.load())) }
+            refreshCandidates()
+        }
     }
 
     private suspend fun loadDaemonSettings() {
@@ -93,6 +108,7 @@ class SettingsViewModel @Inject constructor(
                         )
                     )
                 }
+                mirrorDaemonRelays(values.irohRelays)
             }
 
             is ApiOutcome.Failure -> _state.update {
@@ -182,6 +198,72 @@ class SettingsViewModel @Inject constructor(
     fun setLogLevel(level: String) {
         if (level !in PhoneSettings.LOG_LEVELS) return
         viewModelScope.launch { phonePreferences.update { it.copy(logLevel = level) } }
+    }
+
+    // -- connection ------------------------------------------------------
+
+    /** Pins one transport or leaves the choice to selection. */
+    fun setConnectionMode(mode: String) {
+        val chosen = ConnectionMode.of(mode)
+        viewModelScope.launch {
+            phonePreferences.update { it.copy(connectionMode = chosen.wire) }
+            _state.update { it.copy(message = "Connection: ${chosen.label}") }
+        }
+    }
+
+    /** Picks which relay list the phone's iroh endpoint uses. */
+    fun setRelayMode(mode: String) {
+        val chosen = RelayModeSetting.of(mode)
+        viewModelScope.launch {
+            phonePreferences.update { it.copy(relayMode = chosen.wire) }
+        }
+    }
+
+    /** The phone's own relay URLs, one per line; invalid entries are dropped, not refused. */
+    fun setRelayUrls(text: String) {
+        val urls = RelayOptions.sanitize(RelayOptions.split(text))
+        viewModelScope.launch { phonePreferences.update { it.copy(relayUrls = urls) } }
+    }
+
+    /**
+     * Re-reads the daemon's other addresses from `/app/v1/info` and stores them with the
+     * certificate pin; link selection can then use the LAN and the tailnet when they answer.
+     */
+    fun refreshCandidates() {
+        val current = _state.value.connection
+        if (current.refreshing) return
+        _state.update { it.copy(connection = it.connection.copy(refreshing = true, error = null)) }
+        viewModelScope.launch {
+            when (val outcome = api.info()) {
+                is ApiOutcome.Ok -> {
+                    val stored = candidateStore.merge(learnedCandidates(outcome.value.connection))
+                    _state.update {
+                        it.copy(
+                            connection = it.connection.copy(candidates = stored, refreshing = false, error = null)
+                        )
+                    }
+                }
+
+                is ApiOutcome.Failure -> _state.update {
+                    it.copy(connection = it.connection.copy(refreshing = false, error = outcome.describe()))
+                }
+            }
+        }
+    }
+
+    /** The daemon's `lan` and `tailscale` addresses as stored candidates; needs its certificate pin. */
+    private fun learnedCandidates(connection: ConnectionInfo?): List<StoredCandidate> {
+        val pin = connection?.certificate?.takeIf { it.length == 64 } ?: return emptyList()
+        return (connection.lan + connection.tailscale)
+            .distinct()
+            .map { StoredCandidate(it, pin, CandidateStore.Source.LEARNED) }
+    }
+
+    /** Keeps the daemon's relay list where the engine can read it for the daemon relay mode. */
+    private fun mirrorDaemonRelays(urls: List<String>) {
+        viewModelScope.launch {
+            phonePreferences.update { it.copy(daemonRelayUrls = RelayOptions.sanitize(urls)) }
+        }
     }
 
     // -- auto-tune ------------------------------------------------------

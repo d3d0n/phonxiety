@@ -129,11 +129,12 @@ def create_app(settings: Settings) -> Starlette:
 
     from .audio.opus import CODECS
     from .app_api import APP_API_VERSION, AppApi
-    from .device import DeviceError
+    from .device import PROTOCOL_VERSION, DeviceError
     from .models import CallLimits, CallRequest
     from .net.iroh import IrohListener
     from .net.link import LinkUnavailable
     from .net.tls import device_identity, server_context
+    from .net.tailnet import addresses_for
     from .net.tunnel import TunnelListener
     from .net.websocket import WebSocketListener
     from .runtime import create_controller
@@ -293,12 +294,18 @@ def create_app(settings: Settings) -> Starlette:
         if not _matches_token(request.headers.get("authorization"), settings.host_token):
             return _unauthorized()
         try:
+            addresses = addresses_for(settings.device_port)
             return JSONResponse({
                 "iroh": await iroh_link.ticket(),
                 "endpoint_id": iroh_link.endpoint_id,
                 # The app's own credential: the QR carries it so the phone can call /app/v1.
                 "app_token": app_api.app_token,
                 "app_api": APP_API_VERSION,
+                "certificate": fingerprint,
+                "device_port": settings.device_port,
+                # The other places this daemon can be reached; the phone stores them as candidates.
+                "lan": addresses["lan"],
+                "tailscale": addresses["tailscale"],
             })
         except LinkUnavailable:
             return JSONResponse({"error": "iroh_link_unavailable"}, status_code=503)
@@ -323,7 +330,12 @@ def create_app(settings: Settings) -> Starlette:
 
     cert_path, key_path, fingerprint = device_identity(settings.state_dir)
     device_tls = server_context(cert_path, key_path)
-    address_link = WebSocketListener(controller.device, settings.device_token)
+    address_link = WebSocketListener(
+        controller.device,
+        settings.device_token,
+        certificate=fingerprint,
+        protocol=PROTOCOL_VERSION,
+    )
     iroh_link = IrohListener(controller.device, settings.device_token, settings.state_dir, settings.iroh_relays)
     adb_tunnel = TunnelListener(controller.device, "adb")
 
@@ -339,6 +351,7 @@ def create_app(settings: Settings) -> Starlette:
     # The phone's app API and bulk streams arrive on the same authenticated link.
     controller.device.on_api = app_api.handle
     controller.device.on_attachment = app_api.serve_attachment
+    controller.device.app_token_source = lambda: app_api.app_token
 
     @asynccontextmanager
     async def controller_lifespan(_app: Any) -> AsyncIterator[None]:

@@ -1,5 +1,6 @@
 package com.phonxiety.bridge.feature.doctor
 
+import com.phonxiety.bridge.CrashReports
 import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.model.DoctorReport
 import com.phonxiety.bridge.model.LinkState
@@ -156,6 +157,34 @@ object DoctorEvaluator {
             evidence = if (paired) "a pairing is stored" else "no pairing link is stored",
             plan = DoctorPolicy.planFor(DoctorItemKind.PAIRING)
         )
+
+        // Only shown when the app actually recorded a death: a healthy install should not carry a
+        // permanent "no crash" line.  The memory limiter is named explicitly because Android 17
+        // kills background processes for it and that looks like a random restart otherwise.
+        snapshot.lastCrash?.let { crash ->
+            rows += DoctorRow(
+                id = ID_LAST_CRASH,
+                kind = DoctorItemKind.LAST_CRASH,
+                title = "Last process exit",
+                severity = when {
+                    crash.memoryLimiter -> DoctorSeverity.WARN
+                    crash.kind == CrashReports.Kind.ANR -> DoctorSeverity.WARN
+                    crash.kind == CrashReports.Kind.CRASH -> DoctorSeverity.WARN
+                    else -> DoctorSeverity.OK
+                },
+                evidence = when {
+                    crash.memoryLimiter ->
+                        "${crash.summary()}; the system reclaimed the process's memory, so keep the " +
+                            "service heap small and the battery exemption granted"
+
+                    crash.kind == CrashReports.Kind.ANR ->
+                        "${crash.summary()}; the trace is in the diagnostics bundle"
+
+                    else -> crash.summary()
+                },
+                plan = DoctorPolicy.planFor(DoctorItemKind.LAST_CRASH)
+            )
+        }
 
         rows += linkRow(bridge)
         rows += daemonRow(daemon)
@@ -383,6 +412,7 @@ object DoctorEvaluator {
     const val ID_RUNTIME: String = "runtime"
     const val ID_NOTIFICATIONS: String = "notifications"
     const val ID_BATTERY: String = "battery"
+    const val ID_LAST_CRASH: String = "last_crash"
     const val ID_PAIRING: String = "pairing"
     const val ID_LINK: String = "link"
     const val ID_DAEMON: String = "daemon"

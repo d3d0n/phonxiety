@@ -74,4 +74,17 @@ internal interface DeviceLinkFactory {
 
     /** Called once when the engine closes. */
     fun shutdown()
+
+    /**
+     * The candidate the last created link was built for; null for factories
+     * that have only one transport.
+     */
+    fun selected(): SelectedCandidate? = null
+
+    /**
+     * Runs one selection round over the current candidates and reports whether
+     * the link should move to another one.  False for factories with one
+     * transport, and false when the round only learned something.
+     */
+    fun considerSwitch(): Boolean = false
 }

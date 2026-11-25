@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    A self-instrumenting test APK: Gradle adds the <instrumentation> element for
+    :app's release variant, so the module needs nothing of its own here.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" />

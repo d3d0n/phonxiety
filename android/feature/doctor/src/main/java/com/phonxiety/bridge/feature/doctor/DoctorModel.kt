@@ -25,6 +25,7 @@ enum class DoctorItemKind(val group: DoctorGroup) {
     RUNTIME_PERMISSION(DoctorGroup.PERMISSIONS),
     NOTIFICATIONS(DoctorGroup.PERMISSIONS),
     BATTERY_EXEMPTION(DoctorGroup.DEVICE),
+    LAST_CRASH(DoctorGroup.DEVICE),
     PAIRING(DoctorGroup.DEVICE),
     LINK(DoctorGroup.LINK),
     DAEMON(DoctorGroup.DAEMON),

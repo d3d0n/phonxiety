@@ -4,6 +4,37 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt)
+    alias(libs.plugins.baselineprofile)
+}
+
+// -- Release signing ---------------------------------------------------------
+// A release APK must never be signed with the debug key by accident: the key is
+// how the phone trusts an update, and a debug-signed build installed over a
+// release one is a signature mismatch at best.  `mise run phone:build --release`
+// sets PHONXIETY_REQUIRE_SIGNING=1; a plain build keeps the debug-key fallback
+// so a developer can install a test APK without owning the release key.
+val releaseKeystore = System.getenv("PHONXIETY_KEYSTORE").orEmpty()
+val releaseKeystorePassword = System.getenv("PHONXIETY_KEYSTORE_PASSWORD").orEmpty()
+val releaseKeyAlias = System.getenv("PHONXIETY_KEY_ALIAS").orEmpty()
+val releaseKeyPassword = System.getenv("PHONXIETY_KEY_PASSWORD").orEmpty()
+val signingRequired = System.getenv("PHONXIETY_REQUIRE_SIGNING") == "1"
+
+if (signingRequired) {
+    val missing = buildList {
+        if (releaseKeystore.isBlank()) add("PHONXIETY_KEYSTORE")
+        if (releaseKeystorePassword.isBlank()) add("PHONXIETY_KEYSTORE_PASSWORD")
+        if (releaseKeyAlias.isBlank()) add("PHONXIETY_KEY_ALIAS")
+        if (releaseKeyPassword.isBlank()) add("PHONXIETY_KEY_PASSWORD")
+    }
+    if (missing.isNotEmpty()) {
+        throw GradleException(
+            "PHONXIETY_REQUIRE_SIGNING=1 needs a release key; unset: ${missing.joinToString()}. " +
+                "Run without --require-signing (and without that variable) for a debug-key build."
+        )
+    }
+    if (!file(releaseKeystore).isFile) {
+        throw GradleException("PHONXIETY_KEYSTORE points at $releaseKeystore, which is not a file")
+    }
 }
 
 android {
@@ -44,6 +75,11 @@ android {
         }
     }
 
+    // The :benchmark test module runs the release APK: the profile has to come
+    // from the build users install, and Macrobenchmark needs a non-debuggable,
+    // profileable process.
+    testBuildType = "release"
+
     packaging {
         jniLibs {
             // Keep libiroh_ffi.so and libjnidispatch.so uncompressed and
@@ -70,31 +106,41 @@ android {
         // privileged permissions.  Set the PHONXIETY_KEYSTORE* environment
         // variables to override the debug key.  Passwords are read from the
         // environment and never written into build output.
-        val store = System.getenv("PHONXIETY_KEYSTORE")
-        if (!store.isNullOrBlank()) {
+        if (releaseKeystore.isNotBlank()) {
             create("phonxietyRelease") {
-                storeFile = file(store)
-                storePassword = System.getenv("PHONXIETY_KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("PHONXIETY_KEY_ALIAS")
-                keyPassword = System.getenv("PHONXIETY_KEY_PASSWORD")
+                storeFile = file(releaseKeystore)
+                storePassword = releaseKeystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
             }
         }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8 shrinks and obfuscates the release APK; the keep rules in
+            // proguard-rules.pro cover what the reflective clients need — JNA's
+            // Structure and native registration, the uniffi bindings, the
+            // kotlinx.serialization models and the navigation keys that
+            // SavedState restores by name.
+            isMinifyEnabled = true
+            isShrinkResources = true
             isDebuggable = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
             signingConfig = signingConfigs.findByName("phonxietyRelease")
                 ?: signingConfigs.getByName("debug")
         }
     }
+}
 
-    // No baseline profile is generated for this app, so the installer that
-    // Activity and Lifecycle pull transitively is dead weight in the manifest.
-    configurations.configureEach {
-        exclude(group = "androidx.profileinstaller", module = "profileinstaller")
-    }
+// The profile is collected on a device by :benchmark and committed next to the
+// release variant it belongs to (`src/release/generated/baselineProfiles`).
+// Generation is manual: `./gradlew :app:generateBaselineProfile`.
+baselineProfile {
+    saveInSrc = true
 }
 
 dependencies {
@@ -126,6 +172,13 @@ dependencies {
     implementation(libs.androidx.navigation3.runtime)
     implementation(libs.androidx.navigation3.ui)
     implementation(libs.kotlinx.serialization.json)
+
+    // Installs the baseline profile collected by :benchmark; without one in the
+    // sources it does nothing.
+    implementation(libs.androidx.profileinstaller)
+
+    // Generates the profile; a test-only module that is never shipped in the app.
+    baselineProfile(project(":benchmark"))
 
     // Google code scanner: pairs by scanning the daemon's QR code without a
     // camera permission.

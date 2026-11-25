@@ -19,6 +19,7 @@ dependencies = [
   "starlette>=0.47",
   "uvicorn>=0.35",
   "websockets>=15",
+  "zeroconf>=0.154,<1",
 ]
 
 [dependency-groups]
@@ -34,3 +35,4 @@ packages = ["src/phonxiety"]
 
 [tool.pytest.ini_options]
 asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]

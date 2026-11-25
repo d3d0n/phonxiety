@@ -31,7 +31,7 @@ import okio.ByteString.Companion.toByteString
 internal class WebSocketLinkFactory(
     private val config: BridgeConfig.Address
 ) : DeviceLinkFactory {
-    private val client = buildClient(config.certSha256)
+    private val client = pinnedOkHttpClient(config.certSha256)
 
     override fun create(): DeviceLink = WebSocketLink(client, config)
 
@@ -39,34 +39,93 @@ internal class WebSocketLinkFactory(
         runCatching { client.dispatcher.executorService.shutdown() }
         runCatching { client.connectionPool.evictAll() }
     }
+}
 
-    private companion object {
-        /**
-         * OkHttp 5.5.1 does not enable TCP_NODELAY itself: `ConnectPlan`
-         * sets only `soTimeout` before `connect()`.  The listener below turns
-         * it on as soon as the connection is acquired, before the WebSocket
-         * request is written, so PCM frames are not coalesced by Nagle.
-         */
-        private val tcpNoDelay = object : EventListener() {
-            override fun connectionAcquired(call: HttpCall, connection: Connection) {
-                runCatching { connection.socket().tcpNoDelay = true }
-            }
-        }
+/**
+ * OkHttp 5.5.1 does not enable TCP_NODELAY itself: `ConnectPlan` sets only
+ * `soTimeout` before `connect()`.  The listener turns it on as soon as the
+ * connection is acquired, before the WebSocket request is written, so PCM
+ * frames are not coalesced by Nagle.
+ */
+private val tcpNoDelay = object : EventListener() {
+    override fun connectionAcquired(call: HttpCall, connection: Connection) {
+        runCatching { connection.socket().tcpNoDelay = true }
+    }
+}
 
-        fun buildClient(certSha256: String?): OkHttpClient {
-            val builder = OkHttpClient.Builder()
-                .connectTimeout(5, TimeUnit.SECONDS)
-                .readTimeout(0, TimeUnit.MILLISECONDS)
-                .writeTimeout(10, TimeUnit.SECONDS)
-                .eventListener(tcpNoDelay)
-            if (certSha256 != null) {
-                val pinned = PinnedTrustManager(certSha256)
-                builder
-                    .sslSocketFactory(pinned.socketFactory, pinned)
-                    .hostnameVerifier { _, _ -> true }
-            }
-            return builder.build()
+/** The shared WebSocket client; [certSha256] pins the daemon certificate when it is known. */
+internal fun pinnedOkHttpClient(certSha256: String?): OkHttpClient {
+    val builder = OkHttpClient.Builder()
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .writeTimeout(10, TimeUnit.SECONDS)
+        .eventListener(tcpNoDelay)
+    if (certSha256 != null) {
+        val pinned = PinnedTrustManager(certSha256)
+        builder
+            .sslSocketFactory(pinned.socketFactory, pinned)
+            .hostnameVerifier { _, _ -> true }
+    }
+    return builder.build()
+}
+
+/**
+ * Probes one address candidate the way the link contract measures a path:
+ * three consecutive TLS handshakes with the pinned certificate and the bearer
+ * token in the upgrade request, each within
+ * [CandidateScore.PROBE_BUDGET_MS].  The daemon authorizes the upgrade before
+ * any frame arrives, so an open socket proves the pin and the token; the probe
+ * closes at once and never sends a device `hello`, so it cannot replace the
+ * live link.
+ */
+internal class WebSocketCandidateProbe(
+    private val token: String,
+    private val budgetMs: Long = CandidateScore.PROBE_BUDGET_MS
+) : CandidateProbe {
+    private val clients = java.util.concurrent.ConcurrentHashMap<String, OkHttpClient>()
+
+    override fun probe(candidate: Candidate): ProbeReport {
+        val pin = candidate.certSha256?.takeIf { it.isNotBlank() } ?: return ProbeReport(candidate.id, 0, null)
+        val url = candidate.url ?: return ProbeReport(candidate.id, 0, null)
+        val client = clients.getOrPut(pin) { pinnedOkHttpClient(pin) }
+        val samples = ArrayList<Long>(CandidateScore.MIN_PASSES)
+        repeat(CandidateScore.MIN_PASSES) {
+            val openMs = openOnce(client, url) ?: return ProbeReport(candidate.id, 0, null)
+            samples += openMs
         }
+        samples.sort()
+        return ProbeReport(candidate.id, samples.size, samples[samples.size / 2])
+    }
+
+    private fun openOnce(client: OkHttpClient, url: String): Long? {
+        val request = try {
+            Request.Builder().url(url).header("Authorization", "Bearer $token").build()
+        } catch (_: Exception) {
+            return null
+        }
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val started = System.nanoTime()
+        var openMs = 0L
+        val socket = client.newWebSocket(
+            request,
+            object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    openMs = (System.nanoTime() - started) / 1_000_000
+                    runCatching { webSocket.close(1000, "probe") }
+                    latch.countDown()
+                }
+
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    runCatching { webSocket.cancel() }
+                    latch.countDown()
+                }
+            }
+        )
+        if (!latch.await(budgetMs, TimeUnit.MILLISECONDS)) {
+            runCatching { socket.cancel() }
+            return null
+        }
+        return openMs.takeIf { it in 1..budgetMs }
     }
 }
 
@@ -124,7 +183,9 @@ private class WebSocketLink(
     override val backlogBytes: Long
         get() = socket?.queueSize() ?: 0L
 
-    override fun route(): DeviceLink.Route? = null
+    // One pinned TCP stream to a known address: there is no relay hop to report, and no
+    // transport-level round trip until the daemon's heartbeat answers.
+    override fun route(): DeviceLink.Route = DeviceLink.Route(relay = false, rttMs = null)
 
     override fun start(listener: DeviceLink.Listener) {
         val request = try {

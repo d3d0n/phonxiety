@@ -41,6 +41,9 @@ import com.phonxiety.bridge.designsystem.component.PrimaryActionButton
 import com.phonxiety.bridge.designsystem.component.SectionCard
 import com.phonxiety.bridge.designsystem.component.StatusPill
 import com.phonxiety.bridge.designsystem.component.StatusTone
+import com.phonxiety.bridge.net.ConnectionMode
+import com.phonxiety.bridge.net.RelayModeSetting
+import com.phonxiety.bridge.net.RelayOptions
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -60,7 +63,11 @@ data class SettingsCallbacks(
     val onAutoTune: (Boolean) -> Unit = {},
     val onEvaluateNow: () -> Unit = {},
     val onRevertChange: (String) -> Unit = {},
-    val onRevertEverything: () -> Unit = {}
+    val onRevertEverything: () -> Unit = {},
+    val onConnectionMode: (String) -> Unit = {},
+    val onRelayMode: (String) -> Unit = {},
+    val onRelayUrls: (String) -> Unit = {},
+    val onRefreshCandidates: () -> Unit = {}
 )
 
 /** Settings and auto-tune; the daemon's values and the phone's own, side by side. */
@@ -94,7 +101,11 @@ fun SettingsRoute(
                 onAutoTune = viewModel::setAutoTuneEnabled,
                 onEvaluateNow = viewModel::evaluateNow,
                 onRevertChange = viewModel::revertChange,
-                onRevertEverything = viewModel::revertEverything
+                onRevertEverything = viewModel::revertEverything,
+                onConnectionMode = viewModel::setConnectionMode,
+                onRelayMode = viewModel::setRelayMode,
+                onRelayUrls = viewModel::setRelayUrls,
+                onRefreshCandidates = viewModel::refreshCandidates
             ),
             modifier = modifier.padding(padding)
         )
@@ -119,10 +130,94 @@ fun SettingsScreen(
             TextButton(onClick = callbacks.onBack) { Text("Back") }
             Text("Settings", style = MaterialTheme.typography.headlineSmall)
         }
+        ConnectionCard(state.phone, state.connection, callbacks)
         AudioCard(state.phone, callbacks)
         DeviceCard(state.phone, callbacks)
         DaemonCard(state.daemon, callbacks)
         AutoTuneCard(state.autoTune, callbacks)
+    }
+}
+
+@Composable
+private fun ConnectionCard(phone: PhoneSettings, connection: ConnectionUi, callbacks: SettingsCallbacks) {
+    val mode = ConnectionMode.of(phone.connectionMode)
+    val relayMode = RelayModeSetting.of(phone.relayMode)
+    SectionCard(
+        title = "Connection",
+        subtitle = "Which transport reaches the daemon, and which relays the phone's iroh endpoint uses",
+        status = {
+            StatusPill(
+                label = if (mode == ConnectionMode.AUTO) "auto" else mode.label,
+                tone = if (mode == ConnectionMode.AUTO) StatusTone.NEUTRAL else StatusTone.POSITIVE
+            )
+        }
+    ) {
+        Text("Transport", style = MaterialTheme.typography.labelMedium)
+        Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ConnectionMode.entries.forEach { entry ->
+                FilterChip(
+                    selected = mode == entry,
+                    onClick = { callbacks.onConnectionMode(entry.wire) },
+                    label = { Text(entry.label) }
+                )
+            }
+        }
+        Text(
+            text = "Automatic probes every known address and keeps the best one; a pinned mode uses only that " +
+                "transport, and the link never moves during a call.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        HorizontalDivider()
+        Text("iroh relays", style = MaterialTheme.typography.labelMedium)
+        Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            RelayModeSetting.entries.forEach { entry ->
+                FilterChip(
+                    selected = relayMode == entry,
+                    onClick = { callbacks.onRelayMode(entry.wire) },
+                    label = { Text(entry.label) }
+                )
+            }
+        }
+        when (relayMode) {
+            RelayModeSetting.CUSTOM -> FormField(
+                label = "This phone's relay URLs, one per line",
+                value = RelayOptions.join(phone.relayUrls),
+                singleLine = false
+            ) { callbacks.onRelayUrls(it) }
+
+            RelayModeSetting.DAEMON -> {
+                val daemonRelays = phone.daemonRelayUrls
+                Text(
+                    text = if (daemonRelays.isEmpty()) {
+                        "The daemon lists no relays; its endpoint uses the defaults."
+                    } else {
+                        "From the daemon: ${daemonRelays.joinToString()}"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            else -> Unit
+        }
+
+        HorizontalDivider()
+        Text("Known addresses", style = MaterialTheme.typography.labelMedium)
+        connection.error?.let { ErrorCard(title = "Candidates", message = it) }
+        Text(
+            text = if (connection.candidates.isEmpty()) {
+                "None yet: the daemon reports its LAN and tailnet addresses when it is reachable."
+            } else {
+                "${connection.candidates.size} address(es): ${connection.lanCount} on the LAN, ${connection.tailnetCount} in the tailnet"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        TextButton(onClick = callbacks.onRefreshCandidates, enabled = !connection.refreshing) {
+            Text(if (connection.refreshing) "Reading…" else "Refresh from the daemon")
+        }
     }
 }
 
@@ -417,7 +512,15 @@ internal fun previewSettingsState(): SettingsUiState = SettingsUiState(
     phone = PhoneSettings(
         preferredCodec = PhoneCodec.OPUS,
         maxBitrate = 32_000,
-        wifiLowLatency = true
+        wifiLowLatency = true,
+        relayMode = "daemon",
+        daemonRelayUrls = listOf("https://relay.example")
+    ),
+    connection = ConnectionUi(
+        candidates = listOf(
+            com.phonxiety.bridge.net.StoredCandidate("wss://192.168.1.10:18763/device", "a".repeat(64)),
+            com.phonxiety.bridge.net.StoredCandidate("wss://100.64.0.9:18763/device", "a".repeat(64))
+        )
     ),
     autoTune = AutoTuneUi(
         enabled = true,

@@ -1,6 +1,8 @@
 package com.phonxiety.bridge.feature.settings
 
 import com.phonxiety.bridge.PhoneSettings
+import com.phonxiety.bridge.net.StoredCandidate
+import com.phonxiety.bridge.net.isTailnet
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -109,9 +111,21 @@ data class AutoTuneUi(
     val lastEvaluatedAtMs: Long? = null
 )
 
+/** The addresses the phone may reach the daemon at, learned from the daemon itself. */
+data class ConnectionUi(
+    val candidates: List<StoredCandidate> = emptyList(),
+    val refreshing: Boolean = false,
+    val error: String? = null
+) {
+    val tailnetCount: Int get() = candidates.count { it.isTailnet }
+
+    val lanCount: Int get() = candidates.size - tailnetCount
+}
+
 data class SettingsUiState(
     val daemon: DaemonSettingsUi = DaemonSettingsUi(),
     val phone: PhoneSettings = PhoneSettings(),
+    val connection: ConnectionUi = ConnectionUi(),
     val autoTune: AutoTuneUi = AutoTuneUi(),
     val message: String? = null
 )

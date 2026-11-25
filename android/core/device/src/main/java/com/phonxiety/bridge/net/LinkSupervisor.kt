@@ -135,6 +135,16 @@ internal class LinkSupervisor(
 
     fun isUp(): Boolean = synchronized(lock) { linkUp }
 
+    /** Candidate the current (or last) attempt was built for, when the factory chooses one. */
+    fun selectedCandidate(): SelectedCandidate? = factory.selected()
+
+    /**
+     * One idle selection round: true when a probe says another candidate now
+     * wins by the hysteresis rule, so the owner drops the link to move to it.
+     * Never true while the transport has no selection.
+     */
+    fun considerSwitch(): Boolean = factory.considerSwitch()
+
     /** Route of the live link for the UI, or null while down. */
     fun route(): DeviceLink.Route? = synchronized(lock) {
         if (!linkUp) null else link?.route()
@@ -311,6 +321,20 @@ internal class LinkSupervisor(
             reconnectTask = null
         }
         connect()
+    }
+
+    /**
+     * Drops the live link so the next attempt picks a candidate again, e.g.
+     * after the connection mode changed.  Reports down, so the reconnect runs
+     * through the usual backoff; false when nothing is live.
+     */
+    fun reconnect(reason: String): Boolean {
+        val current = synchronized(lock) {
+            if (!running || !linkUp) null else link
+        } ?: return false
+        handleDown(current, reason)
+        runCatching { current.cancel() }
+        return true
     }
 
     /**

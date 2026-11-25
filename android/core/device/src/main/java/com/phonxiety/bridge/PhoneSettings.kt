@@ -8,6 +8,9 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.phonxiety.bridge.net.ConnectionMode
+import com.phonxiety.bridge.net.RelayModeSetting
+import com.phonxiety.bridge.net.RelayOptions
 import java.util.Locale
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -31,6 +34,11 @@ object PhoneCodec {
  * [wifiLowLatency] holds the Wi-Fi low-latency lock while the link is up; [thermalAwareness] and
  * [batteryAwareness] let auto-tune release that lock; [logLevel] is what the log ring keeps;
  * [testNumber] is the only number the test lab is allowed to dial.
+ *
+ * Connection values decide which transport the engine opens and which relays its iroh
+ * endpoint uses: [connectionMode] pins one candidate or leaves the choice to selection,
+ * [relayMode] picks between the preset relays, the daemon's list, the phone's own list and
+ * no relays at all, and [relayUrls] is that own list.
  */
 data class PhoneSettings(
     val preferredCodec: String = PhoneCodec.AUTO,
@@ -40,7 +48,12 @@ data class PhoneSettings(
     val batteryAwareness: Boolean = true,
     val logLevel: String = "info",
     val testNumber: String = "",
-    val autoTuneEnabled: Boolean = false
+    val autoTuneEnabled: Boolean = false,
+    val connectionMode: String = ConnectionMode.AUTO.wire,
+    val relayMode: String = RelayModeSetting.DEFAULT.wire,
+    val relayUrls: List<String> = emptyList(),
+    /** The daemon's own `iroh_relays`, mirrored here so the daemon relay mode can use it. */
+    val daemonRelayUrls: List<String> = emptyList()
 ) {
     companion object {
         const val MIN_BITRATE = 6_000
@@ -57,7 +70,11 @@ data class PhoneSettings(
             batteryAwareness: Boolean,
             logLevel: String?,
             testNumber: String?,
-            autoTuneEnabled: Boolean
+            autoTuneEnabled: Boolean,
+            connectionMode: String? = ConnectionMode.AUTO.wire,
+            relayMode: String? = RelayModeSetting.DEFAULT.wire,
+            relayUrls: List<String> = emptyList(),
+            daemonRelayUrls: List<String> = emptyList()
         ): PhoneSettings = PhoneSettings(
             preferredCodec = PhoneCodec.normalize(preferredCodec),
             maxBitrate = maxBitrate.coerceIn(MIN_BITRATE, MAX_BITRATE),
@@ -66,7 +83,11 @@ data class PhoneSettings(
             batteryAwareness = batteryAwareness,
             logLevel = logLevel?.trim()?.lowercase(Locale.US)?.takeIf { it in LOG_LEVELS } ?: "info",
             testNumber = sanitizeNumber(testNumber),
-            autoTuneEnabled = autoTuneEnabled
+            autoTuneEnabled = autoTuneEnabled,
+            connectionMode = ConnectionMode.of(connectionMode).wire,
+            relayMode = RelayModeSetting.of(relayMode).wire,
+            relayUrls = RelayOptions.sanitize(relayUrls),
+            daemonRelayUrls = RelayOptions.sanitize(daemonRelayUrls)
         )
 
         /** Keeps digits and a single leading `+`; an empty string means "not configured". */
@@ -112,6 +133,10 @@ class PhoneSettingsStore private constructor(private val dataStore: DataStore<Pr
             preferences[LOG_LEVEL] = next.logLevel
             preferences[TEST_NUMBER] = next.testNumber
             preferences[AUTO_TUNE] = next.autoTuneEnabled
+            preferences[CONNECTION_MODE] = next.connectionMode
+            preferences[RELAY_MODE] = next.relayMode
+            preferences[RELAY_URLS] = RelayOptions.join(next.relayUrls)
+            preferences[DAEMON_RELAY_URLS] = RelayOptions.join(next.daemonRelayUrls)
         }
         return written
     }
@@ -127,7 +152,11 @@ class PhoneSettingsStore private constructor(private val dataStore: DataStore<Pr
         batteryAwareness = preferences[BATTERY_AWARENESS] ?: true,
         logLevel = preferences[LOG_LEVEL],
         testNumber = preferences[TEST_NUMBER],
-        autoTuneEnabled = preferences[AUTO_TUNE] ?: false
+        autoTuneEnabled = preferences[AUTO_TUNE] ?: false,
+        connectionMode = preferences[CONNECTION_MODE],
+        relayMode = preferences[RELAY_MODE],
+        relayUrls = RelayOptions.split(preferences[RELAY_URLS].orEmpty()),
+        daemonRelayUrls = RelayOptions.split(preferences[DAEMON_RELAY_URLS].orEmpty())
     )
 
     companion object {
@@ -139,6 +168,10 @@ class PhoneSettingsStore private constructor(private val dataStore: DataStore<Pr
         private val LOG_LEVEL = stringPreferencesKey("log_level")
         private val TEST_NUMBER = stringPreferencesKey("test_number")
         private val AUTO_TUNE = booleanPreferencesKey("auto_tune_enabled")
+        private val CONNECTION_MODE = stringPreferencesKey("connection_mode")
+        private val RELAY_MODE = stringPreferencesKey("relay_mode")
+        private val RELAY_URLS = stringPreferencesKey("relay_urls")
+        private val DAEMON_RELAY_URLS = stringPreferencesKey("daemon_relay_urls")
 
         @Volatile private var instance: PhoneSettingsStore? = null
 

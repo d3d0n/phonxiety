@@ -203,6 +203,19 @@ class InfoTests(_ApiCase):
         self.assertFalse(body["voice_controls"]["loopback"])
         self.assertEqual(body["phone"]["device"], None)
 
+    async def test_info_reports_the_other_addresses_with_the_pin(self) -> None:
+        with mock.patch("phonxiety.app_api.addresses_for", return_value={
+            "lan": ["wss://192.168.1.10:18763/device"],
+            "tailscale": ["wss://100.64.0.2:18763/device"],
+        }):
+            status, body = await self.call("GET", "/app/v1/info")
+        self.assertEqual(status, 200)
+        connection = body["connection"]
+        self.assertEqual(connection["device_port"], 18763)
+        self.assertEqual(connection["certificate"], "cc" * 32)
+        self.assertEqual(connection["lan"], ["wss://192.168.1.10:18763/device"])
+        self.assertEqual(connection["tailscale"], ["wss://100.64.0.2:18763/device"])
+
     async def test_status_reports_the_link_the_listeners_know(self) -> None:
         status, body = await self.call("GET", "/app/v1/status")
         self.assertEqual(status, 200)
@@ -248,6 +261,17 @@ class LinkTestAndProbeTests(_ApiCase):
         self.assertIsInstance(iroh["rtt_ms"], float)
         self.assertFalse(tailscale["available"])
         self.assertEqual(tailscale["reason"], "not_installed")
+
+    async def test_probe_reports_every_tailnet_address_and_the_path(self) -> None:
+        with mock.patch("phonxiety.app_api.shutil.which", return_value="/usr/bin/tailscale"), \
+                mock.patch("phonxiety.app_api.tailscale_addresses", return_value=["100.64.0.2", "fd7a:115c:a1e0::2"]), \
+                mock.patch.object(self.device, "status", return_value={"connected": True, "peer": "100.64.0.5"}):
+            status, body = await self.call("POST", "/app/v1/probe", body={"candidates": ["tailscale"]})
+        self.assertEqual(status, 200)
+        tailscale = body["candidates"][0]
+        self.assertTrue(tailscale["available"])
+        self.assertTrue(tailscale["reachable"])
+        self.assertEqual(["100.64.0.2", "fd7a:115c:a1e0::2"], tailscale["addresses"])
 
     async def test_unknown_candidate_is_reported_not_refused(self) -> None:
         status, body = await self.call("POST", "/app/v1/probe", body={"candidates": ["wireguard"]})
@@ -826,6 +850,20 @@ class HubTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.hub.info["preferred_codec"], "opus")
         self.assertEqual(self.hub.info["control_caps"], ["tone_start"])
         self.assertEqual(self.hub.info["version"], 3)
+
+    async def _app_access(self) -> list[dict[str, Any]]:
+        await asyncio.sleep(0.05)
+        return [json.loads(item) for item in self.link.sent if isinstance(item, str) and '"app_access"' in item]
+
+    async def test_a_v3_phone_receives_the_current_app_token_on_connect(self) -> None:
+        self.hub.app_token_source = lambda: "app-secret"
+        await self._hello(app_api=1)
+        self.assertEqual(await self._app_access(), [{"type": "app_access", "app_token": "app-secret"}])
+
+    async def test_no_app_token_goes_to_a_phone_without_the_app_api(self) -> None:
+        self.hub.app_token_source = lambda: "app-secret"
+        await self._hello()
+        self.assertEqual(await self._app_access(), [])
 
     async def test_the_hello_preference_picks_the_next_call_codec(self) -> None:
         self.hub.audio_codec = "pcm"

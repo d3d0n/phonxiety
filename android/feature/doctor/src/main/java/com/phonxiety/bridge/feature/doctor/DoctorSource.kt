@@ -1,5 +1,6 @@
 package com.phonxiety.bridge.feature.doctor
 
+import com.phonxiety.bridge.CrashReports
 import com.phonxiety.bridge.model.DoctorReport
 import com.phonxiety.bridge.root.AppFacts
 import com.phonxiety.bridge.root.ModuleState
@@ -17,6 +18,8 @@ data class DoctorSnapshot(
     val runtimeMissing: Set<RuntimePermission> = emptySet(),
     val notificationsEnabled: Boolean = true,
     val batteryExempt: Boolean? = null,
+    /** The newest process death the app recorded, when there was one. */
+    val lastCrash: CrashReports.Report? = null,
     val checkedAtEpochMs: Long = 0L,
     val readError: String? = null
 )

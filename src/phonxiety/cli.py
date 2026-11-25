@@ -176,6 +176,7 @@ def _daemon_get(settings: Any, path: str, *, timeout: float = 5.0) -> Any:
 
 def _status_lines(payload: dict[str, Any], *, color: bool) -> list[str]:
     """Health as aligned rows; the state word is coloured on a terminal."""
+    from .net.tailnet import path_kind
 
     def tone(text: str, code: str) -> str:
         return f"\x1b[{code}m{text}\x1b[0m" if color else text
@@ -202,6 +203,13 @@ def _status_lines(payload: dict[str, Any], *, color: bool) -> list[str]:
             rows.append(("calling", f"{tone('ready', good)}  {device.get('audio_codec')} audio"))
     else:
         rows.append(("phone", f"{tone('not connected', bad)}  pair it with: phonxiety pair"))
+    if device.get("connected"):
+        peer = device.get("peer")
+        kind = path_kind(str(peer)) if peer else "none"
+        route = f"  {device['route']}" if device.get("route") else ""
+        rows.append(("path", f"{tone(kind, good if kind in ('iroh', 'lan', 'tailscale') else warn)}{route}"))
+    else:
+        rows.append(("path", tone("offline", warn)))
     call = device.get("active_call")
     if isinstance(call, dict):
         rows.append(("call", f"{call.get('state')}  {call.get('call_id')}"))

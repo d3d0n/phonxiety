@@ -8,6 +8,8 @@ import com.phonxiety.bridge.PhoneSettings
 import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.BridgeStateRepository
 import com.phonxiety.bridge.model.BridgeState
+import com.phonxiety.bridge.model.ConnectionInfo
+import com.phonxiety.bridge.model.DaemonInfo
 import com.phonxiety.bridge.model.DeviceState
 import com.phonxiety.bridge.model.LinkTestFrames
 import com.phonxiety.bridge.model.LinkTestResult
@@ -125,6 +127,41 @@ class SettingsViewModelTest {
         assertEquals(48_000, prefs.settings.value.maxBitrate)
         assertTrue(prefs.settings.value.wifiLowLatency)
         assertEquals("debug", prefs.settings.value.logLevel)
+    }
+
+    @Test
+    fun `connection mode, relays and daemon addresses are stored where the engine reads them`() = runBlocking<Unit> {
+        val pin = "a".repeat(64)
+        api.infoHandler = {
+            ApiOutcome.Ok(
+                200,
+                DaemonInfo(
+                    connection = ConnectionInfo(
+                        devicePort = 18763,
+                        certificate = pin,
+                        lan = listOf("wss://192.168.1.10:18763/device"),
+                        tailscale = listOf("wss://100.64.0.9:18763/device")
+                    )
+                )
+            )
+        }
+        api.settingsHandler = { ApiOutcome.Ok(200, snapshot(DaemonSettingsValues(irohRelays = listOf("https://daemon.example")))) }
+        val vm = viewModel()
+        withTimeout(5_000) { vm.state.first { it.connection.candidates.size == 2 } }
+
+        vm.setConnectionMode("tailscale")
+        vm.setRelayMode("custom")
+        vm.setRelayUrls("https://mine.example\nnot a url")
+        withTimeout(5_000) { vm.state.first { it.phone.relayUrls == listOf("https://mine.example") } }
+        assertEquals("tailscale", prefs.settings.value.connectionMode)
+        assertEquals("custom", prefs.settings.value.relayMode)
+        assertEquals(listOf("https://mine.example"), prefs.settings.value.relayUrls)
+
+        // The daemon relay mode reads the daemon's list, mirrored into the phone's preferences.
+        withTimeout(5_000) { vm.state.first { it.phone.daemonRelayUrls.isNotEmpty() } }
+        assertEquals(listOf("https://daemon.example"), prefs.settings.value.daemonRelayUrls)
+        assertEquals(1, vm.state.value.connection.tailnetCount)
+        assertEquals(1, vm.state.value.connection.lanCount)
     }
 
     @Test

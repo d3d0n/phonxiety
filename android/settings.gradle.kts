@@ -20,6 +20,7 @@ rootProject.name = "phonxiety-android"
 
 // Surfaces and host.
 include(":app")
+include(":benchmark")
 include(":feature:onboarding")
 include(":feature:dashboard")
 include(":feature:livecall")

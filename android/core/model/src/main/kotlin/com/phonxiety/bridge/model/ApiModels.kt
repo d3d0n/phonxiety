@@ -25,7 +25,22 @@ data class DaemonInfo(
     @SerialName("control_caps") val controlCaps: List<String> = emptyList(),
     val phone: PhoneInfo = PhoneInfo(),
     val limits: ApiLimits = ApiLimits(),
-    @SerialName("mark_kinds") val markKinds: List<String> = emptyList()
+    @SerialName("mark_kinds") val markKinds: List<String> = emptyList(),
+    val connection: ConnectionInfo? = null
+)
+
+/**
+ * The other addresses this daemon can be reached at, as it reports them on
+ * `/app/v1/info`: its address-listener port, the certificate pin an address
+ * link needs, and the addresses it knows it has — LAN first, then its tailnet
+ * addresses when the Tailscale CLI is present on the daemon host.
+ */
+@Serializable
+data class ConnectionInfo(
+    @SerialName("device_port") val devicePort: Int? = null,
+    val certificate: String? = null,
+    val lan: List<String> = emptyList(),
+    val tailscale: List<String> = emptyList()
 )
 
 @Serializable

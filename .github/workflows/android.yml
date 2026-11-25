@@ -77,6 +77,34 @@ jobs:
       - name: Build iroh bindings
         run: mise run phone:iroh
 
+      # Materialises the release key from repository secrets when they exist.
+      # Only names appear here; a missing secret leaves the build on the debug
+      # key, and PHONXIETY_REQUIRE_SIGNING stays unset so that is allowed.
+      - name: Prepare release signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.PHONXIETY_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.PHONXIETY_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.PHONXIETY_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.PHONXIETY_KEY_PASSWORD }}
+        run: |
+          if [ -z "${KEYSTORE_BASE64:-}" ]; then
+            echo "No release key in secrets; the APK is signed with the debug key."
+            exit 0
+          fi
+          mkdir -p "$RUNNER_TEMP/keystore"
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/keystore/release.jks"
+          chmod 600 "$RUNNER_TEMP/keystore/release.jks"
+          {
+            echo "PHONXIETY_KEYSTORE=$RUNNER_TEMP/keystore/release.jks"
+            echo "PHONXIETY_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+            echo "PHONXIETY_KEY_ALIAS=$KEY_ALIAS"
+            echo "PHONXIETY_KEY_PASSWORD=$KEY_PASSWORD"
+            echo "PHONXIETY_REQUIRE_SIGNING=1"
+          } >> "$GITHUB_ENV"
+
+      # Screenshot verification, unit tests, lint and the minified release APK.
+      # The Roborazzi tasks are selected by name so every module that renders a
+      # screen compares against its committed images, not just the design system.
       - name: Build, test and lint
         working-directory: android
         run: |
@@ -84,7 +112,17 @@ jobs:
             :app:assembleRelease \
             testDebugUnitTest \
             lint \
-            :core:designsystem:verifyRoborazziDebug
+            verifyRoborazziDebug
+
+      # R8 maps every obfuscated name back to its source; without it an on-device
+      # crash report is unreadable.
+      - name: Upload R8 mapping
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phonxiety-r8-mapping
+          path: android/app/build/outputs/mapping/release/mapping.txt
+          if-no-files-found: warn
 
       # Builds the release APK again (incrementally) and packages the module zip.
       - name: Package module zip

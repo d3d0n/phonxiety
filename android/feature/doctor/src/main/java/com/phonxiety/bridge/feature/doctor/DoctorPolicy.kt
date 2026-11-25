@@ -74,6 +74,10 @@ object DoctorPolicy {
             rollback = "Remove it in Settings → Apps → Phonxiety → Battery → Unrestricted → Optimised."
         )
 
+        // A recorded crash or exit is evidence, not a symptom with a switch: the row explains the
+        // reason and the trace goes with the diagnostics bundle.
+        DoctorItemKind.LAST_CRASH -> null
+
         DoctorItemKind.PAIRING -> FixPlan(
             fix = DoctorFixId.REPAIR_PAIRING,
             risk = FixClass.CONFIRM,
@@ -159,6 +163,7 @@ object DoctorPolicy {
         DoctorItemKind.RUNTIME_PERMISSION,
         DoctorItemKind.NOTIFICATIONS,
         DoctorItemKind.BATTERY_EXEMPTION,
+        DoctorItemKind.LAST_CRASH,
         DoctorItemKind.DAEMON_CHECK -> null
     }
 

@@ -317,7 +317,25 @@ sealed interface AttachmentOutcome {
 data class DiagnosticsSnapshot(
     val engine: EngineDiagnostics,
     val audio: AudioDiagnostics,
-    val link: LinkDiagnostics
+    val link: LinkDiagnostics,
+    /** Process deaths the system recorded, newest first and bounded. */
+    val crashes: List<CrashDiagnostics> = emptyList()
+)
+
+/**
+ * One process death as `ApplicationExitInfo` reported it.  `memory_limiter` is set when the
+ * description names Android's memory limiter (`MemoryLimiter:AnonSwap`), which is the case the
+ * Doctor has to explain instead of treating as a generic crash.  `trace` carries the ANR trace or
+ * the uncaught-exception stack when one was captured.
+ */
+@Serializable
+data class CrashDiagnostics(
+    @SerialName("at") val atEpochMs: Long,
+    val kind: String,
+    val reason: String,
+    val description: String? = null,
+    @SerialName("memory_limiter") val memoryLimiter: Boolean = false,
+    val trace: String? = null
 )
 
 @Serializable
@@ -392,6 +410,16 @@ object ControlEnvelope {
                 (value as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
             }
         }
+    } catch (_: Exception) {
+        null
+    }
+
+    /** The token in a daemon `{"type":"app_access","app_token":...}` message, when well-formed. */
+    fun appAccessToken(text: String): String? = try {
+        (json.parseToJsonElement(text) as? JsonObject)
+            ?.get("app_token")
+            ?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { p -> p.isString }?.contentOrNull }
+            ?.takeIf { it.isNotBlank() && it.length <= 256 }
     } catch (_: Exception) {
         null
     }

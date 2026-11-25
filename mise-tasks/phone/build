@@ -3,6 +3,13 @@
 #MISE depends=["phone:iroh"]
 #
 # Does not touch a device and does not install anything.
+#
+# Usage: mise run phone:build [--release]
+#
+#   --release   Refuse to build unless PHONXIETY_KEYSTORE (and the password,
+#               alias and key password variables) are set.  Without it a missing
+#               key falls back to the debug key, which is fine for a test APK and
+#               wrong for one the phone will accept as an update.
 set -euo pipefail
 
 ROOT="${MISE_PROJECT_ROOT:?run this task through mise: mise run phone:build}"
@@ -10,8 +17,45 @@ ANDROID="$ROOT/android"
 MAGISK="$ANDROID/magisk"
 DIST="$ROOT/dist"
 
+REQUIRE_SIGNING="${PHONXIETY_REQUIRE_SIGNING:-0}"
+usage() {
+    cat <<'EOF'
+Usage: mise run phone:build [--release]
+
+  --release   Require PHONXIETY_KEYSTORE, PHONXIETY_KEYSTORE_PASSWORD,
+              PHONXIETY_KEY_ALIAS and PHONXIETY_KEY_PASSWORD, and fail without
+              them instead of falling back to the debug key.  The same switch is
+              PHONXIETY_REQUIRE_SIGNING=1.
+EOF
+}
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --release|--require-signing)
+            REQUIRE_SIGNING=1
+            shift ;;
+        -h|--help)
+            usage
+            exit 0 ;;
+        *)
+            printf 'error: unknown argument: %s\n' "$1" >&2
+            exit 1 ;;
+    esac
+done
+
 fail() { printf 'error: %s\n' "$1" >&2; exit 1; }
 note() { printf '%s\n' "$1"; }
+
+if [ "$REQUIRE_SIGNING" = "1" ]; then
+    missing=""
+    for name in PHONXIETY_KEYSTORE PHONXIETY_KEYSTORE_PASSWORD PHONXIETY_KEY_ALIAS PHONXIETY_KEY_PASSWORD; do
+        if [ -z "${!name:-}" ]; then
+            missing="$missing $name"
+        fi
+    done
+    [ -z "$missing" ] || fail "release signing required but unset:$missing (run without --release for a debug-key APK)"
+    [ -f "$PHONXIETY_KEYSTORE" ] || fail "PHONXIETY_KEYSTORE points at $PHONXIETY_KEYSTORE, which is not a file"
+    export PHONXIETY_REQUIRE_SIGNING=1
+fi
 
 [ -f "$MAGISK/module.prop" ] || fail "missing android/magisk/module.prop"
 [ -f "$MAGISK/system/etc/permissions/privapp-permissions-com.phonxiety.bridge.xml" ] || \
@@ -37,8 +81,8 @@ if [ ! -f "$APK" ]; then
 fi
 [ -f "$APK" ] || fail "release APK was not produced"
 
-if [ -z "${PHONXIETY_KEYSTORE:-}" ]; then
-    note "Release APK is signed with the debug key. Set PHONXIETY_KEYSTORE (and passwords) for a dedicated key."
+if [ "$REQUIRE_SIGNING" != "1" ] && [ -z "${PHONXIETY_KEYSTORE:-}" ]; then
+    note "Release APK is signed with the debug key. Set PHONXIETY_KEYSTORE (and passwords) or run with --release for a dedicated key."
 fi
 
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/phonxiety-module.XXXXXX")"

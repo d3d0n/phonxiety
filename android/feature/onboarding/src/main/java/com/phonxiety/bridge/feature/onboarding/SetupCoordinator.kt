@@ -178,7 +178,9 @@ class SetupCoordinator(
             verify = verify,
             missingRuntime = permissions.missing(),
             paired = paired,
-            linkTestPassed = if (paired) preferences.linkTestPassed else null,
+            // Only a pass is remembered: a past failure says nothing about the link now, so every
+            // probe after one runs the test again instead of parking the wizard on the old result.
+            linkTestPassed = if (paired && preferences.linkTestPassed == true) true else null,
             progress = runCatching { progressStore.read() }.getOrNull()
         )
     }

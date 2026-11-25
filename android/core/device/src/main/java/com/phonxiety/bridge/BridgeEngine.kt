@@ -27,6 +27,7 @@ import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.model.CallPhase
 import com.phonxiety.bridge.model.Capabilities
 import com.phonxiety.bridge.model.ControlEnvelope
+import com.phonxiety.bridge.model.CrashDiagnostics
 import com.phonxiety.bridge.model.DaemonInfo
 import com.phonxiety.bridge.model.DeviceActiveCall
 import com.phonxiety.bridge.model.DeviceApiError
@@ -43,12 +44,18 @@ import com.phonxiety.bridge.model.EngineDiagnostics
 import com.phonxiety.bridge.model.LinkDiagnostics
 import com.phonxiety.bridge.model.LinkError
 import com.phonxiety.bridge.model.LinkKind
+import com.phonxiety.bridge.net.CandidateLinkFactory
+import com.phonxiety.bridge.net.CandidateStore
+import com.phonxiety.bridge.net.ConnectionMode
 import com.phonxiety.bridge.net.DeviceLink
 import com.phonxiety.bridge.net.ExecutorLinkScheduler
-import com.phonxiety.bridge.net.IrohLinkFactory
 import com.phonxiety.bridge.net.IrohSupport
+import com.phonxiety.bridge.net.LinkSelector
 import com.phonxiety.bridge.net.LinkSupervisor
-import com.phonxiety.bridge.net.WebSocketLinkFactory
+import com.phonxiety.bridge.net.RelayModeSetting
+import com.phonxiety.bridge.net.RelayOptions
+import com.phonxiety.bridge.net.Tailnet
+import com.phonxiety.bridge.net.WebSocketCandidateProbe
 import java.io.File
 import java.io.OutputStream
 import java.security.MessageDigest
@@ -75,6 +82,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.SerializationException
@@ -121,6 +129,9 @@ class BridgeEngine(
         private const val APP_REQUEST_TIMEOUT_MS = 30_000L
         private const val TELEMETRY_INTERVAL_MS = 5_000L
         private const val AUDIO_LEVEL_INTERVAL_MS = 100L
+
+        /** How often an idle link re-probes its candidates; the selector's hysteresis decides. */
+        private const val SELECTION_INTERVAL_S = 900L
         private val DESTINATION = Regex("^[+*#0-9]{1,32}$")
         private val LINK_TEST_MAGIC = "PXLT".encodeUtf8()
     }
@@ -147,6 +158,10 @@ class BridgeEngine(
         Thread(runnable, "phonxiety-state").apply { isDaemon = true }
     }.asCoroutineDispatcher()
     private val engineScope = CoroutineScope(SupervisorJob() + engineDispatcher + CoroutineName("phonxiety-engine"))
+
+    /** The app API credential; the daemon re-sends it on every connect, so it can change at runtime. */
+    @Volatile
+    private var appToken: String? = config.appToken
     private val startedElapsed = SystemClock.elapsedRealtime()
     private var telemetryJob: Job? = null
 
@@ -162,11 +177,24 @@ class BridgeEngine(
     private val callbackThread = HandlerThread("phonxiety-callbacks").apply { start() }
     private val callbackHandler = Handler(callbackThread.looper)
 
+    /**
+     * Which candidate the link uses, kept across attempts so a reconnect prefers the
+     * path that was working.  Reads the phone's mode and call state through the
+     * lambdas because both change while the engine runs.
+     */
+    private val selector = LinkSelector()
+
     private val links = LinkSupervisor(
-        factory = when (config) {
-            is BridgeConfig.Address -> WebSocketLinkFactory(config)
-            is BridgeConfig.Iroh -> IrohLinkFactory(appContext, config) { ownsCall() }
-        },
+        factory = CandidateLinkFactory(
+            context = appContext,
+            config = config,
+            selector = selector,
+            prober = WebSocketCandidateProbe(config.token),
+            store = CandidateStore.of(appContext),
+            mode = { ConnectionMode.of(phoneSettings.connectionMode) },
+            ownsCall = { ownsCall() },
+            duringCall = { ownsCall() }
+        ),
         callbacks = LinkCallbacks(),
         scheduler = ExecutorLinkScheduler(scheduler),
         clock = { SystemClock.elapsedRealtime() }
@@ -209,8 +237,15 @@ class BridgeEngine(
 
     private var lastRouteKey: String? = null
 
-    private val linkKind: LinkKind = when (config) {
-        is BridgeConfig.Address -> LinkKind.WEBSOCKET
+    /**
+     * The transport the current (or last) attempt uses.  A WebSocket target inside the
+     * tailnet ranges is a Tailscale-app link; selection updates this whenever it picks
+     * another candidate.
+     */
+    private var linkKind: LinkKind = when (config) {
+        is BridgeConfig.Address ->
+            if (Tailnet.isTailnetHost(Tailnet.hostOf(config.url))) LinkKind.TAILSCALE else LinkKind.WEBSOCKET
+
         is BridgeConfig.Iroh -> LinkKind.IROH
     }
 
@@ -252,6 +287,7 @@ class BridgeEngine(
         }
         scheduler.scheduleWithFixedDelay({ safe { links.tick() } }, 1, 1, TimeUnit.SECONDS)
         scheduler.scheduleWithFixedDelay({ safe { publishRoute() } }, 1, 1, TimeUnit.SECONDS)
+        scheduler.scheduleWithFixedDelay({ safe { considerSwitch() } }, SELECTION_INTERVAL_S, SELECTION_INTERVAL_S, TimeUnit.SECONDS)
         scheduler.scheduleWithFixedDelay({ safe { emitPlayback() } }, 500, 500, TimeUnit.MILLISECONDS)
         scheduler.scheduleWithFixedDelay({ safe { emitAudioLevels() } }, AUDIO_LEVEL_INTERVAL_MS, AUDIO_LEVEL_INTERVAL_MS, TimeUnit.MILLISECONDS)
         scheduler.scheduleWithFixedDelay({ safe { expirePendingDial() } }, 5, 5, TimeUnit.SECONDS)
@@ -265,7 +301,11 @@ class BridgeEngine(
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: android.net.Network) {
             try {
-                scheduler.execute { safe { links.networkAvailable() } }
+                scheduler.execute {
+                    safe { links.networkAvailable() }
+                    // A new network may make a better candidate reachable: one selection round.
+                    safe { considerSwitch() }
+                }
             } catch (_: RejectedExecutionException) {
                 // Closing.
             }
@@ -327,11 +367,17 @@ class BridgeEngine(
     private fun applySettings(settings: PhoneSettings, push: Boolean = true) {
         val codecChanged = settings.preferredCodec != preferredCodec
         val bitrateChanged = settings.maxBitrate != maxBitrate
+        val modeChanged = settings.connectionMode != phoneSettings.connectionMode
         phoneSettings = settings
         preferredCodec = settings.preferredCodec
         maxBitrate = settings.maxBitrate
         BridgeLog.minimumLevel = BridgeLog.levelOf(settings.logLevel) ?: BridgeLog.INFO
+        applyRelays(settings)
         applyWifiLock()
+        // A new mode applies to the next attempt: the current link was chosen under the old one.
+        if (modeChanged && !ownsCall()) {
+            runCatching { scheduler.execute { safe { links.reconnect("connection_mode_changed") } } }
+        }
         if (push && helloDelivered && links.isUp() && (codecChanged || bitrateChanged)) {
             send(
                 DeviceOutbound.SetPrefs(
@@ -340,6 +386,18 @@ class BridgeEngine(
                 )
             )
         }
+    }
+
+    /**
+     * Points the iroh endpoint at the relays the phone chose.  A bound endpoint keeps its
+     * relays, so a change recycles it — never during a call, where the link must stay put;
+     * the choice then applies to the next bind.
+     */
+    private fun applyRelays(settings: PhoneSettings) {
+        val mode = RelayModeSetting.of(settings.relayMode)
+        val urls = RelayOptions.urls(mode, settings.relayUrls, settings.daemonRelayUrls)
+        val changed = IrohSupport.configureRelays(mode, urls)
+        if (changed && !ownsCall()) IrohSupport.recycleEndpoint()
     }
 
     /**
@@ -369,6 +427,17 @@ class BridgeEngine(
                 wifiLock.release()
             }
         }
+    }
+
+    /**
+     * One idle re-probe: with automatic selection and no call owned, a better measured
+     * path takes the link over.  The selector's hysteresis decides, so a single lucky
+     * probe never moves it.
+     */
+    private fun considerSwitch() {
+        if (!running || !links.isUp() || ownsCall()) return
+        if (ConnectionMode.of(phoneSettings.connectionMode) != ConnectionMode.AUTO) return
+        if (links.considerSwitch()) links.reconnect("candidate_better")
     }
 
     private fun publishRoute() {
@@ -405,12 +474,14 @@ class BridgeEngine(
     private inner class LinkCallbacks : LinkSupervisor.Callbacks {
         override fun onLinkOpened(): Boolean {
             onLinkState(R.string.notification_link_connected)
+            val chosen = links.selectedCandidate()
+            if (chosen != null) linkKind = chosen.kind
             stateStore.linkUp(
                 kind = linkKind,
                 route = links.route()?.let { RouteSnapshot(it.relay, it.rttMs) },
                 sinceEpochMs = System.currentTimeMillis(),
                 reconnects = links.reconnects(),
-                address = when (config) {
+                address = chosen?.host ?: when (config) {
                     is BridgeConfig.Address -> config.host
                     is BridgeConfig.Iroh -> IrohSupport.shortEndpointId(config.ticket)
                 }
@@ -444,6 +515,8 @@ class BridgeEngine(
         "connect_failed" -> "cannot reach the daemon"
         "network_changed" -> "the network changed"
         "network_lost" -> "the network is gone"
+        "connection_mode_changed" -> "the connection mode changed"
+        "candidate_better" -> "a better path was measured"
         "closed", "closing" -> "the daemon closed the link"
         "protocol" -> "the daemon spoke an unknown protocol"
         "write_failed" -> "the link stopped accepting data"
@@ -469,6 +542,11 @@ class BridgeEngine(
             "api_result" -> {
                 val result = runCatching { ControlEnvelope.decodeApiResult(text) }.getOrNull() ?: return
                 apiPending.remove(result.id)?.complete(result)
+            }
+
+            "app_access" -> {
+                val token = ControlEnvelope.appAccessToken(text) ?: return
+                engineScope.launch { acceptAppToken(token) }
             }
 
             else -> Unit
@@ -520,7 +598,7 @@ class BridgeEngine(
             stateStore.state.value.capabilities.copy(
                 frameworkAudio = frameworkAudio,
                 callControl = callControl,
-                appApi = if (config.appToken != null) stateStore.state.value.capabilities.appApi else null
+                appApi = if (appToken != null) stateStore.state.value.capabilities.appApi else null
             )
         )
         return sent
@@ -752,7 +830,20 @@ class BridgeEngine(
                 rttMs = links.route()?.rttMs,
                 backlogBytes = links.backlogBytes(),
                 reconnects = links.reconnects()
-            )
+            ),
+            // What killed the last processes: the daemon puts this next to its own state in the
+            // diagnostics bundle, so a crash or an ANR arrives with the report instead of being
+            // inferred from a gap in `logcat`.
+            crashes = CrashReports.recent(appContext, limit = 5).map { report ->
+                CrashDiagnostics(
+                    atEpochMs = report.atEpochMs,
+                    kind = report.kind.name.lowercase(Locale.US),
+                    reason = report.reason,
+                    description = report.description,
+                    memoryLimiter = report.memoryLimiter,
+                    trace = report.detail
+                )
+            }
         )
         replyOk(id, json.encodeToJsonElement(DiagnosticsSnapshot.serializer(), diagnostics).jsonObject)
     }
@@ -1915,8 +2006,31 @@ class BridgeEngine(
         apiPending.clear()
     }
 
+    /** Stores the token the daemon handed over the authenticated link, then refreshes capabilities. */
+    private suspend fun acceptAppToken(token: String) {
+        if (token == appToken) return
+        val stored = withContext(Dispatchers.IO) {
+            runCatching {
+                val current = BridgeConfigLoader.loadOrNull(appContext) ?: return@runCatching false
+                val updated = when (current) {
+                    is BridgeConfig.Address -> current.copy(appToken = token)
+                    is BridgeConfig.Iroh -> current.copy(appToken = token)
+                }
+                BridgeConfigLoader.write(appContext, updated)
+                true
+            }.getOrDefault(false)
+        }
+        if (!stored) {
+            BridgeLog.w(TAG, "could not store the app token from the daemon")
+            return
+        }
+        appToken = token
+        BridgeLog.i(TAG, "app API access granted by the daemon")
+        refreshCapabilities()
+    }
+
     private suspend fun refreshCapabilities() {
-        val token = config.appToken ?: return
+        val token = appToken ?: return
         val request = DeviceApiRequest(
             id = UUID.randomUUID().toString(),
             method = "GET",

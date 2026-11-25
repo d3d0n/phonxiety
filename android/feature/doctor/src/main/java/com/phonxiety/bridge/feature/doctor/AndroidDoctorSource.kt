@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.PowerManager
 import com.phonxiety.bridge.BridgeService
+import com.phonxiety.bridge.CrashReports
 import com.phonxiety.bridge.root.AndroidAppFactsProbe
 import com.phonxiety.bridge.root.AndroidPackageInventory
 import com.phonxiety.bridge.root.ModuleController
@@ -73,6 +74,13 @@ class AndroidDoctorSource(context: Context) : DoctorSource {
             runtimeMissing = missingRuntimePermissions(),
             notificationsEnabled = notificationsEnabled(),
             batteryExempt = batteryExempt(),
+            // The recorder writes before the process dies, so this read is the same answer the
+            // diagnostics bundle gets.
+            lastCrash = try {
+                CrashReports.latest(appContext)
+            } catch (_: Exception) {
+                null
+            },
             checkedAtEpochMs = System.currentTimeMillis()
         )
     }
