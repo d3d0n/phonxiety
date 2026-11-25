@@ -268,8 +268,9 @@ internal class IrohLinkFactory(
  *
  * Reader coroutines per stream, a writer coroutine per send stream, a route
  * sampler and the datagram probe echo run for the life of the connection; any
- * failure reports down once.  The wire framing is [Framing]; this class only
- * decides what to send where.
+ * failure reports down once.  Extra bidirectional streams the daemon opens
+ * after auth are tunnel requests and go to [AdbTunnel].  The wire framing is
+ * [Framing]; this class only decides what to send where.
  */
 private class IrohLink(
     private val context: Context,
@@ -286,6 +287,8 @@ private class IrohLink(
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    /** Extra bidirectional streams the daemon may open on this connection. */
+    private val tunnels = AdbTunnel()
     private val controlOutbound = Channel<ByteArray>(Channel.UNLIMITED)
     private val audioOutbound = Channel<ByteArray>(Channel.UNLIMITED)
     private val backlog = AtomicLong(0)
@@ -333,6 +336,7 @@ private class IrohLink(
             listener.onLinkOpened()
             scope.launch { readLoop(control.recv(), Framing.KIND_TEXT, listener) }
             scope.launch { audioReadLoop(link, listener) }
+            scope.launch { tunnels.acceptLoop(link, scope) }
             scope.launch { writeLoop(controlSend, controlOutbound, listener) }
             scope.launch { writeLoop(audioSend, audioOutbound, listener) }
             scope.launch {

@@ -189,6 +189,10 @@ class IrohLink:
             reader.cancel()
         with contextlib.suppress(iroh.IrohError):
             self._connection.close(code, reason.encode("utf-8")[:120])
+        # The readers are gone, so nobody else will wake a recv() waiting on the inbox.
+        while not self._inbox.empty():
+            self._inbox.get_nowait()
+        self._inbox.put_nowait(LinkClosed())
 
 
 class IrohListener:

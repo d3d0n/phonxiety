@@ -9,6 +9,7 @@ from pathlib import Path
 from phonxiety.device import DeviceHub
 from phonxiety.net.framing import FrameError, frame, parse_header
 from phonxiety.net.iroh import IrohLink, IrohListener
+from phonxiety.net.link import LinkClosed
 
 TOKEN = "device-secret"
 HELLO = json.dumps({"type": "hello", "version": 2, "device": "test", "capabilities": {}})
@@ -173,6 +174,18 @@ class LinkTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(FrameError):
             await link.recv()
         await link.close(1000, "done")
+
+    async def test_closing_a_link_ends_a_receive_waiting_on_it(self) -> None:
+        # The hub's read loop is parked in recv() when another link of the same phone replaces it.
+        connection = _Connection(b"")
+        link = IrohLink(connection, connection.stream)
+        await link.open_audio()
+        waiting = asyncio.create_task(link.recv())
+        await asyncio.sleep(0)
+        await link.close(1012, "Replaced by a newer connection")
+        async with asyncio.timeout(1):
+            with self.assertRaises(LinkClosed):
+                await waiting
 
 
 if __name__ == "__main__":

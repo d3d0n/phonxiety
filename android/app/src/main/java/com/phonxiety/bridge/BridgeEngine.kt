@@ -263,6 +263,7 @@ class BridgeEngine(
                 .put("framework_audio", frameworkAudio)
                 .put("busy", busy)
                 .put("link_test", true)
+                .put("adb_tunnel", config is BridgeConfig.Iroh)
                 .put("audio_codecs", org.json.JSONArray().put("pcm").put("opus")))
             .put("active_call", active)
         return links.sendText(hello.toString())
