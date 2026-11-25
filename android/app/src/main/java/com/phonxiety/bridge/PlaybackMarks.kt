@@ -78,13 +78,15 @@ internal class PlaybackMarks(private val epoch: Long) {
     }
 
     /**
-     * Drains the pending mark once nothing received before it is left: callers
-     * pass the queued sample count from the audio path, and a mark drains only
-     * when that count is zero.  Returns the mark drained by this call.
+     * Drains the pending mark once nothing received before it is left.
+     * [queuedSamples] reads the audio path's queue and runs under the same lock
+     * as [offer]: a mark offered after the snapshot waits for the next call, so
+     * audio that arrived just before it can never be counted as played.
+     * Returns the mark drained by this call.
      */
-    fun observe(queuedSamples: Long): Long? {
-        if (queuedSamples > 0L) return null
+    fun observe(queuedSamples: () -> Long): Long? {
         synchronized(lock) {
+            if (queuedSamples() > 0L) return null
             val id = pending ?: return null
             pending = null
             val last = drained

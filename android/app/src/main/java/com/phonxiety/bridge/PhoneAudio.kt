@@ -357,8 +357,11 @@ class PhoneAudio(
         if (player == null) return@withLock Pair(0L, 0L)
         val head = headFrames(player)
         val played = playbackBase + head
-        val queued = (writtenFrames - played).coerceAtLeast(0L) + ring.size()
-        marks.observe(queued)
+        var queued = 0L
+        marks.observe {
+            queued = (writtenFrames - played).coerceAtLeast(0L) + ring.size()
+            queued
+        }
         played to queued
     }
 
