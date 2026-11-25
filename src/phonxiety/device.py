@@ -52,6 +52,9 @@ class DeviceHub:
         self._decoder: OpusDecoder | None = None
         self._link: DeviceLink | None = None
         self._ready = asyncio.Event()
+        self._attach_lock = asyncio.Lock()
+        self._link_free = asyncio.Event()
+        self._link_free.set()
         self._send_lock = asyncio.Lock()
         self._pending: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._outgoing: asyncio.Queue[tuple[str, int, bytes, int]] = asyncio.Queue(maxsize=10)
@@ -111,18 +114,43 @@ class DeviceHub:
         }
 
     async def attach(self, link: DeviceLink) -> None:
-        """Serve one authenticated phone link until it ends."""
-        if self._link is not None:
-            await link.close(1013, "A device is already connected")
-            return
-        self._link = link
-        self._ready.clear()
-        workers: list[asyncio.Task[Any]] = []
+        """Serve one authenticated phone link until it ends.
+
+        A second link from the same phone and boot replaces the first: the phone only opens
+        a new link after losing the old one, which the daemon may not have noticed yet. A
+        link from another phone is refused while one is connected.
+        """
         try:
             async with asyncio.timeout(10):
                 hello = json.loads(await link.recv())
-            if not isinstance(hello, dict) or hello.get("type") != "hello" or hello.get("version") != 1:
-                raise DeviceError("Incompatible device handshake")
+        except (LinkClosed, TimeoutError, ValueError):
+            await link.close(1002, "Device handshake failed")
+            return
+        if not isinstance(hello, dict) or hello.get("type") != "hello" or hello.get("version") != 1:
+            await link.close(1002, "Incompatible device handshake")
+            return
+        async with self._attach_lock:
+            current = self._link
+            if current is not None:
+                same_phone = (hello.get("device"), hello.get("boot_id")) == (
+                    self.info.get("device"), self.info.get("boot_id")
+                ) and self.info.get("boot_id") is not None
+                if not same_phone:
+                    await link.close(1013, "A device is already connected")
+                    return
+                log.info("Phone %s reconnected from %s; closing its previous link", hello.get("device"), link.peer)
+                await current.close(1012, "Replaced by a newer connection")
+                try:
+                    async with asyncio.timeout(5):
+                        await self._link_free.wait()
+                except TimeoutError:
+                    await link.close(1013, "A device is already connected")
+                    return
+            self._link = link
+            self._link_free.clear()
+        self._ready.clear()
+        workers: list[asyncio.Task[Any]] = []
+        try:
             self.info = {key: hello.get(key) for key in ("device", "boot_id", "capabilities", "active_call")}
             self._ready.set()
             log.info("Phone %s connected from %s", self.info.get("device"), link.peer)
@@ -167,6 +195,7 @@ class DeviceHub:
                     self._progress.notify_all()
                 if self.on_event is not None:
                     await self.on_event({"type": "device_disconnected"})
+                self._link_free.set()
 
     async def _receive_event(self, event: dict[str, Any]) -> None:
         kind = event.get("type")

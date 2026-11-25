@@ -41,11 +41,33 @@ class DeviceLinkTests(unittest.IsolatedAsyncioTestCase):
             additional_headers={"Authorization": f"Bearer {token}"},
         )
 
-    async def _phone(self, socket: ClientConnection) -> None:
-        await socket.send(json.dumps({"type": "hello", "version": 1, "device": "test", "capabilities": {}}))
+    async def _phone(self, socket: ClientConnection, boot_id: str = "boot-1", device: str = "test") -> None:
+        await socket.send(json.dumps({
+            "type": "hello", "version": 1, "device": device, "boot_id": boot_id, "capabilities": {},
+        }))
         async with asyncio.timeout(2):
-            while not self.hub.connected:
+            while not self.hub.connected or self.hub.info.get("boot_id") != boot_id or self.hub.info.get("device") != device:
                 await asyncio.sleep(0.01)
+
+    async def test_the_same_phone_reconnecting_replaces_its_stale_link(self) -> None:
+        async with self._connect() as stale, self._connect() as fresh:
+            await self._phone(stale)
+            stale_link = self.hub._link
+            await self._phone(fresh)  # the daemon has not noticed the old link is gone
+            async with asyncio.timeout(2):
+                await stale.wait_closed()
+                while self.hub._link is stale_link or not self.hub.connected:
+                    await asyncio.sleep(0.01)
+            self.assertEqual(stale.close_code, 1012)
+
+    async def test_another_phone_is_refused_while_one_is_connected(self) -> None:
+        async with self._connect() as first, self._connect() as other:
+            await self._phone(first)
+            await other.send(json.dumps({"type": "hello", "version": 1, "device": "other", "boot_id": "x", "capabilities": {}}))
+            async with asyncio.timeout(2):
+                await other.wait_closed()
+            self.assertEqual(other.close_code, 1013)
+            self.assertEqual(self.hub.info.get("device"), "test")
 
     async def test_identity_is_stable_across_restarts(self) -> None:
         self.assertEqual(device_identity(Path(self.directory.name))[2], self.fingerprint)
