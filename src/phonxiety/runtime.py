@@ -4,18 +4,53 @@ from __future__ import annotations
 
 import fcntl
 import os
+from collections.abc import Callable
+from typing import Any
 
 from .controller import CallController
 from .device import DeviceHub
 from .power import hold_awake
-from .settings import Settings
+from .settings import Settings, secret
 from .store import CallStore
+
+
+def voice_factory(settings: Settings, auth: Any) -> Callable[[str, str, Any], Any]:
+    """Build the configured voice backend; keys are checked now, not on the first call."""
+    if settings.voice_backend == "deepgram":
+        from .deepgram import DeepgramOptions, DeepgramVoiceSession
+
+        env = os.environ.get
+        options = DeepgramOptions(
+            api_key=secret(settings.state_dir, "DEEPGRAM_API_KEY", "deepgram-api-key"),
+            language=env("PHONXIETY_DEEPGRAM_LANGUAGE", "en"),
+            listen_model=env("PHONXIETY_DEEPGRAM_LISTEN_MODEL", "nova-3"),
+            think_model=env("PHONXIETY_DEEPGRAM_THINK_MODEL", "gpt-4o-mini"),
+            speak_model=env("PHONXIETY_DEEPGRAM_SPEAK_MODEL", "aura-2-thalia-en"),
+        )
+        return lambda instructions, brief, callbacks: DeepgramVoiceSession(
+            instructions, callbacks, options, initial_context=brief,
+        )
+    if settings.voice_backend == "gemini":
+        from .gemini import GeminiOptions, GeminiVoiceSession
+
+        gemini = GeminiOptions(
+            api_key=secret(settings.state_dir, "GEMINI_API_KEY", "gemini-api-key"),
+            model=os.environ.get("PHONXIETY_GEMINI_MODEL", GeminiOptions.model),
+            voice=os.environ.get("PHONXIETY_GEMINI_VOICE", GeminiOptions.voice),
+        )
+        return lambda instructions, brief, callbacks: GeminiVoiceSession(
+            instructions, callbacks, gemini, initial_context=brief,
+        )
+    from .voice import CodexVoiceSession
+
+    return lambda instructions, brief, callbacks: CodexVoiceSession(
+        instructions, callbacks, auth=auth, voice=settings.voice, initial_context=brief,
+    )
 
 
 def create_controller(settings: Settings) -> CallController:
     from .auth import CodexAuth
     from .task_agent import TaskAgent
-    from .voice import CodexVoiceSession
 
     settings.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     lock = open(settings.state_dir / "daemon.lock", "a+")
@@ -36,9 +71,7 @@ def create_controller(settings: Settings) -> CallController:
         return CallController(
             store,
             device,
-            lambda instructions, brief, callbacks: CodexVoiceSession(
-                instructions, callbacks, auth=auth, voice=settings.voice, initial_context=brief,
-            ),
+            voice_factory(settings, auth),
             task_agent,
             singleton_file=lock,
             keep_awake=hold_awake,

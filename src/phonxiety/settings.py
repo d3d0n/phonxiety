@@ -75,6 +75,29 @@ def _iroh_relays(state_dir: Path) -> tuple[str, ...]:
     return tuple(url for url in (entry.split("#", 1)[0].strip() for entry in entries) if url)
 
 
+VOICE_BACKENDS = ("codex", "gemini", "deepgram")
+
+
+def _voice_backend() -> str:
+    backend = os.environ.get("PHONXIETY_VOICE_BACKEND", "codex").strip().lower()
+    if backend not in VOICE_BACKENDS:
+        raise ValueError(f"PHONXIETY_VOICE_BACKEND must be one of: {', '.join(VOICE_BACKENDS)}")
+    return backend
+
+
+def secret(state_dir: Path, variable: str, filename: str) -> str:
+    """An API key from the environment, else from `<state_dir>/<filename>`; never logged."""
+    value = os.environ.get(variable, "").strip()
+    if not value:
+        try:
+            value = (state_dir / filename).read_text().strip()
+        except FileNotFoundError:
+            value = ""
+    if not value:
+        raise ValueError(f"set {variable} or put the key in {state_dir / filename}")
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     state_dir: Path
@@ -90,6 +113,7 @@ class Settings:
     audio_codec: str = "opus"
     opus_bitrate: int = DEFAULT_OPUS_BITRATE
     iroh_relays: tuple[str, ...] = ()
+    voice_backend: str = "codex"
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -113,6 +137,7 @@ class Settings:
             audio_codec=_codec(),
             opus_bitrate=_opus_bitrate(),
             iroh_relays=_iroh_relays(state_dir),
+            voice_backend=_voice_backend(),
         )
 
     @property
