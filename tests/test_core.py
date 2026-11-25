@@ -371,6 +371,7 @@ class ControllerTests(_ControllerCase):
         await voice.callbacks.audio(agent)
         await voice.callbacks.transcript("user", "Hello?", True)
         await voice.callbacks.transcript("assistant", "Hi, this is a test.", True)
+        await voice.callbacks.transcript("user", "Bye-b", False)
         await self.controller.hangup_call(call_id)
         await self.controller.wait_call_result(call_id, wait_s=2)
 
@@ -378,6 +379,8 @@ class ControllerTests(_ControllerCase):
         record = json.loads((archive / f"{call_id}.json").read_text())
         self.assertEqual([(item["role"], item["text"]) for item in record["transcript"]],
                          [("user", "Hello?"), ("assistant", "Hi, this is a test.")])
+        self.assertEqual([(item["role"], item["text"]) for item in record["current_partials"]], [("user", "Bye-b")])
+        self.assertFalse(record["transcript_complete"])
         self.assertEqual((record["state"], record["request"]["destination"], record["audio_codec"]),
                          ("ended", request().destination, "pcm"))
         self.assertEqual(record["recording"]["channels"], ["remote", "agent"])

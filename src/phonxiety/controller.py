@@ -745,8 +745,9 @@ class CallController:
     def _call_record(self, call: _Call) -> dict[str, Any]:
         """Everything known about a finished call, for its archive file."""
         record = self.store.snapshot(call.call_id)
-        for paging in ("current_partials", "next_cursor", "has_more"):
+        for paging in ("next_cursor", "has_more"):
             record.pop(paging)
+        # Unfinished last utterances (current_partials) stay: they are not in the final transcript.
         record["transcript"] = self.store.transcript(call.call_id)
         record["request"] = call.request.model_dump(mode="json")
         record["audio_codec"] = call.audio_codec
