@@ -1705,7 +1705,7 @@ class AppApi:
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - the stream is the report
-            log.warning("Attachment %s failed: %s", header.get("path"), exc)
+            log.warning("Attachment %s failed: %r", header.get("path"), exc)
             with contextlib.suppress(Exception):
                 await send.write_all(frame(json.dumps({
                     "type": "error", "code": "attachment_failed", "message": str(exc)[:300],

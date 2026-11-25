@@ -448,14 +448,16 @@ class DeviceHub:
                 raise DeviceError("device_disconnected") from exc
 
     async def serve_attachment(self, header: dict[str, Any], send: Any, recv: Any) -> None:
-        """Take a phone-opened bulk stream off the transport's accept loop.
+        """Serve one phone-opened bulk stream and return when it is written.
 
-        Returns as soon as the work is scheduled: the hub keeps serving control messages
-        while a large attachment is written.
+        The transport runs each stream in its own task and finishes the stream when this
+        returns, so the work must be complete by then. The task is tracked so a link going
+        down cancels it.
         """
         task = asyncio.create_task(self._serve_attachment(header, send, recv), name="app-attachment")
         self._attachment_tasks.add(task)
         task.add_done_callback(self._attachment_tasks.discard)
+        await task
 
     async def _serve_attachment(self, header: dict[str, Any], send: Any, recv: Any) -> None:
         handler = self.on_attachment
