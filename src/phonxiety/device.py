@@ -412,7 +412,7 @@ class DeviceHub:
             )
             await link.close(1011, "Device heartbeat failed")
 
-    async def link_test(self, seconds: float) -> dict[str, Any]:
+    async def link_test(self, seconds: float, codec: str | None = None) -> dict[str, Any]:
         """Load the idle link like a call and time it.
 
         Call-sized frames leave every 20 ms and the phone echoes them, so both
@@ -438,8 +438,9 @@ class DeviceHub:
                 await asyncio.sleep(0.25)
 
         pinger = asyncio.create_task(ping(), name="link-test-ping")
-        # Probe frames are the size the configured format puts on the wire every 20 ms.
-        codec = self.stream_codec()
+        # Probe frames are the size the format puts on the wire every 20 ms: the one a call
+        # would use, or `codec` to measure another format's load (the phone echoes any size).
+        codec = codec or self.stream_codec()
         payload = bytes(self.opus_bitrate // 8 // 50 if codec == "opus" else FRAME_PCM_BYTES)
         started = time.monotonic()
         stall = 0.0

@@ -127,6 +127,7 @@ def create_app(settings: Settings) -> Starlette:
 
     from iroh import IrohError
 
+    from .codec import CODECS
     from .device import DeviceError, WebSocketListener
     from .models import CallLimits, CallRequest
     from .p2p import IrohListener
@@ -298,10 +299,13 @@ def create_app(settings: Settings) -> Starlette:
             seconds = min(30.0, max(1.0, float(request.query_params.get("seconds", "5"))))
         except ValueError:
             return JSONResponse({"error": "invalid_seconds"}, status_code=400)
+        codec = request.query_params.get("codec") or None
+        if codec not in (None, *CODECS):
+            return JSONResponse({"error": "invalid_codec"}, status_code=400)
         try:
             # Like a call, give a phone that is reconnecting time to arrive.
             await controller.device.wait_connected(15.0)
-            return JSONResponse(await controller.device.link_test(seconds))
+            return JSONResponse(await controller.device.link_test(seconds, codec=codec))
         except DeviceError as exc:
             return JSONResponse({"error": str(exc)}, status_code=409)
 

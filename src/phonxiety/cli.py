@@ -256,7 +256,8 @@ def _link_test_lines(result: dict[str, Any], *, color: bool) -> list[str]:
 def _cmd_link_test(args: argparse.Namespace) -> None:
     settings = _settings()
     _ensure_daemon(settings)
-    result = _daemon_get(settings, f"/link-test?seconds={args.seconds}", timeout=args.seconds + 30.0)
+    query = f"seconds={args.seconds}" + (f"&codec={args.codec}" if args.codec else "")
+    result = _daemon_get(settings, f"/link-test?{query}", timeout=args.seconds + 30.0)
     if args.json or not isinstance(result, dict):
         _print_json(result)
         return
@@ -470,6 +471,10 @@ def build_parser() -> argparse.ArgumentParser:
         "link-test", help="load the phone link like a call, without dialing, and time it"
     )
     link_test.add_argument("--seconds", type=float, default=5.0, help="test length, 1 to 30 (default 5)")
+    link_test.add_argument(
+        "--codec", choices=("pcm", "opus"),
+        help="size the test frames for this format instead of the one a call would use",
+    )
     link_test.add_argument("--json", action="store_true", help="print the raw measurements")
     link_test.set_defaults(func=_cmd_link_test)
 
