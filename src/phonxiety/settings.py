@@ -320,6 +320,7 @@ class Settings:
     port: int = 18762
     device_host: str = "0.0.0.0"
     device_port: int = 18763
+    iroh_port: int = 18764  # fixed IPv4 UDP port for the iroh endpoint; a random one if it is taken
     codex_auth_path: Path | None = None
     codex_task_model: str | None = None
     codex_voice: str = "sol"
@@ -355,6 +356,7 @@ class Settings:
             port=port,
             device_host=os.environ.get("PHONXIETY_DEVICE_HOST") or "0.0.0.0",
             device_port=device_port,
+            iroh_port=_port("PHONXIETY_IROH_PORT", 18764),
             codex_auth_path=Path(codex_auth_path).expanduser() if codex_auth_path else None,
             codex_task_model=str(saved["codex_task_model"]) if saved.get("codex_task_model") else (os.environ.get("PHONXIETY_CODEX_TASK_MODEL") or None),
             codex_voice=str(saved.get("codex_voice") or os.environ.get("PHONXIETY_CODEX_VOICE", "sol")),

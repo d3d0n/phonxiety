@@ -263,11 +263,14 @@ class IrohLink:
 
 
 class IrohListener:
-    def __init__(self, hub: LinkSink, token: str, state_dir: Path, relay_urls: tuple[str, ...] = ()) -> None:
+    def __init__(
+        self, hub: LinkSink, token: str, state_dir: Path, relay_urls: tuple[str, ...] = (), port: int = 0
+    ) -> None:
         self._hub = hub
         self._token = token
         self._state_dir = state_dir
         self._relay_urls = relay_urls
+        self._port = port
         self._endpoint: Any = None
         self._accepting: asyncio.Task[None] | None = None
         self._serving: set[asyncio.Task[None]] = set()
@@ -290,7 +293,18 @@ class IrohListener:
         if self._relay_urls:
             # Own relays replace n0's public ones; address lookup still publishes the home relay.
             options.relay_mode = iroh.RelayMode.custom_from_urls(list(self._relay_urls))
-        self._endpoint = await iroh.Endpoint.bind(options)
+        if self._port:
+            # A fixed IPv4 port keeps the LAN address in a paired ticket valid across daemon
+            # restarts; IPv6 and the relay are still found through the endpoint's own lookup.
+            options.bind_addr = f"0.0.0.0:{self._port}"
+        try:
+            self._endpoint = await iroh.Endpoint.bind(options)
+        except iroh.IrohError as exc:
+            if not self._port:
+                raise
+            log.warning("iroh port %s unavailable (%s); binding a random port", self._port, exc)
+            options.bind_addr = None
+            self._endpoint = await iroh.Endpoint.bind(options)
         self._accepting = asyncio.create_task(self._accept(), name="iroh-accept")
 
     async def ticket(self) -> str:

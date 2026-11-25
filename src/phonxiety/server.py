@@ -340,7 +340,9 @@ def create_app(settings: Settings) -> Starlette:
         certificate=fingerprint,
         protocol=PROTOCOL_VERSION,
     )
-    iroh_link = IrohListener(controller.device, settings.device_token, settings.state_dir, settings.iroh_relays)
+    iroh_link = IrohListener(
+        controller.device, settings.device_token, settings.state_dir, settings.iroh_relays, port=settings.iroh_port
+    )
     adb_tunnel = TunnelListener(controller.device, "adb")
 
     def link_info() -> dict[str, Any]:
