@@ -43,7 +43,7 @@ class DeviceLinkTests(unittest.IsolatedAsyncioTestCase):
 
     async def _phone(self, socket: ClientConnection, boot_id: str = "boot-1", device: str = "test") -> None:
         await socket.send(json.dumps({
-            "type": "hello", "version": 1, "device": device, "boot_id": boot_id, "capabilities": {},
+            "type": "hello", "version": 2, "device": device, "boot_id": boot_id, "capabilities": {},
         }))
         async with asyncio.timeout(2):
             while not self.hub.connected or self.hub.info.get("boot_id") != boot_id or self.hub.info.get("device") != device:
@@ -63,7 +63,7 @@ class DeviceLinkTests(unittest.IsolatedAsyncioTestCase):
     async def test_another_phone_is_refused_while_one_is_connected(self) -> None:
         async with self._connect() as first, self._connect() as other:
             await self._phone(first)
-            await other.send(json.dumps({"type": "hello", "version": 1, "device": "other", "boot_id": "x", "capabilities": {}}))
+            await other.send(json.dumps({"type": "hello", "version": 2, "device": "other", "boot_id": "x", "capabilities": {}}))
             async with asyncio.timeout(2):
                 await other.wait_closed()
             self.assertEqual(other.close_code, 1013)
@@ -123,43 +123,57 @@ class DeviceLinkTests(unittest.IsolatedAsyncioTestCase):
             result = await second
             self.assertEqual(result["frames_echoed"], 1)
 
-    async def _drain(self, played: int, queued: int) -> bool:
-        """wait_played against a phone that answers every command and reports these counters."""
+    async def _drain(self, *, drains: bool) -> tuple[bool, list[bytes]]:
+        """wait_played against a phone that reports a mark drained only if `drains`.
+
+        Returns the outcome and the magics of the binary frames the phone received, in order.
+        """
         async with self._connect() as socket:
             await self._phone(socket)
             self.hub.begin_stream("call", 4)
             for _ in range(3):
                 self.hub.send_audio("call", FRAME)
             waiting = asyncio.create_task(self.hub.wait_played("call", 3 * 960, timeout=1))
+            magics: list[bytes] = []
+            drained = 0
 
-            async def answer() -> None:
+            async def phone() -> None:
+                nonlocal drained
                 async for message in socket:
-                    if isinstance(message, str) and json.loads(message).get("type") == "command":
+                    if isinstance(message, bytes):
+                        magic, epoch, index = AUDIO_HEADER.unpack_from(message)
+                        magics.append(magic)
+                        if magic == b"PXMK" and drains:
+                            drained = index
+                    elif json.loads(message).get("type") == "command":
                         await socket.send(json.dumps({"type": "response", "id": json.loads(message)["id"], "ok": True}))
 
             async def report() -> None:
-                while True:  # like the phone, every so often whatever is going on
+                while True:  # like the phone: counters that never prove playback, plus the drained mark
                     await socket.send(json.dumps({
                         "type": "playback", "call_id": "call", "epoch": 4,
-                        "played_samples": played, "queued_samples": queued,
+                        "played_samples": 3 * 960, "queued_samples": 0,
+                        **({"drained_mark": drained} if drained else {}),
                     }))
                     await asyncio.sleep(0.05)
 
-            phone = [asyncio.create_task(answer()), asyncio.create_task(report())]
+            tasks = [asyncio.create_task(phone()), asyncio.create_task(report())]
             try:
-                return await waiting
+                return await waiting, magics
             finally:
-                for task in phone:
+                for task in tasks:
                     task.cancel()
-                await asyncio.gather(*phone, return_exceptions=True)
+                await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def test_an_empty_phone_queue_after_the_ping_confirms_playback_despite_dropped_audio(self) -> None:
-        # The phone dropped a frame on overflow: its count never reaches ours, its queue empties.
-        self.assertTrue(await self._drain(played=2 * 960, queued=0))
+    async def test_playback_is_confirmed_by_the_mark_that_follows_the_audio(self) -> None:
+        played, magics = await self._drain(drains=True)
+        self.assertTrue(played)
+        self.assertEqual(magics, [b"PX01", b"PX01", b"PX01", b"PXMK"])
 
-    async def test_counters_level_with_ours_but_audio_still_queued_is_not_played(self) -> None:
-        # Its pre-roll counts as played, so the counters meet 20 ms before the speech has played.
-        self.assertFalse(await self._drain(played=3 * 960, queued=960))
+    async def test_counters_without_a_drained_mark_do_not_confirm_playback(self) -> None:
+        # Counters level with ours and an empty queue: still not proof, the mark is.
+        played, _ = await self._drain(drains=False)
+        self.assertFalse(played)
 
 
 class OpusStreamTests(unittest.IsolatedAsyncioTestCase):

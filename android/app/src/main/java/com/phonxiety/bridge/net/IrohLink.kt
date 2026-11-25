@@ -56,7 +56,7 @@ internal object IrohSupport {
     private const val NETWORK_WAIT_MS = 30_000L
 
     /** ALPN of the device protocol, per the iroh link contract. */
-    val ALPN: ByteArray = "phonxiety/device/1".toByteArray(Charsets.UTF_8)
+    val ALPN: ByteArray = "phonxiety/device/2".toByteArray(Charsets.UTF_8)
 
     private val contextInstalled = AtomicBoolean(false)
     private val endpointMutex = Mutex()
@@ -260,12 +260,16 @@ internal class IrohLinkFactory(
 }
 
 /**
- * One iroh link: dial the daemon endpoint from the stored ticket, open one
- * bidirectional stream, authenticate with the first frame, then move framed
- * messages.  A reader coroutine, a writer coroutine fed by a queue and a
- * route sampler run for the life of the stream; any failure reports down once.
+ * One iroh link, protocol v2: dial the daemon endpoint from the stored ticket,
+ * open the bidirectional control stream, authenticate with the first frame on
+ * it, then open the phone→daemon audio stream and accept the daemon→phone one.
+ * Text frames travel on control, binary frames (audio, marks, link test) on the
+ * audio streams; a frame on the wrong stream is a protocol error.
  *
- * The wire framing is [Framing]; this class only decides what to send.
+ * Reader coroutines per stream, a writer coroutine per send stream, a route
+ * sampler and the datagram probe echo run for the life of the connection; any
+ * failure reports down once.  The wire framing is [Framing]; this class only
+ * decides what to send where.
  */
 private class IrohLink(
     private val context: Context,
@@ -275,10 +279,15 @@ private class IrohLink(
     private companion object {
         const val TAG = "PhonxietyBridge"
         const val ROUTE_INTERVAL_MS = 1_000L
+        /** Send priority of the control stream, above the audio stream. */
+        const val CONTROL_PRIORITY = 1
+        /** Send priority of the phone→daemon audio stream. */
+        const val AUDIO_PRIORITY = 0
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val outbound = Channel<ByteArray>(Channel.UNLIMITED)
+    private val controlOutbound = Channel<ByteArray>(Channel.UNLIMITED)
+    private val audioOutbound = Channel<ByteArray>(Channel.UNLIMITED)
     private val backlog = AtomicLong(0)
     private val downOnce = AtomicBoolean(false)
     private val cancelled = AtomicBoolean(false)
@@ -305,23 +314,33 @@ private class IrohLink(
                 }
             }
             connection = link
-            val stream = link.openBi()
-            val outgoing = stream.send()
+            // Control: one bidirectional stream, the auth frame first.
+            val control = link.openBi()
+            val controlSend = control.send()
             val auth = Framing.encode(Framing.KIND_TEXT, authMessage())
                 ?: return fail(listener, "connect_failed")
-            outgoing.writeAll(auth)
+            controlSend.writeAll(auth)
             if (cancelled.get()) {
                 runCatching { link.close(0, "cancelled".toByteArray()) }
                 return
             }
+            // Audio: the phone→daemon stream opens right after auth, the
+            // daemon→phone one is accepted by audioReadLoop.  Control keeps the
+            // higher send priority so a queued audio burst cannot delay commands.
+            val audioSend = link.openUni()
+            runCatching { controlSend.setPriority(CONTROL_PRIORITY) }
+            runCatching { audioSend.setPriority(AUDIO_PRIORITY) }
             listener.onLinkOpened()
-            scope.launch { readLoop(stream.recv(), listener) }
-            scope.launch { writeLoop(outgoing, listener) }
+            scope.launch { readLoop(control.recv(), Framing.KIND_TEXT, listener) }
+            scope.launch { audioReadLoop(link, listener) }
+            scope.launch { writeLoop(controlSend, controlOutbound, listener) }
+            scope.launch { writeLoop(audioSend, audioOutbound, listener) }
             scope.launch {
                 val reason = runCatching { link.closed() }.getOrDefault("closed")
                 fail(listener, reason.ifEmpty { "closed" })
             }
             scope.launch { sampleRoute(link) }
+            scope.launch { datagramLoop(link) }
             unwatchNetwork = IrohSupport.watchNetwork(context) { reason -> onNetworkChange(reason, listener) }
             if (cancelled.get()) unwatchNetwork()
         } catch (t: Throwable) {
@@ -338,7 +357,12 @@ private class IrohLink(
         .toString()
         .toByteArray(Charsets.UTF_8)
 
-    private suspend fun readLoop(incoming: RecvStream, listener: DeviceLink.Listener) {
+    /**
+     * Reads framed messages from one stream.  [kind] is the only frame kind the
+     * stream may carry: text on control, binary on an audio stream.  A frame of
+     * the other kind is a protocol error.
+     */
+    private suspend fun readLoop(incoming: RecvStream, kind: Int, listener: DeviceLink.Listener) {
         try {
             while (true) {
                 val header = incoming.readExact(Framing.HEADER_BYTES.toUInt())
@@ -347,7 +371,7 @@ private class IrohLink(
                     return
                 }
                 val parsed = Framing.parse(header)
-                if (parsed == null) {
+                if (parsed == null || parsed.kind != kind) {
                     fail(listener, "protocol")
                     return
                 }
@@ -356,7 +380,7 @@ private class IrohLink(
                     fail(listener, "closed")
                     return
                 }
-                if (parsed.kind == Framing.KIND_TEXT) {
+                if (kind == Framing.KIND_TEXT) {
                     listener.onLinkText(payload.toString(Charsets.UTF_8))
                 } else {
                     listener.onLinkBinary(payload.toByteString())
@@ -367,9 +391,24 @@ private class IrohLink(
         }
     }
 
-    private suspend fun writeLoop(outgoing: SendStream, listener: DeviceLink.Listener) {
+    /** Accepts the daemon→phone audio stream after auth, then reads its frames. */
+    private suspend fun audioReadLoop(link: Connection, listener: DeviceLink.Listener) {
+        val incoming = try {
+            link.acceptUni()
+        } catch (t: Throwable) {
+            if (!cancelled.get()) fail(listener, "closed")
+            return
+        }
+        readLoop(incoming, Framing.KIND_BINARY, listener)
+    }
+
+    private suspend fun writeLoop(
+        outgoing: SendStream,
+        queue: Channel<ByteArray>,
+        listener: DeviceLink.Listener,
+    ) {
         try {
-            for (bytes in outbound) {
+            for (bytes in queue) {
                 try {
                     outgoing.writeAll(bytes)
                 } finally {
@@ -380,6 +419,37 @@ private class IrohLink(
             if (!cancelled.get()) fail(listener, "write_failed")
         }
     }
+
+    /**
+     * Echoes the daemon's `PXLT` datagram probes, which measure the raw path
+     * during a call, unchanged.  Other datagrams are ignored, as is a probe
+     * that no longer fits the connection's current limit.
+     */
+    private suspend fun datagramLoop(link: Connection) {
+        while (!cancelled.get() && !downOnce.get()) {
+            val datagram = try {
+                link.readDatagram()
+            } catch (_: Throwable) {
+                // The connection is gone; the closed watcher reports the reason.
+                return
+            }
+            if (!isLinkProbe(datagram)) continue
+            val limit = try {
+                link.maxDatagramSize()?.toLong()
+            } catch (_: Throwable) {
+                null
+            }
+            if (limit != null && (limit <= 0L || datagram.size > limit)) continue
+            runCatching { link.sendDatagram(datagram) }
+        }
+    }
+
+    private fun isLinkProbe(bytes: ByteArray): Boolean =
+        bytes.size >= 4 &&
+            bytes[0] == 0x50.toByte() && // P
+            bytes[1] == 0x58.toByte() && // X
+            bytes[2] == 0x4C.toByte() && // L
+            bytes[3] == 0x54.toByte() // T
 
     /**
      * The default network changed under a live link: drop the link and the
@@ -422,20 +492,20 @@ private class IrohLink(
     override fun sendText(message: String): Boolean {
         val frame = Framing.encode(Framing.KIND_TEXT, message.toByteArray(Charsets.UTF_8))
             ?: return false
-        return enqueue(frame)
+        return enqueue(controlOutbound, frame)
     }
 
     override fun sendBinary(frame: ByteArray, length: Int) {
         val size = length.coerceIn(0, frame.size)
         if (size == 0) return
         val encoded = Framing.encode(Framing.KIND_BINARY, frame, size) ?: return
-        enqueue(encoded)
+        enqueue(audioOutbound, encoded)
     }
 
-    private fun enqueue(bytes: ByteArray): Boolean {
+    private fun enqueue(queue: Channel<ByteArray>, bytes: ByteArray): Boolean {
         if (cancelled.get() || downOnce.get()) return false
         backlog.addAndGet(bytes.size.toLong())
-        if (outbound.trySend(bytes).isFailure) {
+        if (queue.trySend(bytes).isFailure) {
             backlog.addAndGet(-bytes.size.toLong())
             return false
         }
@@ -449,7 +519,8 @@ private class IrohLink(
         Log.w(TAG, "iroh paths at link down ($reason): ${describePaths()}")
         route = null
         runCatching { connection?.close(0, reason.toByteArray(Charsets.UTF_8)) }
-        outbound.close()
+        controlOutbound.close()
+        audioOutbound.close()
         listener.onLinkDown(reason)
         scope.cancel()
     }
@@ -468,7 +539,8 @@ private class IrohLink(
         downOnce.set(true)
         unwatchNetwork()
         route = null
-        outbound.close()
+        controlOutbound.close()
+        audioOutbound.close()
         val link = connection
         scope.cancel()
         if (link != null) {

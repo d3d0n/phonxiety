@@ -43,6 +43,9 @@ class _WebSocketLink:
         except ConnectionClosed as exc:
             raise LinkClosed() from exc
 
+    async def send_datagram(self, data: bytes) -> bool:
+        return False  # one TCP stream: nothing travels unreliably
+
     async def close(self, code: int, reason: str) -> None:
         await self._connection.close(code=code, reason=reason)
 

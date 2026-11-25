@@ -1,15 +1,18 @@
 package com.phonxiety.bridge.net
 
 /**
- * Wire framing of the iroh device stream, shared with the daemon:
+ * Wire framing of the iroh device streams and the WebSocket transport, shared
+ * with the daemon:
  *
  * ```
  * kind:u8 | payload length:u32 big-endian | payload
  * ```
  *
  * `kind` is [KIND_TEXT] for UTF-8 JSON control messages and [KIND_BINARY] for
- * binary payloads (audio, link test).  A payload is 1..[MAX_PAYLOAD] bytes; a
- * header with any other kind or length is a protocol error.  Pure Kotlin, so
+ * binary payloads (audio, playback marks, link test).  On iroh the control
+ * stream carries only text and the audio streams only binary; the WebSocket
+ * carries both kinds on its one socket.  A payload is 1..[MAX_PAYLOAD] bytes;
+ * a header with any other kind or length is a protocol error.  Pure Kotlin, so
  * the codec is unit-testable without Android.
  */
 internal object Framing {

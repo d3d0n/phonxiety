@@ -308,7 +308,8 @@ def create_app(settings: Settings) -> Starlette:
         try:
             # Like a call, give a phone that is reconnecting time to arrive.
             await controller.device.wait_connected(15.0)
-            return JSONResponse(await controller.device.link_test(seconds, codec=codec))
+            datagrams = request.query_params.get("transport") == "datagram"
+            return JSONResponse(await controller.device.link_test(seconds, codec=codec, datagrams=datagrams))
         except DeviceError as exc:
             return JSONResponse({"error": str(exc)}, status_code=409)
 

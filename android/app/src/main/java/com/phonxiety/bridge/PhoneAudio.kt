@@ -79,6 +79,7 @@ class PhoneAudio(
     private val txLock = ReentrantLock()
     private val rxLock = ReentrantLock()
     private val ring = SampleRing(RING_CAPACITY_SAMPLES)
+    private val marks = PlaybackMarks(epoch)
 
     private var record: AudioRecord? = null
     private var track: AudioTrack? = null
@@ -281,9 +282,18 @@ class PhoneAudio(
         txThread = Thread({ txLoop(player) }, "phonxiety-tx").also { it.start() }
     }
 
-    /** Accepts one host binary frame.  Header/epoch validation happens here. */
+    /** Accepts one host binary frame or playback mark.  Header/epoch validation happens here. */
     fun offerFrame(bytes: ByteString) {
         if (closed || !txRunning.get() || bytes.size < 16) return
+        if (bytes.size == MarkFrame.SIZE) {
+            // A mark drains once everything received before it has played; the
+            // epoch filter and ordering live in PlaybackMarks.
+            val mark = MarkFrame.parse(bytes.toByteArray())
+            if (mark != null) {
+                marks.offer(mark.epoch, mark.id)
+                return
+            }
+        }
         val expected = if (opusBitrate != null) OPUS_VERSION else PCM_VERSION
         if (bytes[0] != 0x50.toByte() || bytes[1] != 0x58.toByte() ||
             bytes[2] != 0x30.toByte() || bytes[3] != expected
@@ -348,8 +358,12 @@ class PhoneAudio(
         val head = headFrames(player)
         val played = playbackBase + head
         val queued = (writtenFrames - played).coerceAtLeast(0L) + ring.size()
+        marks.observe(queued)
         played to queued
     }
+
+    /** Latest playback mark drained for this epoch, or null before the first. */
+    fun drainedMark(): Long? = marks.drainedMark()
 
     @Synchronized
     fun close() {

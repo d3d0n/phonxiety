@@ -25,6 +25,8 @@ AUDIO_HEADER = struct.Struct("!4sIQ")
 AUDIO_MAGIC = b"PX01"  # PCM s16le
 OPUS_MAGIC = b"PX02"  # one 20 ms Opus packet
 PROBE_MAGIC = b"PXLT"
+MARK_MAGIC = b"PXMK"  # no payload; the phone reports it drained once everything before it played
+PROTOCOL_VERSION = 2
 FRAME_PCM_BYTES = 1920
 MAX_PCM_BYTES = 19200
 
@@ -55,7 +57,8 @@ class DeviceHub:
         self._attach_lock = asyncio.Lock()
         self._link_free = asyncio.Event()
         self._link_free.set()
-        self._send_lock = asyncio.Lock()
+        self._send_lock = asyncio.Lock()  # control messages
+        self._audio_lock = asyncio.Lock()  # the audio path, separate so a stalled audio write never holds a command
         self._pending: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._outgoing: asyncio.Queue[tuple[str, int, bytes, int]] = asyncio.Queue(maxsize=10)
         self._events: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=64)
@@ -66,8 +69,8 @@ class DeviceHub:
         self._dropped_samples = 0
         self._played_samples = 0
         self._queued_samples = 0
-        self._playback_reports = 0
-        self._reports_at_response = 0  # playback reports received before the latest command reply
+        self._mark = 0  # last playback mark sent on the audio path
+        self._drained_mark = 0  # last mark the phone reported played out
         self._frames_out = 0
         self._frames_in = 0
         self._send_wait = 0.0
@@ -126,7 +129,7 @@ class DeviceHub:
         except (LinkClosed, TimeoutError, ValueError):
             await link.close(1002, "Device handshake failed")
             return
-        if not isinstance(hello, dict) or hello.get("type") != "hello" or hello.get("version") != 1:
+        if not isinstance(hello, dict) or hello.get("type") != "hello" or hello.get("version") != PROTOCOL_VERSION:
             await link.close(1002, "Incompatible device handshake")
             return
         async with self._attach_lock:
@@ -200,7 +203,6 @@ class DeviceHub:
     async def _receive_event(self, event: dict[str, Any]) -> None:
         kind = event.get("type")
         if kind == "response":
-            self._reports_at_response = self._playback_reports
             future = self._pending.get(str(event.get("id")))
             if future is not None and not future.done():
                 if event.get("ok") is True:
@@ -217,7 +219,9 @@ class DeviceHub:
                     raise DeviceError("Invalid playback counters")
                 self._played_samples = max(self._played_samples, played)
                 self._queued_samples = queued
-                self._playback_reports += 1
+                mark = event.get("drained_mark")
+                if isinstance(mark, int) and mark > self._drained_mark:
+                    self._drained_mark = mark
                 async with self._progress:
                     self._progress.notify_all()
             return
@@ -382,7 +386,7 @@ class DeviceHub:
                 try:
                     began = time.monotonic()
                     async with asyncio.timeout(2):
-                        async with self._send_lock:
+                        async with self._audio_lock:
                             if self._link is link and self._call_id == call_id and self._epoch == epoch:
                                 await link.send(frame)
                                 self._frames_out += 1
@@ -413,12 +417,13 @@ class DeviceHub:
             )
             await link.close(1011, "Device heartbeat failed")
 
-    async def link_test(self, seconds: float, codec: str | None = None) -> dict[str, Any]:
+    async def link_test(self, seconds: float, codec: str | None = None, *, datagrams: bool = False) -> dict[str, Any]:
         """Load the idle link like a call and time it.
 
         Call-sized frames leave every 20 ms and the phone echoes them, so both
         directions carry what a conversation carries while pings measure how
-        long control messages wait behind that audio.
+        long control messages wait behind that audio. With `datagrams` the probes
+        travel as QUIC datagrams (lost ones stay lost) instead of on the audio stream.
         """
         link = self._link
         if link is None or not self.connected:
@@ -451,8 +456,13 @@ class DeviceHub:
                 if self._link is not link or self._call_id is not None or pinger.done():
                     break
                 pending[count] = now
-                async with self._send_lock:
-                    await link.send(AUDIO_HEADER.pack(PROBE_MAGIC, self._probe_id, count) + payload)
+                probe = AUDIO_HEADER.pack(PROBE_MAGIC, self._probe_id, count) + payload
+                if datagrams:
+                    if not await link.send_datagram(probe):
+                        raise DeviceError("datagrams_unavailable")
+                else:
+                    async with self._audio_lock:
+                        await link.send(probe)
                 stall = max(stall, time.monotonic() - now)
                 count += 1
                 await asyncio.sleep(max(0.0, started + count * 0.02 - time.monotonic()))
@@ -469,6 +479,7 @@ class DeviceHub:
         frames, control = _spread(self._probe_ms), _spread(pings)
         return {
             "codec": codec,
+            "transport": "datagram" if datagrams else "stream",
             "frame_bytes": len(payload),
             "peer": link.peer,
             "route": route,
@@ -490,29 +501,32 @@ class DeviceHub:
     async def wait_played(self, call_id: str, target_samples: int, timeout: float = 3) -> bool:
         """Whether everything handed to the phone has played; the caller has stopped sending.
 
-        Counters cannot prove it: the phone counts its own pre-roll as played and does not count
-        what it dropped on overflow. So: once every queued frame is on the link, a ping round trip
-        proves the phone has them, and a playback report taken after that with nothing queued
-        means the line has played it all. `target_samples` is only reported when that fails.
+        A mark frame follows the last audio on the audio path; the phone reports it drained
+        once everything before it has played. Counters cannot prove this (the phone counts
+        its pre-roll and not what it dropped on overflow), and a ping on the control stream
+        may overtake audio. `target_samples` is only reported when confirmation fails.
         """
-        def done(after: int) -> bool:
-            if not self.connected or self._call_id != call_id:
-                return True
-            # The first report after the ping may have been measured before it; the second was not.
-            return self._playback_reports >= after + 2 and self._queued_samples == 0
+        if not self.connected or self._call_id != call_id:
+            return False
+        self._mark += 1
+        mark = self._mark
+        if self._outgoing.full():
+            _, _, _, stale = self._outgoing.get_nowait()
+            self._outgoing.task_done()
+            self._dropped_samples += stale
+        self._outgoing.put_nowait((call_id, self._epoch, AUDIO_HEADER.pack(MARK_MAGIC, self._epoch, mark), 0))
+
+        def done() -> bool:
+            return not self.connected or self._call_id != call_id or self._drained_mark >= mark
 
         try:
             async with asyncio.timeout(timeout):
-                await self._outgoing.join()
-                await self.command("ping", timeout=timeout)
-                # Counted when the reply arrived; a later reply only makes the wait stricter.
-                after = self._reports_at_response
                 async with self._progress:
-                    await self._progress.wait_for(lambda: done(after))
-        except (TimeoutError, DeviceError) as exc:
+                    await self._progress.wait_for(done)
+        except TimeoutError:
             log.warning(
-                "call %s: playback not confirmed (%s): played %d of %d samples, %d queued on the phone",
-                call_id, type(exc).__name__, self._played_samples, target_samples, self._queued_samples,
+                "call %s: playback not confirmed: mark %d not drained (last %d); played %d of %d samples, %d queued",
+                call_id, mark, self._drained_mark, self._played_samples, target_samples, self._queued_samples,
             )
             return False
         return self.connected and self._call_id == call_id

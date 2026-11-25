@@ -257,6 +257,8 @@ def _cmd_link_test(args: argparse.Namespace) -> None:
     settings = _settings()
     _ensure_daemon(settings)
     query = f"seconds={args.seconds}" + (f"&codec={args.codec}" if args.codec else "")
+    if args.datagrams:
+        query += "&transport=datagram"
     result = _daemon_get(settings, f"/link-test?{query}", timeout=args.seconds + 30.0)
     if args.json or not isinstance(result, dict):
         _print_json(result)
@@ -474,6 +476,10 @@ def build_parser() -> argparse.ArgumentParser:
     link_test.add_argument(
         "--codec", choices=("pcm", "opus"),
         help="size the test frames for this format instead of the one a call would use",
+    )
+    link_test.add_argument(
+        "--datagrams", action="store_true",
+        help="send the probe frames as QUIC datagrams instead of on the audio stream (iroh only)",
     )
     link_test.add_argument("--json", action="store_true", help="print the raw measurements")
     link_test.set_defaults(func=_cmd_link_test)

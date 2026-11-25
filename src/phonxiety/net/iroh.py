@@ -21,11 +21,11 @@ from typing import Any
 
 import iroh
 
-from .framing import HEADER_BYTES, TEXT, frame, parse_header
+from .framing import BINARY, HEADER_BYTES, TEXT, FrameError, frame, parse_header
 from .link import LinkClosed, LinkSink, LinkUnavailable
 
 log = logging.getLogger(__name__)
-ALPN = b"phonxiety/device/1"
+ALPN = b"phonxiety/device/2"
 KEY_NAME = "link.key"
 HANDSHAKE_TIMEOUT_S = 10
 
@@ -56,15 +56,37 @@ def _secret_key(state_dir: Path) -> bytes:
 
 
 class IrohLink:
-    """Device protocol messages on one iroh bidirectional stream."""
+    """Device protocol on one iroh connection: control and audio on separate streams.
 
-    def __init__(self, connection: Any, stream: Any) -> None:
+    The phone opens a bidirectional control stream (JSON text frames, the auth frame
+    first) and a unidirectional audio stream to the daemon; the daemon opens one audio
+    stream back. A lost packet on an audio stream therefore never holds back a command
+    or a ping. Probe frames may also travel as QUIC datagrams (`send_datagram`).
+    """
+
+    def __init__(self, connection: Any, control: Any) -> None:
         self._connection = connection
-        self._send = stream.send()
-        self._recv = stream.recv()
+        self._control_send = control.send()
+        self._control_recv = control.recv()
+        self._audio_send: Any = None
+        self._inbox: asyncio.Queue[str | bytes | BaseException] = asyncio.Queue(maxsize=256)
+        self._readers: list[asyncio.Task[None]] = []
         self.peer = f"iroh:{connection.remote_id().fmt_short()}"
         # The full id is what a relay allowlist needs.
         log.info("iroh connection from endpoint %s", connection.remote_id())
+
+    async def open_audio(self) -> None:
+        """After auth: take the phone's audio stream, open ours, start the readers."""
+        audio_recv = await self._connection.accept_uni()
+        self._audio_send = await self._connection.open_uni()
+        with contextlib.suppress(AttributeError, iroh.IrohError):
+            self._control_send.set_priority(1)
+            self._audio_send.set_priority(0)
+        self._readers = [
+            asyncio.create_task(self._read(self._control_recv, TEXT), name="iroh-control"),
+            asyncio.create_task(self._read(audio_recv, BINARY), name="iroh-audio"),
+            asyncio.create_task(self._read_datagrams(), name="iroh-datagrams"),
+        ]
 
     def route(self) -> str | None:
         """Selected path: `direct` with the phone's address or `relay` with the relay, and its round trip."""
@@ -89,21 +111,63 @@ class IrohLink:
             for path in snapshots
         ]
 
-    async def recv(self) -> str | bytes:
+    @staticmethod
+    async def _frame(stream: Any) -> tuple[int, bytes]:
         try:
-            kind, length = parse_header(await self._recv.read_exact(HEADER_BYTES))
-            payload = await self._recv.read_exact(length)
+            kind, length = parse_header(await stream.read_exact(HEADER_BYTES))
+            return kind, await stream.read_exact(length)
         except iroh.IrohError as exc:
             raise LinkClosed() from exc
-        return payload.decode("utf-8") if kind == TEXT else payload
+
+    async def _read(self, stream: Any, expected: int) -> None:
+        try:
+            while True:
+                kind, payload = await self._frame(stream)
+                if kind != expected:
+                    raise FrameError("Frame on the wrong stream")
+                await self._inbox.put(payload.decode("utf-8") if kind == TEXT else payload)
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:  # handed to recv(), which raises it in the hub
+            await self._inbox.put(exc)
+
+    async def _read_datagrams(self) -> None:
+        try:
+            while True:
+                await self._inbox.put(bytes(await self._connection.read_datagram()))
+        except iroh.IrohError:
+            return  # the connection is closing; the stream readers report it
+
+    async def recv(self) -> str | bytes:
+        if not self._readers:  # the auth frame, before the audio streams exist
+            kind, payload = await self._frame(self._control_recv)
+            if kind != TEXT:
+                raise FrameError("Binary frame on the control stream")
+            return payload.decode("utf-8")
+        item = await self._inbox.get()
+        if isinstance(item, BaseException):
+            raise item
+        return item
 
     async def send(self, message: str | bytes) -> None:
+        stream = self._control_send if isinstance(message, str) else self._audio_send
         try:
-            await self._send.write_all(frame(message))
+            await stream.write_all(frame(message))
         except iroh.IrohError as exc:
             raise LinkClosed() from exc
 
+    async def send_datagram(self, data: bytes) -> bool:
+        try:
+            if len(data) > (self._connection.max_datagram_size() or 0):
+                return False
+            await self._connection.send_datagram(data)
+            return True
+        except iroh.IrohError:
+            return False
+
     async def close(self, code: int, reason: str) -> None:
+        for reader in self._readers:
+            reader.cancel()
         with contextlib.suppress(iroh.IrohError):
             self._connection.close(code, reason.encode("utf-8")[:120])
 
@@ -164,6 +228,8 @@ class IrohListener:
                 log.warning("Rejected an unauthorized iroh peer %s", link.peer)
                 await link.close(4401, "unauthorized")
                 return
+            async with asyncio.timeout(HANDSHAKE_TIMEOUT_S):
+                await link.open_audio()
             await self._hub.attach(link)
         except (LinkClosed, TimeoutError, ValueError, iroh.IrohError) as exc:  # ValueError: bad frame or JSON
             log.info("iroh peer handshake failed: %s", type(exc).__name__)

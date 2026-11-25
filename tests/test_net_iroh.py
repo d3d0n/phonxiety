@@ -11,7 +11,7 @@ from phonxiety.net.framing import FrameError, frame, parse_header
 from phonxiety.net.iroh import IrohLink, IrohListener
 
 TOKEN = "device-secret"
-HELLO = json.dumps({"type": "hello", "version": 1, "device": "test", "capabilities": {}})
+HELLO = json.dumps({"type": "hello", "version": 2, "device": "test", "capabilities": {}})
 
 
 class _Recv:
@@ -53,8 +53,11 @@ class _Id:
 
 
 class _Connection:
-    def __init__(self, incoming: bytes) -> None:
+    def __init__(self, incoming: bytes, audio: bytes = b"") -> None:
         self.stream = _Stream(incoming)
+        self.audio_in = _Recv(audio)
+        self.audio_out = _Send()
+        self.datagrams: list[bytes] = []
         self.closed: tuple[int, bytes] | None = None
 
     def remote_id(self) -> _Id:
@@ -66,9 +69,24 @@ class _Connection:
     async def accept_bi(self) -> _Stream:
         return self.stream
 
+    async def accept_uni(self) -> _Recv:
+        return self.audio_in
+
+    async def open_uni(self) -> _Send:
+        return self.audio_out
+
+    async def read_datagram(self) -> bytes:
+        await asyncio.Event().wait()  # none arrive
+        return b""
+
+    def max_datagram_size(self) -> int:
+        return 1200
+
+    async def send_datagram(self, data: bytes) -> None:
+        self.datagrams.append(data)
+
     def close(self, code: int, reason: bytes) -> None:
         self.closed = (code, reason)
-
 
 class _Incoming:
     def __init__(self, connection: _Connection) -> None:
@@ -133,12 +151,28 @@ class ListenerTests(unittest.IsolatedAsyncioTestCase):
 
 
 class LinkTests(unittest.IsolatedAsyncioTestCase):
-    async def test_link_delivers_framed_messages_in_order(self) -> None:
-        connection = _Connection(frame("first") + frame(b"\x00\x01"))
+    async def test_text_rides_the_control_stream_and_audio_its_own(self) -> None:
+        connection = _Connection(frame("first") + frame("second"), audio=frame(b"PX02-audio"))
         link = IrohLink(connection, connection.stream)
-        self.assertEqual([await link.recv(), await link.recv()], ["first", b"\x00\x01"])
+        await link.open_audio()
+        received = [await link.recv() for _ in range(3)]
+        self.assertEqual(sorted(map(repr, received)), sorted(map(repr, ["first", "second", b"PX02-audio"])))
+        self.assertLess(received.index("first"), received.index("second"))
         await link.send("reply")
+        await link.send(b"PX01-frame")
         self.assertEqual(bytes(connection.stream.send().written), frame("reply"))
+        self.assertEqual(bytes(connection.audio_out.written), frame(b"PX01-frame"))
+        self.assertTrue(await link.send_datagram(b"PXLT" + bytes(12)))
+        self.assertFalse(await link.send_datagram(bytes(2000)))  # above the path's datagram size
+        await link.close(1000, "done")
+
+    async def test_binary_on_the_control_stream_is_a_protocol_error(self) -> None:
+        connection = _Connection(frame(b"PX01-frame"))
+        link = IrohLink(connection, connection.stream)
+        await link.open_audio()
+        with self.assertRaises(FrameError):
+            await link.recv()
+        await link.close(1000, "done")
 
 
 if __name__ == "__main__":

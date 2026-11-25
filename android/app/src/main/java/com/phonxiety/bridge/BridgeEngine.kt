@@ -30,7 +30,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Protocol v1 device endpoint.
+ * Protocol v2 device endpoint.
  *
  * Owns the single device link, the single bridge-owned Telecom call, its
  * audio path and the phone-side host-loss lease.  All externally visible state
@@ -49,7 +49,7 @@ class BridgeEngine(
 ) {
     companion object {
         private const val TAG = "PhonxietyBridge"
-        private const val PROTOCOL_VERSION = 1
+        private const val PROTOCOL_VERSION = 2
         private const val PENDING_DIAL_TIMEOUT_MS = 120_000L
         private const val MAX_RECENT_CALLS = 32
         private const val ORPHAN_CANCEL_TTL_MS = 10 * 60_000L
@@ -305,12 +305,16 @@ class BridgeEngine(
             Triple(audio, current.callId, current.epoch)
         }
         val stats = state.first.stats()
-        sendText(JSONObject()
+        val drained = state.first.drainedMark()
+        val event = JSONObject()
             .put("type", "playback")
             .put("call_id", state.second)
             .put("epoch", state.third)
             .put("played_samples", stats.first)
-            .put("queued_samples", stats.second))
+            .put("queued_samples", stats.second)
+        // Only once a mark of this epoch has actually drained.
+        if (drained != null) event.put("drained_mark", drained)
+        sendText(event)
     }
 
     // ------------------------------------------------------------------
