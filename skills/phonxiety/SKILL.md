@@ -54,8 +54,9 @@ phonxiety result <call_id> --wait-s 45   # repeat until result_status is "ready"
 phonxiety hangup <call_id>               # cancel before the dial, or drop the line
 ```
 
-`result --wait-s` waits at most 45 s per call; call it again while `state` is
-`preparing`, `dialing`, `active` or `ending`. Do not sleep between calls.
+`result --wait-s` waits at most 45 s per call; call it again until `result_status` is
+`ready`. A call can already be `ended` while its summary and fields are still being
+written, so `state` alone is not the signal. Do not sleep between calls.
 
 ## 4. Report
 
