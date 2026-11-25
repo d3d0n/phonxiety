@@ -3,8 +3,9 @@
 Deepgram runs listen (STT), think (LLM) and speak (TTS) in one websocket at 48 kHz
 linear16 both ways, so phone audio needs no resampling. Mapping to the controller:
 
-- the client delegation is a client-side function `client_delegation`; its answer goes
-  back as the FunctionCallResponse, which the agent then speaks;
+- the call functions (`send_dtmf`, `end_call`, `client_delegation`, see interfaces.py) are
+  client-side functions reported as delegations; the answer goes back as the
+  FunctionCallResponse, which the agent then speaks;
 - spoken context (CALL_CONNECTED, CALL_COMPLETE) is injected as a user message and kept
   out of the transcript; commentary context only extends the prompt;
 - each ConversationText is a final transcript segment; UserStartedSpeaking is a barge-in.
@@ -21,7 +22,7 @@ from typing import Any
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed
 
-from .interfaces import VoiceCallbacks
+from .interfaces import CALL_FUNCTIONS, VoiceCallbacks, function_request
 from .realtime import SAMPLE_RATE, PacedOutput
 
 log = logging.getLogger(__name__)
@@ -29,7 +30,6 @@ log = logging.getLogger(__name__)
 AGENT_URL = "wss://agent.deepgram.com/v1/agent/converse"
 KEEPALIVE_S = 5.0
 CONNECT_TIMEOUT_S = 15.0
-DELEGATION_FUNCTION = "client_delegation"
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,18 +95,18 @@ class DeepgramVoiceSession:
                 "think": {
                     "provider": {"type": "open_ai", "model": options.think_model},
                     "prompt": self._prompt,
-                    "functions": [{
-                        "name": DELEGATION_FUNCTION,
-                        "description": (
-                            "Create a client delegation: ask the backend that owns the telephone line to act "
-                            "(press keypad digits, look something up, decide). Give a complete plain-language request."
-                        ),
-                        "parameters": {
-                            "type": "object",
-                            "properties": {"request": {"type": "string", "description": "What the backend should do and why."}},
-                            "required": ["request"],
-                        },
-                    }],
+                    "functions": [
+                        {
+                            "name": name,
+                            "description": description,
+                            "parameters": {
+                                "type": "object",
+                                "properties": {key: {"type": "string", "description": text} for key, text in parameters.items()},
+                                "required": list(parameters),
+                            },
+                        }
+                        for name, description, parameters in CALL_FUNCTIONS
+                    ],
                 },
                 "speak": {"provider": {"type": "deepgram", "model": options.speak_model}},
             },
@@ -196,12 +196,13 @@ class DeepgramVoiceSession:
                     continue
                 call_id, name = str(call.get("id")), str(call.get("name"))
                 try:
-                    request = json.loads(call.get("arguments") or "{}").get("request", "")
+                    arguments = json.loads(call.get("arguments") or "{}")
                 except (TypeError, ValueError):
-                    request = ""
-                if name != DELEGATION_FUNCTION or not isinstance(request, str) or not request.strip():
+                    arguments = {}
+                request = function_request(name, arguments if isinstance(arguments, dict) else {})
+                if request is None:
                     await self._send(json.dumps({"type": "FunctionCallResponse", "id": call_id, "name": name,
-                                                 "content": "Unsupported request."}))
+                                                 "content": "Unsupported or invalid call."}))
                     continue
                 self._pending_calls[call_id] = name
                 await self._callbacks.delegation(call_id, request)

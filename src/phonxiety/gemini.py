@@ -3,7 +3,8 @@
 Gemini takes 16 kHz and returns 24 kHz mono PCM, so phone audio is resampled both ways and
 the reply is paced to playback speed. Mapping to the controller:
 
-- the client delegation is the function `client_delegation`; its answer is the tool response;
+- the call functions (`send_dtmf`, `end_call`, `client_delegation`, see interfaces.py) are
+  reported as delegations; the answer is the tool response;
 - context is a user turn in clientContent; commentary context does not complete the turn,
   so the model takes it in without answering;
 - input/output transcription arrives in pieces: they are reported as partials and become
@@ -16,13 +17,14 @@ import asyncio
 import base64
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed
 
-from .interfaces import VoiceCallbacks
+from .interfaces import CALL_FUNCTIONS, VoiceCallbacks, function_request
 from .realtime import SAMPLE_RATE, PacedOutput, Resampler
 
 log = logging.getLogger(__name__)
@@ -34,9 +36,9 @@ LIVE_URL = (
 INPUT_RATE = 16_000
 OUTPUT_RATE = 24_000
 CONNECT_TIMEOUT_S = 15.0
-DELEGATION_FUNCTION = "client_delegation"
 DEFAULT_MODEL = "gemini-3.8-live"
 DEFAULT_VOICE = "Puck"
+_MARKERS = re.compile(r"<[^<>]*>|\{[^{}]*\}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +64,7 @@ class GeminiVoiceSession:
         self._send_lock = asyncio.Lock()
         self._heard = ""  # the other party's words in the current turn
         self._said = ""  # the model's words in the current turn
+        self._pending_calls: dict[str, str] = {}  # function call id -> function name
         self._closed = False
 
     async def start(self) -> None:
@@ -90,21 +93,21 @@ class GeminiVoiceSession:
                     "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": self._options.voice}}},
                 },
                 "systemInstruction": {"parts": [{"text": self._instructions}]},
-                "tools": [{"functionDeclarations": [{
-                    "name": DELEGATION_FUNCTION,
-                    # The model keeps the line alive while the backend works; the answer is
-                    # spoken once the model finishes its current sentence (WHEN_IDLE).
-                    "behavior": "NON_BLOCKING",
-                    "description": (
-                        "Create a client delegation: ask the backend that owns the telephone line to act "
-                        "(press keypad digits, look something up, decide). Give a complete plain-language request."
-                    ),
-                    "parameters": {
-                        "type": "OBJECT",
-                        "properties": {"request": {"type": "STRING", "description": "What the backend should do and why."}},
-                        "required": ["request"],
-                    },
-                }]}],
+                "tools": [{"functionDeclarations": [
+                    {
+                        "name": name,
+                        # The model keeps the line alive while an action runs; the answer is
+                        # spoken once the model finishes its current sentence (WHEN_IDLE).
+                        "behavior": "NON_BLOCKING",
+                        "description": description,
+                        "parameters": {
+                            "type": "OBJECT",
+                            "properties": {key: {"type": "STRING", "description": text} for key, text in parameters.items()},
+                            "required": list(parameters),
+                        },
+                    }
+                    for name, description, parameters in CALL_FUNCTIONS
+                ]}],
                 "inputAudioTranscription": {},
                 "outputAudioTranscription": {},
             }
@@ -130,9 +133,10 @@ class GeminiVoiceSession:
         self, text: str, *, delegation_id: str | None = None, commentary: bool = False
     ) -> None:
         if delegation_id is not None:
+            # Commentary answers (e.g. a keypress done) are silent: the model just learns them.
             await self._send({"toolResponse": {"functionResponses": [{
-                "id": delegation_id, "name": DELEGATION_FUNCTION,
-                "response": {"result": text, "scheduling": "WHEN_IDLE"},
+                "id": delegation_id, "name": self._pending_calls.pop(delegation_id, "client_delegation"),
+                "response": {"result": text, "scheduling": "SILENT" if commentary else "WHEN_IDLE"},
             }]}})
             return
         await self._send({"clientContent": {
@@ -190,7 +194,9 @@ class GeminiVoiceSession:
             if said:
                 await self._flush_heard()
                 self._said += said
-                await self._callbacks.transcript("assistant", self._said.strip(), False)
+                partial = _MARKERS.sub("", self._said).strip()
+                if partial:
+                    await self._callbacks.transcript("assistant", partial, False)
             if content.get("turnComplete"):
                 await self._flush_heard()
                 await self._flush_said()
@@ -199,13 +205,15 @@ class GeminiVoiceSession:
         if isinstance(call, dict):
             await self._flush_heard()
             for function in call.get("functionCalls", []):
-                request = (function.get("args") or {}).get("request")
-                if function.get("name") != DELEGATION_FUNCTION or not isinstance(request, str) or not request.strip():
+                call_id, name = str(function.get("id")), str(function.get("name"))
+                request = function_request(name, function.get("args") or {})
+                if request is None:
                     await self._send({"toolResponse": {"functionResponses": [{
-                        "id": function.get("id"), "name": function.get("name"), "response": {"error": "Unsupported request."},
+                        "id": call_id, "name": name, "response": {"error": "Unsupported or invalid call."},
                     }]}})
                     continue
-                await self._callbacks.delegation(str(function.get("id")), request)
+                self._pending_calls[call_id] = name
+                await self._callbacks.delegation(call_id, request)
         if "goAway" in event:
             log.warning("Gemini will close the session soon: %s", event["goAway"])
 
@@ -216,7 +224,8 @@ class GeminiVoiceSession:
             await self._callbacks.turn_done("user")
 
     async def _flush_said(self) -> None:
-        text, self._said = self._said.strip(), ""
+        # Gemini's output transcription marks silence with tokens like "<no speech>{pause}".
+        text, self._said = _MARKERS.sub("", self._said).strip(), ""
         if text:
             await self._callbacks.transcript("assistant", text, True)
 

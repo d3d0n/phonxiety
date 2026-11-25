@@ -10,9 +10,10 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+from phonxiety import far_end
 from phonxiety.deepgram import DeepgramOptions, DeepgramVoiceSession
 from phonxiety.gemini import GeminiOptions, GeminiVoiceSession
-from phonxiety.interfaces import VoiceCallbacks
+from phonxiety.interfaces import VoiceCallbacks, function_request
 from phonxiety.realtime import FRAME_BYTES, PacedOutput, Resampler
 from phonxiety.runtime import voice_factory
 from phonxiety.settings import Settings
@@ -98,6 +99,41 @@ class DeepgramEventTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.socket.sent[-1], {
             "type": "FunctionCallResponse", "id": "fc_1", "name": "client_delegation", "content": "FINAL_RESULT: pressed 1",
         })
+
+
+class CallFunctionTests(unittest.IsolatedAsyncioTestCase):
+    def test_line_actions_map_to_exact_requests_and_bad_digits_are_refused(self) -> None:
+        self.assertEqual(function_request("send_dtmf", {"digits": "1 2#"}), "DTMF 12#")
+        self.assertEqual(function_request("end_call", {}), "END_CALL")
+        self.assertEqual(function_request("client_delegation", {"request": " ask "}), "ask")
+        for bad in ({"digits": ""}, {"digits": "12x"}, {"digits": "1" * 33}):
+            self.assertIsNone(function_request("send_dtmf", bad))
+        self.assertIsNone(function_request("transfer", {}))
+
+    async def test_gemini_tool_calls_become_requests_and_answers_keep_their_function_name(self) -> None:
+        events = _Events()
+        session = GeminiVoiceSession("Be brief.", events.callbacks(), GeminiOptions(api_key="t"))
+        socket = _Socket()
+        session._ws = socket  # type: ignore[assignment]
+        await session._handle({"toolCall": {"functionCalls": [
+            {"id": "a", "name": "send_dtmf", "args": {"digits": "2"}},
+            {"id": "b", "name": "end_call", "args": {}},
+            {"id": "c", "name": "send_dtmf", "args": {"digits": "x"}},
+        ]}})
+        self.assertEqual([e for e in events.log if e[0] == "delegation"], [("delegation", "a", "DTMF 2"), ("delegation", "b", "END_CALL")])
+        self.assertEqual(socket.sent[-1]["toolResponse"]["functionResponses"][0]["id"], "c")  # refused at once
+        await session.append_context("Pressed 2.", delegation_id="a", commentary=True)
+        answer = socket.sent[-1]["toolResponse"]["functionResponses"][0]
+        self.assertEqual((answer["name"], answer["response"]["scheduling"]), ("send_dtmf", "SILENT"))
+
+
+class FarEndTests(unittest.TestCase):
+    def test_menu_and_mailbox_wording_is_recognised_and_people_are_not(self) -> None:
+        self.assertEqual(far_end.classify("Для выбора русского языка нажмите два"), far_end.IVR)
+        self.assertEqual(far_end.classify("O'zbek tilini tanlash uchun 1 raqamini bosing"), far_end.IVR)
+        self.assertEqual(far_end.classify("Оставьте сообщение после сигнала"), far_end.VOICEMAIL)
+        for person in ("Алло, слушаю", "Hilton Tashkent City, reservations, how can I help?", "Нажми один два три."):
+            self.assertIsNone(far_end.classify(person), person)
 
 
 class VoiceFactoryTests(unittest.TestCase):

@@ -1,0 +1,19 @@
+CALL BRIEF:
+{{ brief }}
+
+TRANSCRIPT:
+{{ transcript }}
+{% if request is not none %}
+
+DELEGATED REQUEST:
+{{ request }}
+{% endif %}
+{% if line_status is not none %}
+
+LINE STATUS:
+{{ line_status }}
+{% endif %}
+{% if instruction is not none %}
+
+{{ instruction }}
+{% endif %}

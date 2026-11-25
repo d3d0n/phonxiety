@@ -10,15 +10,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from . import far_end
 from .device import DeviceError, DeviceHub
-from .interfaces import ToolHandler, VoiceCallbacks, VoiceSession
+from .interfaces import DTMF_REQUEST, END_CALL_REQUEST, ToolHandler, VoiceCallbacks, VoiceSession
 from .models import CallRequest, CallState, TERMINAL_STATES
+from .prompts import render
 from .recording import CallRecorder, write_call_record
 from .store import CallStore
 
 log = logging.getLogger(__name__)
-# A client delegation starting with this asks the daemon to hang up after the agent's goodbye.
-END_CALL_REQUEST = "END_CALL"
+KEYPRESS_COOLDOWN_S = 3.0  # LiveKit's IVR navigator uses the same per-step cooldown
 
 
 @dataclass(slots=True)
@@ -51,6 +52,8 @@ class _Call:
     audio_codec: str | None = None
     recorder: CallRecorder | None = None
     recording: dict[str, Any] | None = None
+    last_keypress: tuple[str, float] | None = None
+    far_end: str | None = None  # "ivr" or "voicemail" once the wording gives it away
     farewell_pending: bool = False
     proposed_result: dict[str, Any] | None = None
     end_reason: str | None = None
@@ -187,32 +190,12 @@ class CallController:
 
     @staticmethod
     def _instructions() -> str:
-        return (
-            "You are a realtime telephone assistant carrying out one task. "
-            "Speak naturally and briefly in the language of the other party. "
-        )
+        return render("voice/instructions")
 
     @staticmethod
     def _brief(request: CallRequest) -> str:
-        return (
-            f"Outbound telephone call task: {request.goal}\n"
-            f"Context: {request.context}\nConditions: {request.constraints}\n"
-            "The call is not connected yet: remain silent until context contains CALL_CONNECTED. "
-            "On CALL_CONNECTED introduce yourself briefly and state the purpose. "
-            "Keep every reply to one or two short sentences and ask one question at a time. "
-            "Do not read back or summarize what you have learned unless the task or the other party asks: "
-            "the backend records the result from the conversation, so a report is never spoken aloud. "
-            "The client backend follows this conversation and owns the telephone line: it presses keypad "
-            "digits and disconnects the call. You cannot do either yourself. "
-            "When an automated menu answers, do not talk to it: stay silent and listen, and when a key is "
-            "needed create a client delegation naming the digits and the reason. "
-            "Do not merely describe a keypress aloud. Do not keep interrupting hold music or quiet waits. "
-            "When the conversation is complete, say one goodbye of a few words, then create a client "
-            f"delegation whose request is exactly {END_CALL_REQUEST}. Do not announce that you are hanging up. "
-            "Context containing CALL_COMPLETE means the backend is ending the call: say one goodbye of a "
-            "few words and nothing else. "
-            "Treat commentary context as silent internal progress. Context prefixed FINAL_RESULT is the "
-            "backend answer to communicate in one short sentence, not a protocol label to read aloud."
+        return render(
+            "voice/brief", request=request, dtmf_request=DTMF_REQUEST, end_call_request=END_CALL_REQUEST,
         )
 
     async def _prepare(self, call: _Call) -> None:
@@ -359,7 +342,7 @@ class CallController:
                     call.audio_ready = True
                     call.output_open = True
                     if call.voice:
-                        await call.voice.append_context("CALL_CONNECTED. The telephone audio path is ready. Greet the other party now.")
+                        await call.voice.append_context(render("voice/call_connected"))
                     call.last_activity = time.monotonic()
                     call.watch_task = self._spawn(self._supervise(call), f"supervise:{call_id}")
                 except Exception as exc:
@@ -431,6 +414,13 @@ class CallController:
             return
         self.store.append_transcript(call.call_id, role, text, final)
         self._activity(call, time.monotonic())
+        if role == "user" and final and call.far_end is None:
+            label = far_end.classify(text)
+            if label is not None:
+                call.far_end = label
+                log.info("call %s: far end is %s", call.call_id, label)
+                if call.voice:
+                    await call.voice.append_context(render(f"voice/far_end_{label}"), commentary=True)
 
     async def _turn_done(self, call: _Call, role: str) -> None:
         if not self._owned(call):
@@ -485,9 +475,13 @@ class CallController:
         log.debug("call %s: delegation %s request: %s", call.call_id, delegation_id, request)
         call.work_is_review = False
         call.last_activity = time.monotonic()
-        call.work_task = self._spawn(
-            self._run_delegation(call, generation, delegation_id, request), f"delegation:{call.call_id}:{generation}"
-        )
+        words = request.split()
+        if len(words) == 2 and words[0].upper() == DTMF_REQUEST:
+            # A plain keypress: the daemon presses it, no model is asked.
+            work = self._run_keypress(call, generation, delegation_id, words[1].upper())
+        else:
+            work = self._run_delegation(call, generation, delegation_id, request)
+        call.work_task = self._spawn(work, f"delegation:{call.call_id}:{generation}")
 
     def _activity(self, call: _Call, now: float) -> None:
         """Record speech or transcript progress; a review of the quiet line is stale after it."""
@@ -583,8 +577,8 @@ class CallController:
             if not farewell_pending:
                 return {"status": "ending"}
             if review and call.voice:
-                await call.voice.append_context("CALL_COMPLETE. Say one brief goodbye now; the line disconnects after it.")
-            return {"status": "ending", "instruction": "Return the final text now so the voice agent can say one brief goodbye."}
+                await call.voice.append_context(render("voice/call_complete"))
+            return {"status": "ending", "instruction": render("task/finish_instruction")}
 
         return {"send_dtmf": send_dtmf, "finish_call": finish_call}
 
@@ -597,6 +591,30 @@ class CallController:
         call.finish_speech_seen = not farewell_pending
         call.ending_task = self._spawn(self._graceful_finish(call), f"farewell:{call.call_id}")
         await self._notify()
+
+    async def _run_keypress(self, call: _Call, generation: int, delegation_id: str, digits: str) -> None:
+        """Press keys the voice agent asked for. The same keys again within a few seconds
+        are one request heard twice, not a second menu step, so they are not resent."""
+        try:
+            now = time.monotonic()
+            if call.last_keypress is not None and call.last_keypress[0] == digits and now - call.last_keypress[1] < KEYPRESS_COOLDOWN_S:
+                log.info("call %s: keypress %s repeated within the cooldown, not sent again", call.call_id, digits)
+                result = f"Already pressed {digits}; wait for the menu."
+            else:
+                await self.device.command("cancel_actions", call.call_id, action_generation=generation)
+                self._check_work(call, generation)
+                await self._phone_tools(call, generation, review=False)["send_dtmf"]({"digits": digits})
+                call.last_keypress = (digits, time.monotonic())
+                result = f"Pressed {digits}."
+            # Commentary: the agent learns it is done but does not announce it to a menu.
+            if call.voice:
+                await call.voice.append_context(result, delegation_id=delegation_id, commentary=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning("call %s: keypress %s failed: %s", call.call_id, digits, exc)
+            if self._owned(call) and not call.finalizing and generation == call.generation and call.voice:
+                await call.voice.append_context(f"The keypress failed: {str(exc)[:300]}", delegation_id=delegation_id)
 
     async def _run_delegation(self, call: _Call, generation: int, delegation_id: str, request: str) -> None:
         try:
@@ -773,6 +791,7 @@ class CallController:
         record["transcript"] = self.store.transcript(call.call_id)
         record["request"] = call.request.model_dump(mode="json")
         record["audio_codec"] = call.audio_codec
+        record["far_end"] = call.far_end or "person"
         record["recording"] = call.recording
         return record
 

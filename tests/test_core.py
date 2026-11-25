@@ -385,6 +385,34 @@ class ControllerTests(_ControllerCase):
         self.assertTrue(self.device.disconnect_requested.is_set())
         self.assertEqual(asked, [])
 
+    async def test_keypress_request_is_pressed_once_without_the_task_agent(self) -> None:
+        call_id, voice = await self._active()
+        asked: list[str] = []
+
+        async def run(prompt: str, tools: dict) -> str:
+            asked.append(prompt)
+            return "WAIT"
+
+        self.tasks.run_handler = run
+        await voice.callbacks.delegation("k1", "DTMF 2")
+        await self.controller._calls[call_id].work_task
+        await voice.callbacks.delegation("k2", "DTMF 2")  # the same request heard twice
+        await self.controller._calls[call_id].work_task
+        sent = [payload["digits"] for command, _, payload in self.device.commands if command == "dtmf"]
+        self.assertEqual((sent, asked), (["2"], []))
+        self.assertEqual([delegation for _, delegation in voice.contexts if delegation], ["k1", "k2"])
+        await self.controller.hangup_call(call_id)
+        await self.controller.wait_call_result(call_id, wait_s=2)
+
+    async def test_a_menu_is_recognised_and_recorded(self) -> None:
+        call_id, voice = await self._active()
+        await voice.callbacks.transcript("user", "Для выбора русского языка нажмите 2", True)
+        self.assertTrue(any(text.startswith("FAR_END: an automated menu") for text, _ in voice.contexts))
+        await self.controller.hangup_call(call_id)
+        await self.controller.wait_call_result(call_id, wait_s=2)
+        record = json.loads((Path(self.directory.name) / "archive" / f"{call_id}.json").read_text())
+        self.assertEqual(record["far_end"], "ivr")
+
     async def test_audio_format_failure_hangs_up_the_answered_call(self) -> None:
         def broken(call_id: str, epoch: int) -> dict:
             raise RuntimeError("opus encoder unavailable")

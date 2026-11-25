@@ -38,6 +38,7 @@ from .auth import (
     codex_request_headers,
 )
 from .interfaces import ToolHandler
+from .prompts import render
 from .native.devicecheck import codex_attestation_async
 
 logger = logging.getLogger(__name__)
@@ -57,54 +58,6 @@ TASK_OUTCOMES = (
     "needs_user",
     "unknown",
 )
-
-TASK_INSTRUCTIONS = """\
-You are the task agent supervising a live phone call. A separate realtime voice agent talks
-to the other party; you cannot hear or speak. You own the telephone line: `send_dtmf`
-presses keypad digits on the active call, `finish_call` ends the call and records the
-outcome.
-
-You are invoked in one of two situations, named in the request:
-- DELEGATED REQUEST: the voice agent asks for an action or a decision.
-- LINE STATUS: the line has gone quiet and you decide what it needs.
-
-Rules:
-- Work only from the call brief and the transcript. Never pretend to have heard audio or
-  to have completed an action.
-- Lines of the other party come from automatic speech recognition and can contain misheard
-  words. The voice agent hears the audio directly: when the agent repeats or confirms a
-  word, name or number and the other party does not correct it, the agent's version is
-  what was said.
-- Use tools for actions. Do not claim an action succeeded unless the tool result says so.
-- DTMF digits are a string made of 0-9, *, #, A-D.
-- Transcript lines labelled `phone` record keypad input already sent on this call. Do not
-  send the same input again unless the menu asks for it again.
-- Call `finish_call` when the conversation is over: the goal is reached or cannot be
-  reached, and nothing further is expected from either side. Set `farewell_pending` to
-  true only when the agent has not said goodbye yet; the agent then says one brief goodbye
-  before the line disconnects.
-- The voice agent does not read results aloud; take them from the transcript for the summary
-  and fields.
-- Do not finish while a question from either side is unanswered, while the other party
-  asked to wait, or while an automated system is still talking, unless the goal is reached
-  and the menu is only repeating itself. A pause of less than about twenty seconds after an
-  unanswered question is normal.
-- For a DELEGATED REQUEST return the final text for the voice agent: a short plain-text
-  result or an instruction describing what to say or ask. For LINE STATUS reply WAIT when
-  no action is needed.
-- Return plain text without markdown, lists, or code blocks. Keep it short.
-"""
-
-SUMMARY_INSTRUCTIONS = """\
-You finalize a finished or ending phone call. Use the `submit_summary` tool exactly once.
-Choose `task_outcome` from the allowed values. `summary` is a short factual account of
-what happened, including failures or unverified points. `fields` contains only the
-requested result fields, as JSON scalars. Do not invent data that is not in the brief or
-transcript; use null when unknown. Do not answer with prose instead of the tool call.
-Lines of the other party come from automatic speech recognition and can contain misheard
-words. The voice agent heard the audio directly: when the agent repeated or confirmed a
-word, name or number and the other party did not correct it, record the agent's version.
-"""
 
 
 class TaskAgentError(RuntimeError):
@@ -319,17 +272,14 @@ def _user_content(
     line_status: str | None = None,
     instruction: str | None = None,
 ) -> str:
-    sections = [
-        "CALL BRIEF:\n" + _bounded(_json_text(brief), MAX_BRIEF_CHARS),
-        "TRANSCRIPT:\n" + _format_transcript(transcript),
-    ]
-    if request is not None:
-        sections.append("DELEGATED REQUEST:\n" + _bounded(request, MAX_REQUEST_CHARS))
-    if line_status is not None:
-        sections.append("LINE STATUS:\n" + line_status)
-    if instruction is not None:
-        sections.append(instruction)
-    return "\n\n".join(sections)
+    return render(
+        "task/user",
+        brief=_bounded(_json_text(brief), MAX_BRIEF_CHARS),
+        transcript=_format_transcript(transcript),
+        request=_bounded(request, MAX_REQUEST_CHARS) if request is not None else None,
+        line_status=line_status,
+        instruction=instruction,
+    )
 
 
 class _ResponseAccumulator:
@@ -616,10 +566,7 @@ class TaskAgent:
                 brief,
                 transcript,
                 request,
-                instruction=(
-                    "Handle this delegated request now. Use a tool for any "
-                    "phone action, then give the final text for the voice agent."
-                ),
+                instruction=render("task/delegated"),
             ),
             tools,
         )
@@ -640,15 +587,8 @@ class TaskAgent:
             _user_content(
                 brief,
                 transcript,
-                line_status=(
-                    f"Nobody has spoken for {quiet_s:.0f} seconds. The voice agent "
-                    "has not asked for any action."
-                ),
-                instruction=(
-                    "Decide what the line needs now. Call finish_call when the "
-                    "conversation is over, send_dtmf when an automated menu is "
-                    "waiting for keypad input, otherwise reply WAIT."
-                ),
+                line_status=render("task/review_status", quiet_s=f"{quiet_s:.0f}"),
+                instruction=render("task/review"),
             ),
             tools,
         )
@@ -665,7 +605,7 @@ class TaskAgent:
         for _ in range(MAX_ROUNDS):
             body: dict[str, Any] = {
                 "model": model,
-                "instructions": TASK_INSTRUCTIONS,
+                "instructions": render("task/system"),
                 "input": input_items,
                 "stream": True,
                 "store": False,
@@ -720,7 +660,7 @@ class TaskAgent:
         }
         body: dict[str, Any] = {
             "model": model,
-            "instructions": SUMMARY_INSTRUCTIONS,
+            "instructions": render("task/summary_system"),
             "input": [
                 {
                     "role": "user",
@@ -730,10 +670,7 @@ class TaskAgent:
                             "text": _user_content(
                                 brief,
                                 transcript,
-                                instruction=(
-                                    "Finalize this call. Record only the requested result "
-                                    "fields and only facts present in the brief or transcript."
-                                ),
+                                instruction=render("task/summarize"),
                             ),
                         }
                     ],
