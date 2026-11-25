@@ -41,7 +41,7 @@ from .native.devicecheck import codex_attestation_async
 
 logger = logging.getLogger(__name__)
 
-LIVE_MODEL = "gpt-live-1-codex"
+LIVE_MODEL = "gpt-live-1.1-codex"  # the official Codex client's default since openai/codex#61259
 CONTEXT_CHUNK_BYTES = 500
 MAX_OUTPUT_FRAMES = 48  # one second at 20 ms
 SIDEBAND_ATTEMPTS = 5
@@ -377,7 +377,8 @@ class CodexVoiceSession:
             "model": LIVE_MODEL,
             "instructions": self._instructions,
             "audio": {"output": {"voice": self._voice}},
-            "delegation": {"type": "client"},
+            # No spoken filler ("one moment") when a request goes to the backend, as in the Codex client.
+            "delegation": {"type": "client", "ack_filler": False},
         }
         if self._initial_context:
             session_payload["initial_items"] = [{
