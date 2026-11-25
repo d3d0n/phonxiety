@@ -10,6 +10,8 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.telephony.SubscriptionManager
+import com.phonxiety.bridge.net.DeviceLink
+import com.phonxiety.bridge.net.IrohSupport
 import android.telephony.TelephonyManager
 import android.view.View
 import android.view.WindowInsets

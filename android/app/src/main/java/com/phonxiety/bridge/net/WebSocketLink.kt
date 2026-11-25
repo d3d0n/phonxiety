@@ -1,5 +1,6 @@
-package com.phonxiety.bridge
+package com.phonxiety.bridge.net
 
+import com.phonxiety.bridge.BridgeConfig
 import okhttp3.Connection
 import okhttp3.EventListener
 import okhttp3.OkHttpClient

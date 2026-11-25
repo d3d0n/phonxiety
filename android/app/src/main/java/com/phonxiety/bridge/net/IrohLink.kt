@@ -1,10 +1,13 @@
-package com.phonxiety.bridge
+package com.phonxiety.bridge.net
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.SystemClock
 import android.util.Log
+import com.phonxiety.bridge.AppStorage
+import com.phonxiety.bridge.BridgeConfig
 import computer.iroh.Connection
 import computer.iroh.Endpoint
 import computer.iroh.EndpointOptions
@@ -22,15 +25,24 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okio.ByteString.Companion.toByteString
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.coroutines.resume
+
+/**
+ * Process-wide scope for iroh calls that must never block their caller:
+ * endpoint shutdown, endpoint recycle and connection close.  Callers include
+ * the main thread when the service stops, so none of this may run there.
+ */
+private val irohIo = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
 /**
  * Process-wide iroh state: one endpoint, one persisted secret key.
@@ -43,7 +55,6 @@ internal object IrohSupport {
     private const val SECRET_KEY_FILE = "iroh-secret.key"
     private const val SECRET_KEY_BYTES = 32
     private const val NETWORK_WAIT_MS = 30_000L
-    private const val NETWORK_POLL_MS = 500L
     private const val RECYCLE_MIN_INTERVAL_MS = 5 * 60_000L
 
     /** ALPN of the device protocol, per the iroh link contract. */
@@ -87,20 +98,46 @@ internal object IrohSupport {
      */
     private suspend fun awaitNetwork(context: Context) {
         val manager = context.getSystemService(ConnectivityManager::class.java) ?: return
-        val deadline = SystemClock.elapsedRealtime() + NETWORK_WAIT_MS
-        while (true) {
-            val network = manager.activeNetwork
-            if (network != null) {
-                val capabilities = manager.getNetworkCapabilities(network)
-                if (capabilities != null &&
-                    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                ) {
-                    return
+        if (hasInternet(manager)) return
+        withTimeoutOrNull(NETWORK_WAIT_MS) {
+            suspendCancellableCoroutine { continuation ->
+                val callback = object : ConnectivityManager.NetworkCallback() {
+                    override fun onCapabilitiesChanged(
+                        network: Network,
+                        capabilities: NetworkCapabilities,
+                    ) {
+                        if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                            return
+                        }
+                        // Unregister before resuming so the platform never keeps
+                        // a callback whose continuation is already done.
+                        unregister(manager, this)
+                        if (continuation.isActive) continuation.resume(Unit)
+                    }
                 }
+                try {
+                    manager.registerDefaultNetworkCallback(callback)
+                } catch (_: Exception) {
+                    // The callback table is full or the service is gone: bind now
+                    // instead of waiting out the deadline without any signal.
+                    if (continuation.isActive) continuation.resume(Unit)
+                    return@suspendCancellableCoroutine
+                }
+                // Installed only once registered: a cancellation that came first
+                // runs this right away, so the callback never outlives the wait.
+                continuation.invokeOnCancellation { unregister(manager, callback) }
             }
-            if (SystemClock.elapsedRealtime() >= deadline) return
-            delay(NETWORK_POLL_MS)
         }
+    }
+
+    private fun hasInternet(manager: ConnectivityManager): Boolean {
+        val network = manager.activeNetwork ?: return false
+        val capabilities = manager.getNetworkCapabilities(network) ?: return false
+        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
+
+    private fun unregister(manager: ConnectivityManager, callback: ConnectivityManager.NetworkCallback) {
+        runCatching { manager.unregisterNetworkCallback(callback) }
     }
 
     /** Installs the JNI application context iroh's DNS resolver needs. */
@@ -166,13 +203,13 @@ internal object IrohSupport {
     }
 
     private fun stopAsync(endpoint: Endpoint, name: String) {
-        Thread({
+        irohIo.launch {
             try {
-                runBlocking { endpoint.shutdown() }
+                endpoint.shutdown()
             } catch (t: Throwable) {
-                Log.w(TAG, "iroh endpoint close failed: ${t.javaClass.simpleName}")
+                Log.w(TAG, "iroh endpoint close failed ($name): ${t.javaClass.simpleName}")
             }
-        }, name).apply { isDaemon = true }.start()
+        }
     }
 
     /**
@@ -215,6 +252,8 @@ internal class IrohLinkFactory(
  * bidirectional stream, authenticate with the first frame, then move framed
  * messages.  A reader coroutine, a writer coroutine fed by a queue and a
  * route sampler run for the life of the stream; any failure reports down once.
+ *
+ * The wire framing is [Framing]; this class only decides what to send.
  */
 private class IrohLink(
     private val context: Context,
@@ -223,10 +262,6 @@ private class IrohLink(
 ) : DeviceLink {
     private companion object {
         const val TAG = "PhonxietyBridge"
-        const val HEADER_BYTES = 5
-        const val KIND_TEXT = 1
-        const val KIND_BINARY = 2
-        const val MAX_PAYLOAD = 131_072
         const val ROUTE_INTERVAL_MS = 1_000L
         const val RELAY_ONLY_RECYCLE_MS = 20_000L
     }
@@ -260,7 +295,9 @@ private class IrohLink(
             connection = link
             val stream = link.openBi()
             val outgoing = stream.send()
-            outgoing.writeAll(buildFrame(KIND_TEXT, authMessage()))
+            val auth = Framing.encode(Framing.KIND_TEXT, authMessage())
+                ?: return fail(listener, "connect_failed")
+            outgoing.writeAll(auth)
             if (cancelled.get()) {
                 runCatching { link.close(0, "cancelled".toByteArray()) }
                 return
@@ -290,28 +327,22 @@ private class IrohLink(
     private suspend fun readLoop(incoming: RecvStream, listener: DeviceLink.Listener) {
         try {
             while (true) {
-                val header = incoming.readExact(HEADER_BYTES.toUInt())
-                if (header.size != HEADER_BYTES) {
+                val header = incoming.readExact(Framing.HEADER_BYTES.toUInt())
+                if (header.size != Framing.HEADER_BYTES) {
                     fail(listener, "closed")
                     return
                 }
-                val kind = header[0].toInt() and 0xFF
-                val length = ((header[1].toLong() and 0xFF) shl 24) or
-                    ((header[2].toLong() and 0xFF) shl 16) or
-                    ((header[3].toLong() and 0xFF) shl 8) or
-                    (header[4].toLong() and 0xFF)
-                if ((kind != KIND_TEXT && kind != KIND_BINARY) ||
-                    length < 1 || length > MAX_PAYLOAD
-                ) {
+                val parsed = Framing.parse(header)
+                if (parsed == null) {
                     fail(listener, "protocol")
                     return
                 }
-                val payload = incoming.readExact(length.toUInt())
-                if (payload.size.toLong() != length) {
+                val payload = incoming.readExact(parsed.length.toUInt())
+                if (payload.size != parsed.length) {
                     fail(listener, "closed")
                     return
                 }
-                if (kind == KIND_TEXT) {
+                if (parsed.kind == Framing.KIND_TEXT) {
                     listener.onLinkText(payload.toString(Charsets.UTF_8))
                 } else {
                     listener.onLinkBinary(payload.toByteString())
@@ -380,29 +411,20 @@ private class IrohLink(
         }
     }
 
-    override fun sendText(message: String): Boolean =
-        enqueue(buildFrame(KIND_TEXT, message.toByteArray(Charsets.UTF_8)))
+    override fun sendText(message: String): Boolean {
+        val frame = Framing.encode(Framing.KIND_TEXT, message.toByteArray(Charsets.UTF_8))
+            ?: return false
+        return enqueue(frame)
+    }
 
     override fun sendBinary(frame: ByteArray, length: Int) {
         val size = length.coerceIn(0, frame.size)
         if (size == 0) return
-        enqueue(buildFrame(KIND_BINARY, frame.copyOf(size)))
-    }
-
-    private fun buildFrame(kind: Int, payload: ByteArray): ByteArray {
-        val bytes = ByteArray(HEADER_BYTES + payload.size)
-        bytes[0] = kind.toByte()
-        bytes[1] = (payload.size ushr 24).toByte()
-        bytes[2] = (payload.size ushr 16).toByte()
-        bytes[3] = (payload.size ushr 8).toByte()
-        bytes[4] = payload.size.toByte()
-        payload.copyInto(bytes, HEADER_BYTES)
-        return bytes
+        val encoded = Framing.encode(Framing.KIND_BINARY, frame, size) ?: return
+        enqueue(encoded)
     }
 
     private fun enqueue(bytes: ByteArray): Boolean {
-        val payload = bytes.size - HEADER_BYTES
-        if (payload < 1 || payload > MAX_PAYLOAD) return false
         if (cancelled.get() || downOnce.get()) return false
         backlog.addAndGet(bytes.size.toLong())
         if (outbound.trySend(bytes).isFailure) {
@@ -442,9 +464,9 @@ private class IrohLink(
         if (link != null) {
             // Cancel can run on the main thread when the service stops; keep
             // every iroh call off it.
-            Thread({
+            irohIo.launch {
                 runCatching { link.close(0, "cancelled".toByteArray(Charsets.UTF_8)) }
-            }, "phonxiety-iroh-cancel").apply { isDaemon = true }.start()
+            }
         }
     }
 }
