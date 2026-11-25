@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8.3", "pytest-asyncio>=0.24"]
+dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "pytest-timeout>=2.3"]
 
 [project.scripts]
 phonxiety = "phonxiety.cli:main"
@@ -36,3 +36,6 @@ packages = ["src/phonxiety"]
 [tool.pytest.ini_options]
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+# Every test carries a hard deadline: a blocked read or a shutdown that never ends
+# fails with a stack instead of hanging the suite.
+addopts = "--timeout=60 --timeout-method=thread"

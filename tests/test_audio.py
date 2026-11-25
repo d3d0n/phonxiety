@@ -69,38 +69,55 @@ class OpusTests(unittest.TestCase):
         self.assertEqual(len(encoder.encode(FRAME[1001:])), 1)
 
 
+class _Emitted:
+    """Frames as they leave the pacer, with an event per frame so a test waits instead of sleeping."""
+
+    def __init__(self) -> None:
+        self.frames: list[tuple[float, bytes]] = []
+        self.arrived = asyncio.Event()
+
+    async def __call__(self, frame: bytes) -> None:
+        self.frames.append((time.monotonic(), frame))
+        self.arrived.set()
+
+    async def until(self, count: int) -> None:
+        async with asyncio.timeout(5):
+            while len(self.frames) < count:
+                self.arrived.clear()
+                await self.arrived.wait()
+
+
 class PacedOutputTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_burst_plays_at_speech_speed_and_a_barge_in_drops_the_rest(self) -> None:
-        emitted: list[tuple[float, int]] = []
-
-        async def emit(frame: bytes) -> None:
-            emitted.append((time.monotonic(), len(frame)))
-
-        output = PacedOutput(emit)
+        emitted = _Emitted()
+        drained = asyncio.Event()
+        output = PacedOutput(emitted, on_drained=drained.set)
         output.start()
         output.feed(bytes(FRAME_BYTES * 50))  # one second of speech in one burst
-        await asyncio.sleep(0.3)
+        # Only the pacer's own wall clock moves here: wait for the frames it handed over.
+        # The lead rides out jitter, so the first frames leave together; 14 frames prove pacing.
+        await emitted.until(14)
         output.clear()
-        await asyncio.sleep(0.2)
+        output.drain_then_notify()
+        async with asyncio.timeout(2):
+            await drained.wait()  # the pacer saw the cleared buffer and stops there
+        frames = emitted.frames
         await output.close()
         # ~0.3 s of 20 ms frames plus the jitter lead, not the whole second.
-        self.assertTrue(12 <= len(emitted) <= 22, len(emitted))
-        self.assertGreater(emitted[-1][0] - emitted[0][0], 0.2)
-        self.assertEqual({size for _, size in emitted}, {FRAME_BYTES})
+        self.assertTrue(12 <= len(frames) <= 22, len(frames))
+        self.assertGreater(frames[-1][0] - frames[0][0], 0.2)
+        self.assertEqual({len(frame) for _, frame in frames}, {FRAME_BYTES})
+        self.assertFalse(output.pending)
 
     async def test_a_chunk_split_inside_a_sample_keeps_the_byte(self) -> None:
-        emitted: list[bytes] = []
-
-        async def emit(frame: bytes) -> None:
-            emitted.append(frame)
-
-        output = PacedOutput(emit)
+        emitted = _Emitted()
+        output = PacedOutput(emitted)
         output.start()
         output.feed(FRAME[:1001])
         output.feed(FRAME[1001:])
-        await asyncio.sleep(0.1)
+        await emitted.until(1)  # the pacer handed the whole frame over
         await output.close()
-        self.assertEqual(b"".join(emitted), FRAME)
+        self.assertEqual(b"".join(frame for _, frame in emitted.frames), FRAME)
 
 
 class PcmSourceTrackTests(unittest.IsolatedAsyncioTestCase):

@@ -93,6 +93,16 @@ class AdvertisementTests(unittest.TestCase):
         self.assertTrue(advertiser.start())
         self.assertEqual(1, len(backend.registered))
 
+    def test_start_never_looks_up_the_host_name(self) -> None:
+        """A host-name lookup can block the daemon's event loop for minutes; mDNS needs none."""
+        backend = FakeZeroconf()
+        advertiser = MdnsAdvertiser(18763, PIN, 3, backend=backend)
+        with mock.patch(
+            "phonxiety.net.tailnet.socket.getaddrinfo", side_effect=AssertionError("DNS lookup in start()")
+        ):
+            self.assertTrue(advertiser.start())
+        self.assertTrue(advertiser.started)
+
     def test_service_info_advertises_the_local_address(self) -> None:
         info = service_info(18763, PIN, 3, "192.168.1.10")
         self.assertEqual(SERVICE_TYPE, info.type)

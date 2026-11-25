@@ -6,12 +6,13 @@ import ssl
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import InvalidStatus
 
 from phonxiety.audio.opus import OpusEncoder
-from phonxiety.device import AUDIO_HEADER, DeviceHub
+from phonxiety.device import AUDIO_HEADER, DeviceError, DeviceHub
 from phonxiety.net.tls import device_identity, server_context
 from phonxiety.net.websocket import WebSocketListener
 
@@ -25,19 +26,21 @@ class DeviceLinkTests(unittest.IsolatedAsyncioTestCase):
         cert, key, self.fingerprint = device_identity(Path(self.directory.name))
         self.hub = DeviceHub()
         self.listener = WebSocketListener(self.hub, TOKEN)
-        await self.listener.start("127.0.0.1", 0, server_context(cert, key))
+        async with asyncio.timeout(10):
+            await self.listener.start("127.0.0.1", 0, server_context(cert, key))
         self.url = f"wss://127.0.0.1:{self.listener.port}"
         self.client_tls = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         self.client_tls.check_hostname = False
         self.client_tls.verify_mode = ssl.CERT_NONE
 
     async def asyncTearDown(self) -> None:
-        await self.listener.close()
+        async with asyncio.timeout(10):
+            await self.listener.close()
         self.directory.cleanup()
 
     def _connect(self, path: str = "/device", token: str = TOKEN) -> connect:
         return connect(
-            self.url + path, ssl=self.client_tls, compression=None,
+            self.url + path, ssl=self.client_tls, compression=None, open_timeout=5,
             additional_headers={"Authorization": f"Bearer {token}"},
         )
 
@@ -174,6 +177,55 @@ class DeviceLinkTests(unittest.IsolatedAsyncioTestCase):
         # Counters level with ours and an empty queue: still not proof, the mark is.
         played, _ = await self._drain(drains=False)
         self.assertFalse(played)
+
+
+class LinkTestSendTests(unittest.IsolatedAsyncioTestCase):
+    """A link_test ends with a DeviceError when the phone stops reading, never by parking."""
+
+    class _Link:
+        peer = "iroh:test"
+
+        def route(self) -> str:
+            return "direct 10.0.0.2, 3 ms"
+
+        def paths(self) -> list[str]:
+            return []
+
+        async def send(self, message: str | bytes) -> None:
+            await asyncio.Event().wait()  # backpressured: the phone stopped reading
+
+        async def send_datagram(self, data: bytes) -> bool:
+            return False
+
+        async def close(self, code: int, reason: str) -> None:
+            pass
+
+    async def asyncSetUp(self) -> None:
+        self.hub = DeviceHub()
+        self.hub._link = self._Link()
+        self.hub._ready.set()
+
+    async def asyncTearDown(self) -> None:
+        self.hub._link = None
+        self.hub._ready.clear()
+
+    async def test_a_probe_on_a_link_that_stops_reading_ends_with_a_device_error(self) -> None:
+        with mock.patch("phonxiety.device.LINK_WRITE_TIMEOUT_S", 0.05):
+            with self.assertRaises(DeviceError) as raised:
+                await self.hub.link_test(0.5)
+        self.assertEqual(str(raised.exception), "link_test_send_timeout")
+        self.assertIsNone(self.hub._probe)  # probe state cleared: a later test can run
+
+    async def test_a_probe_that_cannot_take_the_audio_lock_ends_with_a_device_error(self) -> None:
+        await self.hub._audio_lock.acquire()  # a stalled audio write holds it
+        try:
+            with mock.patch("phonxiety.device.LINK_WRITE_TIMEOUT_S", 0.05):
+                with self.assertRaises(DeviceError) as raised:
+                    await self.hub.link_test(0.5)
+        finally:
+            self.hub._audio_lock.release()
+        self.assertEqual(str(raised.exception), "link_test_send_timeout")
+        self.assertIsNone(self.hub._probe)
 
 
 class OpusStreamTests(unittest.IsolatedAsyncioTestCase):

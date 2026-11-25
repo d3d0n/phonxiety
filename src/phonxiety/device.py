@@ -37,6 +37,8 @@ MAX_API_RESULT_CHARS = 256 * 1024  # one api_result must fit the phone's page li
 API_CONCURRENCY = 8
 FRAME_PCM_BYTES = 1920
 MAX_PCM_BYTES = 19200
+# A link whose peer stopped reading must not hold the daemon: the same budget audio writes use.
+LINK_WRITE_TIMEOUT_S = 2.0
 # The phone's hello carries what it wants the next call to sound like; the daemon's own
 # `audio_codec` stays the default behind "auto".
 PREFERRED_CODECS = ("auto", "pcm", "opus")
@@ -216,6 +218,7 @@ class DeviceHub:
             self._link_free.clear()
         self._ready.clear()
         workers: list[asyncio.Task[Any]] = []
+        cancelled = False
         try:
             self._record_hello(hello)
             self._ready.set()
@@ -242,8 +245,12 @@ class DeviceHub:
                     if not isinstance(event, dict):
                         raise DeviceError("Invalid device control message")
                     await self._receive_event(event)
-        except (LinkClosed, asyncio.CancelledError):
+        except LinkClosed:
             pass
+        except asyncio.CancelledError:
+            # The detach in `finally` runs anyway; the task itself must still end cancelled,
+            # otherwise a loop shutdown waiting on it can wait for work it never sees finish.
+            cancelled = True
         except Exception as exc:
             log.exception("Device link failed")
             self.last_error = f"device_protocol_error: {exc}"[:300]
@@ -271,13 +278,28 @@ class DeviceHub:
                 if self.on_event is not None:
                     await self.on_event({"type": "device_disconnected"})
                 self._link_free.set()
+        if cancelled:
+            raise asyncio.CancelledError
 
     async def _offer_app_access(self, link: DeviceLink, hello: dict[str, Any]) -> None:
+        """Hand the app token to a v3 phone before the link serves anything else.
+
+        The offer shares the control lock with commands, so it can wait behind a full
+        buffer; a phone that does not take it within `LINK_WRITE_TIMEOUT_S` is disconnected
+        instead, and it reconnects to a daemon that will offer the token again.
+        """
         source = self.app_token_source
         token = source() if source is not None else None
         if not token or not isinstance(hello.get("app_api"), int):
             return
-        await self.send_control(json.dumps({"type": "app_access", "app_token": token}))
+        try:
+            async with asyncio.timeout(LINK_WRITE_TIMEOUT_S):
+                await self.send_control(json.dumps({"type": "app_access", "app_token": token}))
+        except TimeoutError:
+            log.warning("Phone did not take the app token within %.0f s; closing the link so it reconnects",
+                        LINK_WRITE_TIMEOUT_S)
+            await link.close(1013, "App token delivery timed out")
+            raise LinkClosed("app token delivery timed out") from None
 
     def _record_hello(self, hello: dict[str, Any]) -> None:
         """Keep the fields the rest of the daemon reads, and v3's preferences when present."""
@@ -614,7 +636,7 @@ class DeviceHub:
                 call_id, epoch, frame, _ = await self._outgoing.get()
                 try:
                     began = time.monotonic()
-                    async with asyncio.timeout(2):
+                    async with asyncio.timeout(LINK_WRITE_TIMEOUT_S):
                         async with self._audio_lock:
                             if self._link is link and self._call_id == call_id and self._epoch == epoch:
                                 await link.send(frame)
@@ -705,12 +727,18 @@ class DeviceHub:
                     break
                 pending[count] = now
                 probe = AUDIO_HEADER.pack(PROBE_MAGIC, self._probe_id, count) + payload
-                if datagrams:
-                    if not await link.send_datagram(probe):
-                        raise DeviceError("datagrams_unavailable")
-                else:
-                    async with self._audio_lock:
-                        await link.send(probe)
+                try:
+                    # Lock acquisition included: a stalled audio write must not keep a probe
+                    # waiting forever, and a phone that stopped reading ends the test with an error.
+                    async with asyncio.timeout(LINK_WRITE_TIMEOUT_S):
+                        if datagrams:
+                            if not await link.send_datagram(probe):
+                                raise DeviceError("datagrams_unavailable")
+                        else:
+                            async with self._audio_lock:
+                                await link.send(probe)
+                except TimeoutError:
+                    raise DeviceError("link_test_send_timeout") from None
                 stall = max(stall, time.monotonic() - now)
                 count += 1
                 await asyncio.sleep(max(0.0, started + count * 0.02 - time.monotonic()))
