@@ -62,6 +62,19 @@ def _opus_bitrate() -> int:
     return bitrate
 
 
+def _iroh_relays(state_dir: Path) -> tuple[str, ...]:
+    """PHONXIETY_IROH_RELAYS (comma-separated), else `<state_dir>/iroh-relays`, one URL per line."""
+    configured = os.environ.get("PHONXIETY_IROH_RELAYS")
+    if configured is not None:
+        entries = configured.split(",")
+    else:
+        try:
+            entries = (state_dir / "iroh-relays").read_text().splitlines()
+        except FileNotFoundError:
+            return ()
+    return tuple(url for url in (entry.split("#", 1)[0].strip() for entry in entries) if url)
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     state_dir: Path
@@ -99,7 +112,7 @@ class Settings:
             voice=os.environ.get("PHONXIETY_VOICE", "sol"),
             audio_codec=_codec(),
             opus_bitrate=_opus_bitrate(),
-            iroh_relays=tuple(url.strip() for url in os.environ.get("PHONXIETY_IROH_RELAYS", "").split(",") if url.strip()),
+            iroh_relays=_iroh_relays(state_dir),
         )
 
     @property
