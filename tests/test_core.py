@@ -449,6 +449,7 @@ class ControllerTests(_ControllerCase):
         self.assertEqual((record["state"], record["request"]["destination"], record["audio_codec"]),
                          ("ended", request().destination, "pcm"))
         self.assertEqual(record["recording"]["channels"], ["remote", "agent"])
+        self.assertIn("compressed", record["recording"])
 
         with wave.open(str(archive / record["recording"]["file"])) as recording:
             self.assertEqual((recording.getnchannels(), recording.getframerate()), (2, 48_000))

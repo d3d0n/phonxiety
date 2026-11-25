@@ -15,7 +15,7 @@ from .device import DeviceError, DeviceHub
 from .interfaces import ToolHandler, VoiceCallbacks, VoiceSession, line_action
 from .models import CallRequest, CallState, TERMINAL_STATES
 from .prompts import render
-from .recording import CallRecorder, write_call_record
+from .recording import CallRecorder, compress, write_call_record
 from .store import CallStore
 
 log = logging.getLogger(__name__)
@@ -753,6 +753,9 @@ class CallController:
         if call.recorder is not None:
             try:
                 call.recording = await asyncio.to_thread(call.recorder.close)
+                if call.recording and call.recording.get("file"):
+                    wav = call.recorder.path
+                    call.recording["compressed"] = await asyncio.to_thread(compress, wav)
             except Exception as exc:
                 log.exception("call %s: recording could not be written", call.call_id)
                 call.recording = {"file": None, "error": f"recording_export_failed: {exc}"}

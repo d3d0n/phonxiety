@@ -4,6 +4,8 @@ Files live in ``<state_dir>/calls``:
 
 - ``<call_id>.wav``: 48 kHz s16le stereo, left = the other party (phone downlink),
   right = the agent as sent to the phone, aligned on one clock from audio start.
+- ``<call_id>.m4a``: the same call made shareable: both sides mixed to mono, pauses
+  longer than half a second removed, loudness evened out, AAC at 48 kbit/s (needs ffmpeg).
 - ``<call_id>.json``: request, timings, outcomes, result fields, full transcript and
   the recording's properties. Written for every call once its result is final.
 """
@@ -13,6 +15,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
+import subprocess
 import tempfile
 import time
 import wave
@@ -24,6 +28,35 @@ from .codec import SAMPLE_RATE
 
 log = logging.getLogger(__name__)
 CHUNK_SAMPLES = SAMPLE_RATE  # one second per interleave step
+COMPRESS_TIMEOUT_S = 120
+# Mono mix of both sides, pauses over 0.5 s cut, EBU R128 loudness: one voice level throughout.
+_COMPRESS_FILTER = (
+    "pan=mono|c0=0.5*c0+0.5*c1,"
+    "silenceremove=start_periods=1:start_threshold=-45dB:stop_periods=-1:stop_duration=0.5:stop_threshold=-45dB,"
+    "loudnorm=I=-16:TP=-1.5:LRA=11"
+)
+
+
+def compress(wav: Path) -> dict[str, Any]:
+    """Write `<call_id>.m4a` next to the WAV; its properties, or why it could not be made."""
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        return {"file": None, "error": "ffmpeg_not_found"}
+    target = wav.with_suffix(".m4a")
+    temporary = wav.with_name(f".{wav.stem}.part.m4a")
+    try:
+        subprocess.run(
+            [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(wav), "-af", _COMPRESS_FILTER,
+             "-ar", "24000", "-c:a", "aac", "-b:a", "48k", str(temporary)],
+            check=True, capture_output=True, timeout=COMPRESS_TIMEOUT_S,
+        )
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, target)
+    except (OSError, subprocess.SubprocessError) as exc:
+        temporary.unlink(missing_ok=True)
+        detail = exc.stderr.decode(errors="replace").strip()[-300:] if isinstance(exc, subprocess.CalledProcessError) else str(exc)
+        return {"file": None, "error": f"compress_failed: {detail}"}
+    return {"file": target.name, "format": "m4a aac mono, pauses removed", "bytes": target.stat().st_size}
 
 
 class CallRecorder:
