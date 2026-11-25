@@ -23,7 +23,8 @@ from websockets.asyncio.server import Server, ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request, Response
 
-from .codec import DEFAULT_OPUS_BITRATE, FRAME_SAMPLES, OpusDecoder, OpusEncoder
+from .audio.format import FRAME_SAMPLES
+from .audio.opus import DEFAULT_OPUS_BITRATE, OpusDecoder, OpusEncoder
 
 log = logging.getLogger(__name__)
 DEVICE_PATH = "/device"

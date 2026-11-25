@@ -11,11 +11,13 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import far_end
+from .archive import write_call_record
+from .audio.recording import CallRecorder
+from .audio.share import make_shareable
 from .device import DeviceError, DeviceHub
 from .interfaces import ToolHandler, VoiceCallbacks, VoiceSession, line_action
 from .models import CallRequest, CallState, TERMINAL_STATES
 from .prompts import render
-from .recording import CallRecorder, compress, write_call_record
 from .store import CallStore
 
 log = logging.getLogger(__name__)
@@ -755,7 +757,7 @@ class CallController:
                 call.recording = await asyncio.to_thread(call.recorder.close)
                 if call.recording and call.recording.get("file"):
                     wav = call.recorder.path
-                    call.recording["compressed"] = await asyncio.to_thread(compress, wav)
+                    call.recording["compressed"] = await asyncio.to_thread(make_shareable, wav)
             except Exception as exc:
                 log.exception("call %s: recording could not be written", call.call_id)
                 call.recording = {"file": None, "error": f"recording_export_failed: {exc}"}

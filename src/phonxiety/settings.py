@@ -9,7 +9,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from phonxiety.codec import CODECS, DEFAULT_OPUS_BITRATE, MAX_OPUS_BITRATE, MIN_OPUS_BITRATE
+from phonxiety.audio.opus import CODECS, DEFAULT_OPUS_BITRATE, MAX_OPUS_BITRATE, MIN_OPUS_BITRATE
 
 
 def default_state_dir() -> Path:

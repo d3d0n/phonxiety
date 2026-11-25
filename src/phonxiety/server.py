@@ -127,7 +127,7 @@ def create_app(settings: Settings) -> Starlette:
 
     from iroh import IrohError
 
-    from .codec import CODECS
+    from .audio.opus import CODECS
     from .device import DeviceError, WebSocketListener
     from .models import CallLimits, CallRequest
     from .p2p import IrohListener

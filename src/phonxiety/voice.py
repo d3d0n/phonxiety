@@ -15,22 +15,20 @@ import json
 import logging
 import os
 import re
-import threading
 import time
 import uuid
-from array import array
 from collections import deque
-from fractions import Fraction
 from typing import Any
 from urllib.parse import quote
 
 import httpx
 from aiortc import RTCPeerConnection, RTCSessionDescription
-from aiortc.mediastreams import AudioStreamTrack, MediaStreamError
-from av import AudioFrame, AudioResampler
+from aiortc.mediastreams import MediaStreamError
 from websockets.asyncio.client import connect as websocket_connect
 from websockets.exceptions import ConnectionClosed, InvalidHandshake
 
+from .audio.convert import ToMono48k
+from .audio.webrtc import PcmSourceTrack
 from .auth import (
     CODEX_BASE_URL,
     CODEX_CLIENT_VERSION,
@@ -45,11 +43,6 @@ logger = logging.getLogger(__name__)
 
 LIVE_MODEL = "gpt-live-1-codex"
 CONTEXT_CHUNK_BYTES = 500
-SAMPLE_RATE = 48_000
-SAMPLES_PER_FRAME = 960
-BYTES_PER_SAMPLE = 2
-BYTES_PER_FRAME = SAMPLES_PER_FRAME * BYTES_PER_SAMPLE
-MAX_INPUT_BYTES = SAMPLE_RATE * BYTES_PER_SAMPLE * 2  # two seconds
 MAX_OUTPUT_FRAMES = 48  # one second at 20 ms
 SIDEBAND_ATTEMPTS = 5
 SIDEBAND_CONNECT_TIMEOUT_S = 15.0
@@ -201,119 +194,6 @@ class _TranscriptAssembler:
             return None
         self._emitted[role] = (normalized, final)
         return role, normalized, final
-
-
-class PcmSourceTrack(AudioStreamTrack):
-    """Paced 48 kHz mono PCM16 source with continuous sample timestamps."""
-
-    kind = "audio"
-
-    def __init__(self, max_bytes: int = MAX_INPUT_BYTES) -> None:
-        super().__init__()
-        self._buffer = bytearray()
-        self._buffer_lock = threading.Lock()
-        self._max_bytes = max(BYTES_PER_FRAME, int(max_bytes) // 2 * 2)
-        self._timestamp: int | None = None
-        self._start: float = 0.0
-        self._dropped_bytes = 0
-
-    @property
-    def buffered_bytes(self) -> int:
-        with self._buffer_lock:
-            return len(self._buffer)
-
-    @property
-    def dropped_bytes(self) -> int:
-        return self._dropped_bytes
-
-    def push(self, pcm: bytes) -> None:
-        if not isinstance(pcm, (bytes, bytearray, memoryview)):
-            raise TypeError("PCM input must be bytes-like")
-        data = bytes(pcm)
-        if len(data) % BYTES_PER_SAMPLE:
-            raise ValueError("PCM input must contain whole 16-bit samples")
-        if not data:
-            return
-        with self._buffer_lock:
-            if len(data) >= self._max_bytes:
-                self._dropped_bytes += len(self._buffer) + len(data) - self._max_bytes
-                self._buffer[:] = data[-self._max_bytes:]
-            else:
-                overflow = len(self._buffer) + len(data) - self._max_bytes
-                if overflow > 0:
-                    del self._buffer[:overflow]
-                    self._dropped_bytes += overflow
-                self._buffer.extend(data)
-
-    def clear(self) -> None:
-        with self._buffer_lock:
-            self._buffer.clear()
-
-    def _take(self, size: int) -> bytes | None:
-        with self._buffer_lock:
-            if not self._buffer:
-                return None
-            chunk = bytes(self._buffer[:size])
-            del self._buffer[:size]
-            return chunk.ljust(size, b"\x00")
-
-    async def recv(self) -> AudioFrame:
-        if self.readyState != "live":
-            raise MediaStreamError
-        if self._timestamp is None:
-            self._start = time.monotonic()
-            self._timestamp = 0
-        else:
-            self._timestamp += SAMPLES_PER_FRAME
-            deadline = self._start + (self._timestamp / SAMPLE_RATE)
-            wait = deadline - time.monotonic()
-            if wait > 0:
-                await asyncio.sleep(wait)
-        payload = self._take(BYTES_PER_FRAME)
-        if payload is None:
-            payload = b"\x00" * BYTES_PER_FRAME
-        frame = AudioFrame(format="s16", layout="mono", samples=SAMPLES_PER_FRAME)
-        frame.planes[0].update(payload)
-        frame.pts = self._timestamp
-        frame.sample_rate = SAMPLE_RATE
-        frame.time_base = Fraction(1, SAMPLE_RATE)
-        return frame
-
-
-
-
-def downmix_frame(frame: AudioFrame) -> bytes:
-    """Downmix normalized packed s16 / 48 kHz frames without reading plane padding."""
-    if frame.format.name != "s16" or frame.sample_rate != SAMPLE_RATE:
-        raise ValueError("Remote frame must first be normalized to packed s16 at 48 kHz")
-    valid_bytes = frame.samples * len(frame.layout.channels) * BYTES_PER_SAMPLE
-    data = bytes(frame.planes[0])[:valid_bytes]
-    channels = len(frame.layout.channels)
-    if channels <= 0:
-        return b""
-    if channels == 1:
-        mono = data
-    else:
-        samples = memoryview(data).cast("h")
-        count = len(samples) - (len(samples) % channels)
-        if channels == 2:
-            mono_buffer = array(
-                "h",
-                (
-                    (samples[index] + samples[index + 1]) // 2
-                    for index in range(0, count, 2)
-                ),
-            )
-        else:
-            mono_buffer = array(
-                "h",
-                (
-                    sum(samples[index : index + channels]) // channels
-                    for index in range(0, count, channels)
-                ),
-            )
-        mono = mono_buffer.tobytes()
-    return mono
 
 
 class CodexVoiceSession:
@@ -865,20 +745,14 @@ class CodexVoiceSession:
     # -- outbound media ------------------------------------------------
 
     async def _consume_remote(self, track: Any) -> None:
-        resampler: AudioResampler | None = None
-        layout: str | None = None
+        to_mono = ToMono48k()
         try:
             while not self._closing and not self._closed:
                 frame = await track.recv()
-                if layout != frame.layout.name:
-                    layout = frame.layout.name
-                    resampler = AudioResampler(format="s16", layout=layout, rate=SAMPLE_RATE)
-                assert resampler is not None
-                for normalized in resampler.resample(frame):
-                    pcm = downmix_frame(normalized)
-                    if pcm:
-                        self._output.append(pcm)
-                        self._output_ready.set()
+                pcm = to_mono.convert(frame)
+                if pcm:
+                    self._output.append(pcm)
+                    self._output_ready.set()
         except asyncio.CancelledError:
             raise
         except MediaStreamError:
@@ -1036,9 +910,6 @@ __all__ = [
     "CodexVoiceSession",
     "CONTEXT_CHUNK_BYTES",
     "LIVE_MODEL",
-    "PcmSourceTrack",
-    "SAMPLE_RATE",
-    "SAMPLES_PER_FRAME",
     "VoiceSessionClosed",
     "VoiceSessionError",
     "VoiceSessionNotReady",
@@ -1046,6 +917,5 @@ __all__ = [
     "VoiceSignalingError",
     "chunk_utf8",
     "codex_base_url",
-    "downmix_frame",
     "parse_live_call_id",
 ]

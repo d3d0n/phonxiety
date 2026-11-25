@@ -11,7 +11,7 @@ from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import InvalidStatus
 
 from phonxiety.device import AUDIO_HEADER, DeviceHub, WebSocketListener
-from phonxiety.codec import OpusEncoder
+from phonxiety.audio.opus import OpusEncoder
 from phonxiety.tls import device_identity, server_context
 
 TOKEN = "device-secret"
