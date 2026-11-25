@@ -115,14 +115,17 @@ internal object IrohSupport {
                         if (continuation.isActive) continuation.resume(Unit)
                     }
                 }
-                continuation.invokeOnCancellation { unregister(manager, callback) }
                 try {
                     manager.registerDefaultNetworkCallback(callback)
                 } catch (_: Exception) {
                     // The callback table is full or the service is gone: bind now
                     // instead of waiting out the deadline without any signal.
                     if (continuation.isActive) continuation.resume(Unit)
+                    return@suspendCancellableCoroutine
                 }
+                // Installed only once registered: a cancellation that came first
+                // runs this right away, so the callback never outlives the wait.
+                continuation.invokeOnCancellation { unregister(manager, callback) }
             }
         }
     }
