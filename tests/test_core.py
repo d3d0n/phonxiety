@@ -517,6 +517,24 @@ class ControllerTests(_ControllerCase):
         self.assertEqual(await self._goodbye_with_review(voice), 0)
         self.assertFalse(self.device.disconnect_requested.is_set())
 
+    async def test_speech_right_after_the_turn_end_cancels_the_pending_review(self) -> None:
+        call_id, voice = await self._active()
+        voice.review_at_turn_end = True
+        reviews = 0
+
+        async def review(transcript: list[dict], tools: dict) -> str:
+            nonlocal reviews
+            reviews += 1
+            return "WAIT"
+
+        self.tasks.review_handler = review
+        await voice.callbacks.transcript("assistant", "Спасибо, до свидания.", True)
+        await voice.callbacks.turn_done("assistant")
+        # The other party starts a new question before the supervisor picked the review up.
+        await voice.callbacks.transcript("user", "А подождите, ещё", False)
+        await asyncio.sleep(0.5)
+        self.assertEqual(reviews, 0)
+
 
 class QuietLineTests(_ControllerCase):
     review_quiet = 0.05

@@ -501,6 +501,8 @@ class CallController:
     def _activity(self, call: _Call, now: float) -> None:
         """Record speech or transcript progress; a review of the quiet line is stale after it."""
         call.last_activity = now
+        # A turn-end review not started yet is stale too: _turn_done sets it after this call.
+        call.review_now = False
         if call.work_is_review and call.work_task is not None and not call.work_task.done():
             call.generation += 1
             self._cancel(call.work_task)
