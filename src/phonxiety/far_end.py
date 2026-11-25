@@ -12,25 +12,29 @@ import re
 IVR = "ivr"
 VOICEMAIL = "voicemail"
 
-# Russian, Uzbek (Latin and Cyrillic) and English menu and mailbox wording.
-_PHRASES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    (VOICEMAIL, (
-        "после сигнала", "оставьте сообщение", "оставьте ваше сообщение", "голосовой почт",
-        "абонент не может ответить", "signaldan so'ng", "xabar qoldiring",
-        "leave a message", "leave your message", "after the tone", "after the beep", "voicemail",
-    )),
-    (IVR, (
-        "нажмите", "для выбора", "наберите добавочный", "оставайтесь на линии",
-        "ваш звонок очень важен", "bosing", "tanlash uchun", "босинг",
-        "press ", "for english", "please hold", "your call is important", "dial the extension",
-    )),
+# Only wording a person would not use counts. "Please hold" or "оставайтесь на линии" is what a
+# receptionist says too, so it proves nothing; a menu is recognised by a key it offers.
+_NUMBER = (
+    r"(?:\d|ноль|один|два|три|четыре|пять|шесть|семь|восемь|девять|звездочку|решетку"
+    r"|zero|one|two|three|four|five|six|seven|eight|nine|star|pound|hash"
+    r"|nol|bir|ikki|uch|to'rt|besh|olti|yetti|sakkiz|to'qqiz)"
+)
+_MENU = re.compile(
+    rf"\b(?:нажмите|наберите|press|dial)\s+(?:\S+\s+){{0,2}}?{_NUMBER}\b"  # "нажмите 2", "press the number 1"
+    rf"|\b{_NUMBER}\s+(?:raqamini\s+|tugmasini\s+)?(?:bosing|босинг)\b"  # "1 raqamini bosing"
+    r"|\bдля выбора\b.*\bнажмите\b|\bfor english\b.*\bpress\b"
+)
+_MAILBOX = re.compile(
+    r"после (?:звукового )?сигнала|абонент не может ответить|signaldan so'ng"
+    r"|leave (?:a|your) message after|after the (?:tone|beep)"
 )
 
 
 def classify(text: str) -> str | None:
     """IVR or VOICEMAIL when the wording gives the machine away, otherwise None."""
     normalized = re.sub(r"\s+", " ", text.lower().replace("ё", "е"))
-    for label, phrases in _PHRASES:
-        if any(phrase in normalized for phrase in phrases):
-            return label
+    if _MAILBOX.search(normalized):
+        return VOICEMAIL
+    if _MENU.search(normalized):
+        return IVR
     return None

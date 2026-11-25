@@ -149,8 +149,19 @@ class FarEndTests(unittest.TestCase):
     def test_menu_and_mailbox_wording_is_recognised_and_people_are_not(self) -> None:
         self.assertEqual(far_end.classify("Для выбора русского языка нажмите два"), far_end.IVR)
         self.assertEqual(far_end.classify("O'zbek tilini tanlash uchun 1 raqamini bosing"), far_end.IVR)
+        self.assertEqual(far_end.classify("For English, please press three"), far_end.IVR)
         self.assertEqual(far_end.classify("Оставьте сообщение после сигнала"), far_end.VOICEMAIL)
-        for person in ("Алло, слушаю", "Hilton Tashkent City, reservations, how can I help?", "Нажми один два три."):
+        people = (
+            "Алло, слушаю",
+            "Hilton Tashkent City, reservations, how can I help?",
+            "Нажми один два три.",
+            "Please hold while I check availability",
+            "Пожалуйста, оставайтесь на линии, я уточню",
+            "Your call is important, one moment",
+            "Можете оставить сообщение администратору",
+            "Do you want to leave a message for him?",
+        )
+        for person in people:
             self.assertIsNone(far_end.classify(person), person)
 
 

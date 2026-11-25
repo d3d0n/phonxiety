@@ -411,7 +411,7 @@ class ControllerTests(_ControllerCase):
     async def test_a_menu_is_recognised_and_recorded(self) -> None:
         call_id, voice = await self._active()
         await voice.callbacks.transcript("user", "Для выбора русского языка нажмите 2", True)
-        self.assertTrue(any(text.startswith("FAR_END: an automated menu") for text, _ in voice.contexts))
+        self.assertTrue(any(text.startswith("FAR_END: the other side just offered keys") for text, _ in voice.contexts))
         await self.controller.hangup_call(call_id)
         await self.controller.wait_call_result(call_id, wait_s=2)
         record = json.loads((Path(self.directory.name) / "archive" / f"{call_id}.json").read_text())
