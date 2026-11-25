@@ -96,6 +96,8 @@ class DeviceHub:
         self._dropped_samples = 0
         self._played_samples = 0
         self._queued_samples = 0
+        self._playback_reports = 0
+        self._reports_at_response = 0  # playback reports received before the latest command reply
         self._frames_out = 0
         self._frames_in = 0
         self._send_wait = 0.0
@@ -202,6 +204,7 @@ class DeviceHub:
     async def _receive_event(self, event: dict[str, Any]) -> None:
         kind = event.get("type")
         if kind == "response":
+            self._reports_at_response = self._playback_reports
             future = self._pending.get(str(event.get("id")))
             if future is not None and not future.done():
                 if event.get("ok") is True:
@@ -218,6 +221,7 @@ class DeviceHub:
                     raise DeviceError("Invalid playback counters")
                 self._played_samples = max(self._played_samples, played)
                 self._queued_samples = queued
+                self._playback_reports += 1
                 async with self._progress:
                     self._progress.notify_all()
             return
@@ -488,15 +492,34 @@ class DeviceHub:
         }
 
     async def wait_played(self, call_id: str, target_samples: int, timeout: float = 3) -> bool:
+        """Whether everything handed to the phone has played; the caller has stopped sending.
+
+        Counters cannot prove it: the phone counts its own pre-roll as played and does not count
+        what it dropped on overflow. So: once every queued frame is on the link, a ping round trip
+        proves the phone has them, and a playback report taken after that with nothing queued
+        means the line has played it all. `target_samples` is only reported when that fails.
+        """
+        def done(after: int) -> bool:
+            if not self.connected or self._call_id != call_id:
+                return True
+            # The first report after the ping may have been measured before it; the second was not.
+            return self._playback_reports >= after + 2 and self._queued_samples == 0
+
         try:
             async with asyncio.timeout(timeout):
+                await self._outgoing.join()
+                await self.command("ping", timeout=timeout)
+                # Counted when the reply arrived; a later reply only makes the wait stricter.
+                after = self._reports_at_response
                 async with self._progress:
-                    await self._progress.wait_for(
-                        lambda: self._played_samples >= target_samples or not self.connected or self._call_id != call_id
-                    )
-            return self.connected and self._call_id == call_id and self._played_samples >= target_samples
-        except TimeoutError:
+                    await self._progress.wait_for(lambda: done(after))
+        except (TimeoutError, DeviceError) as exc:
+            log.warning(
+                "call %s: playback not confirmed (%s): played %d of %d samples, %d queued on the phone",
+                call_id, type(exc).__name__, self._played_samples, target_samples, self._queued_samples,
+            )
             return False
+        return self.connected and self._call_id == call_id
 
     async def flush(self, call_id: str) -> None:
         if self._call_id != call_id:

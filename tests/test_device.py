@@ -100,6 +100,44 @@ class DeviceLinkTests(unittest.IsolatedAsyncioTestCase):
             result = await second
             self.assertEqual(result["frames_echoed"], 1)
 
+    async def _drain(self, played: int, queued: int) -> bool:
+        """wait_played against a phone that answers every command and reports these counters."""
+        async with self._connect() as socket:
+            await self._phone(socket)
+            self.hub.begin_stream("call", 4)
+            for _ in range(3):
+                self.hub.send_audio("call", FRAME)
+            waiting = asyncio.create_task(self.hub.wait_played("call", 3 * 960, timeout=1))
+
+            async def answer() -> None:
+                async for message in socket:
+                    if isinstance(message, str) and json.loads(message).get("type") == "command":
+                        await socket.send(json.dumps({"type": "response", "id": json.loads(message)["id"], "ok": True}))
+
+            async def report() -> None:
+                while True:  # like the phone, every so often whatever is going on
+                    await socket.send(json.dumps({
+                        "type": "playback", "call_id": "call", "epoch": 4,
+                        "played_samples": played, "queued_samples": queued,
+                    }))
+                    await asyncio.sleep(0.05)
+
+            phone = [asyncio.create_task(answer()), asyncio.create_task(report())]
+            try:
+                return await waiting
+            finally:
+                for task in phone:
+                    task.cancel()
+                await asyncio.gather(*phone, return_exceptions=True)
+
+    async def test_an_empty_phone_queue_after_the_ping_confirms_playback_despite_dropped_audio(self) -> None:
+        # The phone dropped a frame on overflow: its count never reaches ours, its queue empties.
+        self.assertTrue(await self._drain(played=2 * 960, queued=0))
+
+    async def test_counters_level_with_ours_but_audio_still_queued_is_not_played(self) -> None:
+        # Its pre-roll counts as played, so the counters meet 20 ms before the speech has played.
+        self.assertFalse(await self._drain(played=3 * 960, queued=960))
+
 
 class OpusStreamTests(unittest.IsolatedAsyncioTestCase):
     class _Link:
