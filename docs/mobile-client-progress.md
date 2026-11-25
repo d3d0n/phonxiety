@@ -4,7 +4,7 @@ What each phase of [`mobile-client-plan.md`](mobile-client-plan.md) produced on 
 
 | Phase | Outcome on the phone (plan §10) | Status | Commit | Evidence |
 |---|---|---|---|---|
-| 0 Foundations | Installable APK + module from the build; `mise run phone:install` still works | in progress | | |
+| 0 Foundations | Installable APK + module from the build; `mise run phone:install` still works | done 2026-11-26 | ced079f | `./gradlew assembleDebug assembleRelease testDebugUnitTest lint ktlintCheck` exit 0, 111 unit tests; `mise run phone:build` → `dist/phonxiety-bridge-0.3.0.zip` (APK, allowlist with the five privileged permissions, `customize.sh`, `action.sh`, icon, webroot); `adb install -r` + `mise run phone:install` + reboot: `dumpsys package` shows `/system/priv-app/phonxiety-bridge` and `REBOOT`, `INSTALL_SELF_UPDATES`, `CAPTURE_AUDIO_OUTPUT` granted (`ro.control_privapp_permissions=enforce`); `phonxiety status` → `connected … direct, 35 ms`, `opus audio` |
 | 1 Compose shell | App opens to the new dashboard, nothing lost from the old screen | pending | | |
 | 2 Root layer and one-button setup | No module → "paired and linked" with one tap, one root grant, one reboot — on Magisk, KernelSU (+ metamodule), APatch | pending | | |
 | 3 Reactive engine | A real call completes; dashboard updates without polling | pending | | |
