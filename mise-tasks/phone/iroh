@@ -2,8 +2,8 @@
 #MISE description="Build the iroh-ffi Android library and its Kotlin bindings (arm64-v8a)"
 #
 # Produces two generated, gitignored trees:
-#   android/app/src/main/jniLibs/arm64-v8a/libiroh_ffi.so
-#   android/app/src/iroh/kotlin/            (generated uniffi Kotlin + IrohAndroid)
+#   android/core/device/src/main/jniLibs/arm64-v8a/libiroh_ffi.so
+#   android/core/device/src/iroh/kotlin/            (generated uniffi Kotlin + IrohAndroid)
 #
 # The bindings are built from the iroh-ffi tag that matches the pinned iroh
 # release, so the phone and the Python daemon (PyPI `iroh`) speak the same
@@ -31,9 +31,9 @@ TOOLS="$ROOT/.tools"
 FFI="$TOOLS/iroh-ffi"
 TARGET_DIR="$TOOLS/iroh-build"
 ANDROID="$ROOT/android"
-JNI_DIR="$ANDROID/app/src/main/jniLibs/arm64-v8a"
+JNI_DIR="$ANDROID/core/device/src/main/jniLibs/arm64-v8a"
 JNI_LIB="$JNI_DIR/libiroh_ffi.so"
-KOTLIN_OUT="$ANDROID/app/src/iroh/kotlin"
+KOTLIN_OUT="$ANDROID/core/device/src/iroh/kotlin"
 STAMP="$TARGET_DIR/.iroh-android.stamp"
 
 FORCE=0

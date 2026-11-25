@@ -1,6 +1,5 @@
 package com.phonxiety.bridge
 
-import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.content.res.ColorStateList
@@ -10,17 +9,19 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.telephony.SubscriptionManager
-import com.phonxiety.bridge.net.DeviceLink
-import com.phonxiety.bridge.net.IrohSupport
 import android.telephony.TelephonyManager
 import android.view.View
 import android.view.WindowInsets
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.ComponentActivity
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
+import com.phonxiety.bridge.device.R as DeviceR
+import com.phonxiety.bridge.net.IrohSupport
+import dagger.hilt.android.AndroidEntryPoint
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -30,7 +31,8 @@ import java.util.concurrent.Executors
  * unpairs.  The bearer token is never rendered, and iroh calls stay off the
  * main thread.
  */
-class MainActivity : Activity() {
+@AndroidEntryPoint
+class MainActivity : ComponentActivity() {
     private companion object {
         private const val PERMISSION_REQUEST = 0x5041
         private const val REFRESH_INTERVAL_MS = 1_000L
@@ -79,27 +81,27 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.setDecorFitsSystemWindows(false)
-        setContentView(R.layout.activity_main)
+        setContentView(DeviceR.layout.activity_main)
 
-        val root = findViewById<View>(R.id.root)
-        scroll = findViewById(R.id.scroll)
-        column = findViewById(R.id.column)
-        hero = findViewById(R.id.hero)
-        heroDot = findViewById(R.id.hero_dot)
-        heroTitle = findViewById(R.id.hero_title)
-        heroSupport = findViewById(R.id.hero_support)
-        heroMeta = findViewById(R.id.hero_meta)
-        computerSection = findViewById(R.id.computer_section)
-        pairedWithValue = findViewById(R.id.paired_with_value)
-        connectionValue = findViewById(R.id.connection_value)
-        callPermissionsValue = findViewById(R.id.call_permissions_value)
-        systemAccessValue = findViewById(R.id.system_access_value)
-        simValue = findViewById(R.id.sim_value)
-        grantButton = findViewById(R.id.grant_button)
-        primaryAction = findViewById(R.id.primary_action)
-        pairAnotherAction = findViewById(R.id.pair_another_action)
-        unpairAction = findViewById(R.id.unpair_action)
-        footer = findViewById(R.id.footer)
+        val root = findViewById<View>(DeviceR.id.root)
+        scroll = findViewById(DeviceR.id.scroll)
+        column = findViewById(DeviceR.id.column)
+        hero = findViewById(DeviceR.id.hero)
+        heroDot = findViewById(DeviceR.id.hero_dot)
+        heroTitle = findViewById(DeviceR.id.hero_title)
+        heroSupport = findViewById(DeviceR.id.hero_support)
+        heroMeta = findViewById(DeviceR.id.hero_meta)
+        computerSection = findViewById(DeviceR.id.computer_section)
+        pairedWithValue = findViewById(DeviceR.id.paired_with_value)
+        connectionValue = findViewById(DeviceR.id.connection_value)
+        callPermissionsValue = findViewById(DeviceR.id.call_permissions_value)
+        systemAccessValue = findViewById(DeviceR.id.system_access_value)
+        simValue = findViewById(DeviceR.id.sim_value)
+        grantButton = findViewById(DeviceR.id.grant_button)
+        primaryAction = findViewById(DeviceR.id.primary_action)
+        pairAnotherAction = findViewById(DeviceR.id.pair_another_action)
+        unpairAction = findViewById(DeviceR.id.unpair_action)
+        footer = findViewById(DeviceR.id.footer)
 
         root.setOnApplyWindowInsetsListener { view, insets ->
             val bars = insets.getInsets(
@@ -115,7 +117,7 @@ class MainActivity : Activity() {
         unpairAction.setOnClickListener { confirmUnpair() }
         grantButton.setOnClickListener { requestMissingPermissions() }
 
-        footer.text = getString(R.string.footer_version, appVersion())
+        footer.text = getString(DeviceR.string.footer_version, appVersion())
         handleIntent(intent)
     }
 
@@ -149,8 +151,8 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(
         requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray,
+        permissions: Array<String>,
+        grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == PERMISSION_REQUEST) refreshStatus()
@@ -192,36 +194,40 @@ class MainActivity : Activity() {
         when {
             !paired -> applyHero(
                 Hero.NOT_PAIRED,
-                getString(R.string.hero_not_paired_title),
-                getString(R.string.hero_not_paired_support),
-                null,
+                getString(DeviceR.string.hero_not_paired_title),
+                getString(DeviceR.string.hero_not_paired_support),
+                null
             )
+
             privilegedMissing.isNotEmpty() || runtimeMissing.isNotEmpty() -> applyHero(
                 Hero.ATTENTION,
-                getString(R.string.hero_attention_title),
+                getString(DeviceR.string.hero_attention_title),
                 attentionSupport(runtimeMissing, privilegedMissing),
-                null,
+                null
             )
+
             callState != null -> applyHero(
                 Hero.CALL,
-                getString(R.string.hero_call_title),
+                getString(DeviceR.string.hero_call_title),
                 getString(callSupport(callState)),
                 meta,
-                metaIsId,
+                metaIsId
             )
+
             linkState == BridgeRuntime.LinkState.CONNECTED -> applyHero(
                 Hero.CONNECTED,
-                getString(R.string.hero_connected_title),
-                getString(R.string.hero_connected_support),
+                getString(DeviceR.string.hero_connected_title),
+                getString(DeviceR.string.hero_connected_support),
                 meta,
-                metaIsId,
+                metaIsId
             )
+
             else -> applyHero(
                 Hero.CONNECTING,
-                getString(R.string.hero_connecting_title),
-                getString(R.string.hero_connecting_support),
+                getString(DeviceR.string.hero_connecting_title),
+                getString(DeviceR.string.hero_connecting_support),
                 meta,
-                metaIsId,
+                metaIsId
             )
         }
 
@@ -229,7 +235,7 @@ class MainActivity : Activity() {
         if (config != null) {
             val pairedWith = when (config) {
                 is BridgeConfig.Address -> config.host
-                is BridgeConfig.Iroh -> shortId ?: getString(R.string.value_none)
+                is BridgeConfig.Iroh -> shortId ?: getString(DeviceR.string.value_none)
             }
             setTextIfChanged(pairedWithValue, pairedWith)
             pairedWithValue.typeface = if (config is BridgeConfig.Iroh) {
@@ -243,7 +249,7 @@ class MainActivity : Activity() {
         if (runtimeMissing.isEmpty()) {
             grantButton.visibility = View.GONE
             callPermissionsValue.visibility = View.VISIBLE
-            setTextIfChanged(callPermissionsValue, getString(R.string.value_granted))
+            setTextIfChanged(callPermissionsValue, getString(DeviceR.string.value_granted))
         } else {
             callPermissionsValue.visibility = View.GONE
             grantButton.visibility = View.VISIBLE
@@ -252,16 +258,16 @@ class MainActivity : Activity() {
         val active = privilegedMissing.isEmpty()
         setTextIfChanged(
             systemAccessValue,
-            getString(if (active) R.string.value_active else R.string.value_module_inactive),
+            getString(if (active) DeviceR.string.value_active else DeviceR.string.value_module_inactive)
         )
         val systemAccessColor = getColor(
-            if (active) R.color.on_surface_variant else R.color.error
+            if (active) DeviceR.color.on_surface_variant else DeviceR.color.error
         )
         if (systemAccessValue.currentTextColor != systemAccessColor) {
             systemAccessValue.setTextColor(systemAccessColor)
         }
 
-        setTextIfChanged(simValue, simOperatorName() ?: getString(R.string.value_none))
+        setTextIfChanged(simValue, simOperatorName() ?: getString(DeviceR.string.value_none))
 
         primaryAction.visibility = if (paired) View.GONE else View.VISIBLE
         pairAnotherAction.visibility = if (paired) View.VISIBLE else View.GONE
@@ -275,64 +281,64 @@ class MainActivity : Activity() {
 
     private fun attentionSupport(
         runtimeMissing: List<String>,
-        privilegedMissing: List<String>,
+        privilegedMissing: List<String>
     ): String = if (privilegedMissing.isNotEmpty()) {
-        getString(R.string.hero_attention_module)
+        getString(DeviceR.string.hero_attention_module)
     } else {
         getString(
-            R.string.hero_attention_permission,
-            getString(Permissions.labelRes(runtimeMissing.first())),
+            DeviceR.string.hero_attention_permission,
+            getString(Permissions.labelRes(runtimeMissing.first()))
         )
     }
 
     private fun callSupport(state: String): Int = when (state) {
-        "dialing" -> R.string.hero_call_dialing
-        "ending" -> R.string.hero_call_ending
-        else -> R.string.hero_call_active
+        "dialing" -> DeviceR.string.hero_call_dialing
+        "ending" -> DeviceR.string.hero_call_ending
+        else -> DeviceR.string.hero_call_active
     }
 
     /** Route or identity shown under the hero title. */
-    private fun linkMeta(config: BridgeConfig?, route: DeviceLink.Route?): String? {
+    private fun linkMeta(config: BridgeConfig?, route: BridgeRuntime.Route?): String? {
         val paired = config ?: return null
         if (route != null) return routeLabel(route)
         return when (paired) {
             is BridgeConfig.Address -> paired.host
-            is BridgeConfig.Iroh -> shortId ?: getString(R.string.value_none)
+            is BridgeConfig.Iroh -> shortId ?: getString(DeviceR.string.value_none)
         }
     }
 
-    private fun routeLabel(route: DeviceLink.Route): String? {
+    private fun routeLabel(route: BridgeRuntime.Route): String? {
         val rtt = route.rttMs ?: return null
         return getString(
-            if (route.relay) R.string.route_relay else R.string.route_direct,
-            rtt,
+            if (route.relay) DeviceR.string.route_relay else DeviceR.string.route_direct,
+            rtt
         )
     }
 
-    private fun connectionLabel(config: BridgeConfig, route: DeviceLink.Route?): String =
-        when (config) {
-            is BridgeConfig.Address -> getString(
-                if (config.certSha256 != null) {
-                    R.string.connection_address_pinned
-                } else {
-                    R.string.connection_address_system
-                }
-            )
-            is BridgeConfig.Iroh -> getString(
-                when {
-                    route == null -> R.string.value_none
-                    route.relay -> R.string.connection_iroh_relay
-                    else -> R.string.connection_iroh_direct
-                }
-            )
-        }
+    private fun connectionLabel(config: BridgeConfig, route: BridgeRuntime.Route?): String = when (config) {
+        is BridgeConfig.Address -> getString(
+            if (config.certSha256 != null) {
+                DeviceR.string.connection_address_pinned
+            } else {
+                DeviceR.string.connection_address_system
+            }
+        )
+
+        is BridgeConfig.Iroh -> getString(
+            when {
+                route == null -> DeviceR.string.value_none
+                route.relay -> DeviceR.string.connection_iroh_relay
+                else -> DeviceR.string.connection_iroh_direct
+            }
+        )
+    }
 
     private fun applyHero(
         kind: Hero,
         title: String,
         support: String,
         meta: String?,
-        metaIsId: Boolean = false,
+        metaIsId: Boolean = false
     ) {
         setTextIfChanged(heroTitle, title)
         setTextIfChanged(heroSupport, support)
@@ -348,44 +354,48 @@ class MainActivity : Activity() {
             val metaColor: Int
             when (kind) {
                 Hero.CONNECTED -> {
-                    background = R.drawable.bg_hero_primary
-                    titleColor = R.color.on_primary_container
-                    supportColor = R.color.on_primary_container
-                    metaColor = R.color.on_primary_container
+                    background = DeviceR.drawable.bg_hero_primary
+                    titleColor = DeviceR.color.on_primary_container
+                    supportColor = DeviceR.color.on_primary_container
+                    metaColor = DeviceR.color.on_primary_container
                     heroMeta.alpha = 0.75f
-                    setDot(R.color.primary, hollow = false)
+                    setDot(DeviceR.color.primary, hollow = false)
                 }
+
                 Hero.CALL -> {
-                    background = R.drawable.bg_hero_tertiary
-                    titleColor = R.color.on_tertiary_container
-                    supportColor = R.color.on_tertiary_container
-                    metaColor = R.color.on_tertiary_container
+                    background = DeviceR.drawable.bg_hero_tertiary
+                    titleColor = DeviceR.color.on_tertiary_container
+                    supportColor = DeviceR.color.on_tertiary_container
+                    metaColor = DeviceR.color.on_tertiary_container
                     heroMeta.alpha = 0.75f
-                    setDot(R.color.on_tertiary_container, hollow = false)
+                    setDot(DeviceR.color.on_tertiary_container, hollow = false)
                 }
+
                 Hero.CONNECTING -> {
-                    background = R.drawable.bg_hero_neutral
-                    titleColor = R.color.on_surface
-                    supportColor = R.color.on_surface
-                    metaColor = R.color.on_surface_variant
+                    background = DeviceR.drawable.bg_hero_neutral
+                    titleColor = DeviceR.color.on_surface
+                    supportColor = DeviceR.color.on_surface
+                    metaColor = DeviceR.color.on_surface_variant
                     heroMeta.alpha = 1f
-                    setDot(R.color.outline, hollow = false)
+                    setDot(DeviceR.color.outline, hollow = false)
                 }
+
                 Hero.NOT_PAIRED -> {
-                    background = R.drawable.bg_hero_neutral
-                    titleColor = R.color.on_surface
-                    supportColor = R.color.on_surface
-                    metaColor = R.color.on_surface_variant
+                    background = DeviceR.drawable.bg_hero_neutral
+                    titleColor = DeviceR.color.on_surface
+                    supportColor = DeviceR.color.on_surface
+                    metaColor = DeviceR.color.on_surface_variant
                     heroMeta.alpha = 1f
-                    setDot(R.color.on_surface_variant, hollow = true)
+                    setDot(DeviceR.color.on_surface_variant, hollow = true)
                 }
+
                 Hero.ATTENTION -> {
-                    background = R.drawable.bg_hero_error
-                    titleColor = R.color.on_error_container
-                    supportColor = R.color.on_error_container
-                    metaColor = R.color.on_error_container
+                    background = DeviceR.drawable.bg_hero_error
+                    titleColor = DeviceR.color.on_error_container
+                    supportColor = DeviceR.color.on_error_container
+                    metaColor = DeviceR.color.on_error_container
                     heroMeta.alpha = 0.75f
-                    setDot(R.color.error, hollow = false)
+                    setDot(DeviceR.color.error, hollow = false)
                 }
             }
             hero.setBackgroundResource(background)
@@ -398,7 +408,7 @@ class MainActivity : Activity() {
     }
 
     private fun setDot(colorRes: Int, hollow: Boolean) {
-        heroDot.setBackgroundResource(if (hollow) R.drawable.bg_dot_hollow else R.drawable.bg_dot)
+        heroDot.setBackgroundResource(if (hollow) DeviceR.drawable.bg_dot_hollow else DeviceR.drawable.bg_dot)
         heroDot.backgroundTintList = if (hollow) null else ColorStateList.valueOf(getColor(colorRes))
     }
 
@@ -425,7 +435,7 @@ class MainActivity : Activity() {
         Settings.Global.getFloat(
             contentResolver,
             Settings.Global.ANIMATOR_DURATION_SCALE,
-            1f,
+            1f
         ) != 0f
     } catch (_: Exception) {
         true
@@ -514,11 +524,12 @@ class MainActivity : Activity() {
                 when (result) {
                     is PairingResult.Valid -> {
                         if (label == null && result.config is BridgeConfig.Iroh) {
-                            toast(R.string.pair_error_iroh_invalid)
+                            toast(DeviceR.string.pair_error_iroh_invalid)
                         } else {
                             offerPairing(result.config, label ?: "")
                         }
                     }
+
                     is PairingResult.Invalid -> toast(errorLabelRes(result.error))
                 }
             }
@@ -526,49 +537,58 @@ class MainActivity : Activity() {
     }
 
     private fun errorLabelRes(error: BridgeConfigError): Int = when (error) {
-        BridgeConfigError.PAIR_LINK_INVALID -> R.string.pair_error_link
-        BridgeConfigError.PAIR_URL_MISSING -> R.string.pair_error_url_missing
-        BridgeConfigError.PAIR_IROH_MISSING -> R.string.pair_error_iroh_missing
-        BridgeConfigError.PAIR_TOKEN_MISSING -> R.string.pair_error_token_missing
-        BridgeConfigError.URL_INVALID -> R.string.pair_error_url_invalid
-        BridgeConfigError.TOKEN_INVALID -> R.string.pair_error_token_invalid
-        BridgeConfigError.CERT_INVALID -> R.string.pair_error_cert_invalid
+        BridgeConfigError.PAIR_LINK_INVALID -> DeviceR.string.pair_error_link
+
+        BridgeConfigError.PAIR_URL_MISSING -> DeviceR.string.pair_error_url_missing
+
+        BridgeConfigError.PAIR_IROH_MISSING -> DeviceR.string.pair_error_iroh_missing
+
+        BridgeConfigError.PAIR_TOKEN_MISSING -> DeviceR.string.pair_error_token_missing
+
+        BridgeConfigError.URL_INVALID -> DeviceR.string.pair_error_url_invalid
+
+        BridgeConfigError.TOKEN_INVALID -> DeviceR.string.pair_error_token_invalid
+
+        BridgeConfigError.CERT_INVALID -> DeviceR.string.pair_error_cert_invalid
+
         BridgeConfigError.PAIR_IROH_INVALID,
-        BridgeConfigError.IROH_INVALID -> R.string.pair_error_iroh_invalid
-        else -> R.string.pair_error_generic
+        BridgeConfigError.IROH_INVALID -> DeviceR.string.pair_error_iroh_invalid
+
+        else -> DeviceR.string.pair_error_generic
     }
 
     private fun offerPairing(candidate: BridgeConfig, label: String) {
         if (BridgeRuntime.currentCallState() != null) {
-            toast(R.string.pair_blocked_call)
+            toast(DeviceR.string.pair_blocked_call)
             return
         }
         val message = when (candidate) {
-            is BridgeConfig.Iroh -> getString(R.string.pair_dialog_iroh_message, label)
+            is BridgeConfig.Iroh -> getString(DeviceR.string.pair_dialog_iroh_message, label)
+
             is BridgeConfig.Address -> {
                 val pinLine = candidate.certSha256
-                    ?.let { getString(R.string.pair_dialog_pin, it.take(16)) }
-                    ?: getString(R.string.pair_dialog_no_pin)
-                getString(R.string.pair_dialog_message, candidate.host, pinLine)
+                    ?.let { getString(DeviceR.string.pair_dialog_pin, it.take(16)) }
+                    ?: getString(DeviceR.string.pair_dialog_no_pin)
+                getString(DeviceR.string.pair_dialog_message, candidate.host, pinLine)
             }
         }
         AlertDialog.Builder(this)
-            .setTitle(R.string.pair_dialog_title)
+            .setTitle(DeviceR.string.pair_dialog_title)
             .setMessage(message)
             .setNegativeButton(android.R.string.cancel, null)
-            .setPositiveButton(R.string.pair_dialog_confirm) { _, _ -> applyPairing(candidate) }
+            .setPositiveButton(DeviceR.string.pair_dialog_confirm) { _, _ -> applyPairing(candidate) }
             .show()
     }
 
     private fun applyPairing(candidate: BridgeConfig) {
         if (BridgeRuntime.currentCallState() != null) {
-            toast(R.string.pair_blocked_call)
+            toast(DeviceR.string.pair_blocked_call)
             return
         }
         val stored = try {
             BridgeConfigLoader.write(this, candidate)
         } catch (_: BridgeConfigException) {
-            toast(R.string.pair_save_failed)
+            toast(DeviceR.string.pair_save_failed)
             return
         }
         BridgeRuntime.rememberPairing(stored.kind)
@@ -576,7 +596,7 @@ class MainActivity : Activity() {
         shortId = null
         BridgeService.stop(this)
         BridgeService.start(this)
-        toast(R.string.pair_saved)
+        toast(DeviceR.string.pair_saved)
         refreshStatus()
     }
 
@@ -591,15 +611,15 @@ class MainActivity : Activity() {
                 .addOnSuccessListener { barcode ->
                     if (isFinishing || isDestroyed) return@addOnSuccessListener
                     val raw = barcode.rawValue
-                    if (raw.isNullOrEmpty()) toast(R.string.scan_empty) else parsePairing(raw)
+                    if (raw.isNullOrEmpty()) toast(DeviceR.string.scan_empty) else parsePairing(raw)
                 }
                 .addOnFailureListener {
                     if (isFinishing || isDestroyed) return@addOnFailureListener
-                    toast(R.string.scan_failed)
+                    toast(DeviceR.string.scan_failed)
                 }
         } catch (_: Exception) {
             // No usable Google Play services on this device.
-            toast(R.string.scan_failed)
+            toast(DeviceR.string.scan_failed)
         }
     }
 
@@ -611,21 +631,21 @@ class MainActivity : Activity() {
 
     private fun confirmUnpair() {
         if (BridgeRuntime.currentCallState() != null) {
-            toast(R.string.pair_blocked_call)
+            toast(DeviceR.string.pair_blocked_call)
             return
         }
         AlertDialog.Builder(this)
-            .setTitle(R.string.unpair_dialog_title)
-            .setMessage(R.string.unpair_dialog_message)
+            .setTitle(DeviceR.string.unpair_dialog_title)
+            .setMessage(DeviceR.string.unpair_dialog_message)
             .setNegativeButton(android.R.string.cancel, null)
-            .setPositiveButton(R.string.unpair_confirm) { _, _ -> unpair() }
+            .setPositiveButton(DeviceR.string.unpair_confirm) { _, _ -> unpair() }
             .show()
     }
 
     private fun unpair() {
         BridgeService.stop(this)
         if (!BridgeConfigLoader.delete(this)) {
-            toast(R.string.unpair_failed)
+            toast(DeviceR.string.unpair_failed)
         }
         BridgeRuntime.forgetPairing()
         shortIdTicket = null

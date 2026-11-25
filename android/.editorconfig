@@ -1,0 +1,8 @@
+root = true
+
+[*.{kt,kts}]
+ktlint_code_style = android_studio
+ktlint_function_naming_ignore_when_annotated_with = Composable
+# The existing bridge code predates the 140-column rule; wrapping is left to
+# the author rather than rewritten by a formatting-only change.
+max_line_length = off

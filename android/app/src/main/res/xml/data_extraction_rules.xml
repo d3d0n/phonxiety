@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    No app data is backup-eligible: the pairing token and the call ledger live
+    in device-protected storage that must not leave the phone.  allowBackup
+    covers pre-12 cloud backups; these rules extend the same refusal to Android
+    12+ cloud backup and device-to-device transfer.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude
+            domain="root"
+            path="." />
+    </cloud-backup>
+    <device-transfer>
+        <exclude
+            domain="root"
+            path="." />
+    </device-transfer>
+</data-extraction-rules>

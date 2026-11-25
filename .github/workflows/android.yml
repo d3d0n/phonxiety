@@ -1,0 +1,111 @@
+name: Android
+
+on:
+  push:
+    branches: [main, "feat/**"]
+    paths:
+      - "android/**"
+      - "mise-tasks/phone/**"
+      - "mise.toml"
+      - ".github/workflows/android.yml"
+  pull_request:
+    paths:
+      - "android/**"
+      - "mise-tasks/phone/**"
+      - "mise.toml"
+      - ".github/workflows/android.yml"
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # Installs cmdline-tools + platform-tools into ANDROID_SDK_ROOT.
+      - uses: android-actions/setup-android@v3
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .tools/iroh-ffi
+            .tools/iroh-build
+            .tools/cargo
+            .tools/android-sdk/ndk
+          key: iroh-${{ runner.os }}-${{ hashFiles('mise-tasks/phone/iroh', 'mise.toml') }}
+          restore-keys: |
+            iroh-${{ runner.os }}-
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.kts', 'android/gradle/libs.versions.toml', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      # Java 17, Gradle 9.6.0 and the Rust toolchain (with the Android target)
+      # all come from mise.toml, the same pins the local build uses.
+      - uses: jdx/mise-action@v3
+        with:
+          install: true
+          cache: true
+
+      # Put the SDK where mise.toml points ANDROID_HOME, using the cmdline-tools
+      # that setup-android already installed.  platform 37.1 is what Compose
+      # 1.13 wants; the NDK is installed up front so the iroh build is cached
+      # work rather than a download.
+      - name: Prepare Android SDK
+        run: |
+          set -euo pipefail
+          SDK_DIR="$GITHUB_WORKSPACE/.tools/android-sdk"
+          mkdir -p "$SDK_DIR/cmdline-tools"
+          ln -sfn "$ANDROID_SDK_ROOT/cmdline-tools/latest" "$SDK_DIR/cmdline-tools/latest"
+          yes | "$SDK_DIR/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK_DIR" \
+            "platforms;android-37.1" "build-tools;37.0.0" "platform-tools" "ndk;29.0.14206865" >/dev/null
+
+      # Same steps as `mise run phone:iroh`: cross-compiles libiroh_ffi.so and
+      # regenerates the uniffi Kotlin bindings into :core:device.
+      - name: Build iroh bindings
+        run: mise run phone:iroh
+
+      - name: Build, test and lint
+        working-directory: android
+        run: |
+          mise exec -- ./gradlew --no-daemon --console=plain \
+            :app:assembleRelease \
+            testDebugUnitTest \
+            lint \
+            :core:designsystem:verifyRoborazziDebug
+
+      # Builds the release APK again (incrementally) and packages the module zip.
+      - name: Package module zip
+        run: mise run phone:build
+
+      - name: Upload APK and module zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: phonxiety-android
+          path: |
+            android/app/build/outputs/apk/release/*.apk
+            dist/phonxiety-bridge-*.zip
+          if-no-files-found: error
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phonxiety-android-reports
+          path: |
+            android/**/build/reports/lint-results*.html
+            android/**/build/reports/tests/**
+            android/**/build/test-results/**
+          if-no-files-found: ignore

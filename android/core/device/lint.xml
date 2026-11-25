@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    `ic_launcher` is an adaptive icon and must live in a -v26 folder so AAPT
+    keeps the <adaptive-icon> resource, even though minSdk 34 makes the version
+    qualifier redundant at runtime.
+
+    JNA must be consumed as `@aar` so libjnidispatch.so ships in the APK; a
+    version catalog cannot express the artifact type, so the dependency is a
+    module-local coordinate built from the catalog version.
+-->
+<lint>
+    <issue id="ObsoleteSdkInt">
+        <ignore path="src/main/res/mipmap-anydpi-v26" />
+    </issue>
+    <issue id="UseTomlInstead">
+        <ignore path="build.gradle.kts" />
+    </issue>
+</lint>

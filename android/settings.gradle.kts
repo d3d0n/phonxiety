@@ -17,4 +17,22 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "phonxiety-android"
+
+// Surfaces and host.
 include(":app")
+include(":feature:onboarding")
+include(":feature:dashboard")
+include(":feature:livecall")
+include(":feature:calls")
+include(":feature:lab")
+include(":feature:settings")
+include(":feature:updates")
+include(":feature:doctor")
+include(":feature:widgets")
+
+// Core layers.
+include(":core:model")
+include(":core:designsystem")
+include(":core:data")
+include(":core:device")
+include(":core:root")

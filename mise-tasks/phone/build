@@ -48,6 +48,27 @@ trap cleanup EXIT
 cp -R "$MAGISK/." "$STAGE/"
 mkdir -p "$STAGE/system/priv-app/phonxiety-bridge"
 cp "$APK" "$STAGE/system/priv-app/phonxiety-bridge/phonxiety-bridge.apk"
+
+# module.prop ships updateJson as a placeholder so the field exists in the manager's update
+# checker only when there is a real document to point at.
+UPDATE_JSON="${PHONXIETY_UPDATE_JSON:-}"
+if [ -n "$UPDATE_JSON" ]; then
+    case "$UPDATE_JSON" in
+        https://*) ;;
+        *) fail "PHONXIETY_UPDATE_JSON must be an https:// URL" ;;
+    esac
+    sed -i.bak "s|^updateJson=.*|updateJson=$UPDATE_JSON|" "$STAGE/module.prop"
+    rm -f "$STAGE/module.prop.bak"
+else
+    sed -i.bak '/^updateJson=/d' "$STAGE/module.prop"
+    rm -f "$STAGE/module.prop.bak"
+fi
+if grep -q '__PHONXIETY_UPDATE_JSON__' "$STAGE/module.prop"; then
+    fail "updateJson placeholder was not resolved in module.prop"
+fi
+
+chmod 0755 "$STAGE/action.sh"
+find "$STAGE/webroot" "$STAGE/icon" -type f -exec chmod 0644 {} +
 chmod 0644 "$STAGE/module.prop" \
     "$STAGE/system/priv-app/phonxiety-bridge/phonxiety-bridge.apk" \
     "$STAGE/system/etc/permissions/privapp-permissions-com.phonxiety.bridge.xml"

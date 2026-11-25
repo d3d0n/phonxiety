@@ -2,16 +2,20 @@
 <permissions>
     <!--
         Exactly the privileged permissions the framework path uses:
-          CAPTURE_AUDIO_OUTPUT    AudioRecord(VOICE_DOWNLINK) for call RX
-          MODIFY_PHONE_STATE      audio policy permission for TELEPHONY TX
-          CONTROL_INCALL_EXPERIENCE  non-UI InCallService binding
+          CAPTURE_AUDIO_OUTPUT      AudioRecord(VOICE_DOWNLINK) for call RX
+          MODIFY_PHONE_STATE        audio policy permission for TELEPHONY TX
+          CONTROL_INCALL_EXPERIENCE non-UI InCallService binding
+          INSTALL_SELF_UPDATES      PackageInstaller session for APK-only updates
+          REBOOT                    reboot after a module install (PowerManager)
         Runtime permissions (RECORD_AUDIO, CALL_PHONE, READ_PHONE_STATE,
         POST_NOTIFICATIONS) are requested by the app or granted by the
-        phone:pair task.
+        phone:pair task. INSTALL_PACKAGES is deliberately not granted.
     -->
     <privapp-permissions package="com.phonxiety.bridge">
         <permission name="android.permission.CAPTURE_AUDIO_OUTPUT" />
         <permission name="android.permission.MODIFY_PHONE_STATE" />
         <permission name="android.permission.CONTROL_INCALL_EXPERIENCE" />
+        <permission name="android.permission.INSTALL_SELF_UPDATES" />
+        <permission name="android.permission.REBOOT" />
     </privapp-permissions>
 </permissions>

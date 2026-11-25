@@ -1,6 +1,7 @@
 #!/system/bin/sh
-# Sourced by the Magisk module installer (BusyBox ash, standalone mode).
+# Sourced by the Magisk/KernelSU/APatch module installer (BusyBox ash, standalone mode).
 # Do not exit: the installer still has cleanup to perform.
+# No MAGISK_VER checks: KernelSU and APatch fake that variable with different values.
 
 if [ "$API" -lt 34 ]; then
     abort "phonxiety bridge requires Android 14 (API 34) or newer; found API $API"
@@ -15,6 +16,8 @@ if [ ! -f "$MODPATH/system/etc/permissions/privapp-permissions-com.phonxiety.bri
 fi
 
 set_perm_recursive "$MODPATH/system" 0 0 0755 0644
+set_perm "$MODPATH/action.sh" 0 0 0755
+set_perm_recursive "$MODPATH/webroot" 0 0 0755 0644
 
 ui_print "- phonxiety bridge is a privileged app; the system partition overlay is active after reboot"
 ui_print "- After the reboot open Phonxiety and pair it with the daemon"

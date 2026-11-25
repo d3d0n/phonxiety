@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+        Lint analyses this library's own manifest, so the privileged permissions the root code
+        uses are declared here; the app manifest carries them too and the merger deduplicates.
+        REBOOT: PowerManager.reboot() in PowerManagerRebooter.
+        INSTALL_SELF_UPDATES: the app's own APK updater, which the module allowlist grants.
+    -->
+    <uses-permission
+        android:name="android.permission.REBOOT"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission
+        android:name="android.permission.INSTALL_SELF_UPDATES"
+        tools:ignore="ProtectedPermissions" />
+
+    <!-- Provider detection reads installed root-manager packages (AndroidPackageInventory). -->
+    <queries>
+        <package android:name="com.topjohnwu.magisk" />
+        <package android:name="me.weishu.kernelsu" />
+        <package android:name="com.rifsxd.ksunext" />
+        <package android:name="me.bmax.apatch" />
+    </queries>
+</manifest>
