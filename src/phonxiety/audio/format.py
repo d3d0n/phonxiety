@@ -21,3 +21,10 @@ def mono_frame(pcm: bytes, sample_rate: int = SAMPLE_RATE) -> AudioFrame:
 def frame_bytes(frame: AudioFrame) -> bytes:
     """The valid samples of a packed s16 frame, without plane padding."""
     return bytes(frame.planes[0])[: frame.samples * len(frame.layout.channels) * BYTES_PER_SAMPLE]
+
+
+def whole_samples(pending: bytes, pcm: bytes) -> tuple[bytes, bytes]:
+    """`pending + pcm` split into whole samples and a dangling byte kept for the next chunk."""
+    data = pending + pcm
+    usable = len(data) - len(data) % BYTES_PER_SAMPLE
+    return data[:usable], data[usable:]

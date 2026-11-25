@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from av import AudioFrame, AudioResampler
 
-from .format import BYTES_PER_SAMPLE, SAMPLE_RATE, frame_bytes, mono_frame
+from .format import SAMPLE_RATE, frame_bytes, mono_frame, whole_samples
 
 
 class Resampler:
@@ -16,12 +16,10 @@ class Resampler:
         self._pending = b""
 
     def convert(self, pcm: bytes) -> bytes:
-        data = self._pending + pcm
-        usable = len(data) - len(data) % BYTES_PER_SAMPLE
-        self._pending = data[usable:]
-        if not usable:
+        whole, self._pending = whole_samples(self._pending, pcm)
+        if not whole:
             return b""
-        return b"".join(frame_bytes(out) for out in self._resampler.resample(mono_frame(data[:usable], self._source_rate)))
+        return b"".join(frame_bytes(out) for out in self._resampler.resample(mono_frame(whole, self._source_rate)))
 
 
 class ToMono48k:

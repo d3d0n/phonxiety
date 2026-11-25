@@ -63,6 +63,11 @@ class OpusTests(unittest.TestCase):
         self.assertEqual(len(packets), 2)
         self.assertEqual([len(decoder.decode(packet)) for packet in packets], [FRAME_BYTES, FRAME_BYTES])
 
+    def test_a_chunk_split_inside_a_sample_loses_nothing(self) -> None:
+        encoder = OpusEncoder(32_000)
+        self.assertEqual(encoder.encode(FRAME[:1001]), [])
+        self.assertEqual(len(encoder.encode(FRAME[1001:])), 1)
+
 
 class PacedOutputTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_burst_plays_at_speech_speed_and_a_barge_in_drops_the_rest(self) -> None:
@@ -82,6 +87,20 @@ class PacedOutputTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(12 <= len(emitted) <= 22, len(emitted))
         self.assertGreater(emitted[-1][0] - emitted[0][0], 0.2)
         self.assertEqual({size for _, size in emitted}, {FRAME_BYTES})
+
+    async def test_a_chunk_split_inside_a_sample_keeps_the_byte(self) -> None:
+        emitted: list[bytes] = []
+
+        async def emit(frame: bytes) -> None:
+            emitted.append(frame)
+
+        output = PacedOutput(emit)
+        output.start()
+        output.feed(FRAME[:1001])
+        output.feed(FRAME[1001:])
+        await asyncio.sleep(0.1)
+        await output.close()
+        self.assertEqual(b"".join(emitted), FRAME)
 
 
 class PcmSourceTrackTests(unittest.IsolatedAsyncioTestCase):

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import av
 
-from .format import FRAME_SAMPLES, SAMPLE_RATE, frame_bytes, mono_frame
+from .format import FRAME_SAMPLES, SAMPLE_RATE, frame_bytes, mono_frame, whole_samples
 
 CODECS = ("pcm", "opus")
 DEFAULT_OPUS_BITRATE = 32_000
@@ -27,10 +27,13 @@ class OpusEncoder:
         self._context.bit_rate = bitrate
         self._context.options = {"application": "voip", "frame_duration": "20"}
         self._fifo = av.AudioFifo()
+        self._pending = b""
         self._pts = 0
 
     def encode(self, pcm: bytes) -> list[bytes]:
-        self._fifo.write(mono_frame(pcm))
+        whole, self._pending = whole_samples(self._pending, pcm)
+        if whole:
+            self._fifo.write(mono_frame(whole))
         packets: list[bytes] = []
         while (frame := self._fifo.read(FRAME_SAMPLES)) is not None:
             frame.pts = self._pts

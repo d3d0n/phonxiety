@@ -16,7 +16,7 @@ from collections.abc import Awaitable, Callable
 
 import av
 
-from .format import FRAME_SAMPLES, SAMPLE_RATE, frame_bytes, mono_frame
+from .format import FRAME_SAMPLES, SAMPLE_RATE, frame_bytes, mono_frame, whole_samples
 
 log = logging.getLogger(__name__)
 LEAD_S = 0.06  # keep this much audio ahead of the playhead to ride out network jitter
@@ -33,6 +33,7 @@ class PacedOutput:
         self._emit = emit
         self._on_drained = on_drained
         self._fifo = av.AudioFifo()
+        self._pending = b""
         self._ready = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._notify_drain = False
@@ -41,13 +42,15 @@ class PacedOutput:
         self._task = asyncio.create_task(self._run(), name="voice-paced-output")
 
     def feed(self, pcm: bytes) -> None:
-        if len(pcm) >= 2:
-            self._fifo.write(mono_frame(pcm[: len(pcm) - len(pcm) % 2]))
+        whole, self._pending = whole_samples(self._pending, pcm)
+        if whole:
+            self._fifo.write(mono_frame(whole))
             self._ready.set()
 
     def clear(self) -> None:
         """Barge-in: drop everything not yet handed to the phone."""
         self._fifo = av.AudioFifo()
+        self._pending = b""
         self._notify_drain = False
 
     def drain_then_notify(self) -> None:
