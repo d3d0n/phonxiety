@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+#MISE description="Link the phonxiety skill into installed agent harnesses and put the CLI on PATH"
+set -euo pipefail
+
+ROOT="${MISE_PROJECT_ROOT:?run this task through mise: mise run skills:install}"
+SKILL="$ROOT/skills/phonxiety"
+CLI="$ROOT/.venv/bin/phonxiety"
+BIN_DIR="$HOME/.local/bin"
+
+die() { printf 'error: %s\n' "$1" >&2; exit 1; }
+note() { printf '%s\n' "$1"; }
+
+[ -f "$SKILL/SKILL.md" ] || die "missing $SKILL/SKILL.md"
+[ -x "$CLI" ] || die "the CLI is not installed in .venv; run: mise run setup"
+
+# Skill directories of the harnesses present on this machine: <harness home> <skills dir>.
+linked=0
+while read -r home skills; do
+    [ -d "$home" ] || continue
+    mkdir -p "$skills"
+    ln -sfn "$SKILL" "$skills/phonxiety"
+    note "skill   $skills/phonxiety"
+    linked=$((linked + 1))
+done <<EOF
+$HOME/.claude $HOME/.claude/skills
+$HOME/.codex $HOME/.codex/skills
+$HOME/.omp $HOME/.omp/agent/skills
+EOF
+[ "$linked" -gt 0 ] || note "no Claude Code, Codex or Oh My Pi home found; link $SKILL by hand"
+
+mkdir -p "$BIN_DIR"
+ln -sfn "$CLI" "$BIN_DIR/phonxiety"
+note "cli     $BIN_DIR/phonxiety"
+case ":$PATH:" in
+    *":$BIN_DIR:"*) ;;
+    *) note "add $BIN_DIR to PATH so agents can run phonxiety" ;;
+esac

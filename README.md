@@ -161,6 +161,10 @@ No iroh? `uv run phonxiety pair --lan`, `--tailscale` or `--host` pairs by addre
 
 ---
 
+## Skill
+
+Agents that read skills (Claude Code, Codex, Oh My Pi) can call without MCP: `mise run skills:install` links `skills/phonxiety/SKILL.md` into each harness found on the machine and puts the `phonxiety` CLI into `~/.local/bin`. The skill covers checking the line, writing the brief, waiting for the result and reading the archive.
+
 ## Tools
 
 Three tools. A call outlives the tool call that started it, so placing and waiting are separate.
