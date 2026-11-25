@@ -124,10 +124,11 @@ class IrohLink:
 
 
 class IrohListener:
-    def __init__(self, hub: DeviceHub, token: str, state_dir: Path) -> None:
+    def __init__(self, hub: DeviceHub, token: str, state_dir: Path, relay_urls: tuple[str, ...] = ()) -> None:
         self._hub = hub
         self._token = token
         self._state_dir = state_dir
+        self._relay_urls = relay_urls
         self._endpoint: Any = None
         self._accepting: asyncio.Task[None] | None = None
         self._serving: set[asyncio.Task[None]] = set()
@@ -139,9 +140,11 @@ class IrohListener:
     async def start(self) -> None:
         # iroh completes its futures from its own threads and needs this loop named explicitly.
         iroh.iroh_ffi.uniffi_set_event_loop(asyncio.get_running_loop())
-        self._endpoint = await iroh.Endpoint.bind(
-            iroh.EndpointOptions(preset=iroh.preset_n0(), alpns=[ALPN], secret_key=_secret_key(self._state_dir))
-        )
+        options = iroh.EndpointOptions(preset=iroh.preset_n0(), alpns=[ALPN], secret_key=_secret_key(self._state_dir))
+        if self._relay_urls:
+            # Own relays replace n0's public ones; address lookup still publishes the home relay.
+            options.relay_mode = iroh.RelayMode.custom_from_urls(list(self._relay_urls))
+        self._endpoint = await iroh.Endpoint.bind(options)
         self._accepting = asyncio.create_task(self._accept(), name="iroh-accept")
 
     async def ticket(self) -> str:

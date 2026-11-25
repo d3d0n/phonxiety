@@ -151,6 +151,7 @@ Settings:
 - `PHONXIETY_VOICE` — the voice, `sol` by default.
 - `PHONXIETY_AUDIO_CODEC` — call audio on the phone link: `opus` by default, or `pcm`. Opus is used only when the phone app offers it.
 - `PHONXIETY_OPUS_BITRATE` — Opus bitrate in bit/s, `32000` by default, 6000 to 128000.
+- `PHONXIETY_IROH_RELAYS` — comma-separated iroh relay URLs that replace n0's public relays, e.g. your own `iroh-relay` behind HTTPS. Public relays are rate-limited and may not carry PCM call audio.
 - `PHONXIETY_STATE_DIR` — calls, keys and logs; `~/.local/share/phonxiety` by default.
 - `PHONXIETY_PORT` — MCP and health on loopback, `18762` by default.
 

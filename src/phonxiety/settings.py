@@ -76,6 +76,7 @@ class Settings:
     voice: str = "sol"
     audio_codec: str = "opus"
     opus_bitrate: int = DEFAULT_OPUS_BITRATE
+    iroh_relays: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -98,6 +99,7 @@ class Settings:
             voice=os.environ.get("PHONXIETY_VOICE", "sol"),
             audio_codec=_codec(),
             opus_bitrate=_opus_bitrate(),
+            iroh_relays=tuple(url.strip() for url in os.environ.get("PHONXIETY_IROH_RELAYS", "").split(",") if url.strip()),
         )
 
     @property

@@ -312,7 +312,7 @@ def create_app(settings: Settings) -> Starlette:
     cert_path, key_path, fingerprint = device_identity(settings.state_dir)
     device_tls = server_context(cert_path, key_path)
     address_link = WebSocketListener(controller.device, settings.device_token)
-    iroh_link = IrohListener(controller.device, settings.device_token, settings.state_dir)
+    iroh_link = IrohListener(controller.device, settings.device_token, settings.state_dir, settings.iroh_relays)
 
     @asynccontextmanager
     async def controller_lifespan(_app: Any) -> AsyncIterator[None]:
