@@ -13,9 +13,19 @@ from unittest import mock
 
 from pydantic import ValidationError
 
-from phonxiety.controller import CallController
+from phonxiety import controller as controller_module
+from phonxiety.controller import (
+    CLOSE_CANCEL_BUDGET_S,
+    CLOSE_TASK_BUDGET_S,
+    CallController,
+)
 from phonxiety.models import CallRequest, CallState
 from phonxiety.store import CallStore
+
+
+# close() spends at most CLOSE_TASK_BUDGET_S + CLOSE_CANCEL_BUDGET_S on background work before
+# it closes the device and the store; every fixture deadline below must be longer than that.
+TEARDOWN_LIMIT_S = 30.0
 
 
 def request(key: str = "request-a") -> CallRequest:
@@ -100,13 +110,17 @@ class _Device:
         self.audio_call: str | None = None
         self.drain_target = 0
         self.dtmf_gate: asyncio.Event | None = None
+        self.dtmf_entered = asyncio.Event()
         self.arrived = asyncio.Event()
+        self.arrived_waiting = asyncio.Event()
         self.probes: list[bool] = []
+        self.probes_started = asyncio.Event()
 
     def status(self) -> dict[str, Any]:
         return {"connected": self.connected}
 
     async def wait_connected(self, timeout: float) -> bool:
+        self.arrived_waiting.set()
         try:
             async with asyncio.timeout(timeout):
                 await self.arrived.wait()
@@ -116,6 +130,7 @@ class _Device:
         return True
 
     async def link_test(self, seconds: float) -> dict[str, Any]:
+        self.probes_started.set()
         healthy = self.probes.pop(0) if self.probes else False
         return {"healthy": healthy, "route": "direct test", "frames_sent": 50, "frames_echoed": 50 if healthy else 2}
 
@@ -124,6 +139,7 @@ class _Device:
         if command == "dial":
             self.dialled.set()
         elif command == "dtmf" and self.dtmf_gate is not None:
+            self.dtmf_entered.set()
             await self.dtmf_gate.wait()
         elif command == "hangup":
             self.disconnect_requested.set()
@@ -245,11 +261,23 @@ class _ControllerCase(unittest.IsolatedAsyncioTestCase):
         await self.controller.start()
 
     async def asyncTearDown(self) -> None:
+        # Release every gate: an assertion that failed before a test opened its gate must not
+        # leave a task parked inside close().
         self.device.allow_drain.set()
-        if self.tasks.summary_gate:
+        if self.start_gate is not None:
+            self.start_gate.set()
+        if self.device.dtmf_gate is not None:
+            self.device.dtmf_gate.set()
+        if self.tasks.summary_gate is not None:
             self.tasks.summary_gate.set()
-        await self.controller.close()
+        async with asyncio.timeout(TEARDOWN_LIMIT_S):
+            await self.controller.close()
         self.directory.cleanup()
+
+    async def _settle(self, turns: int = 50) -> None:
+        """Let tasks the daemon just started reach their next wait; no wall-clock timing."""
+        for _ in range(turns):
+            await asyncio.sleep(0)
 
     async def _active(self) -> tuple[str, _Voice]:
         call = await self.controller.place_call(request())
@@ -282,7 +310,7 @@ class ControllerTests(_ControllerCase):
     async def test_call_waits_for_a_phone_that_is_reconnecting(self) -> None:
         self.device.connected = False
         call = await self.controller.place_call(request())
-        await asyncio.sleep(0.05)
+        await asyncio.wait_for(self.device.arrived_waiting.wait(), 1)  # the call is waiting for the phone
         self.assertFalse(self.device.dialled.is_set())
         self.device.arrived.set()
         await asyncio.wait_for(self.device.dialled.wait(), 1)
@@ -401,7 +429,7 @@ class ControllerTests(_ControllerCase):
         self.device.dtmf_gate = asyncio.Event()
         await voice.callbacks.delegation("k1", "Press 1 2 3 for the menu")
         pressing = self.controller._calls[call_id].work_task
-        await asyncio.sleep(0.05)  # the first press is now in flight on the phone
+        await asyncio.wait_for(self.device.dtmf_entered.wait(), 1)  # the first press is in flight
         await voice.callbacks.delegation("k2", "DTMF 123")  # the same request heard twice
         self.assertFalse(pressing.done())  # not cancelled by the repeat
         self.device.dtmf_gate.set()
@@ -487,8 +515,16 @@ class ControllerTests(_ControllerCase):
         self.assertEqual(final["result_status"], "ready")
         self.assertEqual(final["task_outcome"], "incomplete")
 
-    async def _goodbye_with_review(self, voice: _Voice) -> int:
-        """The agent says goodbye; how many reviews ran within half a second (each finishes the call)."""
+    async def _goodbye(self, voice: _Voice, review: Any) -> None:
+        """The agent says goodbye and finishes its turn; `review` counts and ends the call."""
+        self.tasks.review_handler = review
+        self.device.allow_drain.set()
+        await voice.callbacks.transcript("assistant", "Спасибо, до свидания.", True)
+        await voice.callbacks.turn_done("assistant")
+
+    async def test_a_voice_that_cannot_hang_up_is_hung_up_right_after_its_goodbye(self) -> None:
+        call_id, voice = await self._active()
+        voice.review_at_turn_end = True
         reviews = 0
 
         async def review(transcript: list[dict], tools: dict) -> str:
@@ -499,25 +535,29 @@ class ControllerTests(_ControllerCase):
             })
             return ""
 
-        self.tasks.review_handler = review
-        self.device.allow_drain.set()
-        await voice.callbacks.transcript("assistant", "Спасибо, до свидания.", True)
-        await voice.callbacks.turn_done("assistant")
-        await asyncio.sleep(0.5)
-        return reviews
-
-    async def test_a_voice_that_cannot_hang_up_is_hung_up_right_after_its_goodbye(self) -> None:
-        call_id, voice = await self._active()
-        voice.review_at_turn_end = True
-        self.assertEqual(await self._goodbye_with_review(voice), 1)  # long before the 30 s quiet review
+        await self._goodbye(voice, review)
+        # The turn-end review finishes the call itself; the 30 s quiet review never runs.
         result = await self.controller.wait_call_result(call_id, wait_s=2)
         self.assertEqual((result["state"], result["task_outcome"]), ("ended", "succeeded"))
+        self.assertEqual(reviews, 1)
         self.assertTrue(self.device.disconnect_requested.is_set())
 
     async def test_a_voice_that_hangs_up_itself_gets_no_review_at_turn_end(self) -> None:
         call_id, voice = await self._active()
-        self.assertEqual(await self._goodbye_with_review(voice), 0)
+        reviews = 0
+
+        async def review(transcript: list[dict], tools: dict) -> str:
+            nonlocal reviews
+            reviews += 1
+            return "WAIT"
+
+        await self._goodbye(voice, review)
+        await self._settle()  # a review the daemon dispatched would have started by now
+        self.assertEqual(reviews, 0)
+        self.assertFalse(self.controller._calls[call_id].review_now)
         self.assertFalse(self.device.disconnect_requested.is_set())
+        await self.controller.hangup_call(call_id)
+        await self.controller.wait_call_result(call_id, wait_s=1)
 
     async def test_speech_right_after_the_turn_end_cancels_the_pending_review(self) -> None:
         call_id, voice = await self._active()
@@ -534,8 +574,10 @@ class ControllerTests(_ControllerCase):
         await voice.callbacks.turn_done("assistant")
         # The other party starts a new question before the supervisor picked the review up.
         await voice.callbacks.transcript("user", "А подождите, ещё", False)
-        await asyncio.sleep(0.5)
+        await self._settle()  # the queued review would have started by now if it survived
         self.assertEqual(reviews, 0)
+        await self.controller.hangup_call(call_id)
+        await self.controller.wait_call_result(call_id, wait_s=1)
 
 
 class QuietLineTests(_ControllerCase):
@@ -691,11 +733,82 @@ class LinkReadinessTests(_ControllerCase):
     async def test_a_link_drop_while_waiting_does_not_fail_the_call(self) -> None:
         self.device.probes = [False, True]
         call = await self.controller.place_call(request())
-        await asyncio.sleep(0.05)
+        await asyncio.wait_for(self.device.probes_started.wait(), 1)  # the readiness probe is in flight
         await self.controller.on_device_event({"type": "device_disconnected"})
         await asyncio.wait_for(self.device.dialled.wait(), 2)
         await self.controller.hangup_call(call["call_id"])
         await self.controller.wait_call_result(call["call_id"], wait_s=1)
+
+
+class ShutdownBudgetTests(unittest.TestCase):
+    def test_the_fixture_deadline_outlives_the_close_budget(self) -> None:
+        # A teardown shorter than close()'s own budget would report the fixture, not the stuck task.
+        self.assertGreater(TEARDOWN_LIMIT_S, CLOSE_TASK_BUDGET_S + CLOSE_CANCEL_BUDGET_S)
+
+
+class CloseTests(unittest.IsolatedAsyncioTestCase):
+    """Shutdown with work that does not unwind on its own, as after an assertion left a gate shut."""
+
+    async def asyncSetUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory()
+        self.store = CallStore(Path(self.directory.name) / "calls.db")
+        self.device = _Device()
+        self.tasks = _Tasks()
+        self.start_gate = asyncio.Event()
+        self.voice_created = asyncio.Event()
+        self.voices: list[_Voice] = []
+
+        def factory(instructions: str, brief: str, callbacks: Any) -> _Voice:
+            voice = _Voice(callbacks, self.start_gate)
+            self.voices.append(voice)
+            self.voice_created.set()
+            return voice
+
+        self.controller = CallController(
+            self.store, self.device, factory, self.tasks, device_wait=0.3, link_wait=0.4,
+        )
+        await self.controller.start()
+
+    async def asyncTearDown(self) -> None:
+        # Every gate is left shut on purpose: close() has to end anyway.
+        async with asyncio.timeout(TEARDOWN_LIMIT_S):
+            await self.controller.close()
+        self.store.close()
+        self.directory.cleanup()
+
+    async def test_close_ends_a_call_parked_inside_voice_start(self) -> None:
+        await self.controller.place_call(request())
+        await asyncio.wait_for(self.voice_created.wait(), 1)
+        self.assertTrue(self.voices)
+        async with asyncio.timeout(TEARDOWN_LIMIT_S):
+            await self.controller.close()
+        self.assertFalse(self.device.connected)
+        self.assertEqual(self.controller._tasks, set())
+
+    async def test_close_names_a_task_that_outlives_cancellation_and_still_cleans_up(self) -> None:
+        async def stubborn() -> None:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                await asyncio.sleep(30)  # ignores the cancellation, as a blocked thread-backed call does
+
+        task = asyncio.create_task(stubborn(), name="stubborn-test")
+        self.controller._tasks.add(task)
+        with mock.patch.object(controller_module, "CLOSE_TASK_BUDGET_S", 0.05), \
+                mock.patch.object(controller_module, "CLOSE_CANCEL_BUDGET_S", 0.05), \
+                mock.patch.object(controller_module.log, "warning") as warning, \
+                mock.patch.object(self.store, "close") as store_close:
+            async with asyncio.timeout(TEARDOWN_LIMIT_S):
+                await self.controller.close()
+        try:
+            self.assertTrue(any("stubborn-test" in str(call) for call in warning.call_args_list), warning.call_args_list)
+            self.assertFalse(task.done())
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        # Cleanup ran even though the task never stopped.
+        store_close.assert_called_once_with()
+        self.assertFalse(self.device.connected)
 
 
 if __name__ == "__main__":

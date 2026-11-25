@@ -124,16 +124,27 @@ def tailscale_addresses() -> list[str]:
     return _dedupe(found)
 
 
+def route_address() -> str | None:
+    """The address the default route leaves by: the one a LAN peer can reach, and no DNS.
+
+    A UDP connect sends nothing; it only asks the routing table which source address it
+    would use. Cheap enough for a start-up path that must not block.
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("192.0.2.1", 9))
+            return probe.getsockname()[0]
+    except OSError:
+        return None
+
+
 def local_addresses() -> list[str]:
     """Addresses this computer has on its LAN interfaces, loopback excluded."""
     found: list[str] = []
     # The address the default route would use, which the host name does not always resolve to.
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
-            probe.connect(("192.0.2.1", 9))
-            found.append(probe.getsockname()[0])
-    except OSError:
-        pass
+    route = route_address()
+    if route is not None:
+        found.append(route)
     try:
         infos = socket.getaddrinfo(socket.gethostname(), None)
     except OSError:

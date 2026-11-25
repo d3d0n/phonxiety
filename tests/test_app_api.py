@@ -246,6 +246,19 @@ class LinkTestAndProbeTests(_ApiCase):
         status, body = await self.call("POST", "/app/v1/link-test", body={"seconds": 1, "codec": "opus", "bitrate": 999})
         self.assertEqual((status, body["code"]), (400, "invalid_argument"))
 
+    async def test_a_probe_on_a_link_that_stops_reading_is_a_409_not_a_hang(self) -> None:
+        hub = DeviceHub()
+        hub._link = _BlockedSendLink()
+        hub._ready.set()
+        self.device.link_test = hub.link_test
+        try:
+            with mock.patch("phonxiety.device.LINK_WRITE_TIMEOUT_S", 0.05):
+                status, body = await self.call("POST", "/app/v1/link-test", body={"seconds": 1})
+        finally:
+            hub._link = None
+            hub._ready.clear()
+        self.assertEqual((status, body["code"]), (409, "link_test_send_timeout"))
+
     async def test_a_lost_link_is_a_failed_verdict(self) -> None:
         self.device.link_test_result.update({"link_lost": True, "healthy": False, "frames_echoed": 10})
         status, body = await self.call("POST", "/app/v1/link-test", body={"seconds": 1})
@@ -385,9 +398,8 @@ class CallsTests(_ApiCase):
         status, body = await self.call("POST", f"/app/v1/calls/{call_id}/marks", body={"mark": "nonsense"})
         self.assertEqual(status, 400)
         await self.call("POST", f"/app/v1/calls/{call_id}/hangup")
-        async with asyncio.timeout(5):
-            while self.controller.live_call(call_id) is not None:
-                await asyncio.sleep(0.02)
+        await self.controller.wait_call_result(call_id, wait_s=5)
+        self.assertIsNone(self.controller.live_call(call_id))
         record = json.loads((self.state / "calls" / f"{call_id}.json").read_text())
         self.assertEqual([mark["mark"] for mark in record["marks"]], ["agreed"])
         # A mark added after the call ended goes into the archived record itself.
@@ -402,12 +414,20 @@ class CallsTests(_ApiCase):
         self.assertEqual(status, 200)
         self.assertEqual(snapshot["state"], "active")
         since = snapshot["revision"]
+        parking = asyncio.Event()
+        parked = self.controller.wait_change
+
+        async def wait_change(revision: int, timeout: float) -> int:
+            parking.set()
+            return await parked(revision, timeout)
+
         poll = asyncio.create_task(
             self.call("GET", f"/app/v1/calls/{call_id}/events", query={"since": since, "wait_s": 5})
         )
-        await asyncio.sleep(0.05)
-        call = self.controller._calls[call_id]
-        await self.controller._transcript(call, "user", "Friday at three", True)
+        with mock.patch.object(self.controller, "wait_change", wait_change):
+            await asyncio.wait_for(parking.wait(), 2)  # the request is parked in the long poll
+            call = self.controller._calls[call_id]
+            await self.controller._transcript(call, "user", "Friday at three", True)
         status, body = await asyncio.wait_for(poll, 3)
         self.assertEqual(status, 200)
         kinds = [event["type"] for event in body["events"]]
@@ -793,6 +813,11 @@ class _FakeLink:
         self._inbox: asyncio.Queue[Any] = asyncio.Queue()
         self.closed: tuple[int, str] | None = None
         self.finished = asyncio.Event()
+        # Set when the hub comes back to the link for its next message: everything it does
+        # between the hello and that point (the app-token offer) is finished.
+        self.reread = asyncio.Event()
+        self.reads = 0
+        self.blocked: asyncio.Event | None = None
 
     def route(self) -> str:
         return "direct 127.0.0.1, 2 ms"
@@ -801,12 +826,17 @@ class _FakeLink:
         return []
 
     async def recv(self) -> Any:
+        self.reads += 1
+        if self.reads > 1:
+            self.reread.set()
         item = await self._inbox.get()
         if isinstance(item, BaseException):
             raise item
         return item
 
     async def send(self, message: Any) -> None:
+        if self.blocked is not None:
+            await self.blocked.wait()  # the phone stopped reading
         self.sent.append(message)
 
     async def send_datagram(self, data: bytes) -> bool:
@@ -819,6 +849,27 @@ class _FakeLink:
 
     def feed(self, message: Any) -> None:
         self._inbox.put_nowait(message)
+
+
+class _BlockedSendLink:
+    """A DeviceLink whose peer stopped reading: every send waits for a reader that never comes."""
+
+    peer = "iroh:blocked"
+
+    def route(self) -> str:
+        return "direct 10.0.0.2, 3 ms"
+
+    def paths(self) -> list[str]:
+        return []
+
+    async def send(self, message: Any) -> None:
+        await asyncio.Event().wait()
+
+    async def send_datagram(self, data: bytes) -> bool:
+        return False
+
+    async def close(self, code: int, reason: str) -> None:
+        pass
 
 
 class HubTests(unittest.IsolatedAsyncioTestCase):
@@ -852,13 +903,34 @@ class HubTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.hub.info["version"], 3)
 
     async def _app_access(self) -> list[dict[str, Any]]:
-        await asyncio.sleep(0.05)
+        async with asyncio.timeout(2):
+            await self.link.reread.wait()  # the token offer happens before the next read
         return [json.loads(item) for item in self.link.sent if isinstance(item, str) and '"app_access"' in item]
 
     async def test_a_v3_phone_receives_the_current_app_token_on_connect(self) -> None:
         self.hub.app_token_source = lambda: "app-secret"
         await self._hello(app_api=1)
         self.assertEqual(await self._app_access(), [{"type": "app_access", "app_token": "app-secret"}])
+
+    async def test_a_link_that_does_not_take_the_app_token_is_closed_so_the_phone_reconnects(self) -> None:
+        self.hub.app_token_source = lambda: "app-secret"
+        self.link.blocked = asyncio.Event()
+        with mock.patch("phonxiety.device.LINK_WRITE_TIMEOUT_S", 0.05):
+            await self._hello(app_api=1)
+            async with asyncio.timeout(2):
+                await self.serving
+        self.assertEqual(self.link.closed, (1013, "App token delivery timed out"))
+        self.assertFalse(self.hub.connected)
+
+    async def test_a_cancelled_attach_detaches_first_and_ends_cancelled(self) -> None:
+        await self._hello()
+        self.serving.cancel()
+        async with asyncio.timeout(2):
+            with self.assertRaises(asyncio.CancelledError):
+                await self.serving
+        # The detach ran before the cancellation came out, so the next phone is not refused.
+        self.assertFalse(self.hub.connected)
+        self.assertIsNone(self.hub._link)
 
     async def test_no_app_token_goes_to_a_phone_without_the_app_api(self) -> None:
         self.hub.app_token_source = lambda: "app-secret"
@@ -926,8 +998,11 @@ class HubTests(unittest.IsolatedAsyncioTestCase):
     async def test_api_requests_are_answered_off_the_read_loop(self) -> None:
         """A slow request must not hold a fast one behind it, nor the read loop."""
 
+        slow_entered = asyncio.Event()
+
         async def handler(message: dict[str, Any]) -> tuple[int, dict[str, Any]]:
             if message["path"].endswith("/slow"):
+                slow_entered.set()
                 await asyncio.sleep(0.3)
                 return 200, {"slow": True}
             return 200, {"path": message["path"]}
@@ -935,7 +1010,7 @@ class HubTests(unittest.IsolatedAsyncioTestCase):
         self.hub.on_api = handler
         await self._hello()
         self.link.feed(json.dumps({"type": "api", "id": "1", "method": "GET", "path": "/app/v1/slow"}))
-        await asyncio.sleep(0.02)
+        await asyncio.wait_for(slow_entered.wait(), 2)  # the slow request is in flight
         self.link.feed(json.dumps({"type": "api", "id": "2", "method": "GET", "path": "/app/v1/fast"}))
         self.link.feed(json.dumps({"type": "call_state", "call_id": "c1", "state": "dialing"}))
         results = await self._results(2)

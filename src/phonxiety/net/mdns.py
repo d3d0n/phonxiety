@@ -144,10 +144,15 @@ class MdnsAdvertiser:
 
 
 def _first_local_address() -> str | None:
-    from .tailnet import local_addresses  # noqa: PLC0415 - keeps the import graph flat
+    """The address multicast leaves by.
 
-    addresses = local_addresses()
-    return addresses[0] if addresses else None
+    Only the routing table is asked: a host-name lookup can take minutes when DNS is
+    unreachable, and `start()` runs on the daemon's event loop. A phone on the same LAN
+    reaches the daemon by the same interface that carries the advertisement.
+    """
+    from .tailnet import route_address  # noqa: PLC0415 - keeps the import graph flat
+
+    return route_address()
 
 
 def _close(backend: Backend) -> None:

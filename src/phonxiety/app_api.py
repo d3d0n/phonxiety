@@ -461,7 +461,8 @@ class AppApi:
         info = getattr(device, "info", {}) or {}
         stream = bool(getattr(device, "supports_attachments", False))
         link = self._link_info() or {}
-        addresses = addresses_for(self.settings.device_port)
+        # A host-name lookup for the LAN addresses can block for minutes; keep it off the loop.
+        addresses = await asyncio.to_thread(addresses_for, self.settings.device_port)
         return 200, {
             "daemon_version": __version__,
             "protocol": PROTOCOL_VERSION,
@@ -650,7 +651,7 @@ class AppApi:
                     if available else "the iroh endpoint is not bound on this daemon",
                 })
             elif name == "lan":
-                addresses = addresses_for(self.settings.device_port)["lan"]
+                addresses = (await asyncio.to_thread(addresses_for, self.settings.device_port))["lan"]
                 answers.append({
                     "name": "lan",
                     "available": True,

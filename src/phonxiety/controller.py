@@ -22,6 +22,11 @@ from .store import CallStore
 
 log = logging.getLogger(__name__)
 KEYPRESS_COOLDOWN_S = 3.0  # LiveKit's IVR navigator uses the same per-step cooldown
+# Shutdown budget: background work gets CLOSE_TASK_BUDGET_S to finish on its own, then
+# CLOSE_CANCEL_BUDGET_S to unwind after cancellation. Device, agent and store close after
+# that, so a caller bounding close() must allow more than 20 s (tests use 30 s).
+CLOSE_TASK_BUDGET_S = 15.0
+CLOSE_CANCEL_BUDGET_S = 5.0
 
 
 @dataclass(slots=True)
@@ -967,20 +972,34 @@ class CallController:
             task.cancel()
 
     async def close(self) -> None:
+        """Hang up, stop every task, then close the device, the task agent and the store.
+
+        Both task waits are bounded with `asyncio.wait`, which does not wait for the tasks it
+        was watching: `CLOSE_TASK_BUDGET_S` for the work to finish by itself, then
+        `CLOSE_CANCEL_BUDGET_S` for it to unwind once cancelled. Nothing after this point is
+        conditional, so cleanup runs even when a task refuses to stop; such tasks are named
+        in the log and left cancelled.
+        """
         if self._closing:
             return
         self._closing = True
         for call in tuple(self._calls.values()):
             if not call.finalizing:
                 await self.hangup_call(call.call_id, "daemon_stopping")
-        try:
-            async with asyncio.timeout(15):
-                while self._tasks:
-                    await asyncio.gather(*tuple(self._tasks), return_exceptions=True)
-        except TimeoutError:
-            for task in tuple(self._tasks):
+        deadline = time.monotonic() + CLOSE_TASK_BUDGET_S
+        while self._tasks and time.monotonic() < deadline:
+            await asyncio.wait(set(self._tasks), timeout=deadline - time.monotonic())
+        if self._tasks:
+            pending = tuple(self._tasks)
+            for task in pending:
                 task.cancel()
-            await asyncio.gather(*tuple(self._tasks), return_exceptions=True)
+            _, stuck = await asyncio.wait(pending, timeout=CLOSE_CANCEL_BUDGET_S)
+            if stuck:
+                names = sorted(task.get_name() for task in stuck)
+                log.warning(
+                    "Shutdown: %d task(s) still running %.0f s after cancellation: %s",
+                    len(names), CLOSE_CANCEL_BUDGET_S, ", ".join(names),
+                )
         await self.device.close()
         close_agent = getattr(self.task_agent, "close", None)
         if close_agent is not None:

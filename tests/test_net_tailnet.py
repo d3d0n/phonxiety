@@ -93,6 +93,11 @@ class ReportedAddressTests(unittest.TestCase):
                 mock.patch("phonxiety.net.tailnet.subprocess.run", side_effect=fake_run):
             self.assertEqual(["100.64.0.2", "fd7a:115c:a1e0::2"], tailscale_addresses())
 
+    def test_local_addresses_work_without_a_host_name_lookup(self) -> None:
+        with mock.patch.object(tailnet, "route_address", return_value="192.168.1.10"), \
+                mock.patch.object(tailnet.socket, "getaddrinfo", side_effect=OSError("no DNS")):
+            self.assertEqual(["192.168.1.10"], local_addresses())
+
     def test_local_addresses_never_report_the_tailnet(self) -> None:
         with mock.patch.object(tailnet.socket, "socket", side_effect=OSError), \
                 mock.patch.object(tailnet.socket, "getaddrinfo", return_value=[

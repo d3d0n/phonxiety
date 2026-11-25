@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from phonxiety.device import DeviceHub
 from phonxiety.net.framing import FrameError, frame, parse_header
@@ -16,14 +17,18 @@ HELLO = json.dumps({"type": "hello", "version": 2, "device": "test", "capabiliti
 
 
 class _Recv:
+    # A real stream blocks until data or a close arrives. The fake gives up after this long so
+    # a missing close fails the test with a stack instead of parking the whole suite.
+    SILENT_TIMEOUT_S = 5.0
+
     def __init__(self, data: bytes) -> None:
         self.data = bytearray(data)
         self.idle = asyncio.Event()
 
     async def read_exact(self, size: int) -> bytes:
         if len(self.data) < size:
-            # The peer stays silent: a real stream blocks here until it is closed.
-            await self.idle.wait()
+            async with asyncio.timeout(self.SILENT_TIMEOUT_S):
+                await self.idle.wait()
         chunk = bytes(self.data[:size])
         del self.data[:size]
         return chunk
@@ -156,7 +161,8 @@ class LinkTests(unittest.IsolatedAsyncioTestCase):
         connection = _Connection(frame("first") + frame("second"), audio=frame(b"PX02-audio"))
         link = IrohLink(connection, connection.stream)
         await link.open_audio()
-        received = [await link.recv() for _ in range(3)]
+        async with asyncio.timeout(2):
+            received = [await link.recv() for _ in range(3)]
         self.assertEqual(sorted(map(repr, received)), sorted(map(repr, ["first", "second", b"PX02-audio"])))
         self.assertLess(received.index("first"), received.index("second"))
         await link.send("reply")
@@ -166,6 +172,13 @@ class LinkTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await link.send_datagram(b"PXLT" + bytes(12)))
         self.assertFalse(await link.send_datagram(bytes(2000)))  # above the path's datagram size
         await link.close(1000, "done")
+
+    async def test_a_stream_that_goes_silent_is_bounded_not_parked(self) -> None:
+        """The fake used to wait on `idle` forever when nothing closed it: the suite hung."""
+        recv = _Recv(b"")
+        with mock.patch.object(_Recv, "SILENT_TIMEOUT_S", 0.05):
+            with self.assertRaises(TimeoutError):
+                await recv.read_exact(5)
 
     async def test_binary_on_the_control_stream_is_a_protocol_error(self) -> None:
         connection = _Connection(frame(b"PX01-frame"))
