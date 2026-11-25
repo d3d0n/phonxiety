@@ -364,6 +364,27 @@ class ControllerTests(_ControllerCase):
         self.assertTrue(self.device.disconnect_requested.is_set())
         self.assertEqual(result["task_outcome"], "succeeded")
 
+    async def test_end_call_request_hangs_up_after_the_goodbye_without_the_task_agent(self) -> None:
+        call_id, voice = await self._active()
+        asked: list[str] = []
+
+        async def run(prompt: str, tools: dict) -> str:
+            asked.append(prompt)
+            return "WAIT"
+
+        self.tasks.run_handler = run
+        await voice.callbacks.audio(b"\xe8\x03" * 960)  # the goodbye
+        await voice.callbacks.turn_done("assistant")
+        await voice.callbacks.delegation("d1", "END_CALL")
+        await asyncio.wait_for(self.device.drain_requested.wait(), 1)
+        self.assertEqual(self.device.drain_target, 960)
+        await voice.callbacks.delegation("d2", "END_CALL")  # repeated while the goodbye still plays
+        self.assertEqual(self.store.state(call_id), CallState.ENDING)
+        self.device.allow_drain.set()
+        await self.controller.wait_call_result(call_id, wait_s=2)
+        self.assertTrue(self.device.disconnect_requested.is_set())
+        self.assertEqual(asked, [])
+
     async def test_audio_format_failure_hangs_up_the_answered_call(self) -> None:
         def broken(call_id: str, epoch: int) -> dict:
             raise RuntimeError("opus encoder unavailable")

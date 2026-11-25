@@ -83,9 +83,6 @@ Rules:
   reached, and nothing further is expected from either side. Set `farewell_pending` to
   true only when the agent has not said goodbye yet; the agent then says one brief goodbye
   before the line disconnects.
-- A DELEGATED REQUEST to end the call comes right after the voice agent said goodbye: call
-  `finish_call` with `farewell_pending` false, unless the transcript shows the other party
-  still asking or waiting for something; then answer what the agent should say instead.
 - The voice agent does not read results aloud; take them from the transcript for the summary
   and fields.
 - Do not finish while a question from either side is unanswered, while the other party

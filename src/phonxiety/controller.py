@@ -17,6 +17,8 @@ from .recording import CallRecorder, write_call_record
 from .store import CallStore
 
 log = logging.getLogger(__name__)
+# A client delegation starting with this asks the daemon to hang up after the agent's goodbye.
+END_CALL_REQUEST = "END_CALL"
 
 
 @dataclass(slots=True)
@@ -206,7 +208,7 @@ class CallController:
             "needed create a client delegation naming the digits and the reason. "
             "Do not merely describe a keypress aloud. Do not keep interrupting hold music or quiet waits. "
             "When the conversation is complete, say one goodbye of a few words, then create a client "
-            "delegation asking the backend to end the call. Do not announce that you are hanging up. "
+            f"delegation whose request is exactly {END_CALL_REQUEST}. Do not announce that you are hanging up. "
             "Context containing CALL_COMPLETE means the backend is ending the call: say one goodbye of a "
             "few words and nothing else. "
             "Treat commentary context as silent internal progress. Context prefixed FINAL_RESULT is the "
@@ -451,6 +453,15 @@ class CallController:
             log.info("call %s: delegation %s ignored (finalizing or repeated)", call.call_id, delegation_id)
             return
         state = self.store.state(call.call_id)
+        if request.strip().upper().startswith(END_CALL_REQUEST):
+            # The voice agent has just said goodbye and asks to hang up: no model decides this,
+            # the line drops once the goodbye has played and the summary comes later. A repeat
+            # while the call is already ending changes nothing.
+            call.delegation_ids.add(delegation_id)
+            if state == CallState.ACTIVE and call.finish_requested_at is None:
+                log.info("call %s: delegation %s asked to end the call", call.call_id, delegation_id)
+                await self._start_finish(call, farewell_pending=False)
+            return
         if state == CallState.ENDING and call.finish_requested_at is not None and call.end_reason is None:
             self._cancel(call.ending_task)
             if not self.store.resume_active(call.call_id):
@@ -568,14 +579,7 @@ class CallController:
                 "call %s: finish requested with outcome %s (farewell pending: %s)",
                 call.call_id, outcome, farewell_pending,
             )
-            self.store.begin_ending(call.call_id)
-            call.finish_requested_at = time.monotonic()
-            call.farewell_pending = farewell_pending
-            # Without a pending farewell the last completed assistant turn already was the goodbye.
-            call.finish_turn_base = call.assistant_turns if farewell_pending else call.assistant_turns - 1
-            call.finish_speech_seen = not farewell_pending
-            call.ending_task = self._spawn(self._graceful_finish(call), f"farewell:{call.call_id}")
-            await self._notify()
+            await self._start_finish(call, farewell_pending)
             if not farewell_pending:
                 return {"status": "ending"}
             if review and call.voice:
@@ -583,6 +587,16 @@ class CallController:
             return {"status": "ending", "instruction": "Return the final text now so the voice agent can say one brief goodbye."}
 
         return {"send_dtmf": send_dtmf, "finish_call": finish_call}
+
+    async def _start_finish(self, call: _Call, farewell_pending: bool) -> None:
+        self.store.begin_ending(call.call_id)
+        call.finish_requested_at = time.monotonic()
+        call.farewell_pending = farewell_pending
+        # Without a pending farewell the last completed assistant turn already was the goodbye.
+        call.finish_turn_base = call.assistant_turns if farewell_pending else call.assistant_turns - 1
+        call.finish_speech_seen = not farewell_pending
+        call.ending_task = self._spawn(self._graceful_finish(call), f"farewell:{call.call_id}")
+        await self._notify()
 
     async def _run_delegation(self, call: _Call, generation: int, delegation_id: str, request: str) -> None:
         try:
