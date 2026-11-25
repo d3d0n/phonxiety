@@ -10,6 +10,7 @@ import android.os.SystemClock
 import android.telecom.Call
 import android.telecom.PhoneAccountHandle
 import android.telecom.TelecomManager
+import android.telephony.TelephonyManager
 import android.util.Log
 import okio.ByteString
 import okio.ByteString.Companion.encodeUtf8
@@ -453,6 +454,16 @@ class BridgeEngine(
         val callId = callIdOf(message)
         val destination = message.optString("destination", "").trim()
         if (!DESTINATION.matches(destination)) throw CommandException("destination_invalid")
+        // The bridge never dials emergency services.  The SIM and network define
+        // which numbers those are, so ask telephony; refuse if it cannot answer.
+        val emergency = try {
+            appContext.getSystemService(TelephonyManager::class.java)?.isEmergencyNumber(destination)
+        } catch (_: Exception) {
+            null
+        }
+        if (emergency != false) {
+            throw CommandException(if (emergency == true) "emergency_number" else "emergency_check_unavailable")
+        }
         val requestedAccount = message.optString("phone_account", "").trim().ifEmpty { null }
         val unrelatedCall = hasUnrelatedLiveCall()
 
