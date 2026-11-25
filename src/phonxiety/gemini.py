@@ -152,6 +152,10 @@ class GeminiVoiceSession:
         try:
             async for message in ws:
                 await self._handle(json.loads(message))
+            # A normal close (1000/1001) ends the loop without an exception: the voice is gone all the same.
+            if not self._closed:
+                reason = ws.close_reason or "no reason given"
+                await self._fail(f"Gemini closed the voice session: {reason}")
         except ConnectionClosed as exc:
             if not self._closed:
                 reason = exc.rcvd.reason if exc.rcvd else str(exc)

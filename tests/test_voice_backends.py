@@ -11,6 +11,7 @@ from typing import Any
 from unittest import mock
 
 from phonxiety.deepgram import DeepgramOptions, DeepgramVoiceSession
+from phonxiety.gemini import GeminiOptions, GeminiVoiceSession
 from phonxiety.interfaces import VoiceCallbacks
 from phonxiety.realtime import FRAME_BYTES, PacedOutput, Resampler
 from phonxiety.runtime import voice_factory
@@ -112,6 +113,31 @@ class VoiceFactoryTests(unittest.TestCase):
         self.assertEqual(setup["model"], "models/gemini-3.8-live")
         self.assertEqual(setup["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"], "Puck")
         self.assertEqual(session._options.api_key, "test-key")
+
+
+class _ClosedSocket:
+    """A socket the server closed normally: iteration just ends."""
+
+    close_reason = "session timeout"
+
+    def __aiter__(self) -> Any:
+        return self
+
+    async def __anext__(self) -> Any:
+        raise StopAsyncIteration
+
+    async def close(self) -> None:
+        pass
+
+
+class CleanCloseTests(unittest.IsolatedAsyncioTestCase):
+    async def test_a_normal_server_close_is_reported_as_a_voice_error(self) -> None:
+        for session_type, options in ((DeepgramVoiceSession, DeepgramOptions(api_key="t")), (GeminiVoiceSession, GeminiOptions(api_key="t"))):
+            events = _Events()
+            session = session_type("Be brief.", events.callbacks(), options)
+            session._ws = _ClosedSocket()  # type: ignore[assignment]
+            await session._read()
+            self.assertTrue(any(entry[0] == "error" and "session timeout" in entry[1] for entry in events.log), session_type)
 
 
 if __name__ == "__main__":

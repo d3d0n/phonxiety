@@ -161,6 +161,10 @@ class DeepgramVoiceSession:
                     self._output.feed(message)
                     continue
                 await self._handle(json.loads(message))
+            # A normal close (1000/1001) ends the loop without an exception: the voice is gone all the same.
+            if not self._closed:
+                reason = ws.close_reason or "no reason given"
+                await self._fail(f"Deepgram closed the voice session: {reason}")
         except ConnectionClosed as exc:
             if not self._closed:
                 await self._fail(f"Deepgram voice connection closed: {exc.rcvd.reason if exc.rcvd else exc}")
