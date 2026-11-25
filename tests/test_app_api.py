@@ -1127,6 +1127,13 @@ class IrohAttachmentTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RedactionTests(unittest.TestCase):
+    def test_relay_credentials_never_reach_diagnostics(self) -> None:
+        from phonxiety.app_api import _relay_host
+
+        self.assertEqual("https://relay.example:8443", _relay_host("https://user:s3cret@relay.example:8443/path?x=1"))
+        self.assertEqual("https://[2001:db8::1]", _relay_host("https://u:p@[2001:db8::1]/"))
+        self.assertNotIn("s3cret", _relay_host("relay-without-scheme-user:s3cret@host"))
+
     def test_tokens_and_bearers_never_survive(self) -> None:
         text = (
             'app_token=abc123secret\n'

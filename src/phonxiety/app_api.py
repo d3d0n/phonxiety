@@ -134,7 +134,14 @@ def redact(text: str) -> str:
 def _relay_host(url: str) -> str:
     """A relay URL without its credentials or path, safe to show."""
     parts = urlsplit(url)
-    return f"{parts.scheme}://{parts.netloc}" if parts.netloc else url[:80]
+    if not parts.hostname:
+        return url.split("@")[-1][:80]
+    host = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
+    try:
+        port = f":{parts.port}" if parts.port else ""
+    except ValueError:
+        port = ""
+    return f"{parts.scheme}://{host}{port}"
 
 
 class ApiError(Exception):
