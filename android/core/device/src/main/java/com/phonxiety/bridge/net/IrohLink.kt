@@ -4,9 +4,12 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
-import android.util.Log
 import com.phonxiety.bridge.AppStorage
 import com.phonxiety.bridge.BridgeConfig
+import com.phonxiety.bridge.BridgeLog
+import com.phonxiety.bridge.model.AttachmentControl
+import com.phonxiety.bridge.model.ControlEnvelope
+import com.phonxiety.bridge.model.DeviceAuth
 import computer.iroh.Connection
 import computer.iroh.Endpoint
 import computer.iroh.EndpointOptions
@@ -33,8 +36,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.Json
 import okio.ByteString.Companion.toByteString
-import org.json.JSONObject
 
 /**
  * Process-wide scope for iroh calls that must never block their caller:
@@ -158,7 +161,7 @@ object IrohSupport {
         } catch (e: Exception) {
             // A new identity per service start is worse than no persistence,
             // but the link must still work; never log the key itself.
-            Log.w(TAG, "could not persist the iroh secret key: ${e.javaClass.simpleName}")
+            BridgeLog.w(TAG, "could not persist the iroh secret key: ${e.javaClass.simpleName}")
         }
         return generated
     }
@@ -219,7 +222,7 @@ object IrohSupport {
             try {
                 endpoint.shutdown()
             } catch (t: Throwable) {
-                Log.w(TAG, "iroh endpoint close failed ($name): ${t.javaClass.simpleName}")
+                BridgeLog.w(TAG, "iroh endpoint close failed ($name): ${t.javaClass.simpleName}")
             }
         }
     }
@@ -306,7 +309,25 @@ private class IrohLink(
 
     override val backlogBytes: Long get() = backlog.get()
 
+    override val supportsAttachments: Boolean get() = true
+
     override fun route(): DeviceLink.Route? = route
+
+    override suspend fun openAttachment(header: String): AttachmentChannel? {
+        if (cancelled.get() || downOnce.get()) return null
+        val link = connection ?: return null
+        return try {
+            val stream = link.openBi()
+            val send = stream.send()
+            val frame = Framing.encode(Framing.KIND_TEXT, header.toByteArray(Charsets.UTF_8)) ?: return null
+            runCatching { send.setPriority(CONTROL_PRIORITY) }
+            send.writeAll(frame)
+            IrohAttachmentChannel(stream.recv(), send)
+        } catch (t: Throwable) {
+            if (!cancelled.get()) BridgeLog.w(TAG, "attachment open failed: ${t.javaClass.simpleName}")
+            null
+        }
+    }
 
     override fun start(listener: DeviceLink.Listener) {
         scope.launch { connect(listener) }
@@ -354,16 +375,14 @@ private class IrohLink(
             if (cancelled.get()) unwatchNetwork()
         } catch (t: Throwable) {
             if (!cancelled.get()) {
-                Log.w(TAG, "iroh connect failed: ${t.javaClass.simpleName}")
+                BridgeLog.w(TAG, "iroh connect failed: ${t.javaClass.simpleName}")
                 fail(listener, "connect_failed")
             }
         }
     }
 
-    private fun authMessage(): ByteArray = JSONObject()
-        .put("type", "auth")
-        .put("token", config.token)
-        .toString()
+    private fun authMessage(): ByteArray = Json
+        .encodeToString(DeviceAuth.serializer(), DeviceAuth(token = config.token))
         .toByteArray(Charsets.UTF_8)
 
     /**
@@ -467,10 +486,10 @@ private class IrohLink(
     private fun onNetworkChange(reason: String, listener: DeviceLink.Listener) {
         if (cancelled.get() || downOnce.get()) return
         if (ownsCall()) {
-            Log.i(TAG, "$reason during a call: keeping the iroh endpoint")
+            BridgeLog.i(TAG, "$reason during a call: keeping the iroh endpoint")
             return
         }
-        Log.i(TAG, "$reason: recreating the iroh endpoint")
+        BridgeLog.i(TAG, "$reason: recreating the iroh endpoint")
         // Before reporting down, so the reconnect cannot pick up the old endpoint.
         IrohSupport.recycleEndpoint()
         fail(listener, reason)
@@ -484,7 +503,7 @@ private class IrohLink(
                 val path = selected?.let { (if (it.isRelay) "relay " else "direct ") + it.remoteAddr }
                 if (path != lastPath) {
                     lastPath = path
-                    Log.i(TAG, "iroh path: ${path ?: "none"}")
+                    BridgeLog.i(TAG, "iroh path: ${path ?: "none"}")
                 }
                 route = selected?.let {
                     val rtt = it.rttMs.toLong()
@@ -524,7 +543,7 @@ private class IrohLink(
         if (cancelled.get()) return
         if (!downOnce.compareAndSet(false, true)) return
         unwatchNetwork()
-        Log.w(TAG, "iroh paths at link down ($reason): ${describePaths()}")
+        BridgeLog.w(TAG, "iroh paths at link down ($reason): ${describePaths()}")
         route = null
         runCatching { connection?.close(0, reason.toByteArray(Charsets.UTF_8)) }
         controlOutbound.close()
@@ -557,6 +576,65 @@ private class IrohLink(
             irohIo.launch {
                 runCatching { link.close(0, "cancelled".toByteArray(Charsets.UTF_8)) }
             }
+        }
+    }
+}
+
+/**
+ * One phone-opened bulk stream: binary frames are data, a text frame ends the
+ * stream (or reports the daemon's error).  The stream stays independent of the
+ * control and audio streams, so a large recording never delays a command.
+ */
+private class IrohAttachmentChannel(
+    private val incoming: RecvStream,
+    private val outgoing: SendStream
+) : AttachmentChannel {
+    private val done = AtomicBoolean(false)
+    private val cancelled = AtomicBoolean(false)
+
+    override suspend fun next(): AttachmentFrame {
+        if (done.get()) return AttachmentFrame.Error("closed", "attachment stream is closed")
+        return try {
+            val header = incoming.readExact(Framing.HEADER_BYTES.toUInt())
+            if (header.size != Framing.HEADER_BYTES) {
+                done.set(true)
+                return AttachmentFrame.Error("closed", "the daemon closed the attachment stream")
+            }
+            val parsed = Framing.parse(header)
+                ?: return AttachmentFrame.Error("protocol", "invalid attachment frame header")
+            val payload = incoming.readExact(parsed.length.toUInt())
+            if (payload.size != parsed.length) {
+                done.set(true)
+                return AttachmentFrame.Error("closed", "the attachment stream ended mid-frame")
+            }
+            if (parsed.kind == Framing.KIND_BINARY) {
+                AttachmentFrame.Data(payload)
+            } else {
+                when (val control = ControlEnvelope.decodeAttachmentControl(payload.toString(Charsets.UTF_8))) {
+                    is AttachmentControl.End -> {
+                        done.set(true)
+                        AttachmentFrame.End(control.total, control.sha256)
+                    }
+
+                    is AttachmentControl.Error -> {
+                        done.set(true)
+                        AttachmentFrame.Error(control.code, control.message)
+                    }
+
+                    null -> AttachmentFrame.Error("protocol", "unexpected attachment control frame")
+                }
+            }
+        } catch (t: Throwable) {
+            done.set(true)
+            AttachmentFrame.Error("closed", "the attachment stream failed: ${t.javaClass.simpleName}")
+        }
+    }
+
+    override fun cancel() {
+        if (!cancelled.compareAndSet(false, true)) return
+        irohIo.launch {
+            runCatching { outgoing.finish() }
+            runCatching { incoming.stop(0uL) }
         }
     }
 }

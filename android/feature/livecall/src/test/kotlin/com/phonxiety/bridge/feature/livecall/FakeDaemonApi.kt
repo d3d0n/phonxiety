@@ -1,0 +1,177 @@
+package com.phonxiety.bridge.feature.livecall
+
+import com.phonxiety.bridge.data.ApiOutcome
+import com.phonxiety.bridge.data.DaemonApi
+import com.phonxiety.bridge.model.CallEventsPage
+import com.phonxiety.bridge.model.CallSnapshot
+import com.phonxiety.bridge.model.CallsPage
+import com.phonxiety.bridge.model.DaemonInfo
+import com.phonxiety.bridge.model.DaemonStatus
+import com.phonxiety.bridge.model.DeleteCallResult
+import com.phonxiety.bridge.model.DiagnosticsBundle
+import com.phonxiety.bridge.model.DoctorFixResult
+import com.phonxiety.bridge.model.DoctorReport
+import com.phonxiety.bridge.model.DtmfResult
+import com.phonxiety.bridge.model.InstructionResult
+import com.phonxiety.bridge.model.LinkTestResult
+import com.phonxiety.bridge.model.LinkTests
+import com.phonxiety.bridge.model.LoopbackResult
+import com.phonxiety.bridge.model.MarksResponse
+import com.phonxiety.bridge.model.PauseResult
+import com.phonxiety.bridge.model.PlaceCallRequest
+import com.phonxiety.bridge.model.ProbeResult
+import com.phonxiety.bridge.model.RotateResult
+import com.phonxiety.bridge.model.SettingsSnapshot
+import com.phonxiety.bridge.model.SettingsUpdate
+import com.phonxiety.bridge.model.SummaryResult
+import com.phonxiety.bridge.model.TestCallRequest
+import com.phonxiety.bridge.model.ToneResult
+import com.phonxiety.bridge.model.TranscriptPage
+import com.phonxiety.bridge.model.ValidationIssue
+import com.phonxiety.bridge.model.ValidationResult
+import java.io.OutputStream
+import kotlinx.serialization.json.JsonObject
+
+/**
+ * One daemon for every feature test: each handler is a queue the test fills, and every call is
+ * recorded so a test can assert the cursor, the confirmation id or the instruction text.
+ */
+class FakeDaemonApi : DaemonApi {
+    val eventsRequests = mutableListOf<Long?>()
+    val validateRequests = mutableListOf<PlaceCallRequest>()
+    val placedRequests = mutableListOf<PlaceCallRequest>()
+    val instructionRequests = mutableListOf<String>()
+    val dtmfRequests = mutableListOf<String>()
+    val markRequests = mutableListOf<String>()
+    var infoCalls = 0
+    var hangupCalls = 0
+    var pauseCalls = 0
+    var resumeCalls = 0
+    var summarizeCalls = 0
+
+    var info: ApiOutcome<DaemonInfo> = ApiOutcome.Ok(200, DaemonInfo())
+    var callSnapshot: ApiOutcome<CallSnapshot> = ApiOutcome.Failure(404, "call_not_found", "no call")
+    var events: MutableList<ApiOutcome<CallEventsPage>> = mutableListOf()
+    var validation: ApiOutcome<ValidationResult> = ApiOutcome.Ok(200, ValidationResult(valid = true))
+    var place: ApiOutcome<CallSnapshot> = ApiOutcome.Failure(500, "not_configured", "no place handler")
+    var instruction: ApiOutcome<InstructionResult> = ApiOutcome.Ok(200, InstructionResult(delivered = true))
+    var pause: ApiOutcome<PauseResult> = ApiOutcome.Ok(200, PauseResult(muted = true))
+    var resume: ApiOutcome<PauseResult> = ApiOutcome.Ok(200, PauseResult(muted = false))
+    var summarize: ApiOutcome<SummaryResult> = ApiOutcome.Ok(200, SummaryResult(summary = "agreed"))
+    var dtmf: ApiOutcome<DtmfResult> = ApiOutcome.Ok(200, DtmfResult())
+    var marks: ApiOutcome<MarksResponse> = ApiOutcome.Ok(200, MarksResponse())
+    var hangup: ApiOutcome<CallSnapshot> = ApiOutcome.Failure(500, "not_configured", "no hangup handler")
+
+    override suspend fun info(): ApiOutcome<DaemonInfo> {
+        infoCalls++
+        return info
+    }
+
+    override suspend fun events(callId: String, since: Long?, waitSeconds: Double?): ApiOutcome<CallEventsPage> {
+        eventsRequests += since
+        return if (events.isEmpty()) {
+            ApiOutcome.Failure(504, "timeout", "nothing more happened")
+        } else {
+            events.removeAt(0)
+        }
+    }
+
+    override suspend fun call(callId: String): ApiOutcome<CallSnapshot> = callSnapshot
+
+    override suspend fun validateCall(request: PlaceCallRequest): ApiOutcome<ValidationResult> {
+        validateRequests += request
+        return validation
+    }
+
+    override suspend fun placeCall(request: PlaceCallRequest): ApiOutcome<CallSnapshot> {
+        placedRequests += request
+        return place
+    }
+
+    override suspend fun instruction(callId: String, text: String): ApiOutcome<InstructionResult> {
+        instructionRequests += text
+        return instruction
+    }
+
+    override suspend fun pause(callId: String): ApiOutcome<PauseResult> {
+        pauseCalls++
+        return pause
+    }
+
+    override suspend fun resume(callId: String): ApiOutcome<PauseResult> {
+        resumeCalls++
+        return resume
+    }
+
+    override suspend fun summarize(callId: String): ApiOutcome<SummaryResult> {
+        summarizeCalls++
+        return summarize
+    }
+
+    override suspend fun dtmf(callId: String, digits: String): ApiOutcome<DtmfResult> {
+        dtmfRequests += digits
+        return dtmf
+    }
+
+    override suspend fun addMark(callId: String, mark: String, note: String?): ApiOutcome<MarksResponse> {
+        markRequests += mark
+        return marks
+    }
+
+    override suspend fun hangup(callId: String): ApiOutcome<CallSnapshot> {
+        hangupCalls++
+        return hangup
+    }
+
+    override suspend fun status(): ApiOutcome<DaemonStatus> = ApiOutcome.Failure(501, "unused", "unused")
+
+    override suspend fun linkTest(seconds: Double?, codec: String?, transport: String?, bitrate: Int?): ApiOutcome<LinkTestResult> = ApiOutcome.Failure(501, "unused", "unused")
+
+    override suspend fun linkTests(limit: Int?): ApiOutcome<LinkTests> = ApiOutcome.Failure(501, "unused", "unused")
+
+    override suspend fun probe(candidates: List<String>?): ApiOutcome<ProbeResult> = ApiOutcome.Failure(501, "unused", "unused")
+
+    override suspend fun calls(limit: Int?, offset: Int?, before: Double?, outcome: String?, farEnd: String?): ApiOutcome<CallsPage> = ApiOutcome.Ok(200, CallsPage())
+
+    override suspend fun testCall(request: TestCallRequest): ApiOutcome<CallSnapshot> = ApiOutcome.Failure(501, "unused", "unused")
+
+    override suspend fun transcript(callId: String, cursor: Long?, limit: Int?): ApiOutcome<TranscriptPage> = ApiOutcome.Failure(501, "unused", "unused")
+
+    override suspend fun marks(callId: String): ApiOutcome<MarksResponse> = marks
+
+    override suspend fun deleteCall(callId: String): ApiOutcome<DeleteCallResult> = ApiOutcome.Failure(501, "unused", "unused")
+
+    override suspend fun settings(): ApiOutcome<SettingsSnapshot> = ApiOutcome.Failure(501, "unused", "unused")
+
+    override suspend fun putSettings(values: JsonObject): ApiOutcome<SettingsUpdate> = ApiOutcome.Failure(501, "unused", "unused")
+
+    override suspend fun loopback(enabled: Boolean, callId: String?): ApiOutcome<LoopbackResult> = ApiOutcome.Failure(501, "unused", "unused")
+
+    override suspend fun tone(hz: Int?, dbfs: Double?, seconds: Double?, callId: String?): ApiOutcome<ToneResult> = ApiOutcome.Failure(501, "unused", "unused")
+
+    override suspend fun doctor(): ApiOutcome<DoctorReport> = ApiOutcome.Failure(501, "unused", "unused")
+
+    override suspend fun doctorFix(fix: String): ApiOutcome<DoctorFixResult> = ApiOutcome.Failure(501, "unused", "unused")
+
+    override suspend fun diagnostics(): ApiOutcome<JsonObject> = ApiOutcome.Failure(501, "unused", "unused")
+
+    override suspend fun createDiagnosticsBundle(): ApiOutcome<DiagnosticsBundle> = ApiOutcome.Failure(501, "unused", "unused")
+
+    override suspend fun updateManifest(channel: String?): ApiOutcome<JsonObject> = ApiOutcome.Failure(501, "unused", "unused")
+
+    override suspend fun compat(appApi: Int?, protocol: Int?): ApiOutcome<com.phonxiety.bridge.model.CompatReport> = ApiOutcome.Failure(501, "unused", "unused")
+
+    override suspend fun rotatePair(rotateDeviceToken: Boolean): ApiOutcome<RotateResult> = ApiOutcome.Failure(501, "unused", "unused")
+
+    override suspend fun downloadAudio(callId: String, format: String, sink: OutputStream): com.phonxiety.bridge.data.ApiResult = com.phonxiety.bridge.data.ApiResult.Success(200, JsonObject(emptyMap()))
+
+    override suspend fun downloadUpdateArtifact(name: String, sink: OutputStream): com.phonxiety.bridge.data.ApiResult = com.phonxiety.bridge.data.ApiResult.Failure(501, "unused", "unused")
+
+    override suspend fun downloadBundle(bundleId: String, sink: OutputStream): com.phonxiety.bridge.data.ApiResult = com.phonxiety.bridge.data.ApiResult.Success(200, JsonObject(emptyMap()))
+}
+
+/** The validation error the composer must render against the field it names. */
+fun fieldInvalidError(field: String, message: String): ApiOutcome<ValidationResult> = ApiOutcome.Ok(
+    200,
+    ValidationResult(valid = false, errors = listOf(ValidationIssue(field, message)))
+)

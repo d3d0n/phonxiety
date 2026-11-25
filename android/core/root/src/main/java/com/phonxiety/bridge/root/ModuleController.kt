@@ -467,6 +467,13 @@ object ModuleController {
 
     private fun onRetry(state: WizardState): Transition {
         if (state !is WizardState.InstallFailed) return Transition(state)
+        // A failed metamodule preparation must retry the preparation itself; retrying it as a
+        // module update would install Phonxiety without the overlay that mounts it.
+        if (state.operation == InstallOperation.PREPARE_METAMODULE) {
+            return Transition(
+                WizardState.ProviderPrep(state.provider, PrepReason.METAMODULE_MISSING)
+            )
+        }
         val update = state.operation != InstallOperation.INSTALL
         return Transition(WizardState.ReadyToInstall(state.provider, state.module, update))
     }

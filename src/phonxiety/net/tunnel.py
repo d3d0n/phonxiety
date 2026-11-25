@@ -1,4 +1,4 @@
-"""A local TCP port on the Mac that reaches a service on the phone through the iroh link.
+"""A local TCP port on the daemon host that reaches a service on the phone through the iroh link.
 
 `adb connect 127.0.0.1:<port>` then talks to the phone's adbd without a cable or a reachable
 phone address: each TCP connection becomes one extra bidirectional stream on the already

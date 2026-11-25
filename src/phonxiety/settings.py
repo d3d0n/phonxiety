@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import tempfile
 from dataclasses import dataclass
@@ -108,7 +109,76 @@ SETTINGS_FILE = "settings.json"
 SETTINGS_SCHEMA_VERSION = 1
 # Fields the phone may change. Each is read once when the daemon constructs its parts,
 # so a change applies on the next start and the API answers `restart_required`.
-RESTART_SETTINGS = ("audio_codec", "opus_bitrate", "voice_backend", "codex_voice", "iroh_relays")
+RESTART_SETTINGS = (
+    "audio_codec",
+    "opus_bitrate",
+    "voice_backend",
+    "codex_voice",
+    "gemini_voice",
+    "codex_task_model",
+    "gemini_model",
+    "language_hint",
+    "iroh_relays",
+)
+# Call defaults are read from the settings values on every request, so a phone-side
+# change applies to the next call without a restart.
+CALL_SETTINGS = (
+    "ring_timeout_s",
+    "max_duration_s",
+    "default_result_fields",
+    "default_constraints",
+)
+
+RING_TIMEOUT_RANGE = (5, 180)
+MAX_DURATION_RANGE = (10, 3600)
+MAX_RESULT_FIELDS = 16
+MAX_RESULT_FIELD_CHARS = 64
+MAX_CONSTRAINTS_CHARS = 2000
+_MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,63}$")
+_VOICE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+_LANGUAGE = re.compile(r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$")
+
+
+def _int(value: object, name: str, bounds: tuple[int, int]) -> int:
+    try:
+        number = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be an integer") from None
+    low, high = bounds
+    if not low <= number <= high:
+        raise ValueError(f"{name} must be between {low} and {high}")
+    return number
+
+
+def _model(value: object, name: str) -> str:
+    model = str(value).strip()
+    if model and not _MODEL.fullmatch(model):
+        raise ValueError(f"{name} must be 1..64 letters, digits or '._:/+-'")
+    return model
+
+
+def _voice(value: object, name: str) -> str:
+    voice = str(value).strip()
+    if not _VOICE.fullmatch(voice):
+        raise ValueError(f"{name} must be 1..32 letters, digits, '_' or '-'")
+    return voice
+
+
+def _result_fields(value: object) -> list[str]:
+    entries: object = value.split(",") if isinstance(value, str) else value
+    if not isinstance(entries, (list, tuple)):
+        raise ValueError("default_result_fields must be a list of field names")
+    fields: list[str] = []
+    for entry in entries:
+        field = str(entry).strip()
+        if not field:
+            continue
+        if len(field) > MAX_RESULT_FIELD_CHARS:
+            raise ValueError(f"default_result_fields entries must be at most {MAX_RESULT_FIELD_CHARS} characters")
+        fields.append(field)
+    if len(fields) > MAX_RESULT_FIELDS:
+        raise ValueError(f"at most {MAX_RESULT_FIELDS} default result fields")
+    return fields
 
 
 def _voice_backend(name: str | None = None) -> str:
@@ -140,10 +210,29 @@ def validate_runtime(values: dict[str, object]) -> dict[str, object]:
         elif key == "voice_backend":
             clean["voice_backend"] = _voice_backend(str(value))
         elif key == "codex_voice":
-            voice = str(value).strip()
-            if not 1 <= len(voice) <= 32 or not all(char.isalnum() or char in "_-" for char in voice):
-                raise ValueError("codex_voice must be 1..32 letters, digits, '-' or '_'")
-            clean["codex_voice"] = voice
+            clean["codex_voice"] = _voice(value, "codex_voice")
+        elif key == "gemini_voice":
+            clean["gemini_voice"] = _voice(value, "gemini_voice")
+        elif key == "codex_task_model":
+            clean["codex_task_model"] = _model(value, "codex_task_model")
+        elif key == "gemini_model":
+            clean["gemini_model"] = _model(value, "gemini_model")
+        elif key == "language_hint":
+            hint = str(value).strip()
+            if hint and (len(hint) > 35 or not _LANGUAGE.fullmatch(hint)):
+                raise ValueError("language_hint must be a language tag such as 'en' or 'ru-RU', or empty")
+            clean["language_hint"] = hint
+        elif key == "ring_timeout_s":
+            clean["ring_timeout_s"] = _int(value, "ring_timeout_s", RING_TIMEOUT_RANGE)
+        elif key == "max_duration_s":
+            clean["max_duration_s"] = _int(value, "max_duration_s", MAX_DURATION_RANGE)
+        elif key == "default_result_fields":
+            clean["default_result_fields"] = _result_fields(value)
+        elif key == "default_constraints":
+            constraints = str(value).strip()
+            if len(constraints) > MAX_CONSTRAINTS_CHARS:
+                raise ValueError(f"default_constraints must be at most {MAX_CONSTRAINTS_CHARS} characters")
+            clean["default_constraints"] = constraints
         elif key == "iroh_relays":
             if isinstance(value, str):
                 entries: object = value.split(",")
@@ -234,10 +323,17 @@ class Settings:
     codex_auth_path: Path | None = None
     codex_task_model: str | None = None
     codex_voice: str = "sol"
+    gemini_model: str | None = None
+    gemini_voice: str | None = None
     audio_codec: str = "opus"
     opus_bitrate: int = DEFAULT_OPUS_BITRATE
     iroh_relays: tuple[str, ...] = ()
     voice_backend: str = "codex"
+    ring_timeout_s: int = 60
+    max_duration_s: int = 900
+    default_result_fields: tuple[str, ...] = ()
+    default_constraints: str = ""
+    language_hint: str = ""
     adb_port: int = 15555  # local port that reaches the phone's adbd through the iroh link
 
     @classmethod
@@ -260,12 +356,19 @@ class Settings:
             device_host=os.environ.get("PHONXIETY_DEVICE_HOST") or "0.0.0.0",
             device_port=device_port,
             codex_auth_path=Path(codex_auth_path).expanduser() if codex_auth_path else None,
-            codex_task_model=os.environ.get("PHONXIETY_CODEX_TASK_MODEL") or None,
+            codex_task_model=str(saved["codex_task_model"]) if saved.get("codex_task_model") else (os.environ.get("PHONXIETY_CODEX_TASK_MODEL") or None),
             codex_voice=str(saved.get("codex_voice") or os.environ.get("PHONXIETY_CODEX_VOICE", "sol")),
+            gemini_model=str(saved["gemini_model"]) if saved.get("gemini_model") else (os.environ.get("PHONXIETY_GEMINI_MODEL") or None),
+            gemini_voice=str(saved["gemini_voice"]) if saved.get("gemini_voice") else (os.environ.get("PHONXIETY_GEMINI_VOICE") or None),
             audio_codec=str(saved.get("audio_codec") or _codec()),
             opus_bitrate=int(saved.get("opus_bitrate") or _opus_bitrate()),  # type: ignore[arg-type]
             iroh_relays=tuple(saved["iroh_relays"]) if isinstance(saved.get("iroh_relays"), list) else _iroh_relays(state_dir),
             voice_backend=_voice_backend(str(saved["voice_backend"]) if saved.get("voice_backend") else None),
+            ring_timeout_s=int(saved.get("ring_timeout_s") or 60),
+            max_duration_s=int(saved.get("max_duration_s") or 900),
+            default_result_fields=tuple(str(field) for field in saved["default_result_fields"]) if isinstance(saved.get("default_result_fields"), list) else (),
+            default_constraints=str(saved.get("default_constraints") or ""),
+            language_hint=str(saved.get("language_hint") or ""),
             adb_port=_port("PHONXIETY_ADB_PORT", 15555),
         )
 

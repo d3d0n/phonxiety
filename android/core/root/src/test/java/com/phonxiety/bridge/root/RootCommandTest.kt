@@ -49,6 +49,24 @@ class RootCommandTest {
     }
 
     @Test
+    fun pmInstallAllowsTheDowngradeARollbackIs() {
+        assertEquals(
+            "pm install -r -d /data/local/tmp/previous.apk",
+            RootCommand.pmInstall("/data/local/tmp/previous.apk").script
+        )
+        assertEquals(
+            "pm install -r /data/local/tmp/previous.apk",
+            RootCommand.pmInstall("/data/local/tmp/previous.apk", allowDowngrade = false).script
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            RootCommand.pmInstall("/data/local/tmp/previous.apk; reboot")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            RootCommand.pmInstall("/data/local/tmp/../previous.apk")
+        }
+    }
+
+    @Test
     fun stagingAndModuleReads() {
         assertEquals(
             "cp -f /data/user/0/com.phonxiety.bridge/cache/module.zip /data/local/tmp/phonxiety_bridge.zip",

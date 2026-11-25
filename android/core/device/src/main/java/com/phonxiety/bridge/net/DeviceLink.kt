@@ -39,6 +39,30 @@ internal interface DeviceLink {
 
     /** Route for the UI; null for transports without one. */
     fun route(): Route?
+
+    /** True when the transport can carry a phone-opened bulk stream. */
+    val supportsAttachments: Boolean get() = false
+
+    /**
+     * Opens one attachment stream and writes its header frame; null when the
+     * transport has no attachment streams or the link is not live.
+     */
+    suspend fun openAttachment(header: String): AttachmentChannel? = null
+}
+
+/** One readable attachment stream: data frames, then `end` or `error`. */
+internal interface AttachmentChannel {
+    suspend fun next(): AttachmentFrame
+
+    fun cancel()
+}
+
+internal sealed interface AttachmentFrame {
+    data class Data(val bytes: ByteArray) : AttachmentFrame
+
+    data class End(val total: Long, val sha256: String) : AttachmentFrame
+
+    data class Error(val code: String, val message: String) : AttachmentFrame
 }
 
 /**

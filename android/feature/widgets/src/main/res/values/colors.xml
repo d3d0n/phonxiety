@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="phonxiety_widget_background">#FFF7F7FB</color>
+    <color name="phonxiety_widget_text">#FF16161D</color>
+    <color name="phonxiety_widget_muted">#FF5B5B66</color>
+    <color name="phonxiety_widget_good">#FF0F8A6A</color>
+    <color name="phonxiety_widget_warn">#FFB26A00</color>
+    <color name="phonxiety_widget_bad">#FFB3261E</color>
+    <color name="phonxiety_widget_on_bad">#FFFFFFFF</color>
+</resources>

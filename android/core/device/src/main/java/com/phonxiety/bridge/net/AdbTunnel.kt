@@ -1,6 +1,6 @@
 package com.phonxiety.bridge.net
 
-import android.util.Log
+import com.phonxiety.bridge.BridgeLog
 import computer.iroh.BiStream
 import computer.iroh.Connection
 import computer.iroh.RecvStream
@@ -177,13 +177,13 @@ internal class AdbTunnel(private val host: AdbHost = AndroidAdbHost()) {
                 return
             }
             if (!AdbReady.ensure(host)) {
-                Log.w(TAG, "adb_tunnel_unavailable")
+                BridgeLog.w(TAG, "adb_tunnel_unavailable")
                 reject(stream, send, recv)
                 return
             }
             val socket = openSocket()
             if (socket == null) {
-                Log.w(TAG, "adb_tunnel_unavailable")
+                BridgeLog.w(TAG, "adb_tunnel_unavailable")
                 reject(stream, send, recv)
                 return
             }
@@ -191,7 +191,7 @@ internal class AdbTunnel(private val host: AdbHost = AndroidAdbHost()) {
         } catch (t: CancellationException) {
             throw t
         } catch (t: Throwable) {
-            Log.w(TAG, "adb tunnel failed: ${t.javaClass.simpleName}")
+            BridgeLog.w(TAG, "adb tunnel failed: ${t.javaClass.simpleName}")
         } finally {
             runCatching { send.close() }
             runCatching { recv.close() }
@@ -325,9 +325,9 @@ internal class AdbTunnelCommands(private val host: AdbHost) {
         if (current.exit != 0) return false
         if (current.output.trim() == PORT.toString()) return true
         if (host.su("setprop service.adb.tcp.port $PORT")?.exit != 0) return false
-        Log.i(TAG, "adb tunnel: setprop service.adb.tcp.port $PORT")
+        BridgeLog.i(TAG, "adb tunnel: setprop service.adb.tcp.port $PORT")
         if (host.su("stop adbd; start adbd")?.exit != 0) return false
-        Log.i(TAG, "adb tunnel: restarted adbd on port $PORT")
+        BridgeLog.i(TAG, "adb tunnel: restarted adbd on port $PORT")
         return true
     }
 
@@ -336,7 +336,7 @@ internal class AdbTunnelCommands(private val host: AdbHost) {
         if (check.exit == 0) return true
         val add = host.su("$table -w -I INPUT 1 $rule") ?: return false
         if (add.exit != 0) return false
-        Log.i(TAG, "adb tunnel: $table -I INPUT 1 $rule")
+        BridgeLog.i(TAG, "adb tunnel: $table -I INPUT 1 $rule")
         return true
     }
 }
@@ -393,12 +393,12 @@ private object AdbReady {
         if (ready) return true
         return mutex.withLock {
             if (ready) return@withLock true
-            // An installer (the Mac over adb, or root granted to this app) may already have
+            // An installer (the computer over adb, or root granted to this app) may already have
             // opened adbd on loopback; then no root is needed here at all.
             val open = withContext(Dispatchers.IO) { host.connect(AdbTunnel.PORT)?.use { true } ?: false }
             val enabled = open || withContext(Dispatchers.IO) { AdbTunnelCommands(host).enable() }
             if (enabled) {
-                Log.i(TAG, "adb_tunnel_enabled")
+                BridgeLog.i(TAG, "adb_tunnel_enabled")
                 ready = true
             }
             enabled

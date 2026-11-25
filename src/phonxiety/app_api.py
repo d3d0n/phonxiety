@@ -46,7 +46,12 @@ from .device import PROTOCOL_VERSION, PROTOCOL_VERSIONS, DeviceError
 from .models import CallLimits, CallRequest, TERMINAL_STATES
 from .net.framing import frame
 from .settings import (
+    MAX_CONSTRAINTS_CHARS,
+    MAX_DURATION_RANGE,
+    MAX_RESULT_FIELD_CHARS,
+    MAX_RESULT_FIELDS,
     RESTART_SETTINGS,
+    RING_TIMEOUT_RANGE,
     SETTINGS_SCHEMA_VERSION,
     VOICE_BACKENDS,
     Settings,
@@ -70,6 +75,9 @@ BUNDLES_KEEP = 8
 BUNDLES_TTL_S = 2 * 3600
 LINK_TESTS_KEEP = 50
 MARK_KINDS = ("agreed", "refused", "follow-up", "unclear", "callback")
+UPDATE_ARTIFACT_PATH = "/app/v1/update/artifact"
+# The manifest keys an artifact may be requested by; the file name always comes from the manifest.
+UPDATE_ARTIFACTS = ("apk", "module")
 FIXES = ("relay_config", "state_dirs")
 # Paths that exist for some method: anything else on them is 405, not 404.
 KNOWN_PATHS = frozenset({
@@ -88,6 +96,7 @@ KNOWN_PATHS = frozenset({
     "/app/v1/diagnostics",
     "/app/v1/diagnostics/bundle",
     "/app/v1/update/manifest",
+    UPDATE_ARTIFACT_PATH,
     "/app/v1/compat",
     "/app/v1/pair/rotate",
 })
@@ -213,6 +222,14 @@ class AppApi:
             "opus_bitrate": settings.opus_bitrate,
             "voice_backend": settings.voice_backend,
             "codex_voice": settings.codex_voice,
+            "gemini_voice": settings.gemini_voice or "",
+            "codex_task_model": settings.codex_task_model or "",
+            "gemini_model": settings.gemini_model or "",
+            "language_hint": settings.language_hint,
+            "ring_timeout_s": settings.ring_timeout_s,
+            "max_duration_s": settings.max_duration_s,
+            "default_result_fields": list(settings.default_result_fields),
+            "default_constraints": settings.default_constraints,
             "iroh_relays": list(settings.iroh_relays),
         }
 
@@ -312,6 +329,8 @@ class AppApi:
             return await self._bundle_page(query, body, bundle["bundle_id"])
         if path == "/app/v1/update/manifest" and method == "GET":
             return await self._update_manifest(query, body)
+        if path == UPDATE_ARTIFACT_PATH and method == "GET":
+            return await self._update_artifact(query, body)
         if path == "/app/v1/compat" and method == "GET":
             return await self._compat(query, body)
         if path == "/app/v1/pair/rotate" and method == "POST":
@@ -517,6 +536,7 @@ class AppApi:
         return {
             "at": _iso(time.time()),
             "codec": result.get("codec"),
+            "bitrate": result.get("bitrate"),
             "transport": result.get("transport"),
             "peer": result.get("peer"),
             "route": result.get("route"),
@@ -549,8 +569,16 @@ class AppApi:
         transport = body.get("transport", "stream")
         if transport not in ("stream", "datagram"):
             raise ApiError(400, "invalid_argument", "transport must be stream or datagram")
+        trial_bitrate = body.get("bitrate")
+        if trial_bitrate is not None:
+            if isinstance(trial_bitrate, bool) or not isinstance(trial_bitrate, int) or not MIN_OPUS_BITRATE <= trial_bitrate <= MAX_OPUS_BITRATE:
+                raise ApiError(400, "invalid_argument", f"bitrate must be an integer between {MIN_OPUS_BITRATE} and {MAX_OPUS_BITRATE}")
+        if trial_bitrate is not None and codec != "opus":
+            raise ApiError(400, "invalid_argument", "bitrate applies to the opus codec only")
         await device.wait_connected(15.0)
-        result = await device.link_test(seconds, codec=codec, datagrams=transport == "datagram")
+        result = await device.link_test(
+            seconds, codec=codec, datagrams=transport == "datagram", bitrate=trial_bitrate
+        )
         record = {"id": uuid.uuid4().hex[:16], **self._link_test_record(result)}
         self._store_link_test(record)
         return 200, record
@@ -666,12 +694,12 @@ class AppApi:
             destination=body.get("destination"),
             goal=body.get("goal"),
             context=body.get("context", ""),
-            constraints=body.get("constraints", ""),
+            constraints=body.get("constraints") or self.values.get("default_constraints", ""),
             limits=CallLimits(
-                max_duration_s=body.get("max_duration_s", 900),
-                ring_timeout_s=body.get("ring_timeout_s", 60),
+                max_duration_s=body.get("max_duration_s", self.values.get("max_duration_s", 900)),
+                ring_timeout_s=body.get("ring_timeout_s", self.values.get("ring_timeout_s", 60)),
             ),
-            result_fields=body.get("result_fields") or [],
+            result_fields=body.get("result_fields") or self.values.get("default_result_fields") or [],
             phone_account=body.get("phone_account"),
         )
         return request, confirmation
@@ -1176,6 +1204,10 @@ class AppApi:
                 "audio_codec": list(CODECS),
                 "voice_backend": list(VOICE_BACKENDS),
                 "opus_bitrate": {"min": MIN_OPUS_BITRATE, "max": MAX_OPUS_BITRATE},
+                "ring_timeout_s": {"min": RING_TIMEOUT_RANGE[0], "max": RING_TIMEOUT_RANGE[1]},
+                "max_duration_s": {"min": MAX_DURATION_RANGE[0], "max": MAX_DURATION_RANGE[1]},
+                "default_result_fields": {"max_items": MAX_RESULT_FIELDS, "max_chars": MAX_RESULT_FIELD_CHARS},
+                "default_constraints": {"max_chars": MAX_CONSTRAINTS_CHARS},
             },
         }
 
@@ -1374,6 +1406,13 @@ class AppApi:
                 "opus_bitrate": self.values["opus_bitrate"],
                 "voice_backend": self.values["voice_backend"],
                 "codex_voice": self.values["codex_voice"],
+                "codex_task_model": self.values["codex_task_model"],
+                "gemini_model": self.values["gemini_model"],
+                "gemini_voice": self.values["gemini_voice"],
+                "language_hint": self.values["language_hint"],
+                "ring_timeout_s": self.values["ring_timeout_s"],
+                "max_duration_s": self.values["max_duration_s"],
+                "default_result_fields": self.values["default_result_fields"],
                 "iroh_relays": [_relay_host(url) for url in self.values.get("iroh_relays") or []],
             },
             "phone": device.status() if hasattr(device, "status") else {},
@@ -1467,7 +1506,8 @@ class AppApi:
 
     # -- updates and pairing --------------------------------------------
 
-    async def _update_manifest(self, query: dict[str, Any], body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    def _manifest_payload(self, channel: Any = None) -> dict[str, Any]:
+        """The update document as served, with the selected channel's entry resolved."""
         path = self.updates_dir / "manifest.json"
         try:
             manifest = json.loads(path.read_text())
@@ -1479,15 +1519,52 @@ class AppApi:
             raise ApiError(500, "manifest_invalid", "the manifest is not an object")
         channels = manifest.get("channels")
         if isinstance(channels, dict) and channels:
-            name = str(query.get("channel") or manifest.get("channel") or "stable")
+            name = str(channel or manifest.get("channel") or "stable")
             selected = channels.get(name)
             if not isinstance(selected, dict):
                 raise ApiError(404, "unknown_channel", f"no channel {name}")
             payload = {key: value for key, value in manifest.items() if key != "channels"}
             payload["channel"] = name
             payload["entry"] = selected
-            return 200, payload
-        return 200, manifest
+            return payload
+        return manifest
+
+    async def _update_manifest(self, query: dict[str, Any], body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        return 200, self._manifest_payload(query.get("channel"))
+
+    def _update_artifact_bytes(self, name: Any, channel: Any = None) -> tuple[str, bytes]:
+        """The apk or module artifact named by the manifest, read from the updates directory.
+
+        The file name is the manifest's own plain basename: a query can choose *which* artifact,
+        never *where* it is read from.
+        """
+        key = str(name or "").strip().lower()
+        if key not in UPDATE_ARTIFACTS:
+            raise ApiError(400, "invalid_argument", f"name must be one of: {', '.join(UPDATE_ARTIFACTS)}")
+        try:
+            manifest = self._manifest_payload(channel)
+        except ApiError as exc:
+            if exc.code == "manifest_unavailable":
+                raise ApiError(404, "artifact_unavailable", "this daemon publishes no update manifest") from None
+            raise
+        artifacts = manifest.get("entry") if isinstance(manifest.get("entry"), dict) else manifest
+        entry = artifacts.get(key)
+        filename = entry.get("file") if isinstance(entry, dict) else None
+        if not isinstance(filename, str) or not filename:
+            raise ApiError(404, "artifact_unavailable", f"the manifest names no {key} artifact")
+        if filename in (".", "..") or "/" in filename or "\\" in filename or ".." in filename:
+            raise ApiError(400, "invalid_argument", f"the manifest names an invalid {key} file")
+        path = self.updates_dir / filename
+        try:
+            return key, path.read_bytes()
+        except FileNotFoundError:
+            raise ApiError(404, "artifact_unavailable", f"the {key} artifact is not published") from None
+        except OSError as exc:
+            raise ApiError(500, "artifact_unreadable", f"the {key} artifact cannot be read: {exc}") from None
+
+    async def _update_artifact(self, query: dict[str, Any], body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        key, data = self._update_artifact_bytes(query.get("name"), query.get("channel"))
+        return 200, {"name": key, **self._page(data, query)}
 
     async def _compat(self, query: dict[str, Any], body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         client: dict[str, Any] = {}
@@ -1566,6 +1643,9 @@ class AppApi:
     # -- bulk attachments ----------------------------------------------
 
     def _attachment_bytes(self, path: str, query: dict[str, Any]) -> bytes:
+        if path == UPDATE_ARTIFACT_PATH:
+            _, data = self._update_artifact_bytes(query.get("name"), query.get("channel"))
+            return data
         call = CALL_ID_PATH.match(path)
         if call is not None and call["action"] == "audio":
             call_id = self._safe_id(call["call_id"], "call_id")

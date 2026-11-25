@@ -26,6 +26,14 @@ class AndroidPackageInventory(
         }.isSuccess
     }
 
+    override fun version(packageName: String): String? {
+        val info = runCatching {
+            packageManager.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0))
+        }.getOrNull() ?: return null
+        val name = info.versionName?.takeIf { it.isNotBlank() }
+        return name?.let { "$it (${info.longVersionCode})" } ?: info.longVersionCode.toString()
+    }
+
     companion object {
         val ROOT_MANAGER_PACKAGES: Set<String> = setOf(
             MagiskProvider.MANAGER_PACKAGE,
@@ -58,7 +66,8 @@ class AndroidAppFactsProbe(
             packageName = packageName,
             isSystemApp = (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0,
             apkPath = info.sourceDir,
-            grantedPermissions = granted
+            grantedPermissions = granted,
+            updatedSystemApp = (info.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
         )
     }
 }

@@ -2,7 +2,13 @@ package com.phonxiety.bridge
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
+import android.net.wifi.WifiManager
+import android.os.BatteryManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
@@ -12,32 +18,81 @@ import android.telecom.Call
 import android.telecom.PhoneAccountHandle
 import android.telecom.TelecomManager
 import android.telephony.TelephonyManager
-import android.util.Log
 import com.phonxiety.bridge.device.R
+import com.phonxiety.bridge.model.AppGateway
+import com.phonxiety.bridge.model.AttachmentHeader
+import com.phonxiety.bridge.model.AttachmentOutcome
+import com.phonxiety.bridge.model.AudioDiagnostics
+import com.phonxiety.bridge.model.BridgeState
+import com.phonxiety.bridge.model.CallPhase
+import com.phonxiety.bridge.model.Capabilities
+import com.phonxiety.bridge.model.ControlEnvelope
+import com.phonxiety.bridge.model.DaemonInfo
+import com.phonxiety.bridge.model.DeviceActiveCall
+import com.phonxiety.bridge.model.DeviceApiError
+import com.phonxiety.bridge.model.DeviceApiRequest
+import com.phonxiety.bridge.model.DeviceApiResult
+import com.phonxiety.bridge.model.DeviceCapabilities
+import com.phonxiety.bridge.model.DeviceCommand
+import com.phonxiety.bridge.model.DeviceOutbound
+import com.phonxiety.bridge.model.DeviceProtocol
+import com.phonxiety.bridge.model.DeviceState
+import com.phonxiety.bridge.model.DiagnosticsSnapshot
+import com.phonxiety.bridge.model.DisconnectCause
+import com.phonxiety.bridge.model.EngineDiagnostics
+import com.phonxiety.bridge.model.LinkDiagnostics
+import com.phonxiety.bridge.model.LinkError
+import com.phonxiety.bridge.model.LinkKind
 import com.phonxiety.bridge.net.DeviceLink
 import com.phonxiety.bridge.net.ExecutorLinkScheduler
 import com.phonxiety.bridge.net.IrohLinkFactory
+import com.phonxiety.bridge.net.IrohSupport
 import com.phonxiety.bridge.net.LinkSupervisor
 import com.phonxiety.bridge.net.WebSocketLinkFactory
 import java.io.File
+import java.io.OutputStream
+import java.security.MessageDigest
 import java.util.Locale
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineName
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
 import okio.ByteString
 import okio.ByteString.Companion.encodeUtf8
-import org.json.JSONObject
 
 /**
- * Protocol v2 device endpoint.
+ * Protocol v3 device endpoint.
  *
  * Owns the single device link, the single bridge-owned Telecom call, its
- * audio path and the phone-side host-loss lease.  All externally visible state
- * changes are serialized here; [BridgeInCallService] only forwards Telecom
- * callbacks.
+ * audio path and the phone-side host-loss lease.  Every visible state change
+ * is published on [state] by one serialized scope; [BridgeInCallService] only
+ * forwards Telecom callbacks.
  *
  * The link is a TLS WebSocket to the paired daemon or an iroh stream; see
  * [LinkSupervisor] and [DeviceLink].  The engine keeps the protocol and call
@@ -48,17 +103,24 @@ class BridgeEngine(
     context: Context,
     private val config: BridgeConfig,
     private val onLinkState: (Int) -> Unit
-) {
+) : AppGateway {
     companion object {
         private const val TAG = "PhonxietyBridge"
-        private const val PROTOCOL_VERSION = 2
+        private const val THREAD_NAME = "phonxiety-scheduler"
         private const val PENDING_DIAL_TIMEOUT_MS = 120_000L
         private const val MAX_RECENT_CALLS = 32
         private const val ORPHAN_CANCEL_TTL_MS = 10 * 60_000L
         private const val DIAL_CORRELATION_WINDOW_MS = 10_000L
-        private const val MAX_CONTROL_CHARS = 64 * 1024
+        private const val MAX_TEXT_CHARS = 256 * 1024
+
+        /** One preferences read on the link thread, so the first hello is not sent blind. */
+        private const val SETTINGS_READ_TIMEOUT_MS = 500L
+        private const val MAX_BINARY_BYTES = 64 * 1024
         private const val EXTRA_CALL_ID = "com.phonxiety.bridge.extra.CALL_ID"
         private const val EXTRA_OWNER = "com.phonxiety.bridge.extra.OWNER"
+        private const val APP_REQUEST_TIMEOUT_MS = 30_000L
+        private const val TELEMETRY_INTERVAL_MS = 5_000L
+        private const val AUDIO_LEVEL_INTERVAL_MS = 100L
         private val DESTINATION = Regex("^[+*#0-9]{1,32}$")
         private val LINK_TEST_MAGIC = "PXLT".encodeUtf8()
     }
@@ -70,9 +132,26 @@ class BridgeEngine(
     private val lock = Any()
     private val dtmfMonitor = java.lang.Object()
     private val closeOnce = AtomicBoolean(false)
+    private val json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+        explicitNulls = false
+    }
+
+    private val stateStore = EngineStateStore()
+
+    /** Everything the UI, tiles and widget observe. */
+    val state: StateFlow<BridgeState> get() = stateStore.state
+
+    private val engineDispatcher = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "phonxiety-state").apply { isDaemon = true }
+    }.asCoroutineDispatcher()
+    private val engineScope = CoroutineScope(SupervisorJob() + engineDispatcher + CoroutineName("phonxiety-engine"))
+    private val startedElapsed = SystemClock.elapsedRealtime()
+    private var telemetryJob: Job? = null
 
     private val scheduler = Executors.newSingleThreadScheduledExecutor { runnable ->
-        Thread(runnable, "phonxiety-scheduler").apply { isDaemon = true }
+        Thread(runnable, THREAD_NAME).apply { isDaemon = true }
     }
     private val commandExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "phonxiety-commands").apply { isDaemon = true }
@@ -105,6 +184,35 @@ class BridgeEngine(
     private val recent = LinkedHashMap<String, RecentCall>()
     private val pendingAudioClose = ConcurrentLinkedQueue<PhoneAudio>()
     private val orphanCancels = ArrayList<OrphanCancel>()
+    private val apiPending = ConcurrentHashMap<String, CompletableDeferred<DeviceApiResult>>()
+
+    /** Format the daemon asks for on the next call unless `start_audio` overrides it. */
+    @Volatile private var preferredCodec = PhoneCodec.AUTO
+
+    @Volatile private var maxBitrate = PhoneSettings.DEFAULT_MAX_BITRATE
+
+    /** Phone-owned preferences, kept current from DataStore for hello, set_prefs and the lock. */
+    @Volatile private var phoneSettings = PhoneSettings()
+
+    /** True once this link has answered the handshake, so `set_prefs` never precedes `hello`. */
+    @Volatile private var helloDelivered = false
+
+    @Volatile private var settingsLoaded = false
+
+    private val preferences = PhoneSettingsStore.of(appContext)
+
+    // WIFI_MODE_FULL_LOW_LATENCY is what keeps audio latency stable on a busy Wi-Fi network;
+    // it is held only while the link is up and the setting is on.
+    private val wifiLock: WifiManager.WifiLock? = appContext.getSystemService(WifiManager::class.java)
+        ?.createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "phonxiety:low-latency")
+        ?.apply { setReferenceCounted(false) }
+
+    private var lastRouteKey: String? = null
+
+    private val linkKind: LinkKind = when (config) {
+        is BridgeConfig.Address -> LinkKind.WEBSOCKET
+        is BridgeConfig.Iroh -> LinkKind.IROH
+    }
 
     // ACCESS_NETWORK_STATE is a normal permission declared by this module; the
     // wake lock is held for the lifetime of the foreground service, which is
@@ -116,8 +224,23 @@ class BridgeEngine(
             running = true
             restoreLedgerLocked()
         }
+        stateStore.linkConnecting(linkKind)
         runCatching { wakeLock?.acquire() }
         onLinkState(R.string.notification_link_waiting)
+        telemetryJob = engineScope.launch {
+            while (isActive && running) {
+                runCatching { sampleDeviceState() }.getOrNull()?.let { stateStore.device(it) }
+                delay(TELEMETRY_INTERVAL_MS)
+            }
+        }
+        engineScope.launch {
+            runCatching {
+                preferences.settings.collect {
+                    settingsLoaded = true
+                    applySettings(it)
+                }
+            }
+        }
         try {
             scheduler.schedule({
                 safe { adoptExistingCalls() }
@@ -128,16 +251,18 @@ class BridgeEngine(
             return
         }
         scheduler.scheduleWithFixedDelay({ safe { links.tick() } }, 1, 1, TimeUnit.SECONDS)
+        scheduler.scheduleWithFixedDelay({ safe { publishRoute() } }, 1, 1, TimeUnit.SECONDS)
         scheduler.scheduleWithFixedDelay({ safe { emitPlayback() } }, 500, 500, TimeUnit.MILLISECONDS)
+        scheduler.scheduleWithFixedDelay({ safe { emitAudioLevels() } }, AUDIO_LEVEL_INTERVAL_MS, AUDIO_LEVEL_INTERVAL_MS, TimeUnit.MILLISECONDS)
         scheduler.scheduleWithFixedDelay({ safe { expirePendingDial() } }, 5, 5, TimeUnit.SECONDS)
         runCatching {
-            appContext.getSystemService(android.net.ConnectivityManager::class.java)
+            appContext.getSystemService(ConnectivityManager::class.java)
                 ?.registerDefaultNetworkCallback(networkCallback)
         }
     }
 
     /** A link waiting out its backoff retries as soon as a network is back. */
-    private val networkCallback = object : android.net.ConnectivityManager.NetworkCallback() {
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: android.net.Network) {
             try {
                 scheduler.execute { safe { links.networkAvailable() } }
@@ -150,11 +275,13 @@ class BridgeEngine(
     fun close() {
         if (!closeOnce.compareAndSet(false, true)) return
         synchronized(lock) { running = false }
+        engineScope.cancel()
         runCatching {
-            appContext.getSystemService(android.net.ConnectivityManager::class.java)
+            appContext.getSystemService(ConnectivityManager::class.java)
                 ?.unregisterNetworkCallback(networkCallback)
         }
         links.cancel()
+        failPendingApi("link_down", "the bridge is shutting down")
         scheduler.shutdownNow()
         abortOwnedOnShutdown()
         commandExecutor.shutdownNow()
@@ -162,7 +289,10 @@ class BridgeEngine(
         dtmfExecutor.shutdownNow()
         callbackThread.quitSafely()
         runCatching { if (wakeLock?.isHeld == true) wakeLock?.release() }
+        runCatching { if (wifiLock?.isHeld == true) wifiLock?.release() }
         links.shutdown()
+        stateStore.reset()
+        runCatching { engineDispatcher.close() }
     }
 
     /** `dialing`, `active` or `ending` while this engine owns a call. */
@@ -184,8 +314,76 @@ class BridgeEngine(
         try {
             block()
         } catch (t: Throwable) {
-            Log.e(TAG, "background task failed: ${t.javaClass.simpleName}")
+            BridgeLog.e(TAG, "background task failed: ${t.javaClass.simpleName}")
         }
+    }
+
+    private fun send(message: DeviceOutbound): Boolean = links.sendText(DeviceProtocol.encode(message))
+
+    /**
+     * One phone preference change: remember it for the next hello, apply the local effects, and
+     * tell a live daemon so the next call uses it without a reconnect.
+     */
+    private fun applySettings(settings: PhoneSettings, push: Boolean = true) {
+        val codecChanged = settings.preferredCodec != preferredCodec
+        val bitrateChanged = settings.maxBitrate != maxBitrate
+        phoneSettings = settings
+        preferredCodec = settings.preferredCodec
+        maxBitrate = settings.maxBitrate
+        BridgeLog.minimumLevel = BridgeLog.levelOf(settings.logLevel) ?: BridgeLog.INFO
+        applyWifiLock()
+        if (push && helloDelivered && links.isUp() && (codecChanged || bitrateChanged)) {
+            send(
+                DeviceOutbound.SetPrefs(
+                    preferredCodec = settings.preferredCodec,
+                    maxBitrate = settings.maxBitrate
+                )
+            )
+        }
+    }
+
+    /**
+     * The first `hello` must carry what the phone stored, not the defaults: a call can start
+     * seconds after the link comes up.  The link's own thread waits for one small disk read
+     * instead of racing a coroutine.
+     */
+    private fun loadSettingsBeforeHello() {
+        if (settingsLoaded) return
+        runCatching {
+            runBlocking(Dispatchers.IO) {
+                withTimeoutOrNull(SETTINGS_READ_TIMEOUT_MS) { preferences.read() }
+            }?.let { loaded ->
+                settingsLoaded = true
+                applySettings(loaded, push = false)
+            }
+        }
+    }
+
+    /** Holds the Wi-Fi low-latency lock exactly while the link is up and the setting is on. */
+    private fun applyWifiLock() {
+        val wanted = phoneSettings.wifiLowLatency && links.isUp()
+        runCatching {
+            if (wanted) {
+                if (wifiLock?.isHeld != true) wifiLock?.acquire()
+            } else if (wifiLock?.isHeld == true) {
+                wifiLock.release()
+            }
+        }
+    }
+
+    private fun publishRoute() {
+        val route = links.route() ?: return
+        val key = "${route.relay}|${route.rttMs}"
+        if (key == lastRouteKey) return
+        lastRouteKey = key
+        stateStore.route(RouteSnapshot(route.relay, route.rttMs))
+        onLinkState(R.string.notification_link_connected)
+        send(
+            DeviceOutbound.LinkRoute(
+                path = if (route.relay) "relay" else "direct",
+                rttMs = route.rttMs
+            )
+        )
     }
 
     /**
@@ -207,6 +405,18 @@ class BridgeEngine(
     private inner class LinkCallbacks : LinkSupervisor.Callbacks {
         override fun onLinkOpened(): Boolean {
             onLinkState(R.string.notification_link_connected)
+            stateStore.linkUp(
+                kind = linkKind,
+                route = links.route()?.let { RouteSnapshot(it.relay, it.rttMs) },
+                sinceEpochMs = System.currentTimeMillis(),
+                reconnects = links.reconnects(),
+                address = when (config) {
+                    is BridgeConfig.Address -> config.host
+                    is BridgeConfig.Iroh -> IrohSupport.shortEndpointId(config.ticket)
+                }
+            )
+            engineScope.launch { refreshCapabilities() }
+            applyWifiLock()
             return sendHello()
         }
 
@@ -220,33 +430,53 @@ class BridgeEngine(
 
         override fun onLinkDown(reason: String) {
             onLinkState(R.string.notification_link_waiting)
+            lastRouteKey = null
+            helloDelivered = false
+            applyWifiLock()
+            stateStore.linkDown(LinkError(code = reason, message = linkMessage(reason), atEpochMs = System.currentTimeMillis()))
+            failPendingApi("link_down", "the device link went down")
             abortOwnedForLinkLoss()
         }
     }
 
+    private fun linkMessage(reason: String): String = when (reason) {
+        "host_timeout" -> "the daemon stopped answering"
+        "connect_failed" -> "cannot reach the daemon"
+        "network_changed" -> "the network changed"
+        "network_lost" -> "the network is gone"
+        "closed", "closing" -> "the daemon closed the link"
+        "protocol" -> "the daemon spoke an unknown protocol"
+        "write_failed" -> "the link stopped accepting data"
+        else -> reason
+    }
+
     private fun onText(text: String) {
-        if (text.length > MAX_CONTROL_CHARS) {
-            Log.w(TAG, "ignoring oversized control message")
+        if (text.length > MAX_TEXT_CHARS) {
+            BridgeLog.w(TAG, "ignoring oversized control message")
             return
         }
-        val message = try {
-            JSONObject(text)
-        } catch (_: Exception) {
-            return
-        }
-        if (message.optString("type") != "command") return
-        val id = message.optString("id", "")
-        val command = message.optString("command", "")
-        if (id.isEmpty() || command.isEmpty()) return
-        try {
-            commandExecutor.execute { handleCommand(id, command, message) }
-        } catch (_: RejectedExecutionException) {
-            // Shutting down.
+        when (ControlEnvelope.type(text)) {
+            "command" -> {
+                val id = ControlEnvelope.id(text)
+                if (id.isNullOrEmpty()) return
+                try {
+                    commandExecutor.execute { handleCommand(id, text) }
+                } catch (_: RejectedExecutionException) {
+                    // Shutting down.
+                }
+            }
+
+            "api_result" -> {
+                val result = runCatching { ControlEnvelope.decodeApiResult(text) }.getOrNull() ?: return
+                apiPending.remove(result.id)?.complete(result)
+            }
+
+            else -> Unit
         }
     }
 
     private fun onBinary(bytes: ByteString) {
-        if (bytes.size < 16 || bytes.size > MAX_CONTROL_CHARS) return
+        if (bytes.size < 16 || bytes.size > MAX_BINARY_BYTES) return
         val audio = synchronized(lock) { owned?.audio }
         if (audio != null) {
             audio.offerFrame(bytes)
@@ -256,45 +486,44 @@ class BridgeEngine(
         }
     }
 
-    private fun sendText(message: JSONObject) {
-        links.sendText(message.toString())
-    }
-
     private fun sendHello(): Boolean {
+        loadSettingsBeforeHello()
         val busy = hasUnrelatedLiveCall()
         val callControl = Permissions.granted(appContext, Permissions.CALL_PHONE) &&
             Permissions.granted(appContext, Permissions.CONTROL_INCALL_EXPERIENCE)
         val frameworkAudio = Permissions.granted(appContext, Permissions.CAPTURE_AUDIO_OUTPUT) &&
             Permissions.granted(appContext, Permissions.MODIFY_PHONE_STATE) &&
             Permissions.granted(appContext, Permissions.RECORD_AUDIO)
-        val activePair: Pair<String, String>? = synchronized(lock) {
+        val active: DeviceActiveCall? = synchronized(lock) {
             val current = owned
-            if (current == null || current.finished) null else current.callId to current.state
+            if (current == null || current.finished) null else DeviceActiveCall(current.callId, current.state)
         }
-        val active: Any = if (activePair == null) {
-            JSONObject.NULL
-        } else {
-            JSONObject()
-                .put("call_id", activePair.first)
-                .put("state", activePair.second)
-        }
-        val hello = JSONObject()
-            .put("type", "hello")
-            .put("version", PROTOCOL_VERSION)
-            .put("device", android.os.Build.DEVICE ?: "unknown")
-            .put("boot_id", deviceBootId)
-            .put(
-                "capabilities",
-                JSONObject()
-                    .put("call_control", callControl)
-                    .put("framework_audio", frameworkAudio)
-                    .put("busy", busy)
-                    .put("link_test", true)
-                    .put("adb_tunnel", config is BridgeConfig.Iroh)
-                    .put("audio_codecs", org.json.JSONArray().put("pcm").put("opus"))
+        val hello = DeviceOutbound.Hello(
+            device = android.os.Build.DEVICE ?: "unknown",
+            bootId = deviceBootId,
+            capabilities = DeviceCapabilities(
+                callControl = callControl,
+                frameworkAudio = frameworkAudio,
+                busy = busy,
+                linkTest = true,
+                adbTunnel = config is BridgeConfig.Iroh,
+                audioCodecs = listOf("pcm", "opus")
+            ),
+            activeCall = active,
+            preferredCodec = preferredCodec,
+            maxBitrate = maxBitrate
+        )
+        val sent = send(hello)
+        helloDelivered = sent
+        if (sent) applyWifiLock()
+        stateStore.capabilities(
+            stateStore.state.value.capabilities.copy(
+                frameworkAudio = frameworkAudio,
+                callControl = callControl,
+                appApi = if (config.appToken != null) stateStore.state.value.capabilities.appApi else null
             )
-            .put("active_call", active)
-        return links.sendText(hello.toString())
+        )
+        return sent
     }
 
     private fun bootId(): String {
@@ -335,49 +564,205 @@ class BridgeEngine(
             Triple(audio, current.callId, current.epoch)
         }
         val stats = state.first.stats()
-        val drained = state.first.drainedMark()
-        val event = JSONObject()
-            .put("type", "playback")
-            .put("call_id", state.second)
-            .put("epoch", state.third)
-            .put("played_samples", stats.first)
-            .put("queued_samples", stats.second)
-        // Only once a mark of this epoch has actually drained.
-        if (drained != null) event.put("drained_mark", drained)
-        sendText(event)
+        send(
+            DeviceOutbound.Playback(
+                callId = state.second,
+                epoch = state.third,
+                playedSamples = stats.first,
+                queuedSamples = stats.second,
+                drainedMark = state.first.drainedMark()
+            )
+        )
+    }
+
+    private fun emitAudioLevels() {
+        val target: Pair<PhoneAudio, String> = synchronized(lock) {
+            val current = owned
+            if (current == null || current.finished) return
+            val audio = current.audio ?: return
+            audio to current.callId
+        }
+        val levels = target.first.levels()
+        send(
+            DeviceOutbound.AudioLevels(
+                callId = target.second,
+                rxDbfs = levels.rxDbfs,
+                txDbfs = levels.txDbfs,
+                queued = levels.queuedSamples / 960
+            )
+        )
+        stateStore.audioLevels(levels.rxDbfs, levels.txDbfs)
+        val diagnostics = target.first.diagnostics()
+        stateStore.audioFrames(
+            framesOut = diagnostics.capturedFrames,
+            framesIn = diagnostics.hostFrames,
+            drops = diagnostics.overflowSamples
+        )
     }
 
     // ------------------------------------------------------------------
     // Commands
     // ------------------------------------------------------------------
 
-    private fun handleCommand(id: String, command: String, message: JSONObject) {
+    private fun handleCommand(envelopeId: String, text: String) {
         if (!running) return
+        val command = try {
+            DeviceProtocol.decodeCommand(text)
+        } catch (_: SerializationException) {
+            replyError(envelopeId, "unknown_command")
+            return
+        } catch (_: IllegalArgumentException) {
+            replyError(envelopeId, "unknown_command")
+            return
+        }
+        val id = command.id.ifEmpty { envelopeId }
         try {
             when (command) {
-                "dial" -> handleDial(id, message)
-                "hangup" -> handleHangup(id, message)
-                "start_audio" -> handleStartAudio(id, message)
-                "flush" -> handleFlush(id, message)
-                "dtmf" -> handleDtmf(id, message)
-                "cancel_actions" -> handleCancelActions(id, message)
-                "ping" -> replyOk(id, JSONObject().put("pong", true))
-                else -> replyError(id, "unknown_command")
+                is DeviceCommand.Dial -> handleDial(id, command)
+                is DeviceCommand.Hangup -> handleHangup(id, command)
+                is DeviceCommand.StartAudio -> handleStartAudio(id, command)
+                is DeviceCommand.Flush -> handleFlush(id, command)
+                is DeviceCommand.Dtmf -> handleDtmf(id, command)
+                is DeviceCommand.CancelActions -> handleCancelActions(id, command)
+                is DeviceCommand.Ping -> replyOk(id, buildJsonObject { put("pong", true) })
+                is DeviceCommand.SetPrefs -> handleSetPrefs(id, command)
+                is DeviceCommand.LoopbackStart -> handleLoopback(id, command, enabled = true)
+                is DeviceCommand.LoopbackStop -> handleLoopback(id, command, enabled = false)
+                is DeviceCommand.ToneStart -> handleToneStart(id, command)
+                is DeviceCommand.ToneStop -> handleToneStop(id, command)
+                is DeviceCommand.Diagnostics -> handleDiagnostics(id)
             }
         } catch (e: CommandException) {
             replyError(id, e.code)
         } catch (e: Exception) {
-            Log.e(TAG, "command failed: ${e.javaClass.simpleName}")
+            BridgeLog.e(TAG, "command failed: ${e.javaClass.simpleName}")
             replyError(id, "internal_error")
         }
+    }
+
+    private fun handleSetPrefs(id: String, command: DeviceCommand.SetPrefs) {
+        val codec = command.codec?.let { value ->
+            if (value !in PhoneCodec.all) throw CommandException("codec_unsupported")
+            PhoneCodec.normalize(value)
+        } ?: preferredCodec
+        val bitrate = command.bitrate?.also { value ->
+            if (value !in 6_000..128_000) throw CommandException("bitrate_invalid")
+        } ?: maxBitrate
+        preferredCodec = codec
+        maxBitrate = bitrate
+        replyOk(
+            id,
+            buildJsonObject {
+                put("codec", preferredCodec)
+                put("bitrate", maxBitrate)
+            }
+        )
+    }
+
+    private fun handleLoopback(id: String, command: DeviceCommand, enabled: Boolean) {
+        val callId = when (command) {
+            is DeviceCommand.LoopbackStart -> command.callId
+            is DeviceCommand.LoopbackStop -> command.callId
+            else -> null
+        }
+        val (audio, ownerCallId) = synchronized(lock) {
+            val current = owned
+            if (current == null || current.finished) throw CommandException("not_owned")
+            if (callId != null && current.callId != callId) throw CommandException("not_owned")
+            val active = current.audio ?: throw CommandException("audio_not_started")
+            active to current.callId
+        }
+        val applied = audio.setLoopback(enabled)
+        replyOk(
+            id,
+            buildJsonObject {
+                put("call_id", ownerCallId)
+                put("enabled", applied)
+            }
+        )
+    }
+
+    private fun handleToneStart(id: String, command: DeviceCommand.ToneStart) {
+        val (audio, ownerCallId) = synchronized(lock) {
+            val current = owned
+            if (current == null || current.finished) throw CommandException("not_owned")
+            if (command.callId != null && current.callId != command.callId) throw CommandException("not_owned")
+            val active = current.audio ?: throw CommandException("audio_not_started")
+            active to current.callId
+        }
+        if (command.hz !in 100..4_000) throw CommandException("hz_invalid")
+        if (command.dbfs !in -60.0..0.0) throw CommandException("dbfs_invalid")
+        if (!audio.startTone(command.hz, command.dbfs)) throw CommandException("audio_not_started")
+        replyOk(
+            id,
+            buildJsonObject {
+                put("call_id", ownerCallId)
+                put("hz", command.hz)
+                put("dbfs", command.dbfs)
+                put("started", true)
+            }
+        )
+    }
+
+    private fun handleToneStop(id: String, command: DeviceCommand.ToneStop) {
+        val (audio, ownerCallId) = synchronized(lock) {
+            val current = owned
+            if (current == null || current.finished) throw CommandException("not_owned")
+            if (command.callId != null && current.callId != command.callId) throw CommandException("not_owned")
+            val active = current.audio ?: throw CommandException("audio_not_started")
+            active to current.callId
+        }
+        audio.stopTone()
+        replyOk(
+            id,
+            buildJsonObject {
+                put("call_id", ownerCallId)
+                put("started", false)
+            }
+        )
+    }
+
+    private fun handleDiagnostics(id: String) {
+        var callId: String? = null
+        var callState: String? = null
+        var epoch = -1L
+        var audioState: PhoneAudio? = null
+        synchronized(lock) {
+            val current = owned
+            if (current != null && !current.finished) {
+                callId = current.callId
+                callState = current.state
+                epoch = current.epoch
+                audioState = current.audio
+            }
+        }
+        val diagnostics = DiagnosticsSnapshot(
+            engine = EngineDiagnostics(
+                running = running,
+                callId = callId,
+                state = callState,
+                epoch = epoch,
+                uptimeSeconds = (SystemClock.elapsedRealtime() - startedElapsed) / 1_000,
+                activeCalls = if (ownsCall()) 1 else 0
+            ),
+            audio = audioState?.diagnostics() ?: AudioDiagnostics(),
+            link = LinkDiagnostics(
+                up = links.isUp(),
+                path = links.route()?.let { if (it.relay) "relay" else "direct" },
+                rttMs = links.route()?.rttMs,
+                backlogBytes = links.backlogBytes(),
+                reconnects = links.reconnects()
+            )
+        )
+        replyOk(id, json.encodeToJsonElement(DiagnosticsSnapshot.serializer(), diagnostics).jsonObject)
     }
 
     // CALL_PHONE and READ_PHONE_STATE are checked by the command handler before
     // this runs, and a SecurityException is translated to call_permission_denied.
     @SuppressLint("MissingPermission")
-    private fun handleDial(id: String, message: JSONObject) {
-        val callId = callIdOf(message)
-        val destination = message.optString("destination", "").trim()
+    private fun handleDial(id: String, command: DeviceCommand.Dial) {
+        val callId = command.callId.ifEmpty { throw CommandException("call_id_required") }
+        val destination = command.destination.trim()
         if (!DESTINATION.matches(destination)) throw CommandException("destination_invalid")
         // The bridge never dials emergency services.  The SIM and network define
         // which numbers those are, so ask telephony; refuse if it cannot answer.
@@ -389,7 +774,7 @@ class BridgeEngine(
         if (emergency != false) {
             throw CommandException(if (emergency == true) "emergency_number" else "emergency_check_unavailable")
         }
-        val requestedAccount = message.optString("phone_account", "").trim().ifEmpty { null }
+        val requestedAccount = command.phoneAccount?.trim()?.ifEmpty { null }
         val unrelatedCall = hasUnrelatedLiveCall()
 
         var duplicateState: String? = null
@@ -431,15 +816,18 @@ class BridgeEngine(
         }
         val duplicate = duplicateState
         if (duplicate != null) {
+            stateStore.callStarted(callId, maskDestination(destination), System.currentTimeMillis())
+            stateStore.callPhase(callPhaseOf(duplicate))
             if (duplicate == "failed") {
                 replyError(id, "dial_failed_previous")
             } else {
                 replyOk(
                     id,
-                    JSONObject()
-                        .put("call_id", callId)
-                        .put("state", duplicate)
-                        .put("duplicate", true)
+                    buildJsonObject {
+                        put("call_id", callId)
+                        put("state", duplicate)
+                        put("duplicate", true)
+                    }
                 )
             }
             return
@@ -481,27 +869,30 @@ class BridgeEngine(
             manager.placeCall(Uri.fromParts("tel", destination, null), extras)
         } catch (_: SecurityException) {
             clearFailedDial(callId)
-            Log.e(TAG, "placeCall denied")
+            BridgeLog.e(TAG, "placeCall denied")
             throw CommandException("call_permission_denied")
         } catch (e: Exception) {
             clearFailedDial(callId)
-            Log.e(TAG, "placeCall failed: ${e.javaClass.simpleName}")
+            BridgeLog.e(TAG, "placeCall failed: ${e.javaClass.simpleName}")
             throw CommandException("dial_failed")
         }
 
+        stateStore.callStarted(callId, maskDestination(destination), System.currentTimeMillis())
         val state = synchronized(lock) {
             owned?.takeIf { it.callId == callId }?.state ?: "dialing"
         }
+        stateStore.callPhase(callPhaseOf(state))
         replyOk(
             id,
-            JSONObject()
-                .put("call_id", callId)
-                .put("state", state)
+            buildJsonObject {
+                put("call_id", callId)
+                put("state", state)
+            }
         )
     }
 
-    private fun handleHangup(id: String, message: JSONObject) {
-        val callId = callIdOf(message)
+    private fun handleHangup(id: String, command: DeviceCommand.Hangup) {
+        val callId = command.callId.ifEmpty { throw CommandException("call_id_required") }
         var audio: PhoneAudio? = null
         var call: Call? = null
         var toneOwner: OwnedCall? = null
@@ -535,7 +926,7 @@ class BridgeEngine(
                     try {
                         ledger.cancel(current.callId)
                     } catch (e: CallLedgerException) {
-                        Log.e(TAG, "cancellation not durable: ${e.message}")
+                        BridgeLog.e(TAG, "cancellation not durable: ${e.message}")
                     }
                 }
                 current.cancelled = true
@@ -558,8 +949,15 @@ class BridgeEngine(
             }
         }
         if (terminalState != null) {
-            val terminal = terminalState
-            replyOk(id, JSONObject().put("call_id", callId).put("state", terminal))
+            val terminal = terminalState ?: "ended"
+            stateStore.callPhase(callPhaseOf(terminal))
+            replyOk(
+                id,
+                buildJsonObject {
+                    put("call_id", callId)
+                    put("state", terminal)
+                }
+            )
             return
         }
         toneOwner?.let { cancelToneFor(it) }
@@ -577,7 +975,14 @@ class BridgeEngine(
                     }
                 }
                 if (terminal != null) {
-                    replyOk(id, JSONObject().put("call_id", callId).put("state", terminal))
+                    stateStore.callPhase(callPhaseOf(terminal))
+                    replyOk(
+                        id,
+                        buildJsonObject {
+                            put("call_id", callId)
+                            put("state", terminal)
+                        }
+                    )
                 } else {
                     replyError(id, "disconnect_failed")
                 }
@@ -585,18 +990,27 @@ class BridgeEngine(
             }
         }
         if (pendingOnly) {
-            Log.w(TAG, "hangup requested before the telecom call appeared; retained")
+            BridgeLog.w(TAG, "hangup requested before the telecom call appeared; retained")
         }
-        replyOk(id, JSONObject().put("call_id", callId).put("state", "ending"))
+        stateStore.callPhase(CallPhase.ENDING)
+        replyOk(
+            id,
+            buildJsonObject {
+                put("call_id", callId)
+                put("state", "ending")
+            }
+        )
     }
 
-    private fun handleStartAudio(id: String, message: JSONObject) {
-        val callId = callIdOf(message)
-        val epoch = epochOf(message)
-        val opusBitrate = when (message.optString("codec", "pcm")) {
+    private fun handleStartAudio(id: String, command: DeviceCommand.StartAudio) {
+        val callId = command.callId.ifEmpty { throw CommandException("call_id_required") }
+        val epoch = command.epoch
+        if (epoch < 0 || epoch > 0xFFFFFFFFL) throw CommandException("epoch_invalid")
+        val codec = command.codec ?: if (preferredCodec == PhoneCodec.AUTO) PhoneCodec.OPUS else preferredCodec
+        val opusBitrate = when (codec) {
             "pcm" -> null
 
-            "opus" -> message.optInt("bitrate", 32_000).also {
+            "opus" -> (command.bitrate ?: maxBitrate).also {
                 if (it !in 6_000..128_000) throw CommandException("bitrate_invalid")
             }
 
@@ -614,11 +1028,12 @@ class BridgeEngine(
             if (current.audio != null && current.epoch == epoch) {
                 replyOk(
                     id,
-                    JSONObject()
-                        .put("call_id", callId)
-                        .put("epoch", epoch)
-                        .put("state", "started")
-                        .put("codec", current.audio!!.codec)
+                    buildJsonObject {
+                        put("call_id", callId)
+                        put("epoch", epoch)
+                        put("state", "started")
+                        put("codec", current.audio!!.codec)
+                    }
                 )
                 return
             }
@@ -650,7 +1065,7 @@ class BridgeEngine(
             throw CommandException(e.code)
         } catch (e: Exception) {
             audio.close()
-            Log.e(TAG, "audio start failed: ${e.javaClass.simpleName}")
+            BridgeLog.e(TAG, "audio start failed: ${e.javaClass.simpleName}")
             throw CommandException("audio_start_failed")
         }
 
@@ -669,19 +1084,22 @@ class BridgeEngine(
             audio.close()
             throw CommandException("not_active")
         }
+        stateStore.audio(audio.codec, opusBitrate)
         replyOk(
             id,
-            JSONObject()
-                .put("call_id", callId)
-                .put("epoch", epoch)
-                .put("state", "started")
-                .put("codec", audio.codec)
+            buildJsonObject {
+                put("call_id", callId)
+                put("epoch", epoch)
+                put("state", "started")
+                put("codec", audio.codec)
+            }
         )
     }
 
-    private fun handleFlush(id: String, message: JSONObject) {
-        val callId = callIdOf(message)
-        val epoch = epochOf(message)
+    private fun handleFlush(id: String, command: DeviceCommand.Flush) {
+        val callId = command.callId.ifEmpty { throw CommandException("call_id_required") }
+        val epoch = command.epoch
+        if (epoch < 0 || epoch > 0xFFFFFFFFL) throw CommandException("epoch_invalid")
         val audio = synchronized(lock) {
             val current = owned
             if (current == null || current.callId != callId) throw CommandException("not_owned")
@@ -690,11 +1108,12 @@ class BridgeEngine(
             if (epoch < current.epoch) {
                 replyOk(
                     id,
-                    JSONObject()
-                        .put("call_id", callId)
-                        .put("epoch", epoch)
-                        .put("flushed", false)
-                        .put("obsolete", true)
+                    buildJsonObject {
+                        put("call_id", callId)
+                        put("epoch", epoch)
+                        put("flushed", false)
+                        put("obsolete", true)
+                    }
                 )
                 return
             }
@@ -704,16 +1123,18 @@ class BridgeEngine(
         if (!audio.flush()) throw CommandException("flush_failed")
         replyOk(
             id,
-            JSONObject()
-                .put("call_id", callId)
-                .put("epoch", epoch)
-                .put("flushed", true)
+            buildJsonObject {
+                put("call_id", callId)
+                put("epoch", epoch)
+                put("flushed", true)
+            }
         )
     }
 
-    private fun handleCancelActions(id: String, message: JSONObject) {
-        val callId = callIdOf(message)
-        val generation = generationOf(message)
+    private fun handleCancelActions(id: String, command: DeviceCommand.CancelActions) {
+        val callId = command.callId.ifEmpty { throw CommandException("call_id_required") }
+        val generation = command.actionGeneration
+        if (generation < 0) throw CommandException("action_generation_invalid")
         var target: OwnedCall? = null
         var known = false
         synchronized(lock) {
@@ -737,25 +1158,26 @@ class BridgeEngine(
         }
         replyOk(
             id,
-            JSONObject()
-                .put("call_id", callId)
-                .put("action_generation", generation)
-                .put("cancelled", cancelledCall != null)
+            buildJsonObject {
+                put("call_id", callId)
+                put("action_generation", generation)
+                put("cancelled", cancelledCall != null)
+            }
         )
     }
 
-    private fun handleDtmf(id: String, message: JSONObject) {
-        val callId = callIdOf(message)
-        val generation = generationOf(message)
-        val rawDigits = message.optString("digits", "")
-        val digits = rawDigits.uppercase(Locale.ROOT)
+    private fun handleDtmf(id: String, command: DeviceCommand.Dtmf) {
+        val callId = command.callId.ifEmpty { throw CommandException("call_id_required") }
+        val generation = command.actionGeneration
+        if (generation < 0) throw CommandException("action_generation_invalid")
+        val digits = command.digits.uppercase(Locale.ROOT)
         if (digits.isEmpty() || digits.length > 64 ||
             digits.any { it !in "0123456789*#ABCD" }
         ) {
             throw CommandException("digits_invalid")
         }
-        val toneMs = message.optInt("tone_ms", 120).coerceIn(40, 1000)
-        val gapMs = message.optInt("gap_ms", 80).coerceIn(0, 1000)
+        val toneMs = command.toneMs.coerceIn(40, 1000)
+        val gapMs = command.gapMs.coerceIn(0, 1000)
 
         var bumped = false
         val target = synchronized(lock) {
@@ -847,11 +1269,12 @@ class BridgeEngine(
         } else {
             replyOk(
                 id,
-                JSONObject()
-                    .put("call_id", call.callId)
-                    .put("action_generation", generation)
-                    .put("digits", digits)
-                    .put("completed", true)
+                buildJsonObject {
+                    put("call_id", call.callId)
+                    put("action_generation", generation)
+                    put("digits", digits)
+                    put("completed", true)
+                }
             )
         }
     }
@@ -872,6 +1295,7 @@ class BridgeEngine(
                 }
             }
         }
+        @Suppress("UNREACHABLE_CODE")
         return false
     }
 
@@ -898,14 +1322,11 @@ class BridgeEngine(
             }
         }
         if (report) {
-            sendText(
-                JSONObject()
-                    .put("type", "audio_error")
-                    .put("call_id", callId)
-                    .put("error", reason)
-            )
+            send(DeviceOutbound.AudioError(callId = callId, error = reason))
+            stateStore.error("audio_error", "the call audio failed: $reason")
         }
         audio?.close()
+        stateStore.audioReset()
     }
 
     // ------------------------------------------------------------------
@@ -950,11 +1371,11 @@ class BridgeEngine(
             } else if (current == null || current.call == null) {
                 orphanCancellation = takeOrphanLocked(call)
                 if (orphanCancellation == null) {
-                    Log.i(TAG, "ignoring telecom call not owned by the bridge")
+                    BridgeLog.i(TAG, "ignoring telecom call not owned by the bridge")
                     return
                 }
             } else {
-                Log.i(TAG, "ignoring telecom call while an owned call is attached")
+                BridgeLog.i(TAG, "ignoring telecom call while an owned call is attached")
                 return
             }
         }
@@ -983,14 +1404,14 @@ class BridgeEngine(
                     cleanup(call)
                 }
             }
-            val registered = try {
+            val registeredOrphan = try {
                 call.registerCallback(orphanCallback, callbackHandler)
                 true
             } catch (_: Exception) {
                 false
             }
             runCatching { call.disconnect() }
-            if (!registered || stateOf(call) == Call.STATE_DISCONNECTED) {
+            if (!registeredOrphan || stateOf(call) == Call.STATE_DISCONNECTED) {
                 // No callback will arrive for a Call that is already gone.
                 cleanup(call)
             }
@@ -1002,18 +1423,18 @@ class BridgeEngine(
             call.registerCallback(callback, callbackHandler)
             registered = true
         } catch (e: Exception) {
-            Log.e(TAG, "call callback registration failed: ${e.javaClass.simpleName}")
+            BridgeLog.e(TAG, "call callback registration failed: ${e.javaClass.simpleName}")
         }
         reportState(target, mapState(stateOf(call)), disconnectCause(call))
         if (cancelledDial) {
             try {
                 call.disconnect()
             } catch (_: Exception) {
-                Log.w(TAG, "could not disconnect cancelled dial")
+                BridgeLog.w(TAG, "could not disconnect cancelled dial")
             }
         }
         if (!registered) {
-            Log.w(TAG, "owned call has no state callbacks")
+            BridgeLog.w(TAG, "owned call has no state callbacks")
         }
     }
 
@@ -1026,7 +1447,7 @@ class BridgeEngine(
         var audio: PhoneAudio? = null
         var toneOwner: OwnedCall? = null
         var finish = false
-        var cause: JSONObject? = null
+        var cause: DisconnectCause? = null
         synchronized(lock) {
             val current = owned
             if (current == null || current.call !== call || current.finished) return
@@ -1053,7 +1474,7 @@ class BridgeEngine(
         var audio: PhoneAudio? = null
         var toneOwner: OwnedCall? = null
         var finish = false
-        var cause: JSONObject? = null
+        var cause: DisconnectCause? = null
         synchronized(lock) {
             val current = owned
             if (current == null || current.call !== call || current.finished) return
@@ -1079,7 +1500,7 @@ class BridgeEngine(
         finishOwned(call, disconnectCause(call))
     }
 
-    private fun finishOwned(call: Call, cause: JSONObject?) {
+    private fun finishOwned(call: Call, cause: DisconnectCause?) {
         var audio: PhoneAudio? = null
         var callback: Call.Callback? = null
         var finished: OwnedCall? = null
@@ -1099,7 +1520,7 @@ class BridgeEngine(
             try {
                 ledger.finish(current.callId, current.destination, "ended")
             } catch (e: CallLedgerException) {
-                Log.e(TAG, "terminal state not durable: ${e.message}")
+                BridgeLog.e(TAG, "terminal state not durable: ${e.message}")
             }
         }
         val target = finished ?: return
@@ -1108,6 +1529,7 @@ class BridgeEngine(
         callback?.let { cb -> runCatching { call.unregisterCallback(cb) } }
         cancelToneFor(target)
         restoreMuteForCall(target.callId, call)
+        stateStore.audioReset()
     }
 
     private fun matchesPending(current: OwnedCall, call: Call): Boolean {
@@ -1191,14 +1613,15 @@ class BridgeEngine(
 
     private fun stateOf(call: Call): Int = detailsOf(call)?.state ?: Call.STATE_NEW
 
-    private fun disconnectCause(call: Call): JSONObject? = disconnectCause(detailsOf(call))
+    private fun disconnectCause(call: Call): DisconnectCause? = disconnectCause(detailsOf(call))
 
-    private fun disconnectCause(details: Call.Details?): JSONObject? {
+    private fun disconnectCause(details: Call.Details?): DisconnectCause? {
         val cause = details?.disconnectCause ?: return null
-        return JSONObject()
-            .put("code", cause.code)
-            .put("label", cause.label?.toString() ?: "")
-            .put("reason", cause.reason ?: "")
+        return DisconnectCause(
+            code = cause.code,
+            label = cause.label?.toString() ?: "",
+            reason = cause.reason ?: ""
+        )
     }
 
     private fun abortOwnedForLinkLoss() {
@@ -1221,7 +1644,7 @@ class BridgeEngine(
                     ledger.cancel(current.callId)
                 }
             } catch (e: CallLedgerException) {
-                Log.e(TAG, "link-loss cancellation not durable: ${e.message}")
+                BridgeLog.e(TAG, "link-loss cancellation not durable: ${e.message}")
             }
             current.cancelled = true
             current.generation.set(Long.MAX_VALUE)
@@ -1241,8 +1664,9 @@ class BridgeEngine(
         toneOwner?.let { cancelToneFor(it) }
         call?.let { runCatching { it.disconnect() } }
         if (pendingOnly) {
-            Log.w(TAG, "link lost before the telecom call appeared; cancellation retained as an orphan")
+            BridgeLog.w(TAG, "link lost before the telecom call appeared; cancellation retained as an orphan")
         }
+        stateStore.audioReset()
     }
 
     private fun abortOwnedOnShutdown() {
@@ -1260,7 +1684,7 @@ class BridgeEngine(
                     ttlMs = ORPHAN_CANCEL_TTL_MS
                 )
             } catch (e: CallLedgerException) {
-                Log.e(TAG, "shutdown cancellation not durable: ${e.message}")
+                BridgeLog.e(TAG, "shutdown cancellation not durable: ${e.message}")
             }
             current.cancelled = true
             current.generation.set(Long.MAX_VALUE)
@@ -1281,6 +1705,8 @@ class BridgeEngine(
         callback?.let { cb -> runCatching { call?.unregisterCallback(cb) } }
         call?.let { runCatching { it.disconnect() } }
         toneOwner?.let { cancelToneFor(it) }
+        stateStore.callEnded()
+        stateStore.audioReset()
     }
 
     private fun expirePendingDial() {
@@ -1299,19 +1725,13 @@ class BridgeEngine(
             try {
                 ledger.finish(current.callId, current.destination, "ended")
             } catch (e: CallLedgerException) {
-                Log.e(TAG, "pending expiry not durable: ${e.message}")
+                BridgeLog.e(TAG, "pending expiry not durable: ${e.message}")
             }
             expired = current
         }
         val target = expired ?: return
-        Log.w(TAG, "pending dial expired without a telecom call")
-        sendText(
-            JSONObject()
-                .put("type", "call_state")
-                .put("call_id", target.callId)
-                .put("state", "ended")
-                .put("disconnect_cause", JSONObject.NULL)
-        )
+        BridgeLog.w(TAG, "pending dial expired without a telecom call")
+        reportState(target, "ended", null)
         restoreMuteForCall(target.callId)
     }
 
@@ -1352,7 +1772,7 @@ class BridgeEngine(
                     ttlMs = ORPHAN_CANCEL_TTL_MS
                 )
             } catch (e: CallLedgerException) {
-                Log.e(TAG, "recovered cancellation not durable: ${e.message}")
+                BridgeLog.e(TAG, "recovered cancellation not durable: ${e.message}")
             }
             val synthetic = OwnedCall(
                 callId = pending.callId,
@@ -1373,7 +1793,7 @@ class BridgeEngine(
             try {
                 ledger.finish(pending.callId, pending.destination, "ended")
             } catch (e: CallLedgerException) {
-                Log.e(TAG, "recovered terminal state not durable: ${e.message}")
+                BridgeLog.e(TAG, "recovered terminal state not durable: ${e.message}")
             }
             return
         }
@@ -1388,7 +1808,9 @@ class BridgeEngine(
         restored.state = pending.state
         restored.reportedState = pending.state
         owned = restored
-        Log.i(TAG, "recovered bridge call intent from durable state")
+        BridgeLog.i(TAG, "recovered bridge call intent from durable state")
+        stateStore.callStarted(pending.callId, maskDestination(pending.destination), System.currentTimeMillis())
+        stateStore.callPhase(callPhaseOf(pending.state))
     }
 
     private fun adoptExistingCalls() {
@@ -1420,7 +1842,7 @@ class BridgeEngine(
         try {
             PhoneAudio.restoreAbandonedMute(appContext)
         } catch (e: Exception) {
-            Log.e(TAG, "microphone restore failed: ${e.javaClass.simpleName}")
+            BridgeLog.e(TAG, "microphone restore failed: ${e.javaClass.simpleName}")
         }
     }
 
@@ -1429,8 +1851,150 @@ class BridgeEngine(
         try {
             PhoneAudio.restoreAbandonedMute(appContext, callId)
         } catch (e: Exception) {
-            Log.e(TAG, "microphone restore failed: ${e.javaClass.simpleName}")
+            BridgeLog.e(TAG, "microphone restore failed: ${e.javaClass.simpleName}")
         }
+    }
+
+    // ------------------------------------------------------------------
+    // App API gateway
+    // ------------------------------------------------------------------
+
+    override val supportsAttachments: Boolean get() = links.supportsAttachments()
+
+    override suspend fun exchange(request: DeviceApiRequest): DeviceApiResult {
+        if (!links.isUp()) {
+            return DeviceApiResult(
+                id = request.id,
+                status = 503,
+                error = DeviceApiError("link_down", "the device link is down")
+            )
+        }
+        val wire = json.encodeToString(DeviceApiRequest.serializer(), request)
+        val deferred = CompletableDeferred<DeviceApiResult>()
+        apiPending[request.id] = deferred
+        try {
+            if (!links.sendText(wire)) {
+                return DeviceApiResult(
+                    id = request.id,
+                    status = 503,
+                    error = DeviceApiError("link_down", "the device link refused the message")
+                )
+            }
+            return withTimeout(APP_REQUEST_TIMEOUT_MS) { deferred.await() }
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            return DeviceApiResult(
+                id = request.id,
+                status = 504,
+                error = DeviceApiError("timeout", "the daemon did not answer in time")
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            return DeviceApiResult(
+                id = request.id,
+                status = 500,
+                error = DeviceApiError("transport_error", e.javaClass.simpleName)
+            )
+        } finally {
+            apiPending.remove(request.id)
+        }
+    }
+
+    override suspend fun receiveAttachment(header: AttachmentHeader, sink: OutputStream): AttachmentOutcome {
+        if (!links.supportsAttachments()) return AttachmentOutcome.Unsupported
+        val wire = json.encodeToString(AttachmentHeader.serializer(), header)
+        val channel = links.openAttachment(wire)
+            ?: return AttachmentOutcome.Failed("link_down", "the device link cannot open an attachment stream")
+        return AttachmentReceiver(channel, sink).receive()
+    }
+
+    private fun failPendingApi(code: String, message: String) {
+        for ((id, deferred) in apiPending) {
+            deferred.complete(DeviceApiResult(id = id, status = 503, error = DeviceApiError(code, message)))
+        }
+        apiPending.clear()
+    }
+
+    private suspend fun refreshCapabilities() {
+        val token = config.appToken ?: return
+        val request = DeviceApiRequest(
+            id = UUID.randomUUID().toString(),
+            method = "GET",
+            path = "/app/v1/info",
+            appToken = token
+        )
+        val result = withTimeoutOrNull(APP_REQUEST_TIMEOUT_MS) { exchange(request) } ?: return
+        val element = result.result ?: return
+        if (result.status !in 200..299) return
+        val info = runCatching {
+            json.decodeFromJsonElement(DaemonInfo.serializer(), element)
+        }.getOrNull() ?: return
+        val current = stateStore.state.value.capabilities
+        stateStore.capabilities(
+            Capabilities(
+                callControl = info.voiceControls.hangup || info.voiceControls.instruction,
+                frameworkAudio = current.frameworkAudio,
+                appApi = info.appApi,
+                daemonVersion = info.daemonVersion
+            )
+        )
+    }
+
+    // ------------------------------------------------------------------
+    // Telemetry
+    // ------------------------------------------------------------------
+
+    @SuppressLint("MissingPermission", "DEPRECATION")
+    private fun sampleDeviceState(): DeviceState {
+        val battery = appContext.getSystemService(BatteryManager::class.java)
+        val batteryPercent = runCatching {
+            battery?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)?.takeIf { it in 0..100 }
+        }.getOrNull()
+        val charging = runCatching { battery?.isCharging }.getOrNull()
+        val power = appContext.getSystemService(PowerManager::class.java)
+        val thermal = runCatching {
+            when (power?.currentThermalStatus) {
+                PowerManager.THERMAL_STATUS_NONE -> "none"
+                PowerManager.THERMAL_STATUS_LIGHT -> "light"
+                PowerManager.THERMAL_STATUS_MODERATE -> "moderate"
+                PowerManager.THERMAL_STATUS_SEVERE -> "severe"
+                PowerManager.THERMAL_STATUS_CRITICAL -> "critical"
+                PowerManager.THERMAL_STATUS_EMERGENCY -> "emergency"
+                PowerManager.THERMAL_STATUS_SHUTDOWN -> "shutdown"
+                else -> null
+            }
+        }.getOrNull()
+        val connectivity = appContext.getSystemService(ConnectivityManager::class.java)
+        val capabilities = runCatching {
+            connectivity?.activeNetwork?.let { connectivity.getNetworkCapabilities(it) }
+        }.getOrNull()
+        val network = when {
+            capabilities == null -> null
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
+            else -> "other"
+        }
+        val rssi = runCatching {
+            @Suppress("DEPRECATION")
+            appContext.getSystemService(WifiManager::class.java)
+                ?.connectionInfo
+                ?.rssi
+                ?.takeIf { it != -127 && it != 0 }
+        }.getOrNull()
+        val dozeExempt = runCatching {
+            power?.isIgnoringBatteryOptimizations(ownerPackage)
+        }.getOrNull()
+        val missing = Permissions.runtimeMissing(appContext) + Permissions.privilegedMissing(appContext)
+        return DeviceState(
+            batteryPercent = batteryPercent,
+            charging = charging,
+            thermal = thermal,
+            network = network,
+            wifiRssi = rssi,
+            dozeExempt = dozeExempt,
+            missingPermissions = missing
+        )
     }
 
     // ------------------------------------------------------------------
@@ -1469,15 +2033,11 @@ class BridgeEngine(
         synchronized(dtmfMonitor) { dtmfMonitor.notifyAll() }
         val telecomCall = synchronized(lock) { call.call }
         runCatching { telecomCall?.stopDtmfTone() }
+        call.audio?.stopTone()
     }
 
-    private fun reportState(call: OwnedCall, state: String, cause: JSONObject?) {
-        val causeKey = cause?.let {
-            val code = it.optInt("code")
-            val label = it.optString("label")
-            val reason = it.optString("reason")
-            "$code|$label|$reason"
-        }
+    private fun reportState(call: OwnedCall, state: String, cause: DisconnectCause?) {
+        val causeKey = cause?.let { "${it.code}|${it.label}|${it.reason}" }
         synchronized(lock) {
             if (call.finished && state != "ended") return
             call.state = state
@@ -1491,56 +2051,19 @@ class BridgeEngine(
             try {
                 ledger.markState(call.callId, state)
             } catch (e: CallLedgerException) {
-                Log.e(TAG, "call state not durable: ${e.message}")
+                BridgeLog.e(TAG, "call state not durable: ${e.message}")
             }
         }
-        sendText(
-            JSONObject()
-                .put("type", "call_state")
-                .put("call_id", call.callId)
-                .put("state", state)
-                .put("disconnect_cause", cause ?: JSONObject.NULL)
-        )
+        send(DeviceOutbound.CallState(call.callId, state, cause))
+        stateStore.callPhase(callPhaseOf(state))
     }
 
-    private fun replyOk(id: String, data: JSONObject) {
-        sendText(
-            JSONObject()
-                .put("type", "response")
-                .put("id", id)
-                .put("ok", true)
-                .put("data", data)
-        )
+    private fun replyOk(id: String, data: JsonObject? = null) {
+        send(DeviceOutbound.Response(id = id, ok = true, data = data))
     }
 
     private fun replyError(id: String, error: String) {
-        sendText(
-            JSONObject()
-                .put("type", "response")
-                .put("id", id)
-                .put("ok", false)
-                .put("error", error)
-        )
-    }
-
-    private fun callIdOf(message: JSONObject): String {
-        val value = message.optString("call_id", "")
-        if (value.isEmpty()) throw CommandException("call_id_required")
-        return value
-    }
-
-    private fun epochOf(message: JSONObject): Long {
-        if (!message.has("epoch")) throw CommandException("epoch_required")
-        val value = message.optLong("epoch", -1)
-        if (value < 0 || value > 0xFFFFFFFFL) throw CommandException("epoch_invalid")
-        return value
-    }
-
-    private fun generationOf(message: JSONObject): Long {
-        if (!message.has("action_generation")) throw CommandException("action_generation_required")
-        val value = message.optLong("action_generation", -1)
-        if (value < 0) throw CommandException("action_generation_invalid")
-        return value
+        send(DeviceOutbound.Response(id = id, ok = false, error = error))
     }
 
     private fun addOrphanLocked(call: OwnedCall) {
@@ -1573,7 +2096,7 @@ class BridgeEngine(
             try {
                 ledger.consumeOrphan(orphan.callId, orphan.dialStartedWall)
             } catch (e: CallLedgerException) {
-                Log.e(TAG, "orphan tombstone not cleared: ${e.message}")
+                BridgeLog.e(TAG, "orphan tombstone not cleared: ${e.message}")
             }
             return orphan
         }
@@ -1600,7 +2123,7 @@ class BridgeEngine(
                 try {
                     ledger.consumeOrphan(orphan.callId, orphan.dialStartedWall)
                 } catch (e: CallLedgerException) {
-                    Log.e(TAG, "orphan tombstone not cleared: ${e.message}")
+                    BridgeLog.e(TAG, "orphan tombstone not cleared: ${e.message}")
                 }
                 return orphan
             }
@@ -1620,10 +2143,12 @@ class BridgeEngine(
                 try {
                     ledger.finish(callId, current.destination, "failed")
                 } catch (e: CallLedgerException) {
-                    Log.e(TAG, "dial failure not durable: ${e.message}")
+                    BridgeLog.e(TAG, "dial failure not durable: ${e.message}")
                 }
             }
         }
+        stateStore.callPhase(CallPhase.ENDED)
+        stateStore.audioReset()
     }
 
     private fun rememberLocked(callId: String, destination: String, state: String) {

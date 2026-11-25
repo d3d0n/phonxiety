@@ -74,6 +74,19 @@ class RootCommand private constructor(
             return RootCommand(listOf("cat", file))
         }
 
+        /**
+         * `pm install -r [-d] <apk>` for the kept previous APK. `-d` allows the downgrade a rollback
+         * always is; the path is validated like every other root argument and must already be under
+         * root-owned temporary storage.
+         */
+        fun pmInstall(apkPath: String, allowDowngrade: Boolean = true): RootCommand {
+            val apk = absolutePath(apkPath, "apk")
+            val argv = mutableListOf("pm", "install", "-r")
+            if (allowDowngrade) argv += "-d"
+            argv += apk
+            return RootCommand(argv)
+        }
+
         /** `reboot`, the fallback when `android.permission.REBOOT` is not granted. */
         fun reboot(): RootCommand = RootCommand(listOf("reboot"))
 

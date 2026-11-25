@@ -12,19 +12,26 @@
         android:name="android.permission.INSTALL_SELF_UPDATES"
         tools:ignore="ProtectedPermissions" />
 
+    <!-- The wizard offers the battery-optimisation exemption before pairing, because a
+         heartbeat miss with the screen off is what kills the link. -->
+    <uses-permission
+        android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"
+        tools:ignore="BatteryLife" />
+
     <application
         android:name=".PhonxietyApp"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
+        android:enableOnBackInvokedCallback="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:networkSecurityConfig="@xml/network_security_config"
         android:supportsRtl="true">
 
         <!--
-            Companion UI: pairing (QR scan or phonxiety://pair link), link
-            status and permission repair.  The bridge components themselves are
-            declared by :core:device and merged from its library manifest.
+            The whole control surface: Compose, Navigation 3, the setup wizard and the dashboard.
+            The bridge components themselves are declared by :core:device and merged from its
+            library manifest.
         -->
         <activity
             android:name=".MainActivity"
@@ -44,6 +51,30 @@
                     android:scheme="phonxiety" />
             </intent-filter>
         </activity>
+
+        <!--
+            Setup resumes on the first launch after the reboot the wizard asked for; the
+            receiver only posts the reminder, never starts an activity from the broadcast.
+        -->
+        <receiver
+            android:name=".SetupResumeReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Recordings and transcripts are shared from the app cache, never from app storage. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 
 </manifest>

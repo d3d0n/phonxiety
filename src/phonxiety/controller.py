@@ -89,6 +89,7 @@ class CallController:
         farewell_quiet: float = 0.8,
         review_quiet: float = 2.0,
         review_max_interval: float = 60,
+        language_hint: str = "",
     ):
         self.store = store
         self.device = device
@@ -103,6 +104,7 @@ class CallController:
         self._farewell_quiet = farewell_quiet
         self._review_quiet = review_quiet
         self._review_max_interval = review_max_interval
+        self._language_hint = language_hint.strip()
         self._calls: dict[str, _Call] = {}
         self._tasks: set[asyncio.Task[Any]] = set()
         self._lock = asyncio.Lock()
@@ -316,9 +318,16 @@ class CallController:
     def _instructions() -> str:
         return render("voice/instructions")
 
-    @staticmethod
-    def _brief(request: CallRequest) -> str:
-        return render("voice/brief", request=request)
+    def _brief(self, request: CallRequest) -> str:
+        brief = render("voice/brief", request=request)
+        if self._language_hint:
+            # The phone's language hint: say it once, then let the other party's own
+            # language win if they clearly prefer another one.
+            brief += (
+                f"\nSpeak to the other party in {self._language_hint} unless they clearly prefer "
+                "another language.\n"
+            )
+        return brief
 
     async def _prepare(self, call: _Call) -> None:
         try:

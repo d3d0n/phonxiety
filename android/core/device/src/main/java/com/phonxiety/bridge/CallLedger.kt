@@ -1,7 +1,6 @@
 package com.phonxiety.bridge
 
 import android.content.Context
-import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -201,7 +200,7 @@ internal class CallLedger(context: Context, private val bootId: String) {
             }
         } catch (e: Exception) {
             runCatching { tmp.delete() }
-            Log.e(TAG, "call ledger write failed: ${e.javaClass.simpleName}")
+            BridgeLog.e(TAG, "call ledger write failed: ${e.javaClass.simpleName}")
             throw CallLedgerException("ledger_write_failed")
         }
     }
@@ -253,7 +252,7 @@ internal class CallLedger(context: Context, private val bootId: String) {
         val text = try {
             file.readText(Charsets.UTF_8)
         } catch (e: Exception) {
-            Log.e(TAG, "call ledger unreadable: ${e.javaClass.simpleName}")
+            BridgeLog.e(TAG, "call ledger unreadable: ${e.javaClass.simpleName}")
             throw CallLedgerException("ledger_unreadable")
         }
         val json = try {
@@ -299,7 +298,7 @@ internal class CallLedger(context: Context, private val bootId: String) {
             // cancellation tombstones; keep the recent-ID set so a repeated
             // call_id is still refused after a restart.  Non-terminal states
             // can no longer be trusted, so they become terminal.
-            Log.i(TAG, "call ledger from a previous boot; dropping pending intent")
+            BridgeLog.i(TAG, "call ledger from a previous boot; dropping pending intent")
             val normalizedRecent = boundedRecent.map { entry ->
                 if (entry.state == "failed" || entry.state == "ended") {
                     entry

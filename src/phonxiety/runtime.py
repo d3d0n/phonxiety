@@ -35,8 +35,8 @@ def voice_factory(settings: Settings, auth: Any) -> Callable[[str, str, Any], An
 
         gemini = GeminiOptions(
             api_key=secret(settings.state_dir, "GEMINI_API_KEY", "gemini-api-key"),
-            model=os.environ.get("PHONXIETY_GEMINI_MODEL", DEFAULT_MODEL),
-            voice=os.environ.get("PHONXIETY_GEMINI_VOICE", DEFAULT_VOICE),
+            model=settings.gemini_model or os.environ.get("PHONXIETY_GEMINI_MODEL", DEFAULT_MODEL),
+            voice=settings.gemini_voice or os.environ.get("PHONXIETY_GEMINI_VOICE", DEFAULT_VOICE),
         )
         return lambda instructions, brief, callbacks: GeminiVoiceSession(
             instructions, callbacks, gemini, initial_context=brief,
@@ -76,6 +76,7 @@ def create_controller(settings: Settings) -> CallController:
             singleton_file=lock,
             keep_awake=hold_awake,
             archive_dir=settings.state_dir / "calls",
+            language_hint=settings.language_hint,
         )
     except BaseException:
         lock.close()

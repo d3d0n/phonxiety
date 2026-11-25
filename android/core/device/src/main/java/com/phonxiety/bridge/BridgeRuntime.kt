@@ -1,6 +1,16 @@
 package com.phonxiety.bridge
 
 import android.telecom.Call
+import com.phonxiety.bridge.model.AppGateway
+import com.phonxiety.bridge.model.BridgeState
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 /**
  * Process-wide hand-off between the idle bridge service and the Telecom-bound
@@ -15,7 +25,15 @@ object BridgeRuntime {
     /** Route of the live link, in a form the UI can render. */
     data class Route(val relay: Boolean, val rttMs: Long?)
 
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val mutableState = MutableStateFlow(BridgeState())
+    private var stateJob: Job? = null
+
+    /** The one hot bridge state every surface collects, whether or not the service runs. */
+    val state: StateFlow<BridgeState> = mutableState.asStateFlow()
+
     @Volatile var engine: BridgeEngine? = null
+        private set
 
     @Volatile var inCallService: BridgeInCallService? = null
 
@@ -38,6 +56,27 @@ object BridgeRuntime {
 
     /** Route of the live link, or null while it is down or unavailable. */
     fun currentRoute(): Route? = engine?.currentRoute()?.let { Route(relay = it.relay, rttMs = it.rttMs) }
+
+    /** Installs the service's engine and mirrors its state process-wide. */
+    fun attach(current: BridgeEngine) {
+        stateJob?.cancel()
+        engine = current
+        stateJob = scope.launch {
+            current.state.collect { mutableState.value = it }
+        }
+    }
+
+    /** Detaches [current] if it is still the installed engine. */
+    fun detach(current: BridgeEngine) {
+        if (engine !== current) return
+        stateJob?.cancel()
+        stateJob = null
+        engine = null
+        mutableState.value = BridgeState()
+    }
+
+    /** The live app-API gateway, or null while the service is not running. */
+    fun appGateway(): AppGateway? = engine
 
     fun rememberPairing(kind: BridgeConfig.Kind) {
         pairingKind = kind

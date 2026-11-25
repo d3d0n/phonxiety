@@ -55,8 +55,13 @@ class _Device:
     async def wait_connected(self, timeout: float) -> bool:
         return self.connected
 
-    async def link_test(self, seconds: float, codec: str | None = None, *, datagrams: bool = False) -> dict[str, Any]:
-        return dict(self.link_test_result)
+    async def link_test(
+        self, seconds: float, codec: str | None = None, *, datagrams: bool = False, bitrate: int | None = None,
+    ) -> dict[str, Any]:
+        result = dict(self.link_test_result)
+        result["codec"] = codec or result["codec"]
+        result["bitrate"] = bitrate if result["codec"] == "opus" else None
+        return result
 
     async def command(self, command: str, call_id: str | None = None, *, timeout: float = 10, **payload: Any) -> dict[str, Any]:
         self.commands.append((command, call_id, payload))
@@ -218,6 +223,15 @@ class LinkTestAndProbeTests(_ApiCase):
         self.assertEqual(len(list((self.state / "link-tests").glob("*.json"))), 1)
         status, body = await self.call("GET", "/app/v1/link-test")
         self.assertEqual(len(body["tests"]), 1)
+
+    async def test_a_codec_trial_passes_its_bitrate_to_the_device(self) -> None:
+        status, body = await self.call("POST", "/app/v1/link-test", body={"seconds": 1, "codec": "opus", "bitrate": 16_000})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["bitrate"], 16_000)
+        status, body = await self.call("POST", "/app/v1/link-test", body={"seconds": 1, "codec": "pcm", "bitrate": 16_000})
+        self.assertEqual((status, body["code"]), (400, "invalid_argument"))
+        status, body = await self.call("POST", "/app/v1/link-test", body={"seconds": 1, "codec": "opus", "bitrate": 999})
+        self.assertEqual((status, body["code"]), (400, "invalid_argument"))
 
     async def test_a_lost_link_is_a_failed_verdict(self) -> None:
         self.device.link_test_result.update({"link_lost": True, "healthy": False, "frames_echoed": 10})
@@ -437,6 +451,81 @@ class SettingsTests(_ApiCase):
         status, body = await self.call("PUT", "/app/v1/settings", body={"values": {"nope": 1}})
         self.assertEqual(status, 400)
 
+    async def test_call_and_voice_keys_are_readable_validated_and_persisted(self) -> None:
+        status, body = await self.call("GET", "/app/v1/settings")
+        self.assertEqual(status, 200)
+        for key in (
+            "ring_timeout_s", "max_duration_s", "default_result_fields", "default_constraints",
+            "language_hint", "codex_task_model", "gemini_model", "gemini_voice", "iroh_relays",
+        ):
+            self.assertIn(key, body["values"])
+        self.assertEqual(body["choices"]["ring_timeout_s"], {"min": 5, "max": 180})
+
+        status, body = await self.call("PUT", "/app/v1/settings", body={"values": {
+            "ring_timeout_s": 45,
+            "max_duration_s": 600,
+            "default_result_fields": ["heard", "price"],
+            "default_constraints": "Keep it under a minute.",
+            "language_hint": "ru-RU",
+            "gemini_model": "gemini-2.5-flash",
+            "gemini_voice": "Kore",
+        }})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["values"]["ring_timeout_s"], 45)
+        self.assertEqual(body["values"]["default_result_fields"], ["heard", "price"])
+        self.assertTrue(body["restart_required"])
+        self.assertEqual(sorted(body["restart_required_fields"]), ["gemini_model", "gemini_voice", "language_hint"])
+
+        # A live-only change applies to the next call without a restart.
+        status, body = await self.call("PUT", "/app/v1/settings", body={"values": {"max_duration_s": 300}})
+        self.assertEqual(status, 200)
+        self.assertFalse(body["restart_required"])
+
+        stored = json.loads((self.state / "settings.json").read_text())["values"]
+        self.assertEqual(stored["max_duration_s"], 300)
+        self.assertEqual(stored["default_result_fields"], ["heard", "price"])
+        with mock.patch.dict(os.environ, {"PHONXIETY_STATE_DIR": str(self.state)}):
+            reloaded = Settings.from_env()
+        self.assertEqual(
+            (reloaded.ring_timeout_s, reloaded.max_duration_s, reloaded.language_hint),
+            (45, 300, "ru-RU"),
+        )
+        self.assertEqual(reloaded.default_result_fields, ("heard", "price"))
+        self.assertEqual(reloaded.default_constraints, "Keep it under a minute.")
+        self.assertEqual((reloaded.gemini_model, reloaded.gemini_voice), ("gemini-2.5-flash", "Kore"))
+
+    async def test_bad_control_values_are_refused_with_a_reason(self) -> None:
+        for values in (
+            {"ring_timeout_s": 1},
+            {"ring_timeout_s": "soon"},
+            {"max_duration_s": 5000},
+            {"default_result_fields": ["x" * 65]},
+            {"default_result_fields": [f"field{index}" for index in range(17)]},
+            {"default_constraints": "x" * 2001},
+            {"language_hint": "not a language"},
+            {"codex_task_model": "bad model!"},
+            {"gemini_voice": "bad voice!"},
+        ):
+            status, body = await self.call("PUT", "/app/v1/settings", body={"values": values})
+            self.assertEqual(status, 400, values)
+            self.assertEqual(body["code"], "invalid_argument")
+
+    async def test_call_defaults_reach_a_validated_call(self) -> None:
+        await self.call("PUT", "/app/v1/settings", body={"values": {
+            "ring_timeout_s": 45,
+            "max_duration_s": 600,
+            "default_result_fields": ["heard"],
+            "default_constraints": "One short question.",
+        }})
+        status, body = await self.call("POST", "/app/v1/calls/validate", body={
+            "destination": "+12025550123", "goal": "Confirm the Friday appointment is still on.",
+        })
+        self.assertEqual(status, 200)
+        request = body["request"]
+        self.assertEqual(request["limits"], {"max_duration_s": 600, "ring_timeout_s": 45})
+        self.assertEqual(request["result_fields"], ["heard"])
+        self.assertEqual(request["constraints"], "One short question.")
+
 
 class TestLabAndDoctorTests(_ApiCase):
     async def test_loopback_and_tone_are_gated_by_hello_capabilities(self) -> None:
@@ -514,6 +603,77 @@ class DiagnosticsTests(_ApiCase):
         self.assertTrue(send.finished)
         [message] = [json.loads(payload) for kind, payload in _frames(send.writes) if kind == TEXT]
         self.assertEqual(message["code"], "unauthorized")
+
+
+class UpdateArtifactTests(_ApiCase):
+    def _publish(self, manifest: dict | None, files: dict[str, bytes] | None = None) -> None:
+        updates = self.state / "updates"
+        updates.mkdir(parents=True, exist_ok=True)
+        if manifest is not None:
+            (updates / "manifest.json").write_text(json.dumps(manifest))
+        for name, data in (files or {}).items():
+            (updates / name).write_bytes(data)
+
+    async def test_the_manifest_artifact_is_served_paged_and_streamed(self) -> None:
+        payload = b"apk-bytes" * 100
+        self._publish(
+            {"apk": {"file": "app.apk"}, "module": {"file": "module.zip"}},
+            {"app.apk": payload, "module.zip": b"zip-bytes"},
+        )
+        status, body = await self.call(
+            "GET", "/app/v1/update/artifact", query={"name": "apk", "limit": 64}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body["total"], len(payload))
+        self.assertEqual(base64.b64decode(body["data"]), payload[:64])
+
+        status, body = await self.call("GET", "/app/v1/update/artifact", query={"name": "module"})
+        self.assertEqual((status, base64.b64decode(body["data"])), (200, b"zip-bytes"))
+
+        send = _Send()
+        await self.api.serve_attachment(
+            {"app_token": TOKEN, "path": "/app/v1/update/artifact", "query": {"name": "apk"}},
+            send,
+            None,
+        )
+        await asyncio.wait_for(send.done.wait(), 2)
+        streamed, end = _decode(send.writes)
+        self.assertEqual(streamed, payload)
+        self.assertEqual(end["total"], len(payload))
+
+    async def test_a_channel_entry_is_where_the_file_is_named(self) -> None:
+        self._publish(
+            {"channels": {"stable": {"apk": {"file": "app.apk"}}}},
+            {"app.apk": b"channel-apk"},
+        )
+        status, body = await self.call("GET", "/app/v1/update/artifact", query={"name": "apk"})
+        self.assertEqual((status, base64.b64decode(body["data"])), (200, b"channel-apk"))
+
+    async def test_a_manifest_file_name_cannot_escape_the_updates_directory(self) -> None:
+        (self.state / "secret.txt").write_text("secret")
+        for name in ("../secret.txt", "sub/app.apk", "..", "app/../secret.txt"):
+            self._publish({"apk": {"file": name}})
+            status, body = await self.call("GET", "/app/v1/update/artifact", query={"name": "apk"})
+            self.assertEqual((status, body["code"]), (400, "invalid_argument"), name)
+            self.assertNotIn("secret", json.dumps(body))
+
+    async def test_a_query_can_only_name_an_artifact_not_a_path(self) -> None:
+        self._publish({"apk": {"file": "app.apk"}}, {"app.apk": b"x"})
+        for name in ("../manifest.json", "apk/../manifest.json", "keys"):
+            status, body = await self.call("GET", "/app/v1/update/artifact", query={"name": name})
+            self.assertEqual((status, body["code"]), (400, "invalid_argument"), name)
+
+    async def test_a_missing_artifact_or_manifest_is_artifact_unavailable(self) -> None:
+        status, body = await self.call("GET", "/app/v1/update/artifact", query={"name": "apk"})
+        self.assertEqual((status, body["code"]), (404, "artifact_unavailable"))
+
+        self._publish({"apk": {"file": "app.apk"}})
+        status, body = await self.call("GET", "/app/v1/update/artifact", query={"name": "apk"})
+        self.assertEqual((status, body["code"]), (404, "artifact_unavailable"))
+
+        self._publish({"module": {"file": "module.zip"}})
+        status, body = await self.call("GET", "/app/v1/update/artifact", query={"name": "apk"})
+        self.assertEqual((status, body["code"]), (404, "artifact_unavailable"))
 
 
 class UpdateAndPairTests(_ApiCase):
@@ -666,6 +826,58 @@ class HubTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.hub.info["preferred_codec"], "opus")
         self.assertEqual(self.hub.info["control_caps"], ["tone_start"])
         self.assertEqual(self.hub.info["version"], 3)
+
+    async def test_the_hello_preference_picks_the_next_call_codec(self) -> None:
+        self.hub.audio_codec = "pcm"
+        self.hub.opus_bitrate = 48_000
+        await self._hello(
+            preferred_codec="opus", max_bitrate=24_000,
+            capabilities={"audio_codecs": ["pcm", "opus"]},
+        )
+        self.assertEqual(self.hub.stream_codec(), "opus")
+        # The phone's cap wins over the daemon's configured bitrate for the next call.
+        self.assertEqual(self.hub.begin_stream("c1", 1), {"codec": "opus", "bitrate": 24_000})
+
+    async def test_an_explicit_pcm_preference_wins_over_the_daemon_codec(self) -> None:
+        self.hub.audio_codec = "opus"
+        await self._hello(preferred_codec="pcm", capabilities={"audio_codecs": ["pcm", "opus"]})
+        self.assertEqual(self.hub.stream_codec(), "pcm")
+        self.assertEqual(self.hub.begin_stream("c1", 1), {"codec": "pcm"})
+
+    async def test_auto_keeps_the_daemons_configured_codec(self) -> None:
+        self.hub.audio_codec = "opus"
+        await self._hello(preferred_codec="auto", capabilities={"audio_codecs": ["pcm", "opus"]})
+        self.assertEqual(self.hub.stream_codec(), "opus")
+
+    async def test_a_phone_without_opus_falls_back_to_pcm(self) -> None:
+        self.hub.audio_codec = "opus"
+        await self._hello(preferred_codec="opus", capabilities={"audio_codecs": ["pcm"]})
+        self.assertEqual(self.hub.stream_codec(), "pcm")
+
+    async def test_set_prefs_changes_the_next_call_without_a_reconnect(self) -> None:
+        self.hub.audio_codec = "opus"
+        self.hub.opus_bitrate = 64_000
+        await self._hello(
+            preferred_codec="pcm", max_bitrate=32_000,
+            capabilities={"audio_codecs": ["pcm", "opus"]},
+        )
+        self.assertEqual(self.hub.stream_codec(), "pcm")
+        self.link.feed(json.dumps({"type": "set_prefs", "preferred_codec": "opus", "max_bitrate": 16_000}))
+        async with asyncio.timeout(2):
+            while self.hub.info.get("max_bitrate") != 16_000:
+                await asyncio.sleep(0.01)
+        self.assertEqual(self.hub.begin_stream("c1", 1), {"codec": "opus", "bitrate": 16_000})
+
+    async def test_a_nonsense_preference_is_ignored_not_applied(self) -> None:
+        await self._hello(preferred_codec="mp3", max_bitrate=10, capabilities={"audio_codecs": ["pcm", "opus"]})
+        self.assertIsNone(self.hub.info.get("preferred_codec"))
+        self.assertIsNone(self.hub.info.get("max_bitrate"))
+        self.link.feed(json.dumps({"type": "set_prefs", "preferred_codec": "opus", "max_bitrate": 900_000}))
+        async with asyncio.timeout(2):
+            while self.hub.info.get("preferred_codec") != "opus":
+                await asyncio.sleep(0.01)
+        self.assertEqual(self.hub.info.get("max_bitrate"), None)
+        self.assertEqual(self.hub.begin_stream("c1", 1), {"codec": "opus", "bitrate": 32_000})
 
     async def test_an_unknown_protocol_version_is_refused(self) -> None:
         self.link.feed(json.dumps({"type": "hello", "version": 1, "device": "pixel", "boot_id": "b1", "capabilities": {}}))

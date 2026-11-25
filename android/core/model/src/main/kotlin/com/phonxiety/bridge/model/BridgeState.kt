@@ -13,7 +13,7 @@ data class BridgeState(
     val audio: AudioState = AudioState(),
     val device: DeviceState = DeviceState(),
     val capabilities: Capabilities = Capabilities(),
-    val lastError: LinkError? = null,
+    val lastError: LinkError? = null
 )
 
 @Serializable
@@ -31,7 +31,7 @@ sealed interface LinkState {
         val address: String?,
         val rttMs: Long?,
         val sinceEpochMs: Long,
-        val reconnects: Int,
+        val reconnects: Int
     ) : LinkState
 }
 
@@ -48,7 +48,7 @@ data class CallState(
     val callId: String,
     val destinationMasked: String,
     val phase: CallPhase,
-    val startedAtEpochMs: Long?,
+    val startedAtEpochMs: Long?
 )
 
 @Serializable
@@ -62,7 +62,7 @@ data class AudioState(
     val txLevelDbfs: Float? = null,
     val framesOut: Long = 0,
     val framesIn: Long = 0,
-    val drops: Long = 0,
+    val drops: Long = 0
 )
 
 @Serializable
@@ -73,7 +73,7 @@ data class DeviceState(
     val network: String? = null,
     val wifiRssi: Int? = null,
     val dozeExempt: Boolean? = null,
-    val missingPermissions: List<String> = emptyList(),
+    val missingPermissions: List<String> = emptyList()
 )
 
 @Serializable
@@ -81,7 +81,7 @@ data class Capabilities(
     val callControl: Boolean = false,
     val frameworkAudio: Boolean = false,
     val appApi: Int? = null,
-    val daemonVersion: String? = null,
+    val daemonVersion: String? = null
 )
 
 @Serializable

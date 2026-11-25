@@ -1,6 +1,6 @@
 package com.phonxiety.bridge.net
 
-import android.util.Log
+import com.phonxiety.bridge.BridgeLog
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
@@ -93,6 +93,7 @@ internal class LinkSupervisor(
     private var reconnectDelayMs = RECONNECT_BASE_MS
     private var reconnectTask: LinkTask? = null
     private var lastHostActivity = 0L
+    private var opens = 0
 
     /**
      * Begins connecting and keeps reconnecting until [cancel].  Called once by
@@ -139,6 +140,23 @@ internal class LinkSupervisor(
         if (!linkUp) null else link?.route()
     }
 
+    /** Successful opens after the first one; the UI's reconnect counter. */
+    fun reconnects(): Int = synchronized(lock) { (opens - 1).coerceAtLeast(0) }
+
+    /** True while the live transport can carry a phone-opened attachment stream. */
+    fun supportsAttachments(): Boolean = synchronized(lock) {
+        linkUp && link?.supportsAttachments == true
+    }
+
+    /** Bytes accepted but not yet written to the live link. */
+    fun backlogBytes(): Long = synchronized(lock) { if (linkUp) link?.backlogBytes ?: 0L else 0L }
+
+    /** Opens one attachment stream on the live link; null while down or unsupported. */
+    suspend fun openAttachment(header: String): AttachmentChannel? {
+        val target = synchronized(lock) { if (linkUp) link else null } ?: return null
+        return target.openAttachment(header)
+    }
+
     /** Queues one JSON text message; false when there is no live link. */
     fun sendText(message: String): Boolean {
         val target = synchronized(lock) { if (linkUp) link else null } ?: return false
@@ -167,7 +185,7 @@ internal class LinkSupervisor(
             if (now - lastHostActivity <= HOST_TIMEOUT_MS) return
             link
         } ?: return
-        Log.w(TAG, "host activity deadline expired")
+        BridgeLog.w(TAG, "host activity deadline expired")
         handleDown(stale, "host_timeout")
         runCatching { stale.cancel() }
     }
@@ -217,6 +235,7 @@ internal class LinkSupervisor(
             } else {
                 link = owner
                 linkUp = true
+                opens++
                 reconnectScheduled = false
                 reconnectDelayMs = RECONNECT_BASE_MS
                 lastHostActivity = clock()
@@ -256,7 +275,7 @@ internal class LinkSupervisor(
             running
         }
         if (!notify) return
-        Log.w(TAG, "device link down: $reason")
+        BridgeLog.w(TAG, "device link down: $reason")
         callbacks.onLinkDown(reason)
         scheduleReconnect()
     }

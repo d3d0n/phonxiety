@@ -1,0 +1,115 @@
+package com.phonxiety.bridge.feature.updates
+
+import com.phonxiety.bridge.data.updates.ApkRelease
+import com.phonxiety.bridge.data.updates.AppInstallState
+import com.phonxiety.bridge.data.updates.DaemonRelease
+import com.phonxiety.bridge.data.updates.InstallFailure
+import com.phonxiety.bridge.data.updates.InstalledVersions
+import com.phonxiety.bridge.data.updates.ModuleRelease
+import com.phonxiety.bridge.data.updates.UpdateCheck
+import com.phonxiety.bridge.data.updates.UpdateCompat
+import com.phonxiety.bridge.data.updates.UpdateManifest
+
+/**
+ * Fixed data for previews and screenshot tests: a 0.4.0 release published by the daemon, compared
+ * with a phone on 0.4.0 (current), 0.3.0 (an update is offered) or an older Android (incompatible).
+ */
+object UpdatesSamples {
+    val manifest = UpdateManifest(
+        version = "0.4.0",
+        versionCode = 4,
+        zipUrl = "https://example.test/phonxiety-bridge-0.4.0.zip",
+        changelog = "https://example.test/CHANGELOG.md",
+        updateJsonUrl = "https://example.test/update.json",
+        publishedAt = "2026-11-26T12:00:00+00:00",
+        apk = ApkRelease(
+            version = "0.4.0",
+            versionCode = 4,
+            url = "https://example.test/phonxiety-bridge-0.4.0.apk",
+            sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            size = 7_340_032,
+            signingCertSha256 = "aaaabbbbccccddddeeeeffff0000111122223333444455556666777788889999",
+            minSdk = 34
+        ),
+        module = ModuleRelease(
+            version = "0.4.0",
+            versionCode = 4,
+            zipUrl = "https://example.test/phonxiety-bridge-0.4.0.zip",
+            sha256 = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+            size = 1_048_576,
+            schemaVersion = 1,
+            requiresReboot = true,
+            permissions = listOf(
+                "android.permission.CAPTURE_AUDIO_OUTPUT",
+                "android.permission.MODIFY_PHONE_STATE",
+                "android.permission.CONTROL_INCALL_EXPERIENCE",
+                "android.permission.INSTALL_SELF_UPDATES",
+                "android.permission.REBOOT"
+            )
+        ),
+        daemon = DaemonRelease(minVersion = "0.1.0", protocol = 3, appApi = 1)
+    )
+
+    fun installed(
+        appVersionCode: Long = 4,
+        appVersion: String = "0.4.0",
+        moduleVersionCode: Int = 4,
+        moduleVersion: String = "0.4.0",
+        deviceSdk: Int = 35,
+        daemonVersion: String? = "0.1.0",
+        daemonCompatible: Boolean? = true
+    ) = InstalledVersions(
+        appVersion = appVersion,
+        appVersionCode = appVersionCode,
+        deviceSdk = deviceSdk,
+        moduleVersion = moduleVersion,
+        moduleVersionCode = moduleVersionCode,
+        moduleInstalled = true,
+        grantedPrivilegedPermissions = setOf(
+            "android.permission.CAPTURE_AUDIO_OUTPUT",
+            "android.permission.MODIFY_PHONE_STATE",
+            "android.permission.CONTROL_INCALL_EXPERIENCE",
+            "android.permission.INSTALL_SELF_UPDATES",
+            "android.permission.REBOOT"
+        ),
+        daemonVersion = daemonVersion,
+        daemonAppApi = 1,
+        daemonProtocolVersions = listOf(3),
+        daemonCompatible = daemonCompatible
+    )
+
+    fun check(installed: InstalledVersions = installed()): UpdateCheck = UpdateCheck(
+        manifest = manifest,
+        verdict = UpdateCompat.evaluate(manifest, installed),
+        installed = installed,
+        checkedAtEpochMs = 0L
+    )
+
+    fun upToDate(): UpdatesUiState = UpdatesUiState(check = check())
+
+    fun updateAvailable(): UpdatesUiState = UpdatesUiState(
+        check = check(installed(appVersionCode = 3, appVersion = "0.3.0", moduleVersionCode = 3, moduleVersion = "0.3.0"))
+    )
+
+    fun incompatible(): UpdatesUiState = UpdatesUiState(
+        check = check(
+            installed(
+                deviceSdk = 33,
+                daemonVersion = "0.0.9",
+                daemonCompatible = false
+            )
+        )
+    )
+
+    fun installing(): UpdatesUiState = updateAvailable().copy(
+        appInstall = AppInstallState.Installing(sessionId = 7)
+    )
+
+    fun failed(): UpdatesUiState = updateAvailable().copy(
+        appInstall = AppInstallState.Failed(
+            InstallFailure.SIGNING_CERT_MISMATCH,
+            "installed aaaabbbb…, archive 9999ffff…"
+        ),
+        rollbackAvailable = true
+    )
+}

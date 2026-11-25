@@ -37,6 +37,11 @@ MAX_API_RESULT_CHARS = 256 * 1024  # one api_result must fit the phone's page li
 API_CONCURRENCY = 8
 FRAME_PCM_BYTES = 1920
 MAX_PCM_BYTES = 19200
+# The phone's hello carries what it wants the next call to sound like; the daemon's own
+# `audio_codec` stays the default behind "auto".
+PREFERRED_CODECS = ("auto", "pcm", "opus")
+MIN_PREF_BITRATE = 6_000
+MAX_PREF_BITRATE = 128_000
 
 
 class DeviceError(RuntimeError):
@@ -267,10 +272,26 @@ class DeviceHub:
         self.info = {key: hello.get(key) for key in HELLO_FIELDS}
         self.info["version"] = hello.get("version")
         for key in HELLO_V3_FIELDS:
+            if key in ("preferred_codec", "max_bitrate"):
+                continue  # validated by _apply_prefs, so a bad value cannot reach a call
             if hello.get(key) is not None:
                 self.info[key] = hello[key]
         if isinstance(hello.get("app_api"), int):
             self.info["app_api"] = hello["app_api"]
+        self._apply_prefs(hello)
+
+    def _apply_prefs(self, source: dict[str, Any]) -> None:
+        """Store the phone's audio preference; values this build cannot honour are ignored.
+
+        Called for the hello (the preference a reconnect should carry) and for a
+        `set_prefs` event (a change while the link stays up).
+        """
+        codec = source.get("preferred_codec")
+        if isinstance(codec, str) and codec.strip().lower() in PREFERRED_CODECS:
+            self.info["preferred_codec"] = codec.strip().lower()
+        bitrate = source.get("max_bitrate")
+        if isinstance(bitrate, int) and not isinstance(bitrate, bool) and MIN_PREF_BITRATE <= bitrate <= MAX_PREF_BITRATE:
+            self.info["max_bitrate"] = bitrate
 
     async def _receive_event(self, event: dict[str, Any]) -> None:
         kind = event.get("type")
@@ -301,6 +322,10 @@ class DeviceHub:
             # Never awaited here: a request that waits on a slow operation must not hold
             # the read loop, which also carries playback marks and command responses.
             self._accept_api(event)
+            return
+        if kind == "set_prefs":
+            # The phone changed its codec or bitrate preference without reconnecting.
+            self._apply_prefs(event)
             return
         if kind == "call_state":
             self.info["active_call"] = None if event.get("state") == "ended" else {
@@ -482,12 +507,30 @@ class DeviceHub:
             return "no link"
         return "; ".join(link.paths()) or str(link.route())
 
+    def requested_codec(self) -> str:
+        """What the phone asked for: `opus`, `pcm`, or `auto` for the daemon's own choice."""
+        preferred = self.info.get("preferred_codec")
+        return preferred if preferred in ("opus", "pcm") else "auto"
+
+    def effective_bitrate(self) -> int:
+        """The daemon's Opus bitrate, capped by the phone's `max_bitrate` when it set one."""
+        bitrate = self.opus_bitrate
+        cap = self.info.get("max_bitrate")
+        if isinstance(cap, int) and not isinstance(cap, bool):
+            bitrate = min(bitrate, cap)
+        return max(MIN_PREF_BITRATE, min(bitrate, MAX_PREF_BITRATE))
+
     def stream_codec(self) -> str:
-        """The configured format when the phone supports it, else PCM, which every phone speaks."""
+        """The format the next call uses: the phone's explicit choice wins over the daemon's.
+
+        `auto` (or a v2 hello without the field) keeps the daemon's configured codec; PCM
+        remains the fallback for a phone that does not offer Opus.
+        """
         offered = self.info.get("capabilities", {}).get("audio_codecs")
-        if self.audio_codec == "opus" and isinstance(offered, list) and "opus" in offered:
-            return "opus"
-        return "pcm"
+        phone_opus = isinstance(offered, list) and "opus" in offered
+        requested = self.requested_codec()
+        want_opus = requested == "opus" or (requested == "auto" and self.audio_codec == "opus")
+        return "opus" if want_opus and phone_opus else "pcm"
 
     def begin_stream(self, call_id: str, epoch: int) -> dict[str, Any]:
         """Reset counters for a new audio epoch; returns the `start_audio` format fields."""
@@ -503,12 +546,17 @@ class DeviceHub:
         self._send_wait = 0.0
         self._ping_wait = 0.0
         codec = self.stream_codec()
+        bitrate = self.effective_bitrate()
         if codec == "opus":
-            self._encoder, self._decoder = OpusEncoder(self.opus_bitrate), OpusDecoder()
+            self._encoder, self._decoder = OpusEncoder(bitrate), OpusDecoder()
         else:
             self._encoder = self._decoder = None
-        log.info("call %s: %s audio; phone link at audio start: %s", call_id, codec, self._describe(self._link))
-        return {"codec": "opus", "bitrate": self.opus_bitrate} if codec == "opus" else {"codec": "pcm"}
+        log.info(
+            "call %s: %s audio at %s; requested %s; phone link at audio start: %s",
+            call_id, codec, f"{bitrate} bit/s" if codec == "opus" else "no encoder",
+            self.requested_codec(), self._describe(self._link),
+        )
+        return {"codec": "opus", "bitrate": bitrate} if codec == "opus" else {"codec": "pcm"}
 
     def stop_stream(self) -> None:
         if self._call_id is not None:
@@ -596,13 +644,21 @@ class DeviceHub:
             raise DeviceError(f"{service}_tunnel_unsupported_by_phone")
         return await opener(service)
 
-    async def link_test(self, seconds: float, codec: str | None = None, *, datagrams: bool = False) -> dict[str, Any]:
+    async def link_test(
+        self,
+        seconds: float,
+        codec: str | None = None,
+        *,
+        datagrams: bool = False,
+        bitrate: int | None = None,
+    ) -> dict[str, Any]:
         """Load the idle link like a call and time it.
 
         Call-sized frames leave every 20 ms and the phone echoes them, so both
         directions carry what a conversation carries while pings measure how
         long control messages wait behind that audio. With `datagrams` the probes
         travel as QUIC datagrams (lost ones stay lost) instead of on the audio stream.
+        `bitrate` measures an Opus profile other than the negotiated one (codec trials).
         """
         link = self._link
         if link is None or not self.connected:
@@ -626,7 +682,8 @@ class DeviceHub:
         # Probe frames are the size the format puts on the wire every 20 ms: the one a call
         # would use, or `codec` to measure another format's load (the phone echoes any size).
         codec = codec or self.stream_codec()
-        payload = bytes(self.opus_bitrate // 8 // 50 if codec == "opus" else FRAME_PCM_BYTES)
+        opus_bitrate = bitrate if isinstance(bitrate, int) and bitrate > 0 else self.effective_bitrate()
+        payload = bytes(opus_bitrate // 8 // 50 if codec == "opus" else FRAME_PCM_BYTES)
         started = time.monotonic()
         stall = 0.0
         count = 0
@@ -658,6 +715,7 @@ class DeviceHub:
         frames, control = _spread(self._probe_ms), _spread(pings)
         return {
             "codec": codec,
+            "bitrate": opus_bitrate if codec == "opus" else None,
             "transport": "datagram" if datagrams else "stream",
             "frame_bytes": len(payload),
             "peer": link.peer,

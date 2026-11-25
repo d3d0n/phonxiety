@@ -2,7 +2,6 @@ package com.phonxiety.bridge
 
 import android.content.Context
 import android.os.UserManager
-import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -35,9 +34,9 @@ internal object AppStorage {
         if (!source.isFile) return
         try {
             writeAtomically(target, source.readBytes())
-            if (!source.delete()) Log.w(TAG, "migrated $name but could not remove the old copy")
+            if (!source.delete()) BridgeLog.w(TAG, "migrated $name but could not remove the old copy")
         } catch (e: Exception) {
-            Log.w(TAG, "could not migrate $name: ${e.javaClass.simpleName}")
+            BridgeLog.w(TAG, "could not migrate $name: ${e.javaClass.simpleName}")
         }
     }
 

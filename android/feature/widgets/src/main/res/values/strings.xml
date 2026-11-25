@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_name">Phonxiety link</string>
+    <string name="widget_description">Link state, path and RTT, the running call with its timer, and a hang-up button.</string>
+    <string name="tile_link_name">Phonxiety</string>
+    <string name="tile_link_unpaired">Not paired</string>
+    <string name="tile_link_connecting">Connecting</string>
+    <string name="tile_link_offline">Offline</string>
+    <string name="tile_hangup_name">Hang up</string>
+    <string name="tile_hangup_idle">No call running</string>
+</resources>

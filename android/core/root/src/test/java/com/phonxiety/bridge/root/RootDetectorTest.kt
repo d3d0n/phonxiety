@@ -149,6 +149,38 @@ class RootDetectorTest {
     }
 
     @Test
+    fun deniedRootStillNamesTheManagerVersion() = runTest {
+        val environment = FakeEnvironment().apply {
+            packages += MagiskProvider.MANAGER_PACKAGE
+            packageVersions[MagiskProvider.MANAGER_PACKAGE] = "31.1 (31100)"
+        }
+        val detection = detect(environment) {
+            ShellOutput(stderr = "Permission denied", exitCode = 13)
+        }
+
+        assertEquals(SuStatus.DENIED, detection.su)
+        assertEquals("31.1 (31100)", detection.providers.single().version)
+    }
+
+    @Test
+    fun grantedWithoutTheProviderBinaryFallsBackToTheManagerVersion() = runTest {
+        val environment = FakeEnvironment().apply {
+            dirs[RootCommand.ADB_ROOT] = listOf("magisk", "modules")
+            packages += MagiskProvider.MANAGER_PACKAGE
+            packageVersions[MagiskProvider.MANAGER_PACKAGE] = "31.1 (31100)"
+        }
+        val detection = detect(environment) { script ->
+            if (script == "magisk -v" || script == "magisk -V") {
+                ShellOutput(stderr = "magisk: not found", exitCode = 127)
+            } else {
+                ShellOutput(stdout = "uid=0(root)")
+            }
+        }
+
+        assertEquals("31.1 (31100)", detection.providers.single().version)
+    }
+
+    @Test
     fun detectsKernelSuPackageOnlyWhenRootDenied() = runTest {
         val environment = FakeEnvironment().apply {
             packages += KernelSuProvider.KERNELSU_NEXT_MANAGER_PACKAGE

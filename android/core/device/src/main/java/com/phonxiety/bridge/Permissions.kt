@@ -2,7 +2,6 @@ package com.phonxiety.bridge
 
 import android.content.Context
 import android.content.pm.PackageManager
-import com.phonxiety.bridge.device.R
 
 /**
  * Permission names are string literals: several of these are not present in the
@@ -30,16 +29,4 @@ object Permissions {
     fun runtimeMissing(context: Context): List<String> = RUNTIME.filterNot { granted(context, it) }
 
     fun privilegedMissing(context: Context): List<String> = PRIVILEGED.filterNot { granted(context, it) }
-
-    fun labelRes(permission: String): Int = when (permission) {
-        RECORD_AUDIO -> R.string.permission_microphone
-        CALL_PHONE -> R.string.permission_call_phone
-        READ_PHONE_STATE -> R.string.permission_phone_state
-        POST_NOTIFICATIONS -> R.string.permission_notifications
-        ACCESS_LOCAL_NETWORK -> R.string.permission_local_network
-        CAPTURE_AUDIO_OUTPUT -> R.string.permission_capture_audio_output
-        MODIFY_PHONE_STATE -> R.string.permission_modify_phone_state
-        CONTROL_INCALL_EXPERIENCE -> R.string.permission_control_incall_experience
-        else -> R.string.permission_unknown
-    }
 }

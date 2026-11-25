@@ -1,0 +1,333 @@
+package com.phonxiety.bridge.feature.settings
+
+import android.content.Context
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.phonxiety.bridge.PhoneCodec
+import com.phonxiety.bridge.PhonePreferences
+import com.phonxiety.bridge.PhoneSettings
+import com.phonxiety.bridge.data.ApiOutcome
+import com.phonxiety.bridge.data.BridgeStateRepository
+import com.phonxiety.bridge.data.DaemonApi
+import com.phonxiety.bridge.model.LinkState
+import com.phonxiety.bridge.model.PathKind
+import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.File
+import java.util.UUID
+import javax.inject.Inject
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.decodeFromJsonElement
+
+/**
+ * Settings and auto-tune.
+ *
+ * Daemon-owned values come from `/app/v1/settings` and are written back as one PUT with only the
+ * changed keys. Phone-owned values live in DataStore through [PhonePreferences], and the engine
+ * turns them into the next `hello`, `set_prefs` and the Wi-Fi lock. Auto-tune is off unless the
+ * user turns it on; every change it makes is written to a local change log with its measurement
+ * and can be reverted from this screen.
+ */
+@HiltViewModel
+class SettingsViewModel @Inject constructor(
+    private val api: DaemonApi,
+    private val bridgeState: BridgeStateRepository,
+    private val phonePreferences: PhonePreferences,
+    @ApplicationContext context: Context
+) : ViewModel() {
+    private val json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+    }
+    private val changeLog = AutoTuneLogStore(File(context.filesDir, "settings/auto-tune.json"))
+    private val _state = MutableStateFlow(SettingsUiState())
+    val state: StateFlow<SettingsUiState> = _state.asStateFlow()
+
+    /** How long the current path has been relay-only, and the latest measurement auto-tune cites. */
+    private var relaySinceMs: Long? = null
+    private var latestLinkTest: com.phonxiety.bridge.model.LinkTestResult? = null
+    private val evaluateLock = Mutex()
+
+    init {
+        viewModelScope.launch {
+            phonePreferences.settings.collect { settings ->
+                _state.update { it.copy(phone = settings, autoTune = it.autoTune.copy(enabled = settings.autoTuneEnabled)) }
+            }
+        }
+        viewModelScope.launch {
+            _state.update { it.copy(autoTune = it.autoTune.copy(changes = changeLog.load())) }
+        }
+        viewModelScope.launch { loadDaemonSettings() }
+        viewModelScope.launch {
+            bridgeState.state.collect { bridge -> onBridgeState(bridge) }
+        }
+    }
+
+    // -- daemon settings ------------------------------------------------
+
+    fun refreshDaemonSettings() {
+        viewModelScope.launch { loadDaemonSettings() }
+    }
+
+    private suspend fun loadDaemonSettings() {
+        _state.update { it.copy(daemon = it.daemon.copy(loading = true, error = null)) }
+        when (val outcome = api.settings()) {
+            is ApiOutcome.Ok -> {
+                val values = outcome.value.values.toValues()
+                _state.update {
+                    it.copy(
+                        daemon = it.daemon.copy(
+                            loading = false,
+                            values = values,
+                            form = values.toForm(),
+                            restartRequiredFields = outcome.value.restartRequiredFields,
+                            error = null
+                        )
+                    )
+                }
+            }
+
+            is ApiOutcome.Failure -> _state.update {
+                it.copy(daemon = it.daemon.copy(loading = false, error = outcome.describe()))
+            }
+        }
+    }
+
+    /** One form edit; keys are the [DaemonForm] property names. */
+    fun updateForm(transform: (DaemonForm) -> DaemonForm) = _state.update {
+        it.copy(daemon = it.daemon.copy(form = transform(it.daemon.form), error = null))
+    }
+
+    fun saveDaemonSettings() {
+        val daemon = _state.value.daemon
+        if (daemon.saving) return
+        val edited = daemon.form.toValues(daemon.values)
+        val changes = diff(daemon.values, edited)
+        if (changes.isEmpty()) {
+            _state.update { it.copy(message = "Nothing changed") }
+            return
+        }
+        _state.update { it.copy(daemon = it.daemon.copy(saving = true, error = null)) }
+        viewModelScope.launch {
+            when (val outcome = api.putSettings(changes)) {
+                is ApiOutcome.Ok -> {
+                    val values = outcome.value.values.toValues()
+                    _state.update {
+                        it.copy(
+                            daemon = it.daemon.copy(
+                                saving = false,
+                                values = values,
+                                form = values.toForm(),
+                                restartRequiredFields = outcome.value.restartRequiredFields,
+                                changesApplied = outcome.value.changed,
+                                error = null
+                            ),
+                            message = if (outcome.value.restartRequired) {
+                                "Saved; the daemon needs a restart for ${outcome.value.restartRequiredFields.joinToString()}"
+                            } else {
+                                "Saved"
+                            }
+                        )
+                    }
+                }
+
+                is ApiOutcome.Failure -> _state.update {
+                    it.copy(daemon = it.daemon.copy(saving = false, error = outcome.describe()))
+                }
+            }
+        }
+    }
+
+    private fun kotlinx.serialization.json.JsonObject.toValues(): DaemonSettingsValues = try {
+        json.decodeFromJsonElement(DaemonSettingsValues.serializer(), this)
+    } catch (_: Exception) {
+        DaemonSettingsValues()
+    }
+
+    // -- phone settings -------------------------------------------------
+
+    fun setCodec(codec: String) {
+        val normalized = PhoneCodec.normalize(codec)
+        viewModelScope.launch {
+            phonePreferences.update { it.copy(preferredCodec = normalized) }
+        }
+    }
+
+    fun setMaxBitrate(bitrate: Int) {
+        viewModelScope.launch {
+            phonePreferences.update { it.copy(maxBitrate = bitrate.coerceIn(PhoneSettings.MIN_BITRATE, PhoneSettings.MAX_BITRATE)) }
+        }
+    }
+
+    fun setWifiLowLatency(enabled: Boolean) {
+        viewModelScope.launch { phonePreferences.update { it.copy(wifiLowLatency = enabled) } }
+    }
+
+    fun setThermalAwareness(enabled: Boolean) {
+        viewModelScope.launch { phonePreferences.update { it.copy(thermalAwareness = enabled) } }
+    }
+
+    fun setBatteryAwareness(enabled: Boolean) {
+        viewModelScope.launch { phonePreferences.update { it.copy(batteryAwareness = enabled) } }
+    }
+
+    fun setLogLevel(level: String) {
+        if (level !in PhoneSettings.LOG_LEVELS) return
+        viewModelScope.launch { phonePreferences.update { it.copy(logLevel = level) } }
+    }
+
+    // -- auto-tune ------------------------------------------------------
+
+    fun setAutoTuneEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            phonePreferences.update { it.copy(autoTuneEnabled = enabled) }
+            if (enabled) refreshMeasurement()
+            evaluateAutoTune()
+        }
+    }
+
+    /** Runs the rules now; the screen also evaluates whenever the bridge state changes. */
+    fun evaluateNow() {
+        viewModelScope.launch {
+            refreshMeasurement()
+            evaluateAutoTune()
+        }
+    }
+
+    private suspend fun refreshMeasurement() {
+        when (val outcome = api.linkTests(limit = 1)) {
+            is ApiOutcome.Ok -> latestLinkTest = outcome.value.tests.firstOrNull()
+            is ApiOutcome.Failure -> Unit // keep the previous measurement; the rules degrade honestly
+        }
+    }
+
+    private fun onBridgeState(bridge: com.phonxiety.bridge.model.BridgeState) {
+        val up = bridge.link as? LinkState.Up
+        val now = System.currentTimeMillis()
+        relaySinceMs = if (up?.path == PathKind.RELAY) relaySinceMs ?: now else null
+        // One evaluation at a time; a state tick while one runs is redundant, an explicit
+        // "Evaluate now" waits instead of being dropped.
+        if (_state.value.autoTune.enabled && !evaluateLock.isLocked) {
+            viewModelScope.launch { evaluateAutoTune() }
+        }
+    }
+
+    private suspend fun evaluateAutoTune() {
+        evaluateLock.withLock {
+            val current = _state.value
+            if (!current.autoTune.enabled) return@withLock
+            applyAutoTune(current)
+        }
+    }
+
+    private suspend fun applyAutoTune(current: SettingsUiState) {
+        val link = bridgeState.state.value.link as? LinkState.Up
+        val observation = TuneObservation(
+            path = link?.path,
+            relayForMs = relaySinceMs?.let { (System.currentTimeMillis() - it).coerceAtLeast(0) },
+            network = bridgeState.state.value.device.network,
+            thermal = bridgeState.state.value.device.thermal,
+            batteryPercent = bridgeState.state.value.device.batteryPercent,
+            charging = bridgeState.state.value.device.charging,
+            lastLinkTest = latestLinkTest,
+            missingPermissions = bridgeState.state.value.device.missingPermissions
+        )
+        val action = AutoTune.evaluate(observation, current.phone)
+        val recorded = mutableListOf<AutoTuneLogEntry>()
+        for (change in action.changes) {
+            if (apply(change)) {
+                recorded += AutoTuneLogEntry(
+                    id = UUID.randomUUID().toString(),
+                    atMs = System.currentTimeMillis(),
+                    key = change.key.key,
+                    from = change.from,
+                    to = change.to,
+                    reason = change.reason
+                )
+            }
+        }
+        var log = current.autoTune.changes
+        for (entry in recorded.asReversed()) {
+            log = changeLog.append(entry)
+        }
+        // Apply the writes to the rendered state now, so the next evaluation compares against
+        // the new values instead of logging the same change twice.
+        val phone = if (recorded.isEmpty()) current.phone else phonePreferences.settings.first()
+        _state.update {
+            it.copy(
+                phone = phone,
+                autoTune = it.autoTune.copy(
+                    changes = log,
+                    suggestions = action.suggestions,
+                    lastEvaluatedAtMs = System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
+    private suspend fun apply(change: TuneChange): Boolean {
+        when (change.key) {
+            TuneKey.CODEC -> phonePreferences.update { it.copy(preferredCodec = PhoneCodec.normalize(change.to)) }
+
+            TuneKey.MAX_BITRATE -> {
+                val bitrate = change.to.toIntOrNull() ?: return false
+                phonePreferences.update { it.copy(maxBitrate = bitrate) }
+            }
+
+            TuneKey.WIFI_LOW_LATENCY -> phonePreferences.update { it.copy(wifiLowLatency = change.to == "true") }
+        }
+        return true
+    }
+
+    fun revertChange(id: String) {
+        viewModelScope.launch {
+            val entry = _state.value.autoTune.changes.firstOrNull { it.id == id } ?: return@launch
+            if (entry.reverted) return@launch
+            revert(entry)
+            val log = changeLog.markReverted(setOf(entry.id))
+            _state.update {
+                it.copy(autoTune = it.autoTune.copy(changes = log), message = "Reverted ${entry.title}")
+            }
+        }
+    }
+
+    fun revertEverything() {
+        viewModelScope.launch {
+            val pending = _state.value.autoTune.changes.filterNot { it.reverted }
+            for (entry in pending.asReversed()) revert(entry)
+            val log = changeLog.markReverted(pending.map { it.id }.toSet())
+            _state.update {
+                it.copy(
+                    autoTune = it.autoTune.copy(changes = log),
+                    message = if (pending.isEmpty()) "Nothing to revert" else "Reverted ${pending.size} change(s)"
+                )
+            }
+        }
+    }
+
+    private suspend fun revert(entry: AutoTuneLogEntry) {
+        when (TuneKey.of(entry.key)) {
+            TuneKey.CODEC -> phonePreferences.update { it.copy(preferredCodec = PhoneCodec.normalize(entry.from)) }
+
+            TuneKey.MAX_BITRATE -> entry.from.toIntOrNull()?.let { from ->
+                phonePreferences.update { it.copy(maxBitrate = from) }
+            }
+
+            TuneKey.WIFI_LOW_LATENCY -> phonePreferences.update { it.copy(wifiLowLatency = entry.from == "true") }
+
+            null -> Unit
+        }
+    }
+
+    fun consumeMessage() = _state.update { it.copy(message = null) }
+
+    private fun ApiOutcome.Failure.describe(): String = "$code: $message"
+}

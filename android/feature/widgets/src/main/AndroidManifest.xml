@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+        Surfaces that work while the app has no activity: the Glance widget, the two quick-settings
+        tiles and the long-press destination for them. The state they read is the bridge service's
+        own, so they never keep the app process alive for their sake.
+    -->
+    <application>
+
+        <receiver
+            android:name=".PhonxietyWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/phonxiety_widget_info" />
+        </receiver>
+
+        <service
+            android:name=".LinkTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_tile_link"
+            android:label="@string/tile_link_name"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.TOGGLEABLE_TILE"
+                android:value="false" />
+        </service>
+
+        <service
+            android:name=".HangupTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_tile_hangup"
+            android:label="@string/tile_hangup_name"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.TOGGLEABLE_TILE"
+                android:value="false" />
+        </service>
+
+        <!-- Long-pressing either tile opens the app instead of the system's app-info sheet. -->
+        <activity
+            android:name=".TileDetailsActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE_PREFERENCES" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>

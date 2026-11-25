@@ -6,7 +6,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.IBinder
-import android.util.Log
 import com.phonxiety.bridge.device.R
 
 /**
@@ -31,7 +30,7 @@ class BridgeService : Service() {
             try {
                 context.startForegroundService(Intent(context, BridgeService::class.java))
             } catch (e: Exception) {
-                Log.w(TAG, "cannot start bridge service: ${e.javaClass.simpleName}")
+                BridgeLog.w(TAG, "cannot start bridge service: ${e.javaClass.simpleName}")
             }
         }
 
@@ -54,7 +53,7 @@ class BridgeService : Service() {
             )
             foregroundReady = true
         } catch (e: Exception) {
-            Log.e(TAG, "cannot enter foreground: ${e.javaClass.simpleName}")
+            BridgeLog.e(TAG, "cannot enter foreground: ${e.javaClass.simpleName}")
             stopSelf()
         }
     }
@@ -69,13 +68,13 @@ class BridgeService : Service() {
         val config = try {
             BridgeConfigLoader.load(this)
         } catch (e: BridgeConfigException) {
-            Log.e(TAG, "bridge config unavailable: ${e.code}")
+            BridgeLog.e(TAG, "bridge config unavailable: ${e.code}")
             BridgeRuntime.forgetPairing()
             stopForeground(Service.STOP_FOREGROUND_REMOVE)
             stopSelf(startId)
             return Service.START_NOT_STICKY
         } catch (e: Exception) {
-            Log.e(TAG, "bridge config unreadable: ${e.javaClass.simpleName}")
+            BridgeLog.e(TAG, "bridge config unreadable: ${e.javaClass.simpleName}")
             BridgeRuntime.forgetPairing()
             stopForeground(Service.STOP_FOREGROUND_REMOVE)
             stopSelf(startId)
@@ -87,7 +86,7 @@ class BridgeService : Service() {
             updateNotification(getString(textRes))
         }
         engine = created
-        BridgeRuntime.engine = created
+        BridgeRuntime.attach(created)
         created.start()
         return Service.START_STICKY
     }
@@ -95,7 +94,7 @@ class BridgeService : Service() {
     override fun onDestroy() {
         val current = engine
         engine = null
-        BridgeRuntime.engine = null
+        if (current != null) BridgeRuntime.detach(current)
         current?.close()
         foregroundReady = false
         super.onDestroy()

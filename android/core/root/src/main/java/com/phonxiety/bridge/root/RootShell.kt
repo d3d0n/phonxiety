@@ -121,11 +121,17 @@ interface RootEnvironment {
 
     /** Every installed package name. */
     fun installedPackages(): Set<String>
+
+    /** Manager version from `PackageManager`, so a denied `su` still names a real version. */
+    fun packageVersion(packageName: String): String? = null
 }
 
 /** Package inventory from `PackageManager`; kept abstract so this module stays JVM-testable. */
 fun interface PackageInventory {
     fun installed(): Set<String>
+
+    /** `versionName (versionCode)` of an installed package, or null when it cannot be read. */
+    fun version(packageName: String): String? = null
 }
 
 /** Reads the module tree through [RootShell], since `/data/adb` is unreadable to the app itself. */
@@ -145,6 +151,8 @@ class ShellRootEnvironment(
     }
 
     override fun installedPackages(): Set<String> = packages.installed()
+
+    override fun packageVersion(packageName: String): String? = packages.version(packageName)
 }
 
 /** A plain-filesystem environment: used by tests and by `adb shell`-style tooling. */
@@ -163,4 +171,6 @@ class FileRootEnvironment(
     }
 
     override fun installedPackages(): Set<String> = packages.installed()
+
+    override fun packageVersion(packageName: String): String? = packages.version(packageName)
 }

@@ -53,6 +53,34 @@ class ModuleControllerTest {
     }
 
     @Test
+    fun grantingRootInTheManagerResumesWithoutAnotherStep() {
+        val denied = probe(
+            snapshot(
+                detection = RootDetection(SuStatus.DENIED, listOf(magisk), "Permission denied")
+            )
+        ).state
+        assertEquals(WizardState.RootDenied(magisk, "Permission denied"), denied)
+
+        // The user taps "Open Magisk", grants Phonxiety in Superuser and comes back: the host
+        // re-probes on resume, and this is the snapshot it feeds with the grant now in place.
+        val resumed = ModuleController.reduce(
+            denied,
+            WizardEvent.ProbeCompleted(snapshot())
+        )
+
+        assertEquals(WizardState.ReadyToInstall(magisk), resumed.state)
+    }
+
+    @Test
+    fun recheckFromDeniedShowsTheSpinnerAndProbesAgain() {
+        val denied = WizardState.RootDenied(magisk, "Permission denied")
+        val transition = ModuleController.reduce(denied, WizardEvent.RecheckRequested)
+
+        assertEquals(WizardState.Checking, transition.state)
+        assertEquals(listOf<WizardEffect>(WizardEffect.RunProbe), transition.effects)
+    }
+
+    @Test
     fun suTimeoutIsExplicitInsteadOfAGuess() {
         val state = probe(
             snapshot(detection = RootDetection(SuStatus.TIMED_OUT, suOutput = ""))
@@ -125,6 +153,43 @@ class ModuleControllerTest {
                 WizardEffect.PersistProgress(InstallOperation.PREPARE_METAMODULE, RootId.KERNELSU)
             ),
             transition.effects
+        )
+    }
+
+    @Test
+    fun aFailedMetamoduleRetriesThePreparationNotAModuleUpdate() {
+        val failed = WizardState.InstallFailed(
+            provider = kernelSu,
+            operation = InstallOperation.PREPARE_METAMODULE,
+            module = ModuleState.Absent,
+            result = ProviderResult.Failure("meta-overlayfs SHA-256 mismatch", exitCode = 3)
+        )
+
+        val transition = ModuleController.reduce(failed, WizardEvent.RetryRequested)
+
+        assertEquals(
+            WizardState.ProviderPrep(kernelSu, PrepReason.METAMODULE_MISSING),
+            transition.state
+        )
+    }
+
+    @Test
+    fun preparedMetamoduleAsksForOneReboot() {
+        val installing = ModuleController.reduce(
+            WizardState.ProviderPrep(kernelSu, PrepReason.METAMODULE_MISSING),
+            WizardEvent.PrepareProviderRequested
+        ).state
+
+        val transition = ModuleController.reduce(
+            installing,
+            WizardEvent.InstallResult(
+                ProviderResult.Success("meta-overlayfs: installed\nphonxiety: installed")
+            )
+        )
+
+        assertEquals(
+            WizardState.RebootPending(kernelSu, RebootReason.MODULE_INSTALL, ModuleState.Absent),
+            transition.state
         )
     }
 

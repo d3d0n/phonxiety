@@ -1,5 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt)
 }
@@ -59,6 +61,7 @@ android {
     lint {
         warningsAsErrors = true
         abortOnError = true
+        checkDependencies = true
     }
 
     signingConfigs {
@@ -99,22 +102,35 @@ dependencies {
     implementation(project(":core:device"))
     // Root layer ships the module payload as library assets merged into :app.
     implementation(project(":core:root"))
-
-    // TODO(navigation): add :core:designsystem and the feature modules to :app
-    // together with the Navigation 3 host.  Wiring them in now would ship
-    // placeholder screens nobody can reach (and their Compose/Glance/WorkManager
-    // manifests with them).
+    implementation(project(":core:designsystem"))
+    implementation(project(":feature:onboarding"))
+    implementation(project(":feature:dashboard"))
+    implementation(project(":feature:livecall"))
+    implementation(project(":feature:calls"))
+    implementation(project(":feature:lab"))
+    implementation(project(":feature:settings"))
+    implementation(project(":feature:updates"))
+    implementation(project(":feature:doctor"))
+    implementation(project(":feature:widgets"))
 
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
-    // ComponentActivity is required for @AndroidEntryPoint.  The baseline-profile
-    // installer is pulled in by Activity and Lifecycle, but this app does not
-    // generate or ship a profile, so its receiver and initializer stay out.
-    implementation(libs.androidx.activity)
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.material3.adaptive.navigation.suite)
+    implementation(libs.androidx.compose.material.icons.core)
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.navigation3)
+    implementation(libs.androidx.navigation3.runtime)
+    implementation(libs.androidx.navigation3.ui)
+    implementation(libs.kotlinx.serialization.json)
 
     // Google code scanner: pairs by scanning the daemon's QR code without a
     // camera permission.
     implementation(libs.play.services.code.scanner)
+    implementation(platform(libs.androidx.compose.bom))
 
     testImplementation(libs.junit)
 }

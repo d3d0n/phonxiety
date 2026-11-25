@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- The user-confirmation install path (an app installed by adb before the module exists).
+         With the module in place the privileged INSTALL_SELF_UPDATES path is used instead and the
+         system never shows a dialog. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <application android:supportsRtl="true">
+
+        <!-- PackageInstaller status intents for this app's own update session: success, failure,
+             or a request to show the platform's confirmation dialog. -->
+        <receiver
+            android:name="com.phonxiety.bridge.data.updates.PackageInstallerResultReceiver"
+            android:exported="false" />
+
+        <!-- Shares the downloaded APK with the system package installer on the fallback path. -->
+        <provider
+            android:name="com.phonxiety.bridge.data.updates.UpdatesFileProvider"
+            android:authorities="${applicationId}.updates"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/updates_file_paths" />
+        </provider>
+    </application>
+
+</manifest>

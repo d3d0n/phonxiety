@@ -1,0 +1,283 @@
+#!/usr/bin/env bash
+#MISE description="Publish an update: build the APK and module zip, then write dist/update.json"
+#MISE depends=["phone:iroh"]
+#
+# Produces, in dist/:
+#   phonxiety-bridge-<version>.apk   the signed release APK
+#   phonxiety-bridge-<version>.zip   the module zip, with updateJson pointing at update.json
+#   update.json                      one document for the app, the root manager and the daemon
+#
+# Does not upload anything. --serve copies the APK and the module zip into <state dir>/updates/ and
+# writes <state dir>/updates/manifest.json (the file behind GET /app/v1/update/manifest) with
+# apk.url "daemon:apk" and module.url "daemon:module"; module.zipUrl stays https for the managers.
+set -euo pipefail
+
+ROOT="${MISE_PROJECT_ROOT:?run this task through mise: mise run phone:publish}"
+ANDROID="$ROOT/android"
+MAGISK="$ANDROID/magisk"
+DIST="$ROOT/dist"
+DEFAULT_URL_BASE="https://github.com/d3d0n/phonxiety/releases/latest/download"
+MODULE_SCHEMA=1
+
+URL_BASE="${PHONXIETY_UPDATE_BASE_URL:-$DEFAULT_URL_BASE}"
+CHANNEL="stable"
+CHANGELOG=""
+MIN_DAEMON=""
+SERVE=0
+BUILD=1
+STATE_DIR="${PHONXIETY_STATE_DIR:-$HOME/.local/share/phonxiety}"
+
+usage() {
+    cat <<'EOF'
+Usage: mise run phone:publish [options]
+
+  --url-base URL     Where update.json and the artifacts are hosted (https).
+                     Default: PHONXIETY_UPDATE_BASE_URL, else the GitHub release URL.
+  --changelog URL    Changelog the root manager shows. Default: <url-base>/CHANGELOG.md
+  --channel NAME     Channel written into the document (default: stable).
+  --min-daemon VER   Minimum daemon version. Default: src/phonxiety/__init__.py __version__.
+  --serve            Copy APK + module zip into <state dir>/updates/ and write the daemon's
+                     manifest.json there, with daemon: artifact sources.
+  --state-dir PATH   Daemon state directory for --serve (default: ~/.local/share/phonxiety).
+  --no-build         Reuse the existing release APK and module zip; only write update.json.
+
+Checks before writing anything: the module and APK versions agree, both files exist, their
+SHA-256 values and the APK's signing certificate are computed from the bytes that are published.
+EOF
+}
+
+die() { printf 'error: %s\n' "$1" >&2; exit 1; }
+note() { printf '%s\n' "$1"; }
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --url-base) [ $# -ge 2 ] || die "--url-base requires a value"; URL_BASE="$2"; shift 2 ;;
+        --changelog) [ $# -ge 2 ] || die "--changelog requires a value"; CHANGELOG="$2"; shift 2 ;;
+        --channel) [ $# -ge 2 ] || die "--channel requires a value"; CHANNEL="$2"; shift 2 ;;
+        --min-daemon) [ $# -ge 2 ] || die "--min-daemon requires a value"; MIN_DAEMON="$2"; shift 2 ;;
+        --state-dir) [ $# -ge 2 ] || die "--state-dir requires a value"; STATE_DIR="$2"; shift 2 ;;
+        --serve) SERVE=1; shift ;;
+        --no-build) BUILD=0; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) die "unknown argument: $1" ;;
+    esac
+done
+
+case "$URL_BASE" in
+    https://*) ;;
+    *) die "--url-base must be an https:// URL (the manager and the app refuse anything else)" ;;
+esac
+URL_BASE="${URL_BASE%/}"
+[ -n "$CHANGELOG" ] || CHANGELOG="$URL_BASE/CHANGELOG.md"
+case "$CHANGELOG" in
+    https://*) ;;
+    *) die "the changelog must be an https:// URL" ;;
+esac
+
+[ -f "$MAGISK/module.prop" ] || die "missing android/magisk/module.prop"
+
+MODULE_VERSION="$(awk -F= '/^version=/{print $2; exit}' "$MAGISK/module.prop")"
+MODULE_VERSION_CODE="$(awk -F= '/^versionCode=/{print $2; exit}' "$MAGISK/module.prop")"
+[ -n "$MODULE_VERSION" ] || die "module.prop has no version"
+[ -n "$MODULE_VERSION_CODE" ] || die "module.prop has no versionCode"
+
+sha256_of() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | cut -d' ' -f1
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | cut -d' ' -f1
+    else
+        die "sha256sum or shasum is required"
+    fi
+}
+
+find_build_tool() {
+    local tool version
+    tool="$1"
+    for version in $(ls -1 "$ANDROID_HOME/build-tools" 2>/dev/null | sort -rV); do
+        if [ -x "$ANDROID_HOME/build-tools/$version/$tool" ]; then
+            printf '%s\n' "$ANDROID_HOME/build-tools/$version/$tool"
+            return 0
+        fi
+    done
+    return 1
+}
+
+if [ "$BUILD" = 1 ]; then
+    note "Publishing with updateJson=$URL_BASE/update.json"
+    PHONXIETY_UPDATE_JSON="$URL_BASE/update.json" "$ROOT/mise-tasks/phone/build"
+fi
+
+APK="$ANDROID/app/build/outputs/apk/release/app-release.apk"
+[ -f "$APK" ] || APK="$(find "$ANDROID/app/build/outputs/apk/release" -maxdepth 1 -name '*.apk' -print 2>/dev/null | sed -n '1p')"
+[ -n "$APK" ] && [ -f "$APK" ] || die "release APK not found; run without --no-build"
+
+ZIP="$DIST/phonxiety-bridge-${MODULE_VERSION}.zip"
+[ -f "$ZIP" ] || ZIP="$(ls -1t "$DIST"/phonxiety-bridge-*.zip 2>/dev/null | head -n1 || true)"
+[ -n "$ZIP" ] && [ -f "$ZIP" ] || die "module zip not found; run without --no-build"
+
+# The packaged module.prop must advertise the URL the update document lives at, else the manager
+# shows an update the app does not offer.
+if command -v unzip >/dev/null 2>&1; then
+    PACKAGED_UPDATE_JSON="$(unzip -p "$ZIP" module.prop 2>/dev/null | awk -F= '/^updateJson=/{print $2}')"
+    [ "$PACKAGED_UPDATE_JSON" = "$URL_BASE/update.json" ] || \
+        die "the module zip's updateJson is '${PACKAGED_UPDATE_JSON:-absent}', expected $URL_BASE/update.json; rebuild without --no-build"
+fi
+
+AAPT2="$(find_build_tool aapt2 || true)"
+[ -n "$AAPT2" ] || die "aapt2 was not found in \$ANDROID_HOME/build-tools"
+
+BADGING="$("$AAPT2" dump badging "$APK" 2>/dev/null | awk 'NR==1')"
+[ -n "$BADGING" ] || die "aapt2 could not read $APK"
+APK_VERSION_CODE="$(printf '%s' "$BADGING" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p")"
+APK_VERSION_NAME="$(printf '%s' "$BADGING" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")"
+APK_MIN_SDK="$(printf '%s' "$BADGING" | sed -n "s/.*sdkVersion:'\([0-9]*\)'.*/\1/p")"
+[ -n "$APK_VERSION_CODE" ] || die "could not read the APK versionCode"
+[ -n "$APK_VERSION_NAME" ] || die "could not read the APK versionName"
+[ -n "$APK_MIN_SDK" ] || APK_MIN_SDK=34
+
+[ "$APK_VERSION_CODE" = "$MODULE_VERSION_CODE" ] || \
+    die "module.prop versionCode $MODULE_VERSION_CODE != APK versionCode $APK_VERSION_CODE; bump both"
+[ "$APK_VERSION_NAME" = "$MODULE_VERSION" ] || \
+    die "module.prop version $MODULE_VERSION != APK versionName $APK_VERSION_NAME; bump both"
+
+APKSIGNER="$(find_build_tool apksigner || true)"
+[ -n "$APKSIGNER" ] || die "apksigner was not found in \$ANDROID_HOME/build-tools"
+CERT_SHA256="$("$APKSIGNER" verify --print-certs "$APK" 2>/dev/null | awk '!seen && /certificate SHA-256 digest:/ {sub(/.*certificate SHA-256 digest:[ ]*/, ""); print tolower($0); seen=1}')"
+[ -n "$CERT_SHA256" ] || die "apksigner could not read the signing certificate of $APK"
+
+APK_SHA256="$(sha256_of "$APK")"
+ZIP_SHA256="$(sha256_of "$ZIP")"
+APK_SIZE="$(wc -c < "$APK" | tr -d ' ')"
+ZIP_SIZE="$(wc -c < "$ZIP" | tr -d ' ')"
+APK_NAME="$(basename "$APK")"
+APK_NAME="phonxiety-bridge-${APK_VERSION_NAME}.apk"
+ZIP_NAME="$(basename "$ZIP")"
+
+DAEMON_VERSION="${MIN_DAEMON:-$(awk -F'"' '/^__version__ = "/{print $2; exit}' "$ROOT/src/phonxiety/__init__.py")}"
+[ -n "$DAEMON_VERSION" ] || die "could not read the daemon version; pass --min-daemon"
+APP_API="$(awk -F' = ' '/^APP_API_VERSION = [0-9]+$/{print $2; exit}' "$ROOT/src/phonxiety/app_api.py")"
+PROTOCOL="$(awk -F' = ' '/^PROTOCOL_VERSION = [0-9]+$/{print $2; exit}' "$ROOT/src/phonxiety/device.py")"
+[ -n "$APP_API" ] || die "could not read APP_API_VERSION"
+[ -n "$PROTOCOL" ] || die "could not read PROTOCOL_VERSION"
+
+mkdir -p "$DIST"
+PUBLISHED_APK="$DIST/$APK_NAME"
+if [ "$(cd "$(dirname "$APK")" && pwd)/$(basename "$APK")" != "$(cd "$DIST" && pwd)/$APK_NAME" ]; then
+    cp "$APK" "$PUBLISHED_APK"
+fi
+[ "$(sha256_of "$PUBLISHED_APK")" = "$APK_SHA256" ] || die "the published APK copy does not match its digest"
+
+PYTHON="$(command -v python3 || command -v python || true)"
+[ -n "$PYTHON" ] || die "python3 is required to write update.json"
+
+OUT="$DIST/update.json"
+SERVE_DIR=""
+SERVED_OUT=""
+if [ "$SERVE" = 1 ]; then
+    SERVE_DIR="$STATE_DIR/updates"
+    mkdir -p "$SERVE_DIR"
+    SERVED_OUT="$SERVE_DIR/manifest.json"
+fi
+
+PX_SERVED_OUT="$SERVED_OUT" \
+PX_URL_BASE="$URL_BASE" \
+PX_CHANNEL="$CHANNEL" \
+PX_CHANGELOG="$CHANGELOG" \
+PX_VERSION="$APK_VERSION_NAME" \
+PX_VERSION_CODE="$APK_VERSION_CODE" \
+PX_ZIP_NAME="$ZIP_NAME" \
+PX_APK_NAME="$APK_NAME" \
+PX_APK_SHA256="$APK_SHA256" \
+PX_APK_SIZE="$APK_SIZE" \
+PX_CERT_SHA256="$CERT_SHA256" \
+PX_APK_MIN_SDK="$APK_MIN_SDK" \
+PX_MODULE_SHA256="$ZIP_SHA256" \
+PX_MODULE_SIZE="$ZIP_SIZE" \
+PX_MODULE_SCHEMA="$MODULE_SCHEMA" \
+PX_DAEMON_VERSION="$DAEMON_VERSION" \
+PX_PROTOCOL="$PROTOCOL" \
+PX_APP_API="$APP_API" \
+"$PYTHON" - "$OUT" <<'PY'
+import datetime
+import json
+import os
+import sys
+
+base = os.environ["PX_URL_BASE"].rstrip("/")
+document = {
+    "channel": os.environ["PX_CHANNEL"],
+    "version": os.environ["PX_VERSION"],
+    "versionCode": int(os.environ["PX_VERSION_CODE"]),
+    "zipUrl": f"{base}/{os.environ['PX_ZIP_NAME']}",
+    "changelog": os.environ["PX_CHANGELOG"],
+    "published_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+    "updateJsonUrl": f"{base}/update.json",
+    "apk": {
+        "version": os.environ["PX_VERSION"],
+        "versionCode": int(os.environ["PX_VERSION_CODE"]),
+        "url": f"{base}/{os.environ['PX_APK_NAME']}",
+        "sha256": os.environ["PX_APK_SHA256"],
+        "size": int(os.environ["PX_APK_SIZE"]),
+        "signingCertSha256": os.environ["PX_CERT_SHA256"],
+        "minSdk": int(os.environ["PX_APK_MIN_SDK"]),
+    },
+    "module": {
+        "version": os.environ["PX_VERSION"],
+        "versionCode": int(os.environ["PX_VERSION_CODE"]),
+        "zipUrl": f"{base}/{os.environ['PX_ZIP_NAME']}",
+        "url": f"{base}/{os.environ['PX_ZIP_NAME']}",
+        "sha256": os.environ["PX_MODULE_SHA256"],
+        "size": int(os.environ["PX_MODULE_SIZE"]),
+        "schemaVersion": int(os.environ["PX_MODULE_SCHEMA"]),
+        "requiresReboot": True,
+        "permissions": [
+            "android.permission.CAPTURE_AUDIO_OUTPUT",
+            "android.permission.MODIFY_PHONE_STATE",
+            "android.permission.CONTROL_INCALL_EXPERIENCE",
+            "android.permission.INSTALL_SELF_UPDATES",
+            "android.permission.REBOOT",
+        ],
+    },
+    "daemon": {
+        "minVersion": os.environ["PX_DAEMON_VERSION"],
+        "protocol": int(os.environ["PX_PROTOCOL"]),
+        "appApi": int(os.environ["PX_APP_API"]),
+        "moduleSchema": int(os.environ["PX_MODULE_SCHEMA"]),
+    },
+}
+def write(path, document):
+    with open(path, "w", encoding="utf-8") as stream:
+        json.dump(document, stream, indent=2, ensure_ascii=False)
+        stream.write("\n")
+
+
+write(sys.argv[1], document)
+
+served_path = os.environ.get("PX_SERVED_OUT") or ""
+if served_path:
+    # The daemon serves the artifacts itself: the app fetches them over the authenticated link,
+    # while module.zipUrl and the top-level zipUrl stay https for the root managers.
+    served = json.loads(json.dumps(document))
+    served["apk"]["url"] = "daemon:apk"
+    served["apk"]["file"] = os.environ["PX_APK_NAME"]
+    served["module"]["url"] = "daemon:module"
+    served["module"]["file"] = os.environ["PX_ZIP_NAME"]
+    write(served_path, served)
+PY
+
+[ -s "$OUT" ] || die "update.json was not written"
+
+note "APK:      $PUBLISHED_APK"
+note "Module:   $ZIP"
+note "Manifest: $OUT"
+
+if [ "$SERVE" = 1 ]; then
+    cp "$PUBLISHED_APK" "$SERVE_DIR/$APK_NAME"
+    cp "$ZIP" "$SERVE_DIR/$ZIP_NAME"
+    [ "$(sha256_of "$SERVE_DIR/$APK_NAME")" = "$APK_SHA256" ] || die "the served APK copy does not match its digest"
+    [ "$(sha256_of "$SERVE_DIR/$ZIP_NAME")" = "$ZIP_SHA256" ] || die "the served module copy does not match its digest"
+    note "Daemon:   $SERVED_OUT (GET /app/v1/update/manifest)"
+    note "Served:   $SERVE_DIR/$APK_NAME"
+    note "          $SERVE_DIR/$ZIP_NAME"
+fi

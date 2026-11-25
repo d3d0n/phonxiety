@@ -43,7 +43,9 @@ class RootDetector(
         val magiskVersion = if (
             "magisk" in adbEntries || MagiskProvider.MANAGER_PACKAGE in packages
         ) {
-            versionOf { RootCommand.magiskVersionName() } ?: versionOf { RootCommand.magiskVersionCode() }
+            versionOf { RootCommand.magiskVersionName() }
+                ?: versionOf { RootCommand.magiskVersionCode() }
+                ?: environment.packageVersion(MagiskProvider.MANAGER_PACKAGE)
         } else {
             null
         }
@@ -74,6 +76,7 @@ class RootDetector(
             ksuArtefacts.isNotEmpty() || ksuManagers.any { it in packages }
         ) {
             versionOf { RootCommand.ksudVersion() }
+                ?: ksuManagers.firstNotNullOfOrNull { environment.packageVersion(it) }
         } else {
             null
         }
@@ -110,6 +113,7 @@ class RootDetector(
             apatchArtefacts.isNotEmpty() || ApatchProvider.MANAGER_PACKAGE in packages
         ) {
             versionOf { RootCommand.apdVersion() }
+                ?: environment.packageVersion(ApatchProvider.MANAGER_PACKAGE)
         } else {
             null
         }
@@ -138,7 +142,7 @@ class RootDetector(
         if (MagiskProvider.MANAGER_PACKAGE in packages) {
             found += DetectedProvider(
                 id = RootId.MAGISK,
-                version = UNKNOWN_VERSION,
+                version = environment.packageVersion(MagiskProvider.MANAGER_PACKAGE) ?: UNKNOWN_VERSION,
                 managerPackage = MagiskProvider.MANAGER_PACKAGE,
                 managerInstalled = true
             )
@@ -151,7 +155,7 @@ class RootDetector(
             val next = KernelSuProvider.KERNELSU_NEXT_MANAGER_PACKAGE in packages
             found += DetectedProvider(
                 id = if (next) RootId.KERNELSU_NEXT else RootId.KERNELSU,
-                version = UNKNOWN_VERSION,
+                version = environment.packageVersion(nameSuPackages.first()) ?: UNKNOWN_VERSION,
                 managerPackage = nameSuPackages.first(),
                 managerInstalled = true
             )
@@ -159,7 +163,7 @@ class RootDetector(
         if (ApatchProvider.MANAGER_PACKAGE in packages) {
             found += DetectedProvider(
                 id = RootId.APATCH,
-                version = UNKNOWN_VERSION,
+                version = environment.packageVersion(ApatchProvider.MANAGER_PACKAGE) ?: UNKNOWN_VERSION,
                 managerPackage = ApatchProvider.MANAGER_PACKAGE,
                 managerInstalled = true
             )

@@ -10,7 +10,7 @@ interface BridgeStateRepository {
     val state: StateFlow<BridgeState>
 }
 
-/** Pairing with the Mac daemon: stored payload, parsing and the result of a pairing attempt. */
+/** Pairing with the daemon on the user's computer: stored payload, parsing and the result of a pairing attempt. */
 interface PairingRepository {
     val paired: StateFlow<Boolean>
 
@@ -35,7 +35,7 @@ interface AppApi {
         method: String,
         path: String,
         query: Map<String, String> = emptyMap(),
-        body: JsonObject? = null,
+        body: JsonObject? = null
     ): ApiResult
 
     /** Bulk bytes (recordings, bundles) on their own stream; paged fallback on WebSocket links. */

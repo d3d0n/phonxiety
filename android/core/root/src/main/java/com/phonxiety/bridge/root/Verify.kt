@@ -17,13 +17,18 @@ object PrivilegedPermissions {
     )
 }
 
-/** What `PackageManager` says about this app; produced by the app layer (Android types stay there). */
+/**
+ * What `PackageManager` says about this app; produced by the app layer (Android types stay there).
+ * [updatedSystemApp] is true when a newer APK (self-update, `adb install -r`) sits in `/data/app` over
+ * the module's `/system/priv-app` copy; the platform keeps it privileged.
+ */
 data class AppFacts(
     val packageName: String,
     val isSystemApp: Boolean,
     val apkPath: String?,
     val grantedPermissions: Set<String>,
-    val requiredPermissions: Set<String> = PrivilegedPermissions.ALL
+    val requiredPermissions: Set<String> = PrivilegedPermissions.ALL,
+    val updatedSystemApp: Boolean = false
 ) {
     /** The permission names still missing from the allowlist grant. */
     val missingPermissions: Set<String> get() = requiredPermissions - grantedPermissions
@@ -80,7 +85,10 @@ class VerifyChecker(private val probe: AppFactsProbe) {
                     outcomeOf(moduleState != ModuleState.RemovePending),
                 VerifyCheck.PACKAGE_IS_SYSTEM to outcomeOf(facts?.isSystemApp == true),
                 VerifyCheck.APK_IN_PRIV_APP to
-                    outcomeOf(facts?.apkPath?.startsWith(VerifyReport.PRIV_APP_PREFIX) == true),
+                    outcomeOf(
+                        facts?.apkPath?.startsWith(VerifyReport.PRIV_APP_PREFIX) == true ||
+                            facts?.updatedSystemApp == true
+                    ),
                 VerifyCheck.PRIVILEGED_PERMISSIONS_GRANTED to
                     outcomeOf(facts != null && facts.missingPermissions.isEmpty())
             )

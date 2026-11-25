@@ -1,0 +1,144 @@
+package com.phonxiety.bridge.feature.onboarding
+
+import android.annotation.SuppressLint
+import android.content.Context
+import android.content.Intent
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.net.toUri
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.launch
+
+/**
+ * The wizard wired to the device: hosts the permission dialogs, the battery-exemption intent, the
+ * QR scanner and the deep-link pairing, and forwards [SetupHostRequest]s from the coordinator.
+ */
+@Composable
+fun OnboardingRoute(
+    initialPairLink: String?,
+    onFinished: () -> Unit,
+    onOpenDoctor: () -> Unit,
+    modifier: Modifier = Modifier,
+    viewModel: OnboardingViewModel = hiltViewModel()
+) {
+    val wizard by viewModel.wizard.collectAsStateWithLifecycle()
+    val pairingError by viewModel.pairingError.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { viewModel.onPermissionsResult() }
+    val batteryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { }
+
+    val scanner = rememberQrScanner(
+        onCode = viewModel::pair,
+        onFailure = { message -> scope.launch { snackbar.showSnackbar(message) } }
+    )
+
+    LaunchedEffect(viewModel) {
+        viewModel.requests.collect { request ->
+            when (request) {
+                is SetupHostRequest.RequestRuntimePermissions ->
+                    permissionLauncher.launch(request.permissions.toTypedArray())
+
+                SetupHostRequest.RequestBatteryExemption ->
+                    batteryLauncher.launch(batteryExemptionIntent(context))
+
+                SetupHostRequest.StartPairing -> scanner()
+
+                is SetupHostRequest.PairingRejected -> snackbar.showSnackbar(request.reason)
+
+                is SetupHostRequest.Message -> snackbar.showSnackbar(request.text)
+
+                SetupHostRequest.Finished -> onFinished()
+            }
+        }
+    }
+
+    LaunchedEffect(initialPairLink) {
+        if (!initialPairLink.isNullOrBlank()) viewModel.pair(initialPairLink)
+    }
+
+    LifecycleResumeEffect(Unit) {
+        viewModel.onReturnedToForeground()
+        onPauseOrDispose { }
+    }
+
+    Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { padding ->
+        OnboardingScreen(
+            state = OnboardingUiState(wizard = wizard, pairingError = pairingError),
+            callbacks = OnboardingCallbacks(
+                onPrimary = viewModel::onPrimary,
+                onSecondary = viewModel::onSecondary,
+                onScanQr = scanner,
+                onPairLink = viewModel::pair,
+                onDismissPairingError = viewModel::dismissPairingError,
+                onOpenManager = { pkg -> openManager(context, pkg, scope, snackbar) },
+                onOpenUrl = { url -> openUrl(context, url, scope, snackbar) },
+                onOpenDoctor = onOpenDoctor,
+                onRebootLater = viewModel::onRebootLater,
+                onFinished = onFinished
+            ),
+            modifier = modifier.padding(padding)
+        )
+    }
+}
+
+// The phone is sideloaded as a priv-app, not distributed through Play, and the exemption is the
+// documented fix for heartbeat misses with the screen off (mobile client plan §3.6).
+@SuppressLint("BatteryLife")
+private fun batteryExemptionIntent(context: Context): Intent = Intent(
+    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+    "package:${context.packageName}".toUri()
+)
+
+private fun openManager(
+    context: Context,
+    packageName: String,
+    scope: kotlinx.coroutines.CoroutineScope,
+    snackbar: SnackbarHostState
+) {
+    val launch = context.packageManager.getLaunchIntentForPackage(packageName)
+    try {
+        if (launch != null) {
+            context.startActivity(launch)
+        } else {
+            context.startActivity(
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:$packageName".toUri())
+            )
+        }
+    } catch (error: Exception) {
+        scope.launch { snackbar.showSnackbar(error.message ?: "the manager could not be opened") }
+    }
+}
+
+private fun openUrl(
+    context: Context,
+    url: String,
+    scope: kotlinx.coroutines.CoroutineScope,
+    snackbar: SnackbarHostState
+) {
+    try {
+        context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri()))
+    } catch (error: Exception) {
+        scope.launch { snackbar.showSnackbar(error.message ?: "no browser could open that link") }
+    }
+}

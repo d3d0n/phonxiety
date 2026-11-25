@@ -5,7 +5,6 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.media.AudioManager
 import android.telecom.TelecomManager
-import android.util.Log
 
 /** Persist the original microphone state before muting one owned call. */
 internal object HandsetMute {
@@ -16,6 +15,7 @@ internal object HandsetMute {
     private const val MODIFY_AUDIO_SETTINGS = "android.permission.MODIFY_AUDIO_SETTINGS"
     private val lock = Any()
 
+    @SuppressLint("UseKtx")
     fun acquire(context: Context, callId: String) {
         val app = context.applicationContext
         if (!Permissions.granted(app, MODIFY_AUDIO_SETTINGS)) {
@@ -58,10 +58,11 @@ internal object HandsetMute {
             restoreOwned(app, callId)
         }
     } catch (error: Exception) {
-        Log.w(TAG, "microphone restore failed: ${error.javaClass.simpleName}")
+        BridgeLog.w(TAG, "microphone restore failed: ${error.javaClass.simpleName}")
         false
     }
 
+    @SuppressLint("UseKtx")
     private fun restoreOwned(app: Context, callId: String?): Boolean {
         if (!Permissions.granted(app, MODIFY_AUDIO_SETTINGS)) return false
         val manager = app.getSystemService(AudioManager::class.java) ?: return false

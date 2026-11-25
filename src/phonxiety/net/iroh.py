@@ -317,7 +317,12 @@ class IrohListener:
                 auth = json.loads(await link.recv())
             presented = auth.get("token") if isinstance(auth, dict) and auth.get("type") == "auth" else None
             if not isinstance(presented, str) or not secrets.compare_digest(presented.encode(), self._token.encode()):
-                log.warning("Rejected an unauthorized iroh peer %s", link.peer)
+                log.warning(
+                    "Rejected an unauthorized iroh peer %s (frame type %r, keys %s)",
+                    link.peer,
+                    auth.get("type") if isinstance(auth, dict) else type(auth).__name__,
+                    sorted(auth) if isinstance(auth, dict) else [],
+                )
                 await link.close(4401, "unauthorized")
                 return
             async with asyncio.timeout(HANDSHAKE_TIMEOUT_S):

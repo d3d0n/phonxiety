@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Recordings and transcript exports the call detail screen shares with other apps. -->
+    <cache-path
+        name="call_audio"
+        path="call-audio/" />
+    <cache-path
+        name="call_transcripts"
+        path="call-transcripts/" />
+</paths>

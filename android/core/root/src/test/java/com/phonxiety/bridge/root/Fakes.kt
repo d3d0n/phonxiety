@@ -22,13 +22,16 @@ class RecordingRunner(
 class FakeEnvironment(
     val dirs: MutableMap<String, List<String>> = mutableMapOf(),
     val files: MutableMap<String, String> = mutableMapOf(),
-    val packages: MutableSet<String> = mutableSetOf()
+    val packages: MutableSet<String> = mutableSetOf(),
+    val packageVersions: MutableMap<String, String> = mutableMapOf()
 ) : RootEnvironment {
     override suspend fun listDir(path: String): List<String>? = dirs[path]
 
     override suspend fun readFile(path: String): String? = files[path]
 
     override fun installedPackages(): Set<String> = packages.toSet()
+
+    override fun packageVersion(packageName: String): String? = packageVersions[packageName]
 
     fun module(
         id: String,

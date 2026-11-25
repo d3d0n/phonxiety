@@ -2,25 +2,13 @@
 <!--
     App colour names mapped to the platform's dynamic Material roles.  The
     values-night copy selects the dark roles, so the palette follows the system
-    light/dark setting without a Material library.
+    light/dark setting without a Material library.  Only the window chrome the
+    activity theme uses remains; Compose surfaces get their colours from
+    :core:designsystem.
 -->
 <resources>
     <color name="surface">@android:color/system_surface_light</color>
-    <color name="surface_container">@android:color/system_surface_container_light</color>
-    <color name="surface_container_high">@android:color/system_surface_container_high_light</color>
-    <color name="on_surface">@android:color/system_on_surface_light</color>
-    <color name="on_surface_variant">@android:color/system_on_surface_variant_light</color>
-    <color name="outline">@android:color/system_outline_light</color>
-    <color name="outline_variant">@android:color/system_outline_variant_light</color>
     <color name="primary">@android:color/system_primary_light</color>
-    <color name="on_primary">@android:color/system_on_primary_light</color>
-    <color name="primary_container">@android:color/system_primary_container_light</color>
-    <color name="on_primary_container">@android:color/system_on_primary_container_light</color>
-    <color name="tertiary_container">@android:color/system_tertiary_container_light</color>
-    <color name="on_tertiary_container">@android:color/system_on_tertiary_container_light</color>
-    <color name="error_container">@android:color/system_error_container_light</color>
-    <color name="on_error_container">@android:color/system_on_error_container_light</color>
-    <color name="error">@android:color/system_error_light</color>
 
     <color name="ic_launcher_background">#23235B</color>
 </resources>

@@ -10,14 +10,20 @@ import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.os.SystemClock
-import android.util.Log
+import com.phonxiety.bridge.model.AudioDiagnostics
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.locks.LockSupport
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
+import kotlin.math.log10
+import kotlin.math.sin
 import okio.ByteString
 
 class AudioStartException(val code: String) : Exception(code)
+
+/** One reading of both directions, for the 10 Hz `audio_levels` event. */
+data class AudioLevels(val rxDbfs: Float?, val txDbfs: Float?, val queuedSamples: Long)
 
 /**
  * One call's audio path.
@@ -68,6 +74,7 @@ class PhoneAudio(
         fun restoreAbandonedMute(context: Context, callId: String? = null): Boolean = HandsetMute.restore(context.applicationContext, callId)
 
         private const val RING_CAPACITY_SAMPLES = 24_000 // 500 ms
+        private const val SILENCE_DBFS_TENTHS = -1_000L
     }
 
     private val appContext = context.applicationContext
@@ -99,8 +106,70 @@ class PhoneAudio(
     private var unsentFrames: Long = 0
     private val hostFrames = AtomicLong(0)
     private val overflowSamples = AtomicLong(0)
+    private val rxLevel = AtomicLong(SILENCE_DBFS_TENTHS)
+    private val txLevel = AtomicLong(SILENCE_DBFS_TENTHS)
+    private val loopback = AtomicBoolean(false)
+    private val toneRunning = AtomicBoolean(false)
+
+    @Volatile private var toneThread: Thread? = null
+
+    @Volatile private var toneHz = 1_000
+
+    @Volatile private var toneDbfs = -20.0
 
     @Volatile private var closed = false
+
+    /** Current RMS levels per direction and the uplink samples still queued. */
+    fun levels(): AudioLevels {
+        val queued = stats().second
+        return AudioLevels(
+            rxDbfs = rxLevel.get().takeIf { it > SILENCE_DBFS_TENTHS }?.let { it / 10f },
+            txDbfs = txLevel.get().takeIf { it > SILENCE_DBFS_TENTHS }?.let { it / 10f },
+            queuedSamples = queued
+        )
+    }
+
+    /**
+     * Echoes the captured downlink into the uplink while a call is owned.  Off
+     * by default; the daemon enables it only for the test lab.
+     */
+    fun setLoopback(enabled: Boolean): Boolean {
+        loopback.set(enabled && !closed)
+        return loopback.get()
+    }
+
+    /** Starts a sine into the uplink (the line), additive to host PCM. */
+    fun startTone(hz: Int, dbfs: Double): Boolean {
+        if (closed || !txRunning.get()) return false
+        toneHz = hz
+        toneDbfs = dbfs
+        if (toneRunning.compareAndSet(false, true)) {
+            val thread = Thread({ toneLoop() }, "phonxiety-tone")
+            toneThread = thread
+            thread.start()
+        }
+        return true
+    }
+
+    fun stopTone() {
+        toneRunning.set(false)
+        val thread = toneThread
+        toneThread = null
+        if (thread != null && thread !== Thread.currentThread()) runCatching { thread.join(250) }
+    }
+
+    /** Counters for `diagnostics_snapshot`. */
+    fun diagnostics(): AudioDiagnostics = AudioDiagnostics(
+        codec = codec,
+        bitrate = opusBitrate,
+        capturedFrames = captureFrames,
+        unsentFrames = unsentFrames,
+        hostFrames = hostFrames.get(),
+        writtenFrames = txLock.withLock { writtenFrames },
+        overflowSamples = overflowSamples.get(),
+        rxDbfs = levels().rxDbfs,
+        txDbfs = levels().txDbfs
+    )
 
     // RECORD_AUDIO, CAPTURE_AUDIO_OUTPUT and MODIFY_PHONE_STATE are checked at
     // the top of this method; the recorder is never built without the grant.
@@ -385,6 +454,7 @@ class PhoneAudio(
         closed = true
         rxRunning.set(false)
         txRunning.set(false)
+        stopTone()
 
         val recorder = record
         record = null
@@ -424,7 +494,7 @@ class PhoneAudio(
         // both threads are joined.  "not sent" counts frames the engine
         // refused (link down or backlog); the link can still discard an
         // accepted frame while it closes, so it is a lower bound.
-        Log.i(
+        BridgeLog.i(
             TAG,
             "audio closed: $captureFrames frames captured (${sequence / 48} ms), $unsentFrames not sent, " +
                 "${hostFrames.get()} frames from host, ${writtenFrames / 48} ms written to the line, " +
@@ -474,6 +544,8 @@ class PhoneAudio(
                 reportFatal("capture_frame_alignment")
                 return
             }
+            rxLevel.set(levelOf(frame, 16, read / 2))
+            if (loopback.get()) ring.offer(frame, 16, read / 2)
             if (opus == null) {
                 writeHeader(frame, PCM_VERSION, epoch, sequence)
                 sequence += read / 2
@@ -524,6 +596,7 @@ class PhoneAudio(
                     try {
                         writeAll(player, stereo, 0, samples * 2)
                         writtenFrames += samples.toLong()
+                        txLevel.set(levelOf(mono, 0, samples))
                     } catch (_: Exception) {
                         failure = "playback_write_failed"
                     }
@@ -570,6 +643,64 @@ class PhoneAudio(
         0L
     }
 
+    /** RMS of [samples] little-endian PCM16 samples in dBFS x10. */
+    private fun levelOf(bytes: ByteArray, offset: Int, samples: Int): Long {
+        if (samples <= 0 || offset + samples * 2 > bytes.size) return SILENCE_DBFS_TENTHS
+        var sum = 0.0
+        var i = 0
+        while (i < samples) {
+            val position = offset + i * 2
+            val value = ((bytes[position].toInt() and 0xFF) or (bytes[position + 1].toInt() shl 8)).toShort()
+            sum += value.toDouble() * value
+            i++
+        }
+        val rms = kotlin.math.sqrt(sum / samples)
+        if (rms <= 0.0) return SILENCE_DBFS_TENTHS
+        val dbfs = 20.0 * log10(rms / 32_768.0)
+        return (dbfs.coerceIn(-100.0, 0.0) * 10).toLong()
+    }
+
+    /** RMS of [samples] PCM16 samples in dBFS x10. */
+    private fun levelOf(bytes: ShortArray, offset: Int, samples: Int): Long {
+        if (samples <= 0 || offset + samples > bytes.size) return SILENCE_DBFS_TENTHS
+        var sum = 0.0
+        var i = 0
+        while (i < samples) {
+            val value = bytes[offset + i].toDouble()
+            sum += value * value
+            i++
+        }
+        val rms = kotlin.math.sqrt(sum / samples)
+        if (rms <= 0.0) return SILENCE_DBFS_TENTHS
+        val dbfs = 20.0 * log10(rms / 32_768.0)
+        return (dbfs.coerceIn(-100.0, 0.0) * 10).toLong()
+    }
+
+    private fun toneLoop() {
+        runCatching {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
+        }
+        val frame = ShortArray(FRAME_SAMPLES)
+        var phase = 0.0
+        var next = System.nanoTime()
+        while (toneRunning.get() && !closed) {
+            val hz = toneHz
+            val amplitude = (32_767.0 * Math.pow(10.0, toneDbfs / 20.0)).toInt().coerceIn(0, 32_767)
+            val step = 2.0 * Math.PI * hz / SAMPLE_RATE
+            var i = 0
+            while (i < FRAME_SAMPLES) {
+                frame[i] = (sin(phase) * amplitude).toInt().toShort()
+                phase += step
+                if (phase > 2.0 * Math.PI) phase -= 2.0 * Math.PI
+                i++
+            }
+            ring.offer(frame, 0, FRAME_SAMPLES)
+            next += 20_000_000L
+            val remaining = next - System.nanoTime()
+            if (remaining > 0) LockSupport.parkNanos(remaining) else next = System.nanoTime()
+        }
+    }
+
     private fun writeHeader(frame: ByteArray, version: Byte, epoch: Long, seq: Long) {
         frame[0] = 0x50 // P
         frame[1] = 0x58 // X
@@ -590,7 +721,7 @@ class PhoneAudio(
 
     private fun reportFatal(code: String) {
         if (closed || !fatalReported.compareAndSet(false, true)) return
-        Log.w(TAG, "audio failure: $code")
+        BridgeLog.w(TAG, "audio failure: $code")
         onFatal(code)
     }
 
@@ -633,6 +764,17 @@ class PhoneAudio(
             }
             data[(head + count) % capacity] = sample
             count++
+            return dropped
+        }
+
+        @Synchronized
+        fun offer(source: ShortArray, offset: Int, samples: Int): Int {
+            var dropped = 0
+            var i = 0
+            while (i < samples) {
+                if (push(source[offset + i])) dropped++
+                i++
+            }
             return dropped
         }
 

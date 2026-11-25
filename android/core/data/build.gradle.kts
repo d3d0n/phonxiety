@@ -36,7 +36,11 @@ android {
 
 dependencies {
     api(project(":core:model"))
+    implementation(project(":core:device"))
+    // Module update, provider detection and the kept APK rollback.
+    implementation(project(":core:root"))
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.room.runtime)

@@ -4,7 +4,6 @@ import android.app.Service
 import android.content.pm.ServiceInfo
 import android.telecom.Call
 import android.telecom.InCallService
-import android.util.Log
 
 /**
  * Non-UI InCallService.  Telecom binds this when a call starts; it is not a
@@ -34,7 +33,7 @@ class BridgeInCallService : InCallService() {
         } catch (e: Exception) {
             // Missing RECORD_AUDIO or a pre-unlock restriction: callbacks still
             // arrive, and the explicit audio_error path will report failures.
-            Log.e(TAG, "call foreground unavailable: ${e.javaClass.simpleName}")
+            BridgeLog.e(TAG, "call foreground unavailable: ${e.javaClass.simpleName}")
         }
         BridgeRuntime.inCallService = this
     }

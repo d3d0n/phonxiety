@@ -218,12 +218,14 @@ class _ControllerCase(unittest.IsolatedAsyncioTestCase):
         self.tasks = _Tasks()
         self.start_gate: asyncio.Event | None = None
         self.voices: list[_Voice] = []
+        self.briefs: list[str] = []
         self.voice_created = asyncio.Event()
         self.awake_held = self.awake_released = 0
 
         def factory(instructions: str, brief: str, callbacks: Any) -> _Voice:
             voice = _Voice(callbacks, self.start_gate)
             self.voices.append(voice)
+            self.briefs.append(brief)
             self.voice_created.set()
             return voice
 
@@ -652,6 +654,16 @@ class QuietLineTests(_ControllerCase):
         self.assertEqual([payload["digits"] for command, _, payload in self.device.commands if command == "dtmf"], ["12"])
         await self.controller.hangup_call(call_id)
         await self.controller.wait_call_result(call_id, wait_s=1)
+
+
+class LanguageHintTests(_ControllerCase):
+    async def test_the_language_hint_reaches_the_voice_brief(self) -> None:
+        self.controller._language_hint = "ru-RU"
+        call = await self.controller.place_call(request())
+        await asyncio.wait_for(self.device.dialled.wait(), 1)
+        self.assertIn("Speak to the other party in ru-RU", self.briefs[-1])
+        await self.controller.hangup_call(call["call_id"])
+        await self.controller.wait_call_result(call["call_id"], wait_s=1)
 
 
 class LinkReadinessTests(_ControllerCase):
