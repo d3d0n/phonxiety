@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+from pydantic import ValidationError
+
 from phonxiety.controller import CallController
 from phonxiety.models import CallRequest, CallState
 from phonxiety.store import CallStore
@@ -18,6 +20,15 @@ from phonxiety.store import CallStore
 
 def request(key: str = "request-a") -> CallRequest:
     return CallRequest(request_id=key, destination="+12025550123", goal="Confirm a Friday appointment")
+
+
+class DestinationTests(unittest.TestCase):
+    def test_service_short_numbers_are_allowed_and_emergency_numbers_refused(self) -> None:
+        for allowed in ("1099", "1009", "+998712001515"):
+            self.assertEqual(CallRequest(request_id="r", destination=allowed, goal="g").destination, allowed)
+        for refused in ("112", "103", "1050", "911", "12", "*100#", "1234567"):
+            with self.assertRaises(ValidationError, msg=refused):
+                CallRequest(request_id="r", destination=refused, goal="g")
 
 
 class StoreTests(unittest.TestCase):

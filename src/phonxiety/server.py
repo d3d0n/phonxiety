@@ -180,7 +180,8 @@ def create_app(settings: Settings) -> Starlette:
             request_id: Stable idempotency key. Repeating the same request_id
                 with the same brief returns the existing call; a different
                 brief is a conflict.
-            destination: Already resolved E.164 number, for example +14155550123.
+            destination: Already resolved E.164 number, for example +14155550123, or a 3-6 digit
+                service short number such as a provider's call centre. Emergency numbers are refused.
             goal: What the voice agent should accomplish on the call.
             context: Minimal call brief, not the whole terminal history.
             constraints: Allowed dates, budget, alternatives and information

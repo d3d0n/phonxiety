@@ -500,7 +500,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--request-id",
         help="stable idempotency key; repeat it to retry without redialing",
     )
-    call.add_argument("--destination", required=True, help="E.164 number, e.g. +14155550123")
+    call.add_argument(
+        "--destination", required=True,
+        help="E.164 number (+14155550123) or a 3-6 digit service short number; emergency numbers are refused",
+    )
     call.add_argument("--goal", required=True, help="what the voice agent must accomplish")
     call.add_argument("--context", default="", help="minimal call brief")
     call.add_argument(
