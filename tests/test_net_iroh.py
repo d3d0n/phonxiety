@@ -128,18 +128,17 @@ class ListenerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self) -> None:
         self.directory.cleanup()
 
-    async def test_an_attachment_stream_reaches_the_hub_handler(self) -> None:
-        seen: list[dict] = []
+    async def test_an_attachment_is_written_before_the_transport_finishes_the_stream(self) -> None:
+        written: list[str] = []
 
         async def handler(header, send, recv) -> None:
-            seen.append(header)
+            await asyncio.sleep(0.05)  # a slow file read: the stream must still be open after it
+            written.append(header["id"])
 
         self.hub.on_attachment = handler
         await self.listener._attachments({"type": "attachment", "id": "a1"}, object(), object())
-        async with asyncio.timeout(2):
-            while not seen:
-                await asyncio.sleep(0.01)
-        self.assertEqual(seen, [{"type": "attachment", "id": "a1"}])
+        # The transport finishes the stream as soon as this returns.
+        self.assertEqual(written, ["a1"])
 
     async def test_wrong_token_never_reaches_the_hub(self) -> None:
         connection = _Connection(frame(json.dumps({"type": "auth", "token": "other"})) + frame(HELLO))
