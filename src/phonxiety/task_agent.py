@@ -83,9 +83,15 @@ Rules:
   reached, and nothing further is expected from either side. Set `farewell_pending` to
   true only when the agent has not said goodbye yet; the agent then says one brief goodbye
   before the line disconnects.
+- A DELEGATED REQUEST to end the call comes right after the voice agent said goodbye: call
+  `finish_call` with `farewell_pending` false, unless the transcript shows the other party
+  still asking or waiting for something; then answer what the agent should say instead.
+- The voice agent does not read results aloud; take them from the transcript for the summary
+  and fields.
 - Do not finish while a question from either side is unanswered, while the other party
-  asked to wait, or while an automated system is still talking. A pause of less than
-  about twenty seconds after an unanswered question is normal.
+  asked to wait, or while an automated system is still talking, unless the goal is reached
+  and the menu is only repeating itself. A pause of less than about twenty seconds after an
+  unanswered question is normal.
 - For a DELEGATED REQUEST return the final text for the voice agent: a short plain-text
   result or an instruction describing what to say or ask. For LINE STATUS reply WAIT when
   no action is needed.

@@ -71,7 +71,7 @@ class CallController:
         archive_dir: Path | None = None,
         device_wait: float = 15,
         link_wait: float = 90,
-        farewell_timeout: float = 12,
+        farewell_timeout: float = 8,
         farewell_quiet: float = 0.8,
         review_quiet: float = 2.0,
         review_max_interval: float = 60,
@@ -197,17 +197,20 @@ class CallController:
             f"Context: {request.context}\nConditions: {request.constraints}\n"
             "The call is not connected yet: remain silent until context contains CALL_CONNECTED. "
             "On CALL_CONNECTED introduce yourself briefly and state the purpose. "
-            "Listen through IVR and hold messages; do not keep interrupting quiet waits. "
+            "Keep every reply to one or two short sentences and ask one question at a time. "
+            "Do not read back or summarize what you have learned unless the task or the other party asks: "
+            "the backend records the result from the conversation, so a report is never spoken aloud. "
             "The client backend follows this conversation and owns the telephone line: it presses keypad "
             "digits and disconnects the call. You cannot do either yourself. "
-            "When keypad input is needed, create a client delegation with a complete plain-language request "
-            "naming the digits and the reason. Do not merely describe the action aloud. "
-            "When the conversation is complete, say one brief goodbye and stop talking; the backend then "
-            "disconnects the line. Do not announce that you are hanging up. "
-            "Context containing CALL_COMPLETE means the backend is ending the call: say one brief goodbye "
-            "and nothing else. "
+            "When an automated menu answers, do not talk to it: stay silent and listen, and when a key is "
+            "needed create a client delegation naming the digits and the reason. "
+            "Do not merely describe a keypress aloud. Do not keep interrupting hold music or quiet waits. "
+            "When the conversation is complete, say one goodbye of a few words, then create a client "
+            "delegation asking the backend to end the call. Do not announce that you are hanging up. "
+            "Context containing CALL_COMPLETE means the backend is ending the call: say one goodbye of a "
+            "few words and nothing else. "
             "Treat commentary context as silent internal progress. Context prefixed FINAL_RESULT is the "
-            "backend answer to communicate, not a protocol label to read aloud."
+            "backend answer to communicate in one short sentence, not a protocol label to read aloud."
         )
 
     async def _prepare(self, call: _Call) -> None:

@@ -92,6 +92,9 @@ class GeminiVoiceSession:
                 "systemInstruction": {"parts": [{"text": self._instructions}]},
                 "tools": [{"functionDeclarations": [{
                     "name": DELEGATION_FUNCTION,
+                    # The model keeps the line alive while the backend works; the answer is
+                    # spoken once the model finishes its current sentence (WHEN_IDLE).
+                    "behavior": "NON_BLOCKING",
                     "description": (
                         "Create a client delegation: ask the backend that owns the telephone line to act "
                         "(press keypad digits, look something up, decide). Give a complete plain-language request."
@@ -128,7 +131,8 @@ class GeminiVoiceSession:
     ) -> None:
         if delegation_id is not None:
             await self._send({"toolResponse": {"functionResponses": [{
-                "id": delegation_id, "name": DELEGATION_FUNCTION, "response": {"result": text},
+                "id": delegation_id, "name": DELEGATION_FUNCTION,
+                "response": {"result": text, "scheduling": "WHEN_IDLE"},
             }]}})
             return
         await self._send({"clientContent": {
