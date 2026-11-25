@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import socket
 import tempfile
 import unittest
 from pathlib import Path
@@ -93,15 +94,16 @@ class AdvertisementTests(unittest.TestCase):
         self.assertTrue(advertiser.start())
         self.assertEqual(1, len(backend.registered))
 
-    def test_start_never_looks_up_the_host_name(self) -> None:
-        """A host-name lookup can block the daemon's event loop for minutes; mDNS needs none."""
+    def test_without_a_default_route_the_host_name_address_is_advertised(self) -> None:
         backend = FakeZeroconf()
         advertiser = MdnsAdvertiser(18763, PIN, 3, backend=backend)
-        with mock.patch(
-            "phonxiety.net.tailnet.socket.getaddrinfo", side_effect=AssertionError("DNS lookup in start()")
+        resolved = [(socket.AF_INET, socket.SOCK_DGRAM, 0, "", ("192.168.7.20", 0))]
+        with (
+            mock.patch("phonxiety.net.tailnet.route_address", return_value=None),
+            mock.patch("phonxiety.net.tailnet.socket.getaddrinfo", return_value=resolved),
         ):
             self.assertTrue(advertiser.start())
-        self.assertTrue(advertiser.started)
+        self.assertIn("192.168.7.20", backend.registered[0].parsed_addresses())
 
     def test_service_info_advertises_the_local_address(self) -> None:
         info = service_info(18763, PIN, 3, "192.168.1.10")

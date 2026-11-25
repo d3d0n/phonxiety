@@ -6,6 +6,7 @@ The phone pins the daemon's self-signed certificate (`tls.py`) and authenticates
 
 from __future__ import annotations
 
+import asyncio
 import http
 import secrets
 import ssl
@@ -97,15 +98,19 @@ class WebSocketListener:
             ping_interval=None,
             close_timeout=2,
         )
-        self._advertise_mdns()
+        await self._advertise_mdns()
 
-    def _advertise_mdns(self) -> None:
-        """Publish the listener on the LAN; a failure only costs the phone a shortcut."""
+    async def _advertise_mdns(self) -> None:
+        """Publish the listener on the LAN; a failure only costs the phone a shortcut.
+
+        Starting resolves this computer's LAN address, which can block for a long time
+        when DNS is unreachable, so it runs off the event loop.
+        """
         port = self.port
         if not self._advertise or self._certificate is None or self._protocol is None or port is None:
             return
         advertiser = MdnsAdvertiser(port, self._certificate, self._protocol)
-        if advertiser.start():
+        if await asyncio.to_thread(advertiser.start):
             self._mdns = advertiser
 
     def _authorize(self, connection: ServerConnection, request: Request) -> Response | None:

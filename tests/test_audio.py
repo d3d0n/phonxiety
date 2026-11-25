@@ -91,7 +91,11 @@ class PacedOutputTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_burst_plays_at_speech_speed_and_a_barge_in_drops_the_rest(self) -> None:
         emitted = _Emitted()
         drained = asyncio.Event()
-        output = PacedOutput(emitted, on_drained=drained.set)
+
+        async def on_drained() -> None:
+            drained.set()
+
+        output = PacedOutput(emitted, on_drained=on_drained)
         output.start()
         output.feed(bytes(FRAME_BYTES * 50))  # one second of speech in one burst
         # Only the pacer's own wall clock moves here: wait for the frames it handed over.
@@ -102,6 +106,8 @@ class PacedOutputTests(unittest.IsolatedAsyncioTestCase):
         async with asyncio.timeout(2):
             await drained.wait()  # the pacer saw the cleared buffer and stops there
         frames = emitted.frames
+        await asyncio.sleep(0)  # let the pacer return from the notification
+        self.assertFalse(output._task.done())  # the notification did not crash the pacer
         await output.close()
         # ~0.3 s of 20 ms frames plus the jitter lead, not the whole second.
         self.assertTrue(12 <= len(frames) <= 22, len(frames))

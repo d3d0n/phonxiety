@@ -144,15 +144,15 @@ class MdnsAdvertiser:
 
 
 def _first_local_address() -> str | None:
-    """The address multicast leaves by.
+    """The LAN address to advertise: the default route's, else one the host name resolves to.
 
-    Only the routing table is asked: a host-name lookup can take minutes when DNS is
-    unreachable, and `start()` runs on the daemon's event loop. A phone on the same LAN
-    reaches the daemon by the same interface that carries the advertisement.
+    The host-name lookup can block when DNS is unreachable, so callers run `start()` off
+    the event loop.
     """
-    from .tailnet import route_address  # noqa: PLC0415 - keeps the import graph flat
+    from .tailnet import local_addresses  # noqa: PLC0415 - keeps the import graph flat
 
-    return route_address()
+    found = local_addresses()
+    return found[0] if found else None
 
 
 def _close(backend: Backend) -> None:
