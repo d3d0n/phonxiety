@@ -2,11 +2,14 @@ package com.phonxiety.bridge.feature.livecall
 
 import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.BridgeStateRepository
+import com.phonxiety.bridge.model.AudioState
 import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.model.CallEvent
 import com.phonxiety.bridge.model.CallEventsPage
 import com.phonxiety.bridge.model.CallMark
+import com.phonxiety.bridge.model.CallPhase
 import com.phonxiety.bridge.model.CallSnapshot
+import com.phonxiety.bridge.model.CallState
 import com.phonxiety.bridge.model.MarksResponse
 import com.phonxiety.bridge.model.SummaryResult
 import com.phonxiety.bridge.model.TranscriptTurn
@@ -271,6 +274,70 @@ class LiveCallViewModelTest {
         assertEquals(1, api.eventsRequests.size)
     }
 
+    @Test
+    fun thePhaseAndTheMetersComeFromThePhoneWhileTheDaemonSaysNothing() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = null))
+        val bridge = FakeBridgeState()
+        val viewModel = LiveCallViewModel(api, bridge)
+        viewModel.bind(CALL_ID)
+        runCurrent()
+
+        bridge.emit(BridgeState(call = CallState(CALL_ID, "+998 ·· 67", CallPhase.DIALING, 1_000)))
+        runCurrent()
+        assertEquals("dialing", viewModel.state.value.phase)
+
+        bridge.emit(
+            BridgeState(
+                call = CallState(CALL_ID, "+998 ·· 67", CallPhase.ACTIVE, 1_000),
+                audio = AudioState(codec = "opus", bitrate = 32_000, rxLevelDbfs = -18f, txLevelDbfs = -26f)
+            )
+        )
+        runCurrent()
+        val live = viewModel.state.value
+        assertEquals("active", live.phase)
+        assertEquals("opus", live.audio.codec)
+        assertEquals(32_000, live.audio.bitrate)
+        assertEquals(-18f, live.audio.rxLevelDbfs)
+        assertEquals(-26f, live.audio.txLevelDbfs)
+
+        bridge.emit(BridgeState(call = CallState(CALL_ID, "+998 ·· 67", CallPhase.ENDED, 1_000)))
+        runCurrent()
+        assertEquals("ended", viewModel.state.value.phase)
+
+        // A daemon state, once one arrives, is the one the screen shows.
+        api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(endedEvent(1))))
+        advanceUntilIdle()
+    }
+
+    @Test
+    fun rawDaemonEventsKeepTheirRolesAndTheScreenNamesTheSpeakers() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        api.callSnapshot = ApiOutcome.Ok(200, snapshot())
+        // The exact payload `app_api._sync` puts on the events long-poll.
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        val assistant = json.decodeFromString<CallEvent>(
+            """{"type":"transcript","revision":4,"sequence":303,"role":"assistant",""" +
+                """"text":"Hi, I'm testing a call from the app.","final":true,""" +
+                """"at":"2026-11-26T10:00:20+00:00"}"""
+        )
+        val user = json.decodeFromString<CallEvent>(
+            """{"type":"transcript","revision":6,"sequence":304,"role":"user",""" +
+                """"text":"One, two, three","final":true,""" +
+                """"at":"2026-11-26T10:00:24+00:00"}"""
+        )
+        api.events += ApiOutcome.Ok(200, page(revision = 6, events = listOf(assistant, user)))
+        api.events += ApiOutcome.Ok(200, page(revision = 7, events = listOf(endedEvent(7))))
+
+        val viewModel = viewModel(api)
+        viewModel.bind(CALL_ID)
+        advanceUntilIdle()
+
+        val turns = viewModel.state.value.turns
+        assertEquals(listOf("assistant", "user"), turns.map { it.role })
+        assertEquals(listOf("Agent", "Far end"), turns.map { speakerLabel(it.role) })
+    }
+
     private fun viewModel(api: FakeDaemonApi): LiveCallViewModel = LiveCallViewModel(api, FakeBridgeState())
 
     private companion object {
@@ -278,13 +345,18 @@ class LiveCallViewModelTest {
     }
 }
 
-/** A bridge state that never changes: the live call only reads the meters from it. */
+/** A bridge state the test drives: the live call reads the meters and its own phase from it. */
 class FakeBridgeState : BridgeStateRepository {
-    override val state: StateFlow<BridgeState> = kotlinx.coroutines.flow.MutableStateFlow(BridgeState())
+    private val mutable = kotlinx.coroutines.flow.MutableStateFlow(BridgeState())
+    override val state: StateFlow<BridgeState> = mutable
+
+    fun emit(state: BridgeState) {
+        mutable.value = state
+    }
 }
 
 fun snapshot(
-    state: String = "active",
+    state: String? = "active",
     callOutcome: String? = null,
     taskOutcome: String? = null,
     resultStatus: String? = null,

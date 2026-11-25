@@ -5,9 +5,11 @@ import androidx.lifecycle.viewModelScope
 import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.BridgeStateRepository
 import com.phonxiety.bridge.data.DaemonApi
+import com.phonxiety.bridge.data.daemonCallState
 import com.phonxiety.bridge.model.AudioState
 import com.phonxiety.bridge.model.CallEvent
 import com.phonxiety.bridge.model.CallMark
+import com.phonxiety.bridge.model.CallPhase
 import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.PartialTurn
 import com.phonxiety.bridge.model.TranscriptTurn
@@ -42,6 +44,8 @@ data class LiveCallUiState(
     val destination: String? = null,
     val farEnd: String? = null,
     val state: String? = null,
+    /** The phone's own phase, used until the daemon reports one of its own. */
+    val localPhase: CallPhase? = null,
     val callOutcome: String? = null,
     val resultStatus: String? = null,
     val activity: String? = null,
@@ -54,6 +58,8 @@ data class LiveCallUiState(
     val audioCodec: String? = null,
     val connectedAtMs: Long? = null,
     val createdAtMs: Long? = null,
+    /** When the call stopped, so the timer stops with it. */
+    val endedAtMs: Long? = null,
     val audio: AudioState = AudioState(),
     val controls: LiveControls = LiveControls(),
     val controlsKnown: Boolean = false,
@@ -69,10 +75,15 @@ data class LiveCallUiState(
     val missing: Boolean = false
 ) {
     val terminal: Boolean get() = ended
+
+    /** The daemon's word wins; the phone's own phase fills in until the daemon reports one. */
+    val phase: String? get() = state ?: daemonCallState(localPhase)
+
     val callSecondsElapsed: Long?
         get() {
             val start = connectedAtMs ?: createdAtMs ?: return null
-            return ((System.currentTimeMillis() - start).coerceAtLeast(0)) / 1000
+            val end = (if (ended) endedAtMs else null) ?: System.currentTimeMillis()
+            return ((end - start).coerceAtLeast(0)) / 1000
         }
 }
 
@@ -102,7 +113,7 @@ class LiveCallViewModel @Inject constructor(
         revision = 0
         seenSequences.clear()
         _state.value = LiveCallUiState(callId = callId, loading = true)
-        collectAudio()
+        collectBridge()
         viewModelScope.launch { loadInfo() }
         viewModelScope.launch {
             loadDetail(callId)
@@ -219,11 +230,19 @@ class LiveCallViewModel @Inject constructor(
         }
     }
 
-    private fun collectAudio() {
+    /**
+     * The phone is the only writer of its own phase and audio: the engine has them the moment
+     * Telecom dials, while the daemon's snapshot arrives over the link. Audio levels and the
+     * codec/bitrate therefore always come from the bridge; the phase is a fallback for the daemon's
+     * state, which stays authoritative once it arrives.
+     */
+    private fun collectBridge() {
         audioJob?.cancel()
         audioJob = viewModelScope.launch {
             bridgeState.state.collect { bridge ->
-                _state.update { it.copy(audio = bridge.audio) }
+                val bound = boundCallId
+                val localPhase = bridge.call?.takeIf { bound != null && it.callId == bound }?.phase
+                _state.update { it.copy(audio = bridge.audio, localPhase = localPhase) }
             }
         }
     }
@@ -269,6 +288,7 @@ class LiveCallViewModel @Inject constructor(
     private fun applySnapshot(snapshot: CallSnapshot) {
         val merged = mergeTurns(snapshot.transcript)
         _state.update {
+            val ended = it.ended || terminalState(it.state ?: snapshot.state)
             it.copy(
                 loaded = true,
                 destination = snapshot.destination ?: it.destination,
@@ -284,8 +304,10 @@ class LiveCallViewModel @Inject constructor(
                 audioCodec = snapshot.audioCodec ?: it.audioCodec,
                 connectedAtMs = snapshot.connectedAt?.let { seconds -> (seconds * 1000).toLong() } ?: it.connectedAtMs,
                 createdAtMs = snapshot.createdAt?.let { seconds -> (seconds * 1000).toLong() } ?: it.createdAtMs,
-                ended = terminalState(it.state ?: snapshot.state),
-                hangingUp = it.hangingUp && !terminalState(it.state ?: snapshot.state)
+                endedAtMs = snapshot.endedAt?.let { seconds -> (seconds * 1000).toLong() }
+                    ?: it.endedAtMs ?: if (ended) System.currentTimeMillis() else null,
+                ended = ended,
+                hangingUp = it.hangingUp && !ended
             )
         }
     }
@@ -312,6 +334,7 @@ class LiveCallViewModel @Inject constructor(
                             state = page.state ?: it.state,
                             callOutcome = page.callOutcome ?: it.callOutcome,
                             resultStatus = page.resultStatus ?: it.resultStatus,
+                            endedAtMs = it.endedAtMs ?: if (ended) System.currentTimeMillis() else null,
                             ended = ended,
                             hangingUp = it.hangingUp && !ended
                         )
@@ -379,6 +402,7 @@ class LiveCallViewModel @Inject constructor(
                         state = event.state ?: it.state,
                         callOutcome = event.callOutcome ?: it.callOutcome,
                         resultStatus = event.resultStatus ?: it.resultStatus,
+                        endedAtMs = it.endedAtMs ?: if (ended) event.secondsEpochMs() else null,
                         ended = ended,
                         hangingUp = it.hangingUp && !ended
                     )
@@ -389,6 +413,7 @@ class LiveCallViewModel @Inject constructor(
                         state = event.state ?: it.state,
                         callOutcome = event.callOutcome ?: it.callOutcome,
                         resultStatus = event.resultStatus ?: it.resultStatus,
+                        endedAtMs = it.endedAtMs ?: event.secondsEpochMs(),
                         ended = true,
                         hangingUp = false
                     )
@@ -398,6 +423,9 @@ class LiveCallViewModel @Inject constructor(
         turns?.let { list -> _state.update { it.copy(turns = list) } }
         partials?.let { list -> _state.update { it.copy(partials = list) } }
     }
+
+    /** The event's own timestamp in epoch milliseconds; "now" when the daemon sent none. */
+    private fun CallEvent.secondsEpochMs(): Long = at?.let(::parseIsoSeconds)?.let { seconds -> (seconds * 1000).toLong() } ?: System.currentTimeMillis()
 
     private fun mergeTurns(incoming: List<TranscriptTurn>): List<TranscriptTurn> {
         val merged = _state.value.turns.toMutableList()

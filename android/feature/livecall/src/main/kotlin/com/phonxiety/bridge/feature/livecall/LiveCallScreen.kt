@@ -59,6 +59,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.phonxiety.bridge.data.Speaker
+import com.phonxiety.bridge.data.bitrateKbps
+import com.phonxiety.bridge.data.speakerOf
 import com.phonxiety.bridge.designsystem.component.EmptyState
 import com.phonxiety.bridge.designsystem.component.ErrorCard
 import com.phonxiety.bridge.designsystem.component.LevelMeter
@@ -307,9 +310,9 @@ private fun LiveCallHeader(state: LiveCallUiState, onBack: () -> Unit, nowEpochM
         }
         Spacer(Modifier.width(8.dp))
         StatusPill(
-            label = state.activity ?: phaseLabel(state),
+            label = phaseLabel(state),
             tone = phaseTone(state),
-            pulse = !state.ended && (state.state == "dialing" || state.state == "active")
+            pulse = !state.ended && (state.phase == "dialing" || state.phase == "active")
         )
     }
 }
@@ -356,7 +359,8 @@ private fun TranscriptCard(
                     Text(text = "Transcript", style = MaterialTheme.typography.titleMedium)
                     Text(
                         text = when {
-                            state.ended -> "Call ended · ${state.state ?: "unknown"}"
+                            state.ended -> "Call ended · ${state.phase ?: "unknown"}"
+                            state.activity == "working" -> "Live · the agent is working"
                             state.partials.isNotEmpty() -> "Live"
                             state.turns.isEmpty() -> "Waiting for the first turn"
                             else -> "${state.turns.size} turns"
@@ -430,7 +434,8 @@ private fun TranscriptList(state: LiveCallUiState, modifier: Modifier) {
 
 @Composable
 private fun TranscriptRow(turn: TranscriptTurn) {
-    val agent = turn.role == "agent"
+    val speaker = speakerOf(turn.role)
+    val agent = speaker == Speaker.AGENT
     val container = if (agent) {
         MaterialTheme.colorScheme.tertiaryContainer
     } else {
@@ -449,7 +454,7 @@ private fun TranscriptRow(turn: TranscriptTurn) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = if (agent) "Agent" else "Far end",
+                    text = speakerLabel(turn.role),
                     style = MaterialTheme.typography.labelSmall,
                     color = content
                 )
@@ -559,7 +564,7 @@ private fun LevelCard(state: LiveCallUiState) {
             )
             StatTile(
                 label = "Bitrate",
-                value = state.audio.bitrate?.let { "$it kbit/s" } ?: "—",
+                value = bitrateKbps(state.audio.bitrate)?.let { "$it kbit/s" } ?: "—",
                 mono = true
             )
             StatTile(label = "Drops", value = state.audio.drops.toString(), mono = true)
@@ -796,20 +801,26 @@ internal val MARK_KINDS: List<String> = listOf("agreed", "refused", "follow-up")
 
 internal fun formatTimer(state: LiveCallUiState, nowEpochMs: Long): String {
     val start = state.connectedAtMs ?: state.createdAtMs ?: return "—"
-    val seconds = ((nowEpochMs - start).coerceAtLeast(0)) / 1000
+    val end = (if (state.ended) state.endedAtMs else null) ?: nowEpochMs
+    val seconds = ((end - start).coerceAtLeast(0)) / 1000
     val minutes = seconds / 60
     val rest = seconds % 60
     return "$minutes:${rest.toString().padStart(2, '0')}"
 }
 
-/** `far_end` is the daemon's word; the screen says "Far end". */
-internal fun speakerLabel(role: String): String = when (role) {
-    "far_end" -> "Far end"
-    "agent" -> "Agent"
-    else -> role.replace('_', ' ').replaceFirstChar { it.uppercase() }
+/** `assistant`/`user` are the daemon's words for the two speakers; older records say `agent`/`far_end`. */
+internal fun speakerLabel(role: String?): String = when (speakerOf(role)) {
+    Speaker.AGENT -> "Agent"
+
+    Speaker.FAR_END -> "Far end"
+
+    Speaker.OTHER -> role?.trim()?.takeIf { it.isNotEmpty() }
+        ?.replace('_', ' ')
+        ?.replaceFirstChar { it.uppercase() }
+        ?: "Someone"
 }
 
-internal fun phaseLabel(state: LiveCallUiState): String = when (state.state) {
+internal fun phaseLabel(state: LiveCallUiState): String = when (state.phase) {
     "preparing" -> "Preparing"
     "dialing" -> "Dialing"
     "active" -> "Live"
@@ -821,7 +832,7 @@ internal fun phaseLabel(state: LiveCallUiState): String = when (state.state) {
     else -> if (state.loaded) "Idle" else "Loading"
 }
 
-internal fun phaseTone(state: LiveCallUiState): StatusTone = when (state.state) {
+internal fun phaseTone(state: LiveCallUiState): StatusTone = when (state.phase) {
     "active" -> StatusTone.POSITIVE
     "dialing", "preparing", "ending" -> StatusTone.WARNING
     "failed", "cancelled" -> StatusTone.NEGATIVE

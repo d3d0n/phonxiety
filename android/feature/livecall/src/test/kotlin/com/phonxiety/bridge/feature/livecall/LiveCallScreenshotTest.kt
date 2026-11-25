@@ -115,15 +115,15 @@ object LiveCallSamples {
         destination = "+998901234567",
         farEnd = "Bella Napoli",
         state = "active",
-        activity = "speaking",
+        activity = "idle",
         turns = listOf(
-            TranscriptTurn(1, "agent", "Good evening, I would like to book a table for two on Thursday at eight.", 1_764_000_006.0, true),
-            TranscriptTurn(2, "far_end", "Thursday at eight is full. We have seven or nine.", 1_764_000_014.0, true),
-            TranscriptTurn(3, "agent", "Nine would work. Two people, under the name Rasulov.", 1_764_000_021.0, true),
-            TranscriptTurn(4, "far_end", "Nine it is. Anything else?", 1_764_000_031.0, true),
-            TranscriptTurn(5, "agent", "One question: is there a window seat?", 1_764_000_040.0, true)
+            TranscriptTurn(1, "assistant", "Good evening, I would like to book a table for two on Thursday at eight.", 1_764_000_006.0, true),
+            TranscriptTurn(2, "user", "Thursday at eight is full. We have seven or nine.", 1_764_000_014.0, true),
+            TranscriptTurn(3, "assistant", "Nine would work. Two people, under the name Rasulov.", 1_764_000_021.0, true),
+            TranscriptTurn(4, "user", "Nine it is. Anything else?", 1_764_000_031.0, true),
+            TranscriptTurn(5, "assistant", "One question: is there a window seat?", 1_764_000_040.0, true)
         ),
-        partials = listOf(PartialTurn("far_end", "Let me check the", null)),
+        partials = listOf(PartialTurn("user", "Let me check the", null)),
         marks = listOf(CallMark("agreed", 1_764_000_041.0)),
         summary = "Table for two confirmed for Thursday at 21:00 under Rasulov.",
         audioCodec = "opus",
@@ -131,7 +131,7 @@ object LiveCallSamples {
         createdAtMs = 1_764_000_000_000L,
         audio = AudioState(
             codec = "opus",
-            bitrate = 32,
+            bitrate = 32_000,
             rxLevelDbfs = -18f,
             txLevelDbfs = -26f,
             framesOut = 2_400,
@@ -145,7 +145,8 @@ object LiveCallSamples {
         callOutcome = "answered",
         resultStatus = "ready",
         ended = true,
-        activity = null,
+        endedAtMs = 1_764_000_052_000L,
+        activity = "idle",
         partials = emptyList(),
         muted = false,
         summaryFields = JsonObject(
