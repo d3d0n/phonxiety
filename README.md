@@ -143,6 +143,7 @@ The adapter starts the daemon when none is running. Then:
 ```sh
 uv run phonxiety status      # daemon, phone, route, ready to call
 uv run phonxiety link-test   # load the link like a call, without dialing
+adb connect 127.0.0.1:15555  # adb to the phone through the iroh link, no cable needed
 ```
 
 Settings:

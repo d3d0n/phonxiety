@@ -46,6 +46,27 @@ class LinkSupervisorTest {
     }
 
     @Test
+    fun aNetworkComingBackRetriesAtOnceFromTheBaseDelay() {
+        val supervisor = supervisor()
+        supervisor.start()
+        repeat(3) {
+            factory.last().down("connect_failed")
+            scheduler.advance(scheduler.scheduledDelays.last())
+        }
+        factory.last().down("connect_failed") // now waiting 8 s
+        assertEquals(8_000L, scheduler.scheduledDelays.last())
+        val attempts = factory.created.size
+
+        supervisor.networkAvailable()
+        assertEquals(attempts + 1, factory.created.size)
+        scheduler.advance(8_000) // the cancelled wait must not start a second attempt
+        assertEquals(attempts + 1, factory.created.size)
+
+        factory.last().down("connect_failed")
+        assertEquals(1_000L, scheduler.scheduledDelays.last())
+    }
+
+    @Test
     fun callbacksFromAReplacedLinkAreIgnored() {
         val supervisor = supervisor()
         supervisor.start()

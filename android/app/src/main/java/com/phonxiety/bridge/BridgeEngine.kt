@@ -124,11 +124,30 @@ class BridgeEngine(
         scheduler.scheduleWithFixedDelay({ safe { links.tick() } }, 1, 1, TimeUnit.SECONDS)
         scheduler.scheduleWithFixedDelay({ safe { emitPlayback() } }, 500, 500, TimeUnit.MILLISECONDS)
         scheduler.scheduleWithFixedDelay({ safe { expirePendingDial() } }, 5, 5, TimeUnit.SECONDS)
+        runCatching {
+            appContext.getSystemService(android.net.ConnectivityManager::class.java)
+                ?.registerDefaultNetworkCallback(networkCallback)
+        }
+    }
+
+    /** A link waiting out its backoff retries as soon as a network is back. */
+    private val networkCallback = object : android.net.ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: android.net.Network) {
+            try {
+                scheduler.execute { safe { links.networkAvailable() } }
+            } catch (_: RejectedExecutionException) {
+                // Closing.
+            }
+        }
     }
 
     fun close() {
         if (!closeOnce.compareAndSet(false, true)) return
         synchronized(lock) { running = false }
+        runCatching {
+            appContext.getSystemService(android.net.ConnectivityManager::class.java)
+                ?.unregisterNetworkCallback(networkCallback)
+        }
         links.cancel()
         scheduler.shutdownNow()
         abortOwnedOnShutdown()

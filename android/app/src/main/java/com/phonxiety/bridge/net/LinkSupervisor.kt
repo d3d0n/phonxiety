@@ -291,4 +291,18 @@ internal class LinkSupervisor(
         }
         connect()
     }
+
+    /**
+     * A network just became available: a link waiting out its backoff tries
+     * again now, from the base delay, instead of up to 8 s later.
+     */
+    fun networkAvailable() {
+        val pending = synchronized(lock) {
+            if (!running || linkUp || !reconnectScheduled) return
+            reconnectDelayMs = RECONNECT_BASE_MS
+            reconnectTask.also { reconnectTask = null }
+        }
+        pending?.cancel()
+        reconnectNow()
+    }
 }
