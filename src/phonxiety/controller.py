@@ -699,8 +699,9 @@ class CallController:
         if call.recorder is not None:
             try:
                 call.recording = await asyncio.to_thread(call.recorder.close)
-            except Exception:
+            except Exception as exc:
                 log.exception("call %s: recording could not be written", call.call_id)
+                call.recording = {"file": None, "error": f"recording_export_failed: {exc}"}
         transcript = self.store.transcript(call.call_id)
         result = call.proposed_result
         if result is None and transcript and not self._closing:

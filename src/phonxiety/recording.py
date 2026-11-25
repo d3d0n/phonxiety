@@ -44,65 +44,84 @@ class CallRecorder:
         self._remote_end: int | None = None
         self._agent_end = 0
         self.closed = False
+        # First failure while writing; the recorder then stops so the call itself goes on.
+        self.error: str | None = None
 
     def _now(self) -> int:
         return int((time.monotonic() - self._started) * SAMPLE_RATE)
 
     def remote(self, pcm: bytes) -> None:
-        if self.closed:
+        if self.closed or self.error:
             return
         samples = len(pcm) // 2
         if self._remote_end is None:
             self._remote_end = max(0, self._now() - samples)
-        self._write(self._remote, self._remote_end, pcm)
-        self._remote_end += samples
+        if self._write(self._remote, self._remote_end, pcm):
+            self._remote_end += samples
 
     def agent(self, pcm: bytes) -> None:
-        if self.closed:
+        if self.closed or self.error:
             return
         position = max(self._agent_end, self._now())
-        self._write(self._agent, position, pcm)
-        self._agent_end = position + len(pcm) // 2
+        if self._write(self._agent, position, pcm):
+            self._agent_end = position + len(pcm) // 2
 
-    @staticmethod
-    def _write(stream: BinaryIO, position: int, pcm: bytes) -> None:
-        # Seeking past the end leaves a hole that reads back as silence.
-        stream.seek(position * 2)
-        stream.write(pcm)
+    def _write(self, stream: BinaryIO, position: int, pcm: bytes) -> bool:
+        try:
+            # Seeking past the end leaves a hole that reads back as silence.
+            stream.seek(position * 2)
+            stream.write(pcm)
+            return True
+        except OSError as exc:
+            self.error = f"recording_write_failed: {exc}"
+            log.warning("Recording stopped: %s", self.error)
+            return False
 
     def close(self) -> dict[str, Any] | None:
-        """Interleave into the WAV and drop the raw files; the recording's properties, or None if silent."""
+        """Interleave into the WAV; the recording's properties, or None if nothing was recorded.
+
+        The WAV is published only once complete, and the raw per-side files are removed only
+        then: if writing it fails they stay next to it for recovery and the error propagates.
+        """
         if self.closed:
             return None
         self.closed = True
         total = max(self._remote_end or 0, self._agent_end)
+        temporary = self.path.with_name(self.path.name + ".part")
         try:
-            if total == 0:
-                return None
-            with wave.open(str(self.path), "wb") as out:
-                out.setnchannels(2)
-                out.setsampwidth(2)
-                out.setframerate(SAMPLE_RATE)
-                for stream in (self._remote, self._agent):
-                    stream.seek(0)
-                for start in range(0, total, CHUNK_SAMPLES):
-                    count = min(CHUNK_SAMPLES, total - start)
-                    frames = array("h", bytes(count * 4))
-                    frames[0::2] = _samples(self._remote, count)
-                    frames[1::2] = _samples(self._agent, count)
-                    out.writeframes(frames.tobytes())
-            os.chmod(self.path, 0o600)
-            return {
-                "file": self.path.name,
-                "format": "wav s16le stereo",
-                "sample_rate": SAMPLE_RATE,
-                "channels": ["remote", "agent"],
-                "duration_s": round(total / SAMPLE_RATE, 2),
-            }
-        finally:
+            if total:
+                with wave.open(str(temporary), "wb") as out:
+                    out.setnchannels(2)
+                    out.setsampwidth(2)
+                    out.setframerate(SAMPLE_RATE)
+                    for stream in (self._remote, self._agent):
+                        stream.seek(0)
+                    for start in range(0, total, CHUNK_SAMPLES):
+                        count = min(CHUNK_SAMPLES, total - start)
+                        frames = array("h", bytes(count * 4))
+                        frames[0::2] = _samples(self._remote, count)
+                        frames[1::2] = _samples(self._agent, count)
+                        out.writeframes(frames.tobytes())
+                os.chmod(temporary, 0o600)
+                os.replace(temporary, self.path)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
             for stream in (self._remote, self._agent):
                 stream.close()
-                Path(stream.name).unlink(missing_ok=True)
+            raise
+        for stream in (self._remote, self._agent):
+            stream.close()
+            Path(stream.name).unlink(missing_ok=True)
+        if not total:
+            return None
+        return {
+            "file": self.path.name,
+            "format": "wav s16le stereo",
+            "sample_rate": SAMPLE_RATE,
+            "channels": ["remote", "agent"],
+            "duration_s": round(total / SAMPLE_RATE, 2),
+            "error": self.error,
+        }
 
 
 def _samples(stream: BinaryIO, count: int) -> array:
