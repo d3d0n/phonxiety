@@ -128,6 +128,19 @@ class ListenerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self) -> None:
         self.directory.cleanup()
 
+    async def test_an_attachment_stream_reaches_the_hub_handler(self) -> None:
+        seen: list[dict] = []
+
+        async def handler(header, send, recv) -> None:
+            seen.append(header)
+
+        self.hub.on_attachment = handler
+        await self.listener._attachments({"type": "attachment", "id": "a1"}, object(), object())
+        async with asyncio.timeout(2):
+            while not seen:
+                await asyncio.sleep(0.01)
+        self.assertEqual(seen, [{"type": "attachment", "id": "a1"}])
+
     async def test_wrong_token_never_reaches_the_hub(self) -> None:
         connection = _Connection(frame(json.dumps({"type": "auth", "token": "other"})) + frame(HELLO))
         await self.listener._serve(_Incoming(connection))

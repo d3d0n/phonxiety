@@ -272,12 +272,12 @@ class IrohListener:
         self._accepting: asyncio.Task[None] | None = None
         self._serving: set[asyncio.Task[None]] = set()
 
-    def _attachments(self, header: dict[str, Any], send: Any, recv: Any) -> None:
+    async def _attachments(self, header: dict[str, Any], send: Any, recv: Any) -> None:
         """Hand one bulk stream to the hub, which owns the app API's answer."""
         sink = getattr(self._hub, "serve_attachment", None)
         if sink is None:
             raise ValueError("attachments_unavailable")
-        sink(header, send, recv)
+        await sink(header, send, recv)
 
     @property
     def endpoint_id(self) -> str | None:
