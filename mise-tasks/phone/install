@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+#MISE description="Install the Magisk module on the USB-connected phone (one-time, needs root)"
+#
+# Never reboots unless --reboot was given explicitly.
+set -euo pipefail
+
+ROOT="${MISE_PROJECT_ROOT:?run this task through mise: mise run phone:install}"
+ADB="${ADB:-adb}"
+SERIAL=""
+ZIP=""
+REBOOT=0
+REMOTE_ZIP="/data/local/tmp/phonxiety-bridge-module.zip"
+
+usage() {
+    cat <<'EOF'
+Usage: mise run phone:install [--zip PATH] [--serial SERIAL] [--reboot]
+
+  --zip PATH        Magisk module zip (default: newest dist/phonxiety-bridge-*.zip)
+  --serial SERIAL   adb device serial
+  --reboot          reboot after installing (never done implicitly)
+
+The module installs the app into /system/priv-app through Magisk. It becomes
+active after a reboot. Then pair the phone: mise run phone:pair, or scan the
+code from mise run pair in the app.
+EOF
+}
+
+die() { printf 'error: %s\n' "$1" >&2; exit 1; }
+note() { printf '%s\n' "$1"; }
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --zip)
+            [ $# -ge 2 ] || die "--zip requires a path"
+            ZIP="$2"; shift 2 ;;
+        --serial)
+            [ $# -ge 2 ] || die "--serial requires a value"
+            SERIAL="$2"; shift 2 ;;
+        --reboot)
+            REBOOT=1; shift ;;
+        -h|--help)
+            usage; exit 0 ;;
+        *)
+            die "unknown argument: $1" ;;
+    esac
+done
+
+command -v "$ADB" >/dev/null 2>&1 || die "adb not found"
+
+ADB_CMD=("$ADB")
+if [ -n "$SERIAL" ]; then
+    ADB_CMD+=(-s "$SERIAL")
+fi
+
+STATE="$("${ADB_CMD[@]}" get-state 2>/dev/null || true)"
+[ "$STATE" = "device" ] || die "adb device not ready (state: ${STATE:-offline})"
+
+if [ -z "$ZIP" ]; then
+    ZIP="$(ls -1t "$ROOT"/dist/phonxiety-bridge-*.zip 2>/dev/null | head -n1 || true)"
+fi
+[ -n "$ZIP" ] && [ -f "$ZIP" ] || die "module zip not found; run: mise run phone:build"
+
+ROOT_OK="$("${ADB_CMD[@]}" shell 'su -c id' 2>/dev/null || true)"
+case "$ROOT_OK" in
+    *"uid=0"*) ;;
+    *) die "root shell is not available" ;;
+esac
+
+MAGISK_BIN="$("${ADB_CMD[@]}" shell "su -c 'if [ -x /data/adb/magisk/magisk ]; then echo /data/adb/magisk/magisk; else command -v magisk; fi'" 2>/dev/null | tr -d '\r' | head -n1)"
+[ -n "$MAGISK_BIN" ] || die "magisk CLI was not found in the root shell"
+
+note "Pushing $(basename "$ZIP")..."
+"${ADB_CMD[@]}" push "$ZIP" "$REMOTE_ZIP" >/dev/null
+
+note "Installing module via magisk --install-module..."
+"${ADB_CMD[@]}" shell "su -c '$MAGISK_BIN --install-module $REMOTE_ZIP'"
+
+if ! "${ADB_CMD[@]}" shell "su -c 'test -d /data/adb/modules_update/phonxiety_bridge || test -d /data/adb/modules/phonxiety_bridge'"; then
+    die "module directory was not created; inspect the Magisk output above"
+fi
+
+"${ADB_CMD[@]}" shell "rm -f $REMOTE_ZIP" >/dev/null 2>&1 || true
+
+note "Module installed. It becomes active after a reboot."
+if [ "$REBOOT" -eq 1 ]; then
+    note "Rebooting as requested. After boot pair the phone: mise run phone:pair"
+    "${ADB_CMD[@]}" reboot
+else
+    note "Reboot the phone, then pair it: mise run phone:pair"
+fi

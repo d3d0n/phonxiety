@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+#MISE description="Keep phonxietyd running in the background from login on (macOS launchd agent)"
+set -euo pipefail
+
+ROOT="${MISE_PROJECT_ROOT:?run this task through mise: mise run daemon:install}"
+LABEL="com.phonxiety.daemon"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+LOG_DIR="$HOME/Library/Logs/phonxiety"
+BIN="$ROOT/.venv/bin/phonxietyd"
+DOMAIN="gui/$(id -u)"
+
+die() { printf 'error: %s\n' "$1" >&2; exit 1; }
+note() { printf '%s\n' "$1"; }
+
+[ "$(uname)" = "Darwin" ] || die "launchd agents exist only on macOS; run the daemon with: mise run daemon"
+[ -x "$BIN" ] || die "the daemon is not installed in .venv; run: mise run setup"
+
+mkdir -p "$LOG_DIR" "$(dirname "$PLIST")"
+cat > "$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$LABEL</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$BIN</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>$ROOT</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+    <key>StandardOutPath</key>
+    <string>$LOG_DIR/daemon.log</string>
+    <key>StandardErrorPath</key>
+    <string>$LOG_DIR/daemon.log</string>
+</dict>
+</plist>
+EOF
+
+launchctl bootout "$DOMAIN/$LABEL" >/dev/null 2>&1 || true
+launchctl bootstrap "$DOMAIN" "$PLIST" || die "launchctl could not load $PLIST"
+
+i=0
+while [ "$i" -lt 40 ]; do
+    if "$ROOT/.venv/bin/phonxiety" status --json >/dev/null 2>&1; then
+        note "phonxietyd runs in the background and starts at login."
+        note "Log: $LOG_DIR/daemon.log (mise run daemon:logs). Remove with: mise run daemon:uninstall"
+        "$ROOT/.venv/bin/phonxiety" status
+        exit 0
+    fi
+    sleep 0.5
+    i=$((i+1))
+done
+die "the daemon did not answer within 20 s; see $LOG_DIR/daemon.log (another phonxietyd may already be running)"

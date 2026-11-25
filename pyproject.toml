@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "phonxiety"
+version = "0.1.0"
+description = "Standalone realtime voice agent for cellular calls through an Android phone"
+requires-python = ">=3.12"
+dependencies = [
+  "aiortc>=1.14,<2",
+  "cryptography>=44",
+  "fastmcp>=4.2.5,<5",
+  "httpx>=0.28",
+  "iroh>=1.2,<2",
+  "pydantic>=2.11,<3",
+  "segno>=1.6",
+  "starlette>=0.47",
+  "uvicorn>=0.35",
+  "websockets>=15",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.3", "pytest-asyncio>=0.24"]
+
+[project.scripts]
+phonxiety = "phonxiety.cli:main"
+phonxietyd = "phonxiety.server:main"
+phonxiety-mcp = "phonxiety.mcp:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/phonxiety"]
+
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "function"

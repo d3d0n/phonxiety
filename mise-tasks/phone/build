@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+#MISE description="Build the Android app and package it as a Magisk module zip"
+#MISE depends=["phone:iroh"]
+#
+# Does not touch a device and does not install anything.
+set -euo pipefail
+
+ROOT="${MISE_PROJECT_ROOT:?run this task through mise: mise run phone:build}"
+ANDROID="$ROOT/android"
+MAGISK="$ANDROID/magisk"
+DIST="$ROOT/dist"
+
+fail() { printf 'error: %s\n' "$1" >&2; exit 1; }
+note() { printf '%s\n' "$1"; }
+
+[ -f "$MAGISK/module.prop" ] || fail "missing android/magisk/module.prop"
+[ -f "$MAGISK/system/etc/permissions/privapp-permissions-com.phonxiety.bridge.xml" ] || \
+    fail "missing privapp permission allowlist"
+command -v zip >/dev/null 2>&1 || fail "zip is required to package the module"
+[ -d "${ANDROID_HOME:-}" ] || fail "Android SDK not found at ANDROID_HOME (${ANDROID_HOME:-unset})"
+
+VERSION="$(sed -n 's/^version=//p' "$MAGISK/module.prop" | head -n1)"
+[ -n "$VERSION" ] || fail "module.prop has no version"
+
+if [ -x "$ANDROID/gradlew" ]; then
+    GRADLE=("$ANDROID/gradlew" "-p" "$ANDROID")
+else
+    GRADLE=("gradle" "-p" "$ANDROID")
+fi
+
+note "Building release APK"
+"${GRADLE[@]}" :app:assembleRelease --console=plain
+
+APK="$ANDROID/app/build/outputs/apk/release/app-release.apk"
+if [ ! -f "$APK" ]; then
+    APK="$(find "$ANDROID/app/build/outputs/apk/release" -maxdepth 1 -name '*.apk' -print 2>/dev/null | head -n1)"
+fi
+[ -f "$APK" ] || fail "release APK was not produced"
+
+if [ -z "${PHONXIETY_KEYSTORE:-}" ]; then
+    note "Release APK is signed with the debug key. Set PHONXIETY_KEYSTORE (and passwords) for a dedicated key."
+fi
+
+STAGE="$(mktemp -d "${TMPDIR:-/tmp}/phonxiety-module.XXXXXX")"
+cleanup() { rm -rf "$STAGE"; }
+trap cleanup EXIT
+
+cp -R "$MAGISK/." "$STAGE/"
+mkdir -p "$STAGE/system/priv-app/phonxiety-bridge"
+cp "$APK" "$STAGE/system/priv-app/phonxiety-bridge/phonxiety-bridge.apk"
+chmod 0644 "$STAGE/module.prop" \
+    "$STAGE/system/priv-app/phonxiety-bridge/phonxiety-bridge.apk" \
+    "$STAGE/system/etc/permissions/privapp-permissions-com.phonxiety.bridge.xml"
+
+mkdir -p "$DIST"
+OUT="$DIST/phonxiety-bridge-${VERSION}.zip"
+rm -f "$OUT"
+( cd "$STAGE" && zip -X -r "$OUT" . >/dev/null )
+[ -f "$OUT" ] || fail "module zip was not produced"
+
+note "Module zip: $OUT"
+note "Install over USB: mise run phone:install --reboot"

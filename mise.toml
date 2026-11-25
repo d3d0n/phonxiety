@@ -1,0 +1,29 @@
+[tools]
+python = "3.14"
+uv = "0.13"
+java = "temurin-17"
+gradle = "9.6.0"
+rust = { version = "1.100.0", targets = "aarch64-linux-android" }
+
+[settings]
+python.uv_venv_auto = "create|source"
+
+[env]
+UV_PYTHON = { value = "{{ tools.python.path }}", tools = true }
+ANDROID_HOME = "{{ config_root }}/.tools/android-sdk"
+
+[tasks.setup]
+description = "Install Python dependencies into .venv"
+run = "uv sync"
+
+[tasks.daemon]
+description = "Run phonxietyd in the foreground"
+run = "uv run phonxietyd"
+
+[tasks.test]
+description = "Run the Python test suite"
+run = "uv run pytest tests -q"
+
+[tasks.pair]
+description = "Show the QR code that pairs the phone app with this daemon"
+run = "uv run phonxiety pair"

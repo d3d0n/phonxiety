@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+#MISE description="Follow the log of the background phonxietyd"
+set -euo pipefail
+
+LOG="$HOME/Library/Logs/phonxiety/daemon.log"
+[ -f "$LOG" ] || { printf 'error: %s\n' "no log at $LOG; install the background daemon with: mise run daemon:install" >&2; exit 1; }
+exec tail -n 200 -f "$LOG"

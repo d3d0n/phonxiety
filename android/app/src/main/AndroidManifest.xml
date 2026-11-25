@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-feature
+        android:name="android.hardware.telephony"
+        android:required="true" />
+
+    <!-- TLS WebSocket to the paired daemon, the iroh device link and the bridge
+         foreground services.  iroh reads the system DNS servers through
+         ConnectivityManager/LinkProperties. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- Runtime permissions: requested by the pairing UI. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
+    <!-- Signature|privileged permissions granted by the Magisk privapp allowlist. -->
+    <uses-permission
+        android:name="android.permission.CAPTURE_AUDIO_OUTPUT"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission
+        android:name="android.permission.MODIFY_PHONE_STATE"
+        tools:ignore="ProtectedPermissions" />
+    <uses-permission
+        android:name="android.permission.CONTROL_INCALL_EXPERIENCE"
+        tools:ignore="ProtectedPermissions" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config">
+
+        <!--
+            Companion UI: pairing (QR scan or phonxiety://pair link), link
+            status and permission repair.
+        -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.Phonxiety">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:host="pair"
+                    android:scheme="phonxiety" />
+            </intent-filter>
+        </activity>
+
+        <!--
+            Restores the paired device link after a reboot or app update by
+            starting BridgeService.  Direct-boot aware: it also runs on
+            LOCKED_BOOT_COMPLETED, reading the pairing from device-protected
+            storage.  It starts nothing while config.json is missing or invalid.
+        -->
+        <receiver
+            android:name=".BootReceiver"
+            android:directBootAware="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+            Idle device link.  The app starts it after pairing, from
+            MainActivity and from BootReceiver.  Direct-boot aware so it can
+            reconnect before the first unlock.  It is exported so a root shell
+            can restart it for diagnostics, and gated on DUMP so a normal
+            third-party app cannot.  It reads config.json from device-protected
+            storage before any Telecom call exists.
+        -->
+        <service
+            android:name=".BridgeService"
+            android:directBootAware="true"
+            android:exported="true"
+            android:permission="android.permission.DUMP"
+            android:foregroundServiceType="specialUse"
+            android:stopWithTask="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Persistent device link carrying call control and PCM for a voice-assistant daemon over an encrypted WebSocket or an iroh connection." />
+        </service>
+
+        <!--
+            Non-UI InCallService.  Telecom binds it for calls; CONTROL_INCALL_EXPERIENCE
+            (privapp allowlist) permits a non-UI service without the dialer role.
+            It never declares IN_CALL_SERVICE_UI, so it is not a dialer replacement.
+        -->
+        <service
+            android:name=".BridgeInCallService"
+            android:directBootAware="true"
+            android:exported="true"
+            android:foregroundServiceType="microphone"
+            android:permission="android.permission.BIND_INCALL_SERVICE">
+            <intent-filter>
+                <action android:name="android.telecom.InCallService" />
+            </intent-filter>
+        </service>
+    </application>
+
+</manifest>

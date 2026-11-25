@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+#MISE description="Pair the USB-connected phone with this daemon without the camera (needs root)"
+#
+# Grants the app's runtime permissions, writes the link configuration into the
+# app's device-protected storage (readable before the first unlock after a
+# reboot) and restarts the bridge service. After this the phone reaches the
+# daemon over the network; the cable is no longer needed.
+#
+# The phone credential goes through a private temporary file and a root shell
+# stdin. It is never printed and never passed as a command-line argument.
+set -euo pipefail
+
+ROOT="${MISE_PROJECT_ROOT:?run this task through mise: mise run phone:pair}"
+PACKAGE="com.phonxiety.bridge"
+ADB="${ADB:-adb}"
+SERIAL=""
+MODE=()
+TMP=""
+
+usage() {
+    cat <<'EOF'
+Usage: mise run phone:pair [--serial SERIAL] [--lan | --tailscale | --host HOST]
+
+  --serial SERIAL   adb device serial
+  --lan             pair by this computer's local network address
+  --tailscale       pair by this computer's Tailscale address
+  --host HOST       pair by this address or name
+
+Without an address option the phone is paired with the daemon's iroh endpoint
+id: it finds this computer on any network without a VPN app. That needs the
+running daemon (mise run daemon).
+
+This restarts the bridge service. Do not run it during a call.
+EOF
+}
+
+die() { printf 'error: %s\n' "$1" >&2; exit 1; }
+note() { printf '%s\n' "$1"; }
+
+cleanup() { if [ -n "$TMP" ]; then rm -rf "$TMP"; fi; }
+trap cleanup EXIT INT TERM
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --serial)
+            [ $# -ge 2 ] || die "--serial requires a value"
+            SERIAL="$2"; shift 2 ;;
+        --host)
+            [ $# -ge 2 ] || die "--host requires a value"
+            MODE=(--host "$2"); shift 2 ;;
+        --lan|--tailscale)
+            MODE=("$1"); shift ;;
+        -h|--help)
+            usage; exit 0 ;;
+        *)
+            die "unknown argument: $1" ;;
+    esac
+done
+
+command -v "$ADB" >/dev/null 2>&1 || die "adb not found"
+
+ADB_CMD=("$ADB")
+if [ -n "$SERIAL" ]; then
+    ADB_CMD+=(-s "$SERIAL")
+fi
+
+STATE="$("${ADB_CMD[@]}" get-state 2>/dev/null || true)"
+[ "$STATE" = "device" ] || die "adb device not ready (state: ${STATE:-offline})"
+
+APK_PATH="$("${ADB_CMD[@]}" shell pm path "$PACKAGE" 2>/dev/null \
+    | sed -n 's/^package://p' | head -n1 | tr -d '\r')"
+[ -n "$APK_PATH" ] || die "$PACKAGE is not installed; run: mise run phone:install --reboot"
+
+PKG_DUMP="$("${ADB_CMD[@]}" shell dumpsys package "$PACKAGE")"
+for perm in CAPTURE_AUDIO_OUTPUT MODIFY_PHONE_STATE CONTROL_INCALL_EXPERIENCE; do
+    if ! printf '%s\n' "$PKG_DUMP" | grep -q "$perm.*granted=true"; then
+        die "privileged permission $perm is not granted; install the module and reboot: mise run phone:install --reboot"
+    fi
+done
+
+for perm in RECORD_AUDIO CALL_PHONE READ_PHONE_STATE POST_NOTIFICATIONS; do
+    "${ADB_CMD[@]}" shell pm grant --user 0 "$PACKAGE" "android.permission.$perm" \
+        >/dev/null 2>&1 || true
+done
+PKG_DUMP="$("${ADB_CMD[@]}" shell dumpsys package "$PACKAGE")"
+for perm in RECORD_AUDIO CALL_PHONE READ_PHONE_STATE; do
+    if ! printf '%s\n' "$PKG_DUMP" | grep -q "$perm.*granted=true"; then
+        die "runtime permission $perm was not granted; inspect: adb shell dumpsys package $PACKAGE"
+    fi
+done
+
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/phonxiety-pair.XXXXXX")"
+umask 077
+
+uv run --project "$ROOT" phonxiety pair --json ${MODE[@]+"${MODE[@]}"} > "$TMP/config.json" \
+    || die "could not build the phone configuration"
+[ -s "$TMP/config.json" ] || die "the phone configuration is empty"
+
+HASH="$(shasum -a 256 "$TMP/config.json" | awk '{print $1}')"
+[ -n "$HASH" ] || die "could not hash the phone configuration"
+
+{
+    printf '%s\n' \
+        '#!/system/bin/sh' \
+        'set -eu' \
+        'umask 077' \
+        "APP=$PACKAGE" \
+        'DATA="/data/user_de/0/$APP"' \
+        'DIR="$DATA/files"' \
+        '[ -d "$DATA" ] || { echo "app data directory missing" >&2; exit 1; }' \
+        'mkdir -p "$DIR"' \
+        "cat > \"\$DIR/config.json\" <<'PX_CONFIG_EOF'"
+    cat "$TMP/config.json"
+    printf '%s\n' \
+        'PX_CONFIG_EOF' \
+        'UID_=$(stat -c %u "$DATA")' \
+        'GID_=$(stat -c %g "$DATA")' \
+        'chown "$UID_:$GID_" "$DIR" "$DIR/config.json"' \
+        'chmod 700 "$DIR"' \
+        'chmod 600 "$DIR/config.json"' \
+        'restorecon -R "$DIR" 2>/dev/null || true' \
+        'sha256sum "$DIR/config.json"'
+} > "$TMP/setup.sh"
+
+if ! REMOTE_OUT="$("${ADB_CMD[@]}" shell "su -c 'sh -s'" < "$TMP/setup.sh")"; then
+    die "writing the phone configuration failed"
+fi
+REMOTE_HASH="$(printf '%s\n' "$REMOTE_OUT" | tr -d '\r' | awk 'NF {print $1; exit}')"
+[ "$REMOTE_HASH" = "$HASH" ] || die "phone configuration hash mismatch"
+
+note "Restarting the bridge service..."
+"${ADB_CMD[@]}" shell am stopservice --user 0 -n "$PACKAGE/.BridgeService" \
+    >/dev/null 2>&1 || true
+i=0
+while [ "$i" -lt 20 ]; do
+    if ! "${ADB_CMD[@]}" shell dumpsys activity services "$PACKAGE" 2>/dev/null \
+        | grep -q "BridgeService"; then
+        break
+    fi
+    sleep 0.25
+    i=$((i+1))
+done
+
+"${ADB_CMD[@]}" shell am start-foreground-service --user 0 \
+    -n "$PACKAGE/.BridgeService" >/dev/null || die "am start-foreground-service failed"
+
+i=0
+running=0
+while [ "$i" -lt 40 ]; do
+    if "${ADB_CMD[@]}" shell dumpsys activity services "$PACKAGE" 2>/dev/null \
+        | grep -q "BridgeService"; then
+        running=1
+        break
+    fi
+    sleep 0.25
+    i=$((i+1))
+done
+[ "$running" -eq 1 ] || die "the bridge service did not stay running; inspect: adb logcat -d -s PhonxietyBridge"
+
+note "Phone paired. Waiting for it to reach the daemon..."
+i=0
+while [ "$i" -lt 30 ]; do
+    if uv run --project "$ROOT" phonxiety status --json 2>/dev/null | grep -q '"connected": true'; then
+        uv run --project "$ROOT" phonxiety status
+        exit 0
+    fi
+    sleep 1
+    i=$((i+1))
+done
+die "the phone did not reach the daemon within 30 s: check that the daemon is running (mise run daemon) and that the phone has a network connection"

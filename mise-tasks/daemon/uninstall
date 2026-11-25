@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+#MISE description="Stop the background phonxietyd and remove its launchd agent"
+set -euo pipefail
+
+LABEL="com.phonxiety.daemon"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+
+launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
+rm -f "$PLIST"
+printf '%s\n' "The background daemon is stopped and no longer starts at login."

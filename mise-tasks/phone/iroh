@@ -1,0 +1,220 @@
+#!/usr/bin/env bash
+#MISE description="Build the iroh-ffi Android library and its Kotlin bindings (arm64-v8a)"
+#
+# Produces two generated, gitignored trees:
+#   android/app/src/main/jniLibs/arm64-v8a/libiroh_ffi.so
+#   android/app/src/iroh/kotlin/            (generated uniffi Kotlin + IrohAndroid)
+#
+# The bindings are built from the iroh-ffi tag that matches the pinned iroh
+# release, so the phone and the Python daemon (PyPI `iroh`) speak the same
+# iroh version. Everything is cached under .tools/; a step is skipped when
+# its recorded inputs and outputs are still current.
+#
+# Usage: mise run phone:iroh [--force]
+#
+#   --force   rebuild even when the recorded stamp is current
+set -euo pipefail
+
+ROOT="${MISE_PROJECT_ROOT:?run this task through mise: mise run phone:iroh}"
+
+# --- pinned versions -------------------------------------------------------
+# Keep IROH_VERSION in lockstep with the `iroh` wheel used by the daemon.
+IROH_VERSION="1.2.0"
+IROH_FFI_TAG="v${IROH_VERSION}"
+IROH_FFI_COMMIT="66a8d619a4d791d458d582f312df6e0ab42bc541"
+NDK_VERSION="29.0.14206865"
+API_LEVEL="34"
+CARGO_NDK_VERSION="3.5.4"
+
+# --- paths -----------------------------------------------------------------
+TOOLS="$ROOT/.tools"
+FFI="$TOOLS/iroh-ffi"
+TARGET_DIR="$TOOLS/iroh-build"
+ANDROID="$ROOT/android"
+JNI_DIR="$ANDROID/app/src/main/jniLibs/arm64-v8a"
+JNI_LIB="$JNI_DIR/libiroh_ffi.so"
+KOTLIN_OUT="$ANDROID/app/src/iroh/kotlin"
+STAMP="$TARGET_DIR/.iroh-android.stamp"
+
+FORCE=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --force) FORCE=1; shift ;;
+        -h|--help)
+            sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+            exit 0 ;;
+        *) printf 'error: unknown argument: %s\n' "$1" >&2; exit 2 ;;
+    esac
+done
+
+fail() { printf 'error: %s\n' "$1" >&2; exit 1; }
+note() { printf '%s\n' "$1"; }
+
+sha256() {
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | awk '{print $1}'
+    elif command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    else
+        fail "neither shasum nor sha256sum is available"
+    fi
+}
+
+# --- prerequisites ---------------------------------------------------------
+command -v cargo >/dev/null 2>&1 || \
+    fail "cargo not found; run this task through mise (mise run phone:iroh)"
+command -v rustc >/dev/null 2>&1 || \
+    fail "rustc not found; run this task through mise (mise run phone:iroh)"
+command -v git >/dev/null 2>&1 || fail "git is required"
+[ -n "${ANDROID_HOME:-}" ] && [ -d "$ANDROID_HOME" ] || \
+    fail "ANDROID_HOME is not set to an Android SDK directory (mise.toml sets .tools/android-sdk)"
+
+if command -v rustup >/dev/null 2>&1; then
+    INSTALLED_TARGETS="$(rustup target list --installed 2>/dev/null || true)"
+    case $'\n'"$INSTALLED_TARGETS" in
+        *$'\n'aarch64-linux-android*) ;;
+        *) fail "the aarch64-linux-android Rust target is missing; run: mise exec -- rustup target add aarch64-linux-android" ;;
+    esac
+fi
+
+SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+[ -x "$SDKMANAGER" ] || \
+    fail "sdkmanager not found at $SDKMANAGER; install the Android cmdline-tools"
+
+NDK="$ANDROID_HOME/ndk/$NDK_VERSION"
+if [ ! -d "$NDK/toolchains/llvm/prebuilt" ]; then
+    note "Installing Android NDK $NDK_VERSION (accepted SDK licenses)"
+    # `yes` exits with SIGPIPE once sdkmanager stops reading; its status is
+    # irrelevant as long as the NDK appears.
+    set +o pipefail
+    yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" "ndk;$NDK_VERSION" >/dev/null 2>&1 \
+        || true
+    set -o pipefail
+    [ -d "$NDK/toolchains/llvm/prebuilt" ] || \
+        fail "could not install NDK $NDK_VERSION into $NDK (run: $SDKMANAGER 'ndk;$NDK_VERSION')"
+fi
+
+NDK_HOST_TAG="$(cd "$NDK/toolchains/llvm/prebuilt" && ls -1 | head -n1)"
+[ -n "$NDK_HOST_TAG" ] || fail "NDK $NDK_VERSION has no LLVM prebuilt toolchain"
+NDK_BIN="$NDK/toolchains/llvm/prebuilt/$NDK_HOST_TAG/bin"
+LLVM_STRIP="$NDK_BIN/llvm-strip"
+LLVM_READELF="$NDK_BIN/llvm-readelf"
+[ -x "$LLVM_STRIP" ] || fail "llvm-strip missing from NDK at $NDK_BIN"
+
+CARGO_NDK="$TOOLS/cargo/bin/cargo-ndk"
+if [ ! -x "$CARGO_NDK" ]; then
+    note "Installing cargo-ndk $CARGO_NDK_VERSION into .tools/cargo"
+    CARGO_INSTALL_ROOT="$TOOLS/cargo" cargo install --version "$CARGO_NDK_VERSION" \
+        cargo-ndk --locked >/dev/null 2>&1 || \
+        fail "could not install cargo-ndk $CARGO_NDK_VERSION (cargo install --version $CARGO_NDK_VERSION cargo-ndk --locked)"
+fi
+# cargo-ndk only runs as a cargo subcommand.
+export PATH="$TOOLS/cargo/bin:$PATH"
+
+# --- source checkout -------------------------------------------------------
+if [ ! -d "$FFI/.git" ]; then
+    note "Cloning iroh-ffi $IROH_FFI_TAG"
+    rm -rf "$FFI"
+    mkdir -p "$TOOLS"
+    git clone --quiet --depth 1 --branch "$IROH_FFI_TAG" \
+        https://github.com/n0-computer/iroh-ffi "$FFI" || \
+        fail "could not clone iroh-ffi at $IROH_FFI_TAG"
+fi
+
+HEAD_SHA="$(git -C "$FFI" rev-parse HEAD 2>/dev/null || true)"
+if [ "$HEAD_SHA" != "$IROH_FFI_COMMIT" ]; then
+    note "Checking out iroh-ffi $IROH_FFI_TAG ($IROH_FFI_COMMIT)"
+    git -C "$FFI" fetch --quiet --depth 1 origin "refs/tags/$IROH_FFI_TAG" || \
+        fail "could not fetch iroh-ffi tag $IROH_FFI_TAG"
+    git -C "$FFI" checkout --quiet --detach FETCH_HEAD || \
+        fail "could not check out iroh-ffi $IROH_FFI_COMMIT"
+    HEAD_SHA="$(git -C "$FFI" rev-parse HEAD)"
+fi
+[ "$HEAD_SHA" = "$IROH_FFI_COMMIT" ] || \
+    fail "iroh-ffi checkout is at $HEAD_SHA, expected $IROH_FFI_COMMIT"
+
+# --- up-to-date check ------------------------------------------------------
+RECIPE_HASH="$(sha256 "$FFI/uniffi.toml")"
+RECIPE_HASH="$(printf '%s' "$RECIPE_HASH $(sha256 "${BASH_SOURCE[0]}")")"
+RUSTC_VERSION="$(rustc --version)"
+
+EXPECTED_STAMP="iroh=$IROH_VERSION
+tag=$IROH_FFI_TAG
+commit=$IROH_FFI_COMMIT
+ndk=$NDK_VERSION
+api=$API_LEVEL
+cargo-ndk=$CARGO_NDK_VERSION
+rustc=$RUSTC_VERSION
+recipe=$RECIPE_HASH"
+
+if [ "$FORCE" -eq 0 ] && [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$EXPECTED_STAMP" ] \
+    && [ -f "$JNI_LIB" ] && [ -n "$(find "$KOTLIN_OUT" -name '*.kt' -print -quit 2>/dev/null)" ]; then
+    note "iroh $IROH_VERSION bindings are up to date ($JNI_DIR/libiroh_ffi.so)"
+    note "Use --force to rebuild."
+    exit 0
+fi
+
+mkdir -p "$TARGET_DIR"
+
+# --- cross-compile the cdylib ---------------------------------------------
+note "Building libiroh_ffi.so for arm64-v8a (API $API_LEVEL, release, NDK $NDK_VERSION)"
+STAGE="$(mktemp -d "${TMPDIR:-/tmp}/iroh-android.XXXXXX")"
+cleanup() { rm -rf "$STAGE"; }
+trap cleanup EXIT
+
+export ANDROID_NDK_HOME="$NDK"
+export ANDROID_NDK_ROOT="$NDK"
+export CARGO_TARGET_DIR="$TARGET_DIR"
+
+( cd "$FFI" && cargo ndk -t arm64-v8a -p "$API_LEVEL" \
+    -o "$STAGE" build --release --lib -p iroh-ffi ) || \
+    fail "cargo ndk build failed"
+
+BUILT="$STAGE/arm64-v8a/libiroh_ffi.so"
+[ -f "$BUILT" ] || fail "cargo-ndk did not produce $BUILT"
+
+"$LLVM_STRIP" --strip-unneeded "$BUILT" || fail "llvm-strip failed"
+
+# Android 15 (API 35) devices can use 16 KB pages; unaligned LOAD segments do
+# not load there, and a system app cannot be re-extracted. NDK r28+ emits
+# 16 KB alignment by default; verify instead of trusting it.
+if [ -x "$LLVM_READELF" ]; then
+    BAD_ALIGN="$("$LLVM_READELF" -lW "$BUILT" | awk '/^  LOAD/ && $NF != "0x4000"')"
+    [ -z "$BAD_ALIGN" ] || fail "libiroh_ffi.so is not 16 KB page aligned: $BAD_ALIGN"
+fi
+
+mkdir -p "$JNI_DIR"
+install -m 0644 "$BUILT" "$JNI_LIB"
+
+# --- generate Kotlin bindings ---------------------------------------------
+# uniffi-bindgen reads the metadata from a host build of the same crate.
+note "Generating uniffi Kotlin bindings"
+HOST_LIB="$TARGET_DIR/debug/libiroh_ffi.dylib"
+[ "$(uname -s)" = "Darwin" ] || HOST_LIB="$TARGET_DIR/debug/libiroh_ffi.so"
+(cd "$FFI" && CARGO_TARGET_DIR="$TARGET_DIR" cargo build --quiet --lib -p iroh-ffi) || \
+    fail "could not build the host iroh-ffi library for uniffi-bindgen"
+[ -f "$HOST_LIB" ] || fail "host library for uniffi-bindgen not found at $HOST_LIB"
+
+rm -rf "$KOTLIN_OUT"
+mkdir -p "$KOTLIN_OUT"
+(cd "$FFI" && CARGO_TARGET_DIR="$TARGET_DIR" cargo run --quiet --bin uniffi-bindgen -- \
+    generate --language kotlin --out-dir "$KOTLIN_OUT" \
+    --config "$FFI/uniffi.toml" --library "$HOST_LIB") || \
+    fail "uniffi-bindgen failed"
+
+# IrohAndroid installs the JNI app context iroh's DNS resolver needs on
+# Android. Uniffi does not generate it (it is hand-written in iroh-ffi's
+# kotlin/android module) but the JNI symbol lives in libiroh_ffi.so.
+IROH_ANDROID_SRC="$FFI/kotlin/android/src/main/kotlin/computer/iroh/IrohAndroid.kt"
+[ -f "$IROH_ANDROID_SRC" ] || fail "IrohAndroid.kt not found in the iroh-ffi checkout"
+mkdir -p "$KOTLIN_OUT/computer/iroh"
+install -m 0644 "$IROH_ANDROID_SRC" "$KOTLIN_OUT/computer/iroh/IrohAndroid.kt"
+
+[ -n "$(find "$KOTLIN_OUT" -name '*.kt' -print -quit)" ] || \
+    fail "no Kotlin bindings were generated in $KOTLIN_OUT"
+
+printf '%s\n' "$EXPECTED_STAMP" > "$STAMP"
+
+SO_SIZE="$(wc -c < "$JNI_LIB" | tr -d ' ')"
+note "libiroh_ffi.so: $JNI_LIB ($SO_SIZE bytes, stripped)"
+note "Kotlin bindings: $KOTLIN_OUT"

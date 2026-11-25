@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The device link is a TLS WebSocket (wss://) to the paired daemon, possibly
+    through a tunnel.  Cleartext HTTP is never permitted, so a stale ws:// URL
+    fails instead of silently carrying the bearer token in the clear.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>
