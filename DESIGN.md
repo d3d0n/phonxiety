@@ -204,7 +204,7 @@ APK собран с targetSdk 37; текущий framework backend не вызы
 5. Передаёт PCM downlink в custom audio track; читает `remote_track.recv()` и отправляет декодированный звук в телефонный uplink.
 6. Обрабатывает `session.started`, transcripts, `turn.done`, delegation и ошибки. Для завершения отправляет `session.close`, закрывает peer и согласует teardown с call controller.
 
-WebRTC переносит аудио; sideband — управление, контекст и делегирование. На device link используется 48 kHz mono PCM16LE, на границе WebRTC — audio frames с явными rate/layout/PTS и согласованный Opus.
+WebRTC переносит аудио; sideband — управление, контекст и делегирование. На device link — 48 kHz mono кадрами по 20 ms: Opus (`PX02`, по умолчанию, если телефон объявил `audio_codecs` с `opus`) или PCM16LE (`PX01`); формат задаёт `PHONXIETY_AUDIO_CODEC`, демон передаёт его в `start_audio`, телефон подтверждает в ответе. На границе WebRTC — audio frames с явными rate/layout/PTS и согласованный Opus.
 
 ### 7.3 Голос и выполнение поручения
 

@@ -149,6 +149,8 @@ Settings:
 
 - `PHONXIETY_TASK_MODEL` — the text model that supervises the line.
 - `PHONXIETY_VOICE` — the voice, `sol` by default.
+- `PHONXIETY_AUDIO_CODEC` — call audio on the phone link: `opus` by default, or `pcm`. Opus is used only when the phone app offers it.
+- `PHONXIETY_OPUS_BITRATE` — Opus bitrate in bit/s, `32000` by default, 6000 to 128000.
 - `PHONXIETY_STATE_DIR` — calls, keys and logs; `~/.local/share/phonxiety` by default.
 - `PHONXIETY_PORT` — MCP and health on loopback, `18762` by default.
 
@@ -207,7 +209,7 @@ flowchart LR
 How one call goes:
 
 1. `place_call` stores the request and returns. The daemon waits for the phone, checks the line, opens a voice session and tells the phone to dial.
-2. When the line is answered, the phone streams the downlink audio to the daemon and plays the agent's voice into the uplink. Audio is 48 kHz PCM in 20 ms frames.
+2. When the line is answered, the phone streams the downlink audio to the daemon and plays the agent's voice into the uplink. Audio is 48 kHz mono in 20 ms frames: Opus by default (~32 kbit/s), raw PCM (~768 kbit/s) with `PHONXIETY_AUDIO_CODEC=pcm` or with a phone app that predates Opus.
 3. The voice model talks. The task agent steps in on silence, on a request from the voice model, and once at the end.
 4. The daemon disconnects, writes the summary and fields, and keeps them by `call_id`.
 

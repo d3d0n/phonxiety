@@ -115,9 +115,10 @@ class _Device:
             await self.on_event({"type": "call_state", "call_id": call_id, "state": "ended", "disconnect_cause": {"code": 2}})
         return {"accepted": True}
 
-    def begin_stream(self, call_id: str, epoch: int) -> None:
+    def begin_stream(self, call_id: str, epoch: int) -> dict[str, Any]:
         self.audio_call = call_id
         self.submitted_samples = 0
+        return {"codec": "pcm"}
 
     def stop_stream(self) -> None:
         self.audio_call = None
@@ -346,6 +347,17 @@ class ControllerTests(_ControllerCase):
         result = await self.controller.wait_call_result(call_id, wait_s=1)
         self.assertTrue(self.device.disconnect_requested.is_set())
         self.assertEqual(result["task_outcome"], "succeeded")
+
+    async def test_audio_format_failure_hangs_up_the_answered_call(self) -> None:
+        def broken(call_id: str, epoch: int) -> dict:
+            raise RuntimeError("opus encoder unavailable")
+
+        self.device.begin_stream = broken
+        call_id, _ = await self._active()
+        result = await self.controller.wait_call_result(call_id, wait_s=2)
+        self.assertEqual(result["state"], "ended")
+        self.assertIn("opus encoder unavailable", result["error"])
+        self.assertTrue(self.device.disconnect_requested.is_set())
 
     async def test_phone_end_does_not_report_summary_ready_early(self) -> None:
         call_id, voice = await self._active()

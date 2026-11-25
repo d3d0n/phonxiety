@@ -11,6 +11,7 @@ from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import InvalidStatus
 
 from phonxiety.device import AUDIO_HEADER, DeviceHub, WebSocketListener
+from phonxiety.codec import OpusEncoder
 from phonxiety.tls import device_identity, server_context
 
 TOKEN = "device-secret"
@@ -98,6 +99,54 @@ class DeviceLinkTests(unittest.IsolatedAsyncioTestCase):
             await socket.send(current[1])
             result = await second
             self.assertEqual(result["frames_echoed"], 1)
+
+
+class OpusStreamTests(unittest.IsolatedAsyncioTestCase):
+    class _Link:
+        peer = "test"
+
+        def paths(self) -> list[str]:
+            return []
+
+        def route(self) -> None:
+            return None
+
+    def _hub(self, offered: list[str]) -> DeviceHub:
+        hub = DeviceHub(audio_codec="opus", opus_bitrate=32_000)
+        hub.info = {"capabilities": {"audio_codecs": offered}}
+        hub._link = self._Link()
+        hub._ready.set()
+        return hub
+
+    async def test_phone_without_opus_gets_pcm(self) -> None:
+        hub = self._hub(["pcm"])
+        self.assertEqual(hub.begin_stream("call", 1), {"codec": "pcm"})
+        hub.send_audio("call", FRAME)
+        self.assertEqual(hub._outgoing.get_nowait()[2][:4], b"PX01")
+
+    async def test_opus_frames_are_compact_counted_and_decoded(self) -> None:
+        hub = self._hub(["pcm", "opus"])
+        self.assertEqual(hub.begin_stream("call", 3), {"codec": "opus", "bitrate": 32_000})
+        for _ in range(3):
+            hub.send_audio("call", FRAME)
+        frames = [hub._outgoing.get_nowait()[2] for _ in range(3)]
+        self.assertEqual(hub.submitted_samples, 3 * 960)
+        for position, frame in enumerate(frames):
+            magic, epoch, index = AUDIO_HEADER.unpack_from(frame)
+            self.assertEqual((magic, epoch, index), (b"PX02", 3, 960 * position))
+            self.assertLess(len(frame) - AUDIO_HEADER.size, 400)
+
+        decoded: list[int] = []
+
+        async def on_audio(call_id: str, pcm: bytes) -> None:
+            decoded.append(len(pcm))
+
+        hub.on_audio = on_audio
+        phone = OpusEncoder(32_000)
+        for position in range(3):
+            [packet] = phone.encode(FRAME)
+            await hub._receive_audio(AUDIO_HEADER.pack(b"PX02", 3, 960 * position) + packet)
+        self.assertEqual(decoded, [1920, 1920, 1920])
 
 
 if __name__ == "__main__":

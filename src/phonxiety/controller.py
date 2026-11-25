@@ -329,9 +329,11 @@ class CallController:
                 self._cancel(call.ring_task)
                 call.duration_task = self._spawn(self._duration_timeout(call), f"duration:{call_id}")
                 self._epoch = (self._epoch + 1) & 0xFFFFFFFF or 1
-                self.device.begin_stream(call_id, self._epoch)
                 try:
-                    await self.device.command("start_audio", call_id, epoch=self._epoch)
+                    audio_format = self.device.begin_stream(call_id, self._epoch)
+                    started = await self.device.command("start_audio", call_id, epoch=self._epoch, **audio_format)
+                    if started.get("codec", "pcm") != audio_format["codec"]:
+                        raise DeviceError(f"audio_codec_mismatch: phone started {started.get('codec', 'pcm')}")
                     if call.finalizing or self.store.state(call_id) != CallState.ACTIVE:
                         return
                     call.audio_ready = True

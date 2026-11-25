@@ -1,4 +1,4 @@
-"""Control and bounded PCM transport to one Android bridge.
+"""Control and bounded call-audio transport to one Android bridge.
 
 The hub speaks the device protocol over any authenticated message link. Two
 links exist: an iroh stream (``p2p.py``) and the TLS WebSocket listener below.
@@ -23,10 +23,13 @@ from websockets.asyncio.server import Server, ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request, Response
 
+from .codec import DEFAULT_OPUS_BITRATE, FRAME_SAMPLES, OpusDecoder, OpusEncoder
+
 log = logging.getLogger(__name__)
 DEVICE_PATH = "/device"
 AUDIO_HEADER = struct.Struct("!4sIQ")
-AUDIO_MAGIC = b"PX01"
+AUDIO_MAGIC = b"PX01"  # PCM s16le
+OPUS_MAGIC = b"PX02"  # one 20 ms Opus packet
 PROBE_MAGIC = b"PXLT"
 FRAME_PCM_BYTES = 1920
 MAX_PCM_BYTES = 19200
@@ -74,12 +77,16 @@ class DeviceLink(Protocol):
 
 
 class DeviceHub:
-    def __init__(self) -> None:
+    def __init__(self, audio_codec: str = "pcm", opus_bitrate: int = DEFAULT_OPUS_BITRATE) -> None:
+        self.audio_codec = audio_codec
+        self.opus_bitrate = opus_bitrate
+        self._encoder: OpusEncoder | None = None
+        self._decoder: OpusDecoder | None = None
         self._link: DeviceLink | None = None
         self._ready = asyncio.Event()
         self._send_lock = asyncio.Lock()
         self._pending: dict[str, asyncio.Future[dict[str, Any]]] = {}
-        self._outgoing: asyncio.Queue[tuple[str, int, bytes]] = asyncio.Queue(maxsize=10)
+        self._outgoing: asyncio.Queue[tuple[str, int, bytes, int]] = asyncio.Queue(maxsize=10)
         self._events: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=64)
         self._progress = asyncio.Condition()
         self._call_id: str | None = None
@@ -130,6 +137,7 @@ class DeviceHub:
             "route": link.route() if link is not None and self.connected else None,
             "capabilities": self.info.get("capabilities", {}),
             "active_call": self.info.get("active_call"),
+            "audio_codec": self.stream_codec() if self.connected else None,
         }
 
     async def attach(self, link: DeviceLink) -> None:
@@ -223,8 +231,8 @@ class DeviceHub:
 
     async def _receive_audio(self, frame: bytes) -> None:
         size = len(frame) - AUDIO_HEADER.size
-        if size <= 0 or size > MAX_PCM_BYTES or size % 2:
-            raise DeviceError("Invalid PCM frame size")
+        if size <= 0 or size > MAX_PCM_BYTES:
+            raise DeviceError("Invalid audio frame size")
         magic, epoch, sequence = AUDIO_HEADER.unpack_from(frame)
         if magic == PROBE_MAGIC:
             # The echo of an earlier probe carries that probe's id and must not count for this one.
@@ -233,12 +241,26 @@ class DeviceHub:
                 if started is not None:
                     self._probe_ms.append((time.monotonic() - started) * 1000)
             return
-        if magic != AUDIO_MAGIC:
-            raise DeviceError("Invalid PCM frame version")
-        if self._call_id is not None and epoch == self._epoch:
-            self._frames_in += 1
-            if self.on_audio is not None:
-                await self.on_audio(self._call_id, frame[AUDIO_HEADER.size:])
+        if magic == AUDIO_MAGIC:
+            if size % 2:
+                raise DeviceError("Invalid PCM frame size")
+        elif magic != OPUS_MAGIC:
+            raise DeviceError("Invalid audio frame version")
+        if self._call_id is None or epoch != self._epoch:
+            return
+        payload = frame[AUDIO_HEADER.size:]
+        if magic == OPUS_MAGIC:
+            if self._decoder is None:
+                raise DeviceError("Opus frame on a PCM stream")
+            try:
+                payload = self._decoder.decode(payload)
+            except Exception as exc:
+                raise DeviceError("Invalid Opus frame") from exc
+            if not payload:
+                return
+        self._frames_in += 1
+        if self.on_audio is not None:
+            await self.on_audio(self._call_id, payload)
 
     async def _dispatch_events(self) -> None:
         while True:
@@ -286,7 +308,15 @@ class DeviceHub:
             return "no link"
         return "; ".join(link.paths()) or str(link.route())
 
-    def begin_stream(self, call_id: str, epoch: int) -> None:
+    def stream_codec(self) -> str:
+        """The configured format when the phone supports it, else PCM, which every phone speaks."""
+        offered = self.info.get("capabilities", {}).get("audio_codecs")
+        if self.audio_codec == "opus" and isinstance(offered, list) and "opus" in offered:
+            return "opus"
+        return "pcm"
+
+    def begin_stream(self, call_id: str, epoch: int) -> dict[str, Any]:
+        """Reset counters for a new audio epoch; returns the `start_audio` format fields."""
         self._clear(self._outgoing)
         self._call_id = call_id
         self._epoch = epoch
@@ -298,7 +328,13 @@ class DeviceHub:
         self._frames_in = 0
         self._send_wait = 0.0
         self._ping_wait = 0.0
-        log.info("call %s: phone link at audio start: %s", call_id, self._describe(self._link))
+        codec = self.stream_codec()
+        if codec == "opus":
+            self._encoder, self._decoder = OpusEncoder(self.opus_bitrate), OpusDecoder()
+        else:
+            self._encoder = self._decoder = None
+        log.info("call %s: %s audio; phone link at audio start: %s", call_id, codec, self._describe(self._link))
+        return {"codec": "opus", "bitrate": self.opus_bitrate} if codec == "opus" else {"codec": "pcm"}
 
     def stop_stream(self) -> None:
         if self._call_id is not None:
@@ -315,25 +351,33 @@ class DeviceHub:
         self._submitted_samples = 0
         self._dropped_samples = 0
         self._clear(self._outgoing)
+        self._encoder = self._decoder = None
 
     def send_audio(self, call_id: str, pcm: bytes) -> None:
         if not self.connected or self._call_id != call_id:
             raise DeviceError("audio_stream_not_active")
         if not pcm or len(pcm) % 2 or len(pcm) > MAX_PCM_BYTES:
             raise DeviceError("Invalid outgoing PCM frame")
+        if self._encoder is None:
+            self._enqueue(call_id, AUDIO_MAGIC, pcm, len(pcm) // 2)
+            return
+        for packet in self._encoder.encode(pcm):
+            self._enqueue(call_id, OPUS_MAGIC, packet, FRAME_SAMPLES)
+
+    def _enqueue(self, call_id: str, magic: bytes, payload: bytes, samples: int) -> None:
         if self._outgoing.full():
             # A stalled link must not delay speech: drop the oldest queued frame, keep the newest.
-            _, _, stale = self._outgoing.get_nowait()
+            _, _, _, stale = self._outgoing.get_nowait()
             self._outgoing.task_done()
-            self._dropped_samples += (len(stale) - AUDIO_HEADER.size) // 2
-        frame = AUDIO_HEADER.pack(AUDIO_MAGIC, self._epoch, self._submitted_samples) + pcm
-        self._outgoing.put_nowait((call_id, self._epoch, frame))
-        self._submitted_samples += len(pcm) // 2
+            self._dropped_samples += stale
+        frame = AUDIO_HEADER.pack(magic, self._epoch, self._submitted_samples) + payload
+        self._outgoing.put_nowait((call_id, self._epoch, frame, samples))
+        self._submitted_samples += samples
 
     async def _write_audio(self, link: DeviceLink) -> None:
         try:
             while True:
-                call_id, epoch, frame = await self._outgoing.get()
+                call_id, epoch, frame, _ = await self._outgoing.get()
                 try:
                     began = time.monotonic()
                     async with asyncio.timeout(2):
@@ -347,7 +391,7 @@ class DeviceHub:
         except (asyncio.CancelledError, LinkClosed):
             raise
         except Exception:
-            log.exception("Phone PCM writer failed")
+            log.exception("Phone audio writer failed")
             await link.close(1011, "Audio transport failed")
 
     async def _heartbeat(self, link: DeviceLink) -> None:
@@ -394,7 +438,9 @@ class DeviceHub:
                 await asyncio.sleep(0.25)
 
         pinger = asyncio.create_task(ping(), name="link-test-ping")
-        payload = bytes(FRAME_PCM_BYTES)
+        # Probe frames are the size the configured format puts on the wire every 20 ms.
+        codec = self.stream_codec()
+        payload = bytes(self.opus_bitrate // 8 // 50 if codec == "opus" else FRAME_PCM_BYTES)
         started = time.monotonic()
         stall = 0.0
         count = 0
@@ -420,6 +466,8 @@ class DeviceHub:
         alive = self._link is link
         frames, control = _spread(self._probe_ms), _spread(pings)
         return {
+            "codec": codec,
+            "frame_bytes": len(payload),
             "peer": link.peer,
             "route": route,
             "route_after": link.route() if alive else None,

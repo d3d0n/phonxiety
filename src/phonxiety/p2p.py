@@ -5,7 +5,7 @@ punched) and falls back to a relay, so neither side needs a VPN app or a
 reachable address. The device protocol travels on one bidirectional stream:
 
     frame = kind (1 byte) | length (uint32 big-endian) | payload
-    kind 1: UTF-8 JSON text    kind 2: binary (PX01 audio)
+    kind 1: UTF-8 JSON text    kind 2: binary (PX01 PCM, PX02 Opus, PXLT probe)
 
 The first frame from the phone is ``{"type": "auth", "token": ...}``.
 """

@@ -9,6 +9,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from phonxiety.codec import CODECS, DEFAULT_OPUS_BITRATE, MAX_OPUS_BITRATE, MIN_OPUS_BITRATE
+
 
 def default_state_dir() -> Path:
     configured = os.environ.get("PHONXIETY_STATE_DIR")
@@ -46,6 +48,20 @@ def _port(variable: str, default: int) -> int:
     return port
 
 
+def _codec() -> str:
+    codec = os.environ.get("PHONXIETY_AUDIO_CODEC", "opus").strip().lower()
+    if codec not in CODECS:
+        raise ValueError(f"PHONXIETY_AUDIO_CODEC must be one of: {', '.join(CODECS)}")
+    return codec
+
+
+def _opus_bitrate() -> int:
+    bitrate = int(os.environ.get("PHONXIETY_OPUS_BITRATE", DEFAULT_OPUS_BITRATE))
+    if not MIN_OPUS_BITRATE <= bitrate <= MAX_OPUS_BITRATE:
+        raise ValueError(f"PHONXIETY_OPUS_BITRATE must be between {MIN_OPUS_BITRATE} and {MAX_OPUS_BITRATE}")
+    return bitrate
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     state_dir: Path
@@ -58,6 +74,8 @@ class Settings:
     auth_path: Path | None = None
     task_model: str | None = None
     voice: str = "sol"
+    audio_codec: str = "opus"
+    opus_bitrate: int = DEFAULT_OPUS_BITRATE
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -78,6 +96,8 @@ class Settings:
             auth_path=Path(auth_path).expanduser() if auth_path else None,
             task_model=os.environ.get("PHONXIETY_TASK_MODEL") or None,
             voice=os.environ.get("PHONXIETY_VOICE", "sol"),
+            audio_codec=_codec(),
+            opus_bitrate=_opus_bitrate(),
         )
 
     @property

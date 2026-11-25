@@ -32,7 +32,7 @@ def create_controller(settings: Settings) -> CallController:
         auth = CodexAuth(settings.auth_path)
         task_agent = TaskAgent(auth, settings.task_model)
         store = CallStore(settings.state_dir / "calls.sqlite3")
-        device = DeviceHub()
+        device = DeviceHub(audio_codec=settings.audio_codec, opus_bitrate=settings.opus_bitrate)
         return CallController(
             store,
             device,

@@ -360,7 +360,8 @@ class BridgeEngine(
                 .put("call_control", callControl)
                 .put("framework_audio", frameworkAudio)
                 .put("busy", busy)
-                .put("link_test", true))
+                .put("link_test", true)
+                .put("audio_codecs", org.json.JSONArray().put("pcm").put("opus")))
             .put("active_call", active)
         if (!owner.sendText(hello.toString())) onLinkDown(owner, "hello_failed")
     }
@@ -650,6 +651,13 @@ class BridgeEngine(
     private fun handleStartAudio(id: String, message: JSONObject) {
         val callId = callIdOf(message)
         val epoch = epochOf(message)
+        val opusBitrate = when (message.optString("codec", "pcm")) {
+            "pcm" -> null
+            "opus" -> message.optInt("bitrate", 32_000).also {
+                if (it !in 6_000..128_000) throw CommandException("bitrate_invalid")
+            }
+            else -> throw CommandException("codec_unsupported")
+        }
         var target: OwnedCall? = null
         var previousAudio: PhoneAudio? = null
 
@@ -663,7 +671,8 @@ class BridgeEngine(
                 replyOk(id, JSONObject()
                     .put("call_id", callId)
                     .put("epoch", epoch)
-                    .put("state", "started"))
+                    .put("state", "started")
+                    .put("codec", current.audio!!.codec))
                 return
             }
             if (current.audio != null) {
@@ -683,6 +692,7 @@ class BridgeEngine(
             appContext,
             callId,
             epoch,
+            opusBitrate,
             { frame, length -> sendFrame(frame, length) },
             { reason -> postAudioFatal(callId, epoch, reason) },
         )
@@ -715,7 +725,8 @@ class BridgeEngine(
         replyOk(id, JSONObject()
             .put("call_id", callId)
             .put("epoch", epoch)
-            .put("state", "started"))
+            .put("state", "started")
+            .put("codec", audio.codec))
     }
 
     private fun handleFlush(id: String, message: JSONObject) {

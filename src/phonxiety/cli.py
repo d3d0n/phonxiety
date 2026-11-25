@@ -199,7 +199,7 @@ def _status_lines(payload: dict[str, Any], *, color: bool) -> list[str]:
         elif capabilities.get("busy"):
             rows.append(("calling", f"{tone('busy', warn)}  another call is on the phone"))
         else:
-            rows.append(("calling", tone("ready", good)))
+            rows.append(("calling", f"{tone('ready', good)}  {device.get('audio_codec')} audio"))
     else:
         rows.append(("phone", f"{tone('not connected', bad)}  pair it with: phonxiety pair"))
     call = device.get("active_call")
@@ -245,7 +245,7 @@ def _link_test_lines(result: dict[str, Any], *, color: bool) -> list[str]:
         verdict = tone("good", "32") + "  the idle link carries call-rate audio"
     rows = [
         ("link", f"{result.get('peer')}{route}"),
-        ("audio", f"{echoed} of {sent} frames returned in {result.get('seconds')} s"),
+        ("audio", f"{echoed} of {sent} {result.get('codec')} frames ({result.get('frame_bytes')} B) returned in {result.get('seconds')} s"),
         ("delay", spread(result.get("frame_ms"))),
         ("control", spread(result.get("ping_ms"))),
         ("verdict", verdict),

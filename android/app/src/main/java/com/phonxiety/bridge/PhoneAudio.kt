@@ -22,8 +22,8 @@ class AudioStartException(val code: String) : Exception(code)
  * One call's audio path.
  *
  * RX: AudioRecord(VOICE_DOWNLINK), 48 kHz mono PCM16, framed as 20 ms PX01
- * packets.  This is the framework's digital downlink source, not the
- * microphone.
+ * PCM packets, or as one PX02 Opus packet per 20 ms when [opusBitrate] is
+ * set.  This is the framework's digital downlink source, not the microphone.
  *
  * TX: AudioTrack, 48 kHz stereo PCM16, USAGE_MEDIA, explicitly routed to the
  * AudioDeviceInfo.TYPE_TELEPHONY output.  Mono server PCM is duplicated into
@@ -42,6 +42,8 @@ class PhoneAudio(
     context: Context,
     val callId: String,
     val epoch: Long,
+    /** Opus bitrate in bit/s for both directions, or null for raw PCM. */
+    private val opusBitrate: Int?,
     private val sendFrame: (ByteArray, Int) -> Boolean,
     private val onFatal: (String) -> Unit,
 ) {
@@ -51,6 +53,9 @@ class PhoneAudio(
         private const val FRAME_SAMPLES = 960 // 20 ms
         private const val FRAME_BYTES = FRAME_SAMPLES * 2
         private const val PRE_ROLL_FRAMES = FRAME_SAMPLES
+        private const val PCM_VERSION: Byte = 0x31 // PX01
+        private const val OPUS_VERSION: Byte = 0x32 // PX02
+        private const val MAX_OPUS_PACKET = 1275 // RFC 6716 frame limit
 
         /**
          * Restores microphone state left behind by a dead bridge process.
@@ -79,6 +84,12 @@ class PhoneAudio(
     private var track: AudioTrack? = null
     private var rxThread: Thread? = null
     private var txThread: Thread? = null
+    private var encoder: OpusCodec.Encoder? = null
+    private var decoder: OpusCodec.Decoder? = null
+    private val decodeLock = Any()
+
+    /** Wire format of this session, as reported to the daemon. */
+    val codec: String get() = if (opusBitrate != null) "opus" else "pcm"
 
     private var sequence: Long = 0
     private var writtenFrames: Long = 0
@@ -254,6 +265,16 @@ class PhoneAudio(
             throw AudioStartException("stopped")
         }
 
+        if (opusBitrate != null) {
+            try {
+                encoder = OpusCodec.Encoder(opusBitrate)
+                decoder = OpusCodec.Decoder()
+            } catch (_: Exception) {
+                close()
+                throw AudioStartException("opus_codec_unavailable")
+            }
+        }
+
         rxRunning.set(true)
         txRunning.set(true)
         rxThread = Thread({ rxLoop(recorder) }, "phonxiety-rx").also { it.start() }
@@ -263,8 +284,9 @@ class PhoneAudio(
     /** Accepts one host binary frame.  Header/epoch validation happens here. */
     fun offerFrame(bytes: ByteString) {
         if (closed || !txRunning.get() || bytes.size < 16) return
+        val expected = if (opusBitrate != null) OPUS_VERSION else PCM_VERSION
         if (bytes[0] != 0x50.toByte() || bytes[1] != 0x58.toByte() ||
-            bytes[2] != 0x30.toByte() || bytes[3] != 0x31.toByte()
+            bytes[2] != 0x30.toByte() || bytes[3] != expected
         ) {
             return
         }
@@ -274,9 +296,26 @@ class PhoneAudio(
             (bytes[7].toLong() and 0xFF)
         if (frameEpoch != epoch) return
         val payload = bytes.size - 16
-        if (payload <= 0 || payload % 2 != 0) return
+        if (payload <= 0) return
+        if (opusBitrate == null) {
+            if (payload % 2 != 0) return
+            hostFrames.incrementAndGet()
+            val dropped = ring.offer(bytes, 16, payload / 2)
+            if (dropped > 0) overflowSamples.addAndGet(dropped.toLong())
+            return
+        }
+        val pcm = synchronized(decodeLock) {
+            val codec = decoder ?: return
+            try {
+                codec.decode(bytes.toByteArray(), 16, payload)
+            } catch (_: Exception) {
+                reportFatal("opus_decode_failed")
+                return
+            }
+        }
+        if (pcm.isEmpty() || pcm.size % 2 != 0) return
         hostFrames.incrementAndGet()
-        val dropped = ring.offer(bytes, 16, payload / 2)
+        val dropped = ring.offer(pcm, 0, pcm.size / 2)
         if (dropped > 0) overflowSamples.addAndGet(dropped.toLong())
     }
 
@@ -330,6 +369,14 @@ class PhoneAudio(
         rxLock.withLock {
             if (recorder != null) runCatching { recorder.release() }
         }
+        // The RX thread is joined, so the encoder is idle; the decoder is
+        // released under the lock offerFrame holds while it decodes.
+        encoder?.let { runCatching { it.close() } }
+        encoder = null
+        synchronized(decodeLock) {
+            decoder?.let { runCatching { it.close() } }
+            decoder = null
+        }
 
         val player = track
         txLock.withLock {
@@ -367,11 +414,16 @@ class PhoneAudio(
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
         }
         val frame = ByteArray(16 + FRAME_BYTES)
+        val opus = encoder
+        // Opus encodes whole 20 ms frames; PCM goes out as soon as it is read.
+        val wanted = if (opus != null) FRAME_BYTES else 0
+        val packetFrame = if (opus != null) ByteArray(16 + MAX_OPUS_PACKET) else frame
+        var filled = 0
         while (rxRunning.get() && !closed) {
             val read = try {
                 rxLock.withLock {
                     if (closed || !rxRunning.get()) return
-                    recorder.read(frame, 16, FRAME_BYTES, AudioRecord.READ_NON_BLOCKING)
+                    recorder.read(frame, 16 + filled, FRAME_BYTES - filled, AudioRecord.READ_NON_BLOCKING)
                 }
             } catch (_: Exception) {
                 if (rxRunning.get() && !closed) reportFatal("capture_read_failed")
@@ -394,10 +446,30 @@ class PhoneAudio(
                 reportFatal("capture_frame_alignment")
                 return
             }
-            writeHeader(frame, epoch, sequence)
-            sequence += read / 2
-            captureFrames++
-            if (!sendFrame(frame, 16 + read)) unsentFrames++
+            if (opus == null) {
+                writeHeader(frame, PCM_VERSION, epoch, sequence)
+                sequence += read / 2
+                captureFrames++
+                if (!sendFrame(frame, 16 + read)) unsentFrames++
+                continue
+            }
+            filled += read
+            if (filled < wanted) continue
+            filled = 0
+            val packets = try {
+                opus.encode(frame, 16)
+            } catch (_: Exception) {
+                if (rxRunning.get() && !closed) reportFatal("opus_encode_failed")
+                return
+            }
+            for (packet in packets) {
+                if (packet.size > MAX_OPUS_PACKET) continue
+                writeHeader(packetFrame, OPUS_VERSION, epoch, sequence)
+                System.arraycopy(packet, 0, packetFrame, 16, packet.size)
+                captureFrames++
+                if (!sendFrame(packetFrame, 16 + packet.size)) unsentFrames++
+            }
+            sequence += FRAME_SAMPLES
         }
     }
 
@@ -471,11 +543,11 @@ class PhoneAudio(
             0L
         }
 
-    private fun writeHeader(frame: ByteArray, epoch: Long, seq: Long) {
+    private fun writeHeader(frame: ByteArray, version: Byte, epoch: Long, seq: Long) {
         frame[0] = 0x50 // P
         frame[1] = 0x58 // X
         frame[2] = 0x30 // 0
-        frame[3] = 0x31 // 1
+        frame[3] = version // 1 PCM, 2 Opus
         frame[4] = ((epoch ushr 24) and 0xFF).toByte()
         frame[5] = ((epoch ushr 16) and 0xFF).toByte()
         frame[6] = ((epoch ushr 8) and 0xFF).toByte()
@@ -506,18 +578,34 @@ class PhoneAudio(
             var i = 0
             while (i < samples) {
                 val position = offset + i * 2
-                val low = source[position].toInt() and 0xFF
-                val high = source[position + 1].toInt()
-                val sample = (low or (high shl 8)).toShort()
-                if (count == capacity) {
-                    head = (head + 1) % capacity
-                    count--
-                    dropped++
-                }
-                data[(head + count) % capacity] = sample
-                count++
+                if (push(((source[position].toInt() and 0xFF) or (source[position + 1].toInt() shl 8)).toShort())) dropped++
                 i++
             }
+            return dropped
+        }
+
+        @Synchronized
+        fun offer(source: ByteArray, offset: Int, samples: Int): Int {
+            var dropped = 0
+            var i = 0
+            while (i < samples) {
+                val position = offset + i * 2
+                if (push(((source[position].toInt() and 0xFF) or (source[position + 1].toInt() shl 8)).toShort())) dropped++
+                i++
+            }
+            return dropped
+        }
+
+        /** Appends one sample; true when the oldest one was dropped to make room. */
+        private fun push(sample: Short): Boolean {
+            var dropped = false
+            if (count == capacity) {
+                head = (head + 1) % capacity
+                count--
+                dropped = true
+            }
+            data[(head + count) % capacity] = sample
+            count++
             return dropped
         }
 
