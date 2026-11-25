@@ -671,6 +671,13 @@ class BridgeEngine(
         )
         stateStore.audioLevels(levels.rxDbfs, levels.txDbfs)
         val diagnostics = target.first.diagnostics()
+        // The phone's own live screen reads the codec and the bitrate from this state. Keep them
+        // in step with the stream, so a start that only re-attached an existing epoch cannot leave
+        // the meter blank for the rest of the call.
+        val published = stateStore.state.value.audio
+        if (published.codec != diagnostics.codec || published.bitrate != diagnostics.bitrate) {
+            stateStore.audio(diagnostics.codec, diagnostics.bitrate)
+        }
         stateStore.audioFrames(
             framesOut = diagnostics.capturedFrames,
             framesIn = diagnostics.hostFrames,

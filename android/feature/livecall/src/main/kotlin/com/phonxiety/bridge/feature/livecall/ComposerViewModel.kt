@@ -156,8 +156,13 @@ class ComposerViewModel @Inject constructor(
         _state.update { it.copy(placing = true, error = null) }
         viewModelScope.launch {
             when (val outcome = api.placeCall(payload)) {
-                is ApiOutcome.Ok -> _state.update {
-                    it.copy(placing = false, confirming = false, placedCallId = outcome.value.callId)
+                is ApiOutcome.Ok -> {
+                    // This phone asked for this call: only then may it pull the live screen back
+                    // over the system in-call UI once Telecom draws it.
+                    LiveCallFront.remember(outcome.value.callId)
+                    _state.update {
+                        it.copy(placing = false, confirming = false, placedCallId = outcome.value.callId)
+                    }
                 }
 
                 is ApiOutcome.Failure -> _state.update {
