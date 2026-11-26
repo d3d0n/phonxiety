@@ -652,11 +652,12 @@ private class IrohLink(
                 pathMonitor.cancel()
             }
             // Android's default-network callback is the only network-change source.
-            // iroh's own netmon (`Endpoint.watchNetworkChange`) is not subscribed: on
-            // Android 17 it reported changes continuously, thousands per second, and
-            // recycled the endpoint at every cooldown expiry while the network stayed
-            // the same.  iroh still migrates the connection internally on address
-            // changes; only a replaced or lost default network recycles the endpoint.
+            // The iroh-ffi `Endpoint.watchNetworkChange` wrapper is not used: it loops on
+            // iroh's `Endpoint::network_change()`, which *notifies* iroh of a change instead
+            // of waiting for one, so it fired thousands of times per second and recycled
+            // the endpoint at every cooldown expiry while the network stayed the same.
+            // iroh still migrates the connection internally on address changes; only a
+            // replaced or lost default network recycles the endpoint.
             val unwatch = IrohSupport.watchNetwork(context) { reason -> onNetworkChange(reason, listener) }
             if (!watchers.attachNetworkWatch(unwatch)) unwatch()
         } catch (t: Throwable) {
