@@ -727,8 +727,13 @@ def _canonical(case: _ApiCase, body: dict[str, Any]) -> dict[str, Any]:
     if isinstance(daemon, dict) and "uptime_s" in daemon:
         daemon["uptime_s"] = 0.0
     # A bundle's zip length follows the file paths across machines; the app reads the
-    # id. The key itself stays, so its presence and type are still checked.
+    # id. The key itself stays, so its presence and type are still checked: the app
+    # decodes `size` as a number, so a daemon that sends a string fails here.
     if "bundle_id" in body and "size" in body:
+        size = body["size"]
+        assert isinstance(size, int) and not isinstance(size, bool), (
+            f"the diagnostics bundle's size must be an integer, got {type(size).__name__}: {size!r}"
+        )
         body["size"] = 0
     return body
 

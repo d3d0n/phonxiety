@@ -405,7 +405,7 @@ class LiveCallViewModel @Inject constructor(
                         loadDetail(callId)
                     } else {
                         // Exactly the daemon's own cursor rule: one event is applied once.
-                        applyEvents(page.events.filter { it.revision > revision })
+                        applyEvents(freshEvents(page.events, revision))
                     }
                     revision = maxOf(revision, page.revision)
                     _state.update {
@@ -457,6 +457,14 @@ class LiveCallViewModel @Inject constructor(
         const val MAX_BACKOFF_MS = 5_000L
     }
 }
+
+/**
+ * The daemon's cursor rule: only events past [since] are new, and an event without a
+ * revision (decoded as 0) is never applied.  The contract test drives the shared
+ * `call_events_*` pages through this function before reducing them, so an event that
+ * loses its revision is caught here instead of silently never reaching the screen.
+ */
+internal fun freshEvents(events: List<CallEvent>, since: Long): List<CallEvent> = events.filter { it.revision > since }
 
 /**
  * One batch of polled events applied to [state], in the order the cursor delivered

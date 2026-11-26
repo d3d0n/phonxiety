@@ -347,11 +347,14 @@ class DaemonContractTest {
         val invoke: suspend (DefaultDaemonApi, Contract) -> Outcome
     )
 
+    /** An element only some response variants carry: why, and the files that may omit it. */
+    private class Allowance(val reason: String, val omittedIn: Set<String>)
+
     /**
      * Walks the decoded model against the file's JSON through the [SerialDescriptor]:
      * (a) every JSON key is an element or an [IGNORED] field, (b) every element
      * appears in every object decoded as that type unless [SOMETIMES] allows it to
-     * vary, (c) an element no sample carries must be listed in [NEVER_SENT], (d) a
+     * varies, (c) an element no sample carries must be listed in [NEVER_SENT], (d) a
      * type whose objects are discriminated by a `type` field is checked per group,
      * (e) every enum value is a serial name exactly, and (f) a null is only ever a
      * nullable element.  `JsonElement`/`JsonObject` fields are not descended.
@@ -373,8 +376,22 @@ class DaemonContractTest {
                 val sometimes = SOMETIMES[type].orEmpty()
                 val never = NEVER_SENT[type].orEmpty()
                 val anywhere = objects.flatMap { it.keys }.toSet()
-                for (key in sometimes.keys - anywhere) {
-                    problems += "$type lists $key in SOMETIMES, but no sample carries it"
+                val sampled = objects.map { it.file }.toSet()
+                for ((key, allowance) in sometimes) {
+                    if (key !in anywhere) {
+                        problems += "$type lists $key in SOMETIMES, but no sample carries it"
+                    }
+                    for (file in allowance.omittedIn - sampled) {
+                        problems += "$type lists $key as omittable in $file, but no $type sample" +
+                            " came from that file"
+                    }
+                    for (file in allowance.omittedIn) {
+                        val fromFile = objects.filter { it.file == file }
+                        if (fromFile.isNotEmpty() && fromFile.none { key !in it.keys }) {
+                            problems += "$file: $type lists $key as omittable, but every sample" +
+                                " from that file carries it"
+                        }
+                    }
                 }
                 for (key in never.keys intersect anywhere) {
                     problems += "$type lists $key in NEVER_SENT, but " +
@@ -384,7 +401,8 @@ class DaemonContractTest {
                     for ((group, members) in objects.groupBy { it.group }) {
                         val seen = members.flatMap { it.keys }.toSet()
                         for (member in members) {
-                            val missing = (seen - member.keys) - sometimes.keys
+                            val omittable = sometimes.filter { member.file in it.value.omittedIn }.keys
+                            val missing = (seen - member.keys) - omittable
                             if (missing.isNotEmpty()) {
                                 problems += "${member.file}: $type \"$group\" misses $missing," +
                                     " which another sample of the same event kind carries"
@@ -398,12 +416,13 @@ class DaemonContractTest {
                     }
                 } else {
                     for (sample in objects) {
+                        val omittable = sometimes.filter { sample.file in it.value.omittedIn }.keys
                         val missing = descriptor.elementNames.filter {
-                            it !in sample.keys && it !in sometimes.keys && it !in never.keys
+                            it !in sample.keys && it !in omittable && it !in never.keys
                         }
                         if (missing.isNotEmpty()) {
                             problems += "${sample.file}: $type misses $missing; every answer of a type" +
-                                " carries every element, or the element is listed in SOMETIMES with a reason"
+                                " carries every element, or SOMETIMES names the responses that may omit it"
                         }
                     }
                 }
@@ -699,29 +718,94 @@ class DaemonContractTest {
         )
 
         /**
-         * Elements a type carries in some answers and not others, with the reason.
-         * The element must still appear in at least one sample, and every other
-         * element must appear in every sample of its type.
+         * Response elements only some variants carry: each names the exchanges that may
+         * omit it, so an action answer's snapshot is never proof that a record read
+         * still sends the key.  Every other sample of the type must carry it, and every
+         * listed exchange must really omit it somewhere.
          */
-        val SOMETIMES: Map<String, Map<String, String>> = mapOf(
+        val SOMETIMES: Map<String, Map<String, Allowance>> = mapOf(
             CallSnapshot.serializer().descriptor.serialName to mapOf(
-                "marks" to "only a record read carries the marks; an action answer is the bridge's snapshot",
-                "audio_codec" to "only a record read names the negotiated codec",
-                "request" to "only a record read echoes the stored request",
-                "far_end" to "only a record read names the far end",
-                "live" to "only the live record carries the bridge's live block",
-                "counters" to "only the live record carries the bridge's counters",
-                "confirmation_id" to "only a placed call echoes the caller's confirmation id",
-                "profile" to "only a test call names the test profile",
-                "recording" to "only an ended record carries the recording descriptor",
-                "next_cursor" to "an ended record's transcript is complete, so its read has no cursor",
-                "has_more" to "an ended record's transcript is complete, so its read has no more pages"
+                "marks" to Allowance(
+                    "only a record read carries the marks; an action answer is the bridge's snapshot",
+                    setOf("calls_place.json", "test_call_post.json", "call_hangup_post.json")
+                ),
+                "audio_codec" to Allowance(
+                    "only a record read names the negotiated codec",
+                    setOf("calls_place.json", "test_call_post.json", "call_hangup_post.json")
+                ),
+                "request" to Allowance(
+                    "only a record read echoes the stored request",
+                    setOf("calls_place.json", "test_call_post.json", "call_hangup_post.json")
+                ),
+                "far_end" to Allowance(
+                    "only a record read names the far end",
+                    setOf("calls_place.json", "test_call_post.json", "call_hangup_post.json")
+                ),
+                "live" to Allowance(
+                    "only the live record carries the bridge's live block",
+                    setOf(
+                        "calls_place.json",
+                        "test_call_post.json",
+                        "call_hangup_post.json",
+                        "call_get_ended.json"
+                    )
+                ),
+                "counters" to Allowance(
+                    "only the live record carries the bridge's counters",
+                    setOf(
+                        "calls_place.json",
+                        "test_call_post.json",
+                        "call_hangup_post.json",
+                        "call_get_ended.json"
+                    )
+                ),
+                "confirmation_id" to Allowance(
+                    "only a placed call echoes the caller's confirmation id",
+                    setOf(
+                        "test_call_post.json",
+                        "call_get_live.json",
+                        "call_get_ended.json",
+                        "call_hangup_post.json"
+                    )
+                ),
+                "profile" to Allowance(
+                    "only a test call names the test profile",
+                    setOf(
+                        "calls_place.json",
+                        "call_get_live.json",
+                        "call_get_ended.json",
+                        "call_hangup_post.json"
+                    )
+                ),
+                "recording" to Allowance(
+                    "only an ended record carries the recording descriptor",
+                    setOf(
+                        "calls_place.json",
+                        "test_call_post.json",
+                        "call_get_live.json",
+                        "call_hangup_post.json"
+                    )
+                ),
+                "next_cursor" to Allowance(
+                    "an ended record's transcript is complete, so its read has no cursor",
+                    setOf("call_get_ended.json")
+                ),
+                "has_more" to Allowance(
+                    "an ended record's transcript is complete, so its read has no more pages",
+                    setOf("call_get_ended.json")
+                )
             ),
             ValidationResult.serializer().descriptor.serialName to mapOf(
-                "request" to "an invalid request is not echoed back"
+                "request" to Allowance(
+                    "an invalid request is not echoed back",
+                    setOf("calls_validate_invalid.json")
+                )
             ),
             ProbeCandidate.serializer().descriptor.serialName to mapOf(
-                "detail" to "a candidate that was never measured has no detail line"
+                "detail" to Allowance(
+                    "a candidate that was never measured has no detail line",
+                    setOf("probe_post.json")
+                )
             )
         )
 

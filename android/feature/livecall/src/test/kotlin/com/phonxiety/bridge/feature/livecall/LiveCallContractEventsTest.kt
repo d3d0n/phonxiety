@@ -15,10 +15,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The events half of the shared `contracts/app-api` pages, through the same reducer
- * `LiveCallViewModel` applies every polled batch with.
+ * The events half of the shared `contracts/app-api` pages, through the same cursor
+ * filter and reducer `LiveCallViewModel` applies every polled batch with.
  *
- * Each event the daemon sends must move the state its branch owns: a renamed event
+ * Each page first passes the production cursor filter: an event without a positive
+ * `revision` would be dropped there and never reach the screen, so it fails here.
+ * Each event that survives must then move the state its branch owns: a renamed event
  * type falls through the `when` and changes nothing, and a renamed payload key leaves
  * the field the branch copies at its seeded value. Both fail below, on the contract
  * files themselves rather than on a hand-written event.
@@ -30,15 +32,24 @@ class LiveCallContractEventsTest {
         coerceInputValues = true
     }
 
-    private val events: List<CallEvent> = FILES.flatMap { file ->
+    private class Page(val file: String, val events: List<CallEvent>)
+
+    private val pages: List<Page> = FILES.map { file ->
         val text = javaClass.classLoader!!.getResourceAsStream("app-api/$file")!!
             .bufferedReader()
             .use { it.readText() }
         val body = json.parseToJsonElement(text).jsonObject
             .getValue("response").jsonObject
             .getValue("body").jsonObject
-        body.getValue("events").jsonArray.map { json.decodeFromJsonElement(CallEvent.serializer(), it) }
+        Page(
+            file,
+            body.getValue("events").jsonArray.map {
+                json.decodeFromJsonElement(CallEvent.serializer(), it)
+            }
+        )
     }
+
+    private val events: List<CallEvent> = pages.flatMap { it.events }
 
     @Test
     fun everyContractedEventMovesTheStateItOwns() {
@@ -58,7 +69,20 @@ class LiveCallContractEventsTest {
             emptySet<String>(),
             EVENT_EXEMPTIONS.keys - types
         )
-        for (event in events) {
+        for (page in pages) {
+            assertEquals(
+                "${page.file}: the production cursor drops these events, so they never reach the screen;" +
+                    " every event needs a positive `revision`",
+                page.events.map { it.type },
+                freshEvents(page.events, since = 0).map { it.type }
+            )
+            assertEquals(
+                "${page.file}: event `revision` values must increase strictly within a page",
+                page.events.map { it.revision }.distinct().sorted(),
+                page.events.map { it.revision }
+            )
+        }
+        for (event in pages.flatMap { freshEvents(it.events, since = 0) }) {
             val reduced = reduceCallEvents(SEEDED, listOf(event), mutableSetOf())
             assertNotEquals(
                 "${event.type} changed nothing: the reducer has no branch for it," +
