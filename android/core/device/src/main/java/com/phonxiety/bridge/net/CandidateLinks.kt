@@ -3,6 +3,7 @@ package com.phonxiety.bridge.net
 import android.content.Context
 import com.phonxiety.bridge.BridgeConfig
 import com.phonxiety.bridge.BridgeLog
+import com.phonxiety.bridge.IdleLinkAction
 import com.phonxiety.bridge.model.LinkKind
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -34,10 +35,11 @@ internal class CandidateLinkFactory(
     private val store: CandidateStore,
     private val mode: () -> ConnectionMode,
     private val ownsCall: () -> Boolean,
-    private val duringCall: () -> Boolean
+    private val duringCall: () -> Boolean,
+    private val beginIdleLinkAction: () -> IdleLinkAction?
 ) : DeviceLinkFactory {
     private val irohFactory: IrohLinkFactory? = (config as? BridgeConfig.Iroh)?.let { iroh ->
-        IrohLinkFactory(context, iroh) { ownsCall() }
+        IrohLinkFactory(context, iroh, { ownsCall() }, beginIdleLinkAction)
     }
     private val addressFactories = ConcurrentHashMap<String, WebSocketLinkFactory>()
     private val attempts = ConcurrentHashMap<String, Attempts>()

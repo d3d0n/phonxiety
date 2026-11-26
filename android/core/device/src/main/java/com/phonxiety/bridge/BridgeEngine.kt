@@ -130,6 +130,15 @@ class BridgeEngine(
         private const val TELEMETRY_INTERVAL_MS = 5_000L
         private const val AUDIO_LEVEL_INTERVAL_MS = 100L
 
+        /**
+         * How long a dial waits for an already-admitted idle link action (a
+         * relay escalation or network recycle).  Such an action only nulls the
+         * endpoint and reports the link down, so it is milliseconds; the
+         * deadline covers a wedged native shutdown, after which the dial is
+         * refused as `link_down` rather than reserving a call about to be cut.
+         */
+        private const val LINK_ACTION_WAIT_MS = 2_000L
+
         /** How often an idle link re-probes its candidates; the selector's hysteresis decides. */
         private const val SELECTION_INTERVAL_S = 900L
         private val DESTINATION = Regex("^[+*#0-9]{1,32}$")
@@ -140,7 +149,10 @@ class BridgeEngine(
     private val ownerPackage = appContext.packageName
     private val deviceBootId: String = bootId()
     private val ledger = CallLedger(appContext, deviceBootId)
-    private val lock = Any()
+
+    /** Serializes call reservation with the link's idle-only actions; its monitor is [lock]. */
+    private val admission = CallAdmission()
+    private val lock = admission.lock
     private val dtmfMonitor = java.lang.Object()
     private val closeOnce = AtomicBoolean(false)
     private val json = Json {
@@ -193,7 +205,8 @@ class BridgeEngine(
             store = CandidateStore.of(appContext),
             mode = { ConnectionMode.of(phoneSettings.connectionMode) },
             ownsCall = { ownsCall() },
-            duringCall = { ownsCall() }
+            duringCall = { ownsCall() },
+            beginIdleLinkAction = { tryBeginIdleLinkAction() }
         ),
         callbacks = LinkCallbacks(),
         scheduler = ExecutorLinkScheduler(scheduler),
@@ -464,6 +477,14 @@ class BridgeEngine(
         val current = owned
         current != null && !current.finished
     }
+
+    /**
+     * Admits one idle-only link action — escalate a relay-only link, recycle
+     * the endpoint on a network move — or refuses it while a call is owned or
+     * being reserved.  The door stays shut until the action is released, so the
+     * link can never close under a call placed a moment later.
+     */
+    private fun tryBeginIdleLinkAction(): IdleLinkAction? = admission.tryBeginIdleLinkAction { ownsCall() }
 
     /**
      * The engine side of the link: sends `hello` once a link is live, turns
@@ -875,10 +896,17 @@ class BridgeEngine(
         val requestedAccount = command.phoneAccount?.trim()?.ifEmpty { null }
         val unrelatedCall = hasUnrelatedLiveCall()
 
+        // A relay-only escalation or network recycle already admitted closes
+        // this link as soon as it runs, so a call reserved under it would be
+        // aborted on arrival.  The action is milliseconds long: wait it out and
+        // refuse only if it is still in flight, never race it.
+        if (!admission.awaitIdle(LINK_ACTION_WAIT_MS)) throw CommandException("link_down")
+
         var duplicateState: String? = null
         var reserved: OwnedCall? = null
         synchronized(lock) {
             if (!running) throw CommandException("stopped")
+            if (admission.actionInFlightLocked()) throw CommandException("link_down")
             if (!links.isUp()) throw CommandException("link_down")
             val current = owned
             if (current != null) {
@@ -2355,4 +2383,78 @@ class BridgeEngine(
     )
 
     private class CommandException(val code: String) : Exception(code)
+}
+
+/**
+ * One admitted idle-only link action: the iroh link holds it while it recycles
+ * the endpoint or reports the link down for a relay-only escalation, and the
+ * engine refuses to reserve a call until it is released.  The action is short
+ * (null the endpoint, report down); anything long must not hold it.
+ */
+internal class IdleLinkAction internal constructor(private val onRelease: () -> Unit) : AutoCloseable {
+    private val released = AtomicBoolean(false)
+
+    /** Ends the action; safe to call more than once and from any thread. */
+    fun release() {
+        if (released.compareAndSet(false, true)) onRelease()
+    }
+
+    override fun close() = release()
+}
+
+/**
+ * The door between idle-only link maintenance and call reservation.
+ *
+ * [lock] is the engine's call-ownership monitor: every read and write of the
+ * owned call already happens under it, so an action admitted here can never
+ * overlap a reservation, and a dial can never reserve while an action is in
+ * flight.  One action runs at a time; [awaitIdle] lets a dial wait the action
+ * out instead of failing a command that arrives in the same millisecond.
+ */
+internal class CallAdmission {
+    /** The engine's call-ownership lock: one monitor for the owned call and this door. */
+    internal val lock: Any = Any()
+
+    private var actionInFlight = false
+
+    /**
+     * Admits one idle-only action, or null while a call is owned (including
+     * the reservation window) or another action still runs.  [callOwned] is
+     * read under [lock] and must not block.
+     */
+    fun tryBeginIdleLinkAction(callOwned: () -> Boolean): IdleLinkAction? = synchronized(lock) {
+        if (actionInFlight || callOwned()) return null
+        actionInFlight = true
+        IdleLinkAction {
+            synchronized(lock) {
+                actionInFlight = false
+                (lock as Object).notifyAll()
+            }
+        }
+    }
+
+    /**
+     * Waits up to [timeoutMs] for an in-flight action to end; true when the
+     * caller may reserve.  The monitor is released while waiting, so the action
+     * can finish and a link-down abort can proceed meanwhile.
+     */
+    fun awaitIdle(timeoutMs: Long): Boolean {
+        val deadline = System.nanoTime() + timeoutMs * 1_000_000L
+        synchronized(lock) {
+            while (actionInFlight) {
+                val leftMs = (deadline - System.nanoTime()) / 1_000_000L
+                if (leftMs <= 0L) return false
+                try {
+                    (lock as Object).wait(leftMs)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    return false
+                }
+            }
+            return true
+        }
+    }
+
+    /** True while an action holds the door; the caller holds [lock] to reserve. */
+    fun actionInFlightLocked(): Boolean = actionInFlight
 }
