@@ -38,8 +38,13 @@ What each phase of [`mobile-client-plan.md`](mobile-client-plan.md) produced on 
 - **Aggregate check at 2d7abce.**
   - `./gradlew assembleDebug assembleRelease testDebugUnitTest lint ktlintCheck verifyRoborazziDebug :app:testReleaseUnitTest` exit 0.
   - `uv run pytest -q` 237 passed.
+- **Final phone-pass fixes at 0603a4c.**
+  - The Lab test number is the field's own draft: storage seeds it once, and a slow write can no longer replay an older value over a newer keystroke.
+  - A label/value row stacks when its label and value do not fit, instead of squeezing the label to one letter a line. Call detail and the live call read result values as words, prose or numbers, never the serialized boolean.
+  - The live call follows the phone's dialing or connected state over a stale "Preparing" record, says "Agent listening" only once the call is connected, and names an unconfirmed end "Call status unknown" with the daemon's reason behind Details and a refresh.
+  - Empty meters read "—"; the far-end name comes from one shared mapping; the Lab names the call id on its own labelled line; the Doctor overlay row keeps the package path behind Details.
+  - Aggregate check at the end of this pass: `./gradlew assembleDebug assembleRelease testDebugUnitTest lint ktlintCheck verifyRoborazziDebug :app:testReleaseUnitTest` exit 0.
 - **Open.**
-  - A final phone pass at 2d7abce: the phone is off USB and the home network is down.
   - The lock-screen view of the live-call notification needs a call.
 
 ## Setup kept on the daemon host
