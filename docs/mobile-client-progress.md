@@ -38,7 +38,7 @@ What each phase of [`mobile-client-plan.md`](mobile-client-plan.md) produced on 
 - **Aggregate check at 2d7abce.**
   - `./gradlew assembleDebug assembleRelease testDebugUnitTest lint ktlintCheck verifyRoborazziDebug :app:testReleaseUnitTest` exit 0.
   - `uv run pytest -q` 237 passed.
-- **Fixes following the phone pass at 0603a4c.** Landed at eab6a35 and confirmed on the phone with release 0.4.0 (below).
+- **Fixes following the phone pass at 0603a4c.** Landed at eab6a35 and confirmed on the phone with release 0.4.0 (below), except the "Call status unknown" card: it needs a link lost in the middle of a call, so it is covered by the screenshot and behaviour tests only.
   - The Lab test number is the field's own draft: storage seeds it once, and a slow write can no longer replay an older value over a newer keystroke.
   - A label/value row stacks when its label, its gap and the value's 96 dp minimum width do not fit, instead of squeezing the label to one letter a line. Call detail and the live call read result values as words, prose or numbers, never the serialized boolean.
   - The live call follows the phone's dialing or connected state over a stale "Preparing" record, and an unconfirmed end reads "Call status unknown" with the daemon's reason behind Details and a refresh. The card explains a lost connection only when the daemon's own reason says the link was lost; an unacknowledged hang-up leaves the phone connected, so that case stays cause-neutral. The card scrolls with the transcript, and its controls fold, so the card, the transcript and the pinned action stay reachable at 320 dp and 200% text. The phone's own ended phase no longer ends a stale record: the end, its time, the timer and the controls come only with the daemon's terminal state.
