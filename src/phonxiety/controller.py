@@ -14,7 +14,7 @@ from . import far_end
 from .archive import write_call_record
 from .audio.recording import CallRecorder
 from .audio.share import make_shareable
-from .device import DeviceError, DeviceHub
+from .device import CommandSuppressed, DeviceError, DeviceHub
 from .interfaces import ToolHandler, VoiceCallbacks, VoiceSession, line_action
 from .models import CallRequest, CallState, TERMINAL_STATES
 from .prompts import render
@@ -480,9 +480,16 @@ class CallController:
             if retry.cancelled:
                 log.info("call %s: retry suppressed, the call was hung up", call.call_id)
                 return False
-            await self.device.command("dial", call.call_id, **payload)
+            await self.device.command(
+                "dial", call.call_id, should_send=lambda: not retry.cancelled, **payload
+            )
             retry.accepted = True
             return True
+        except CommandSuppressed:
+            # The hangup reached the reservation before the command left the daemon: the
+            # phone saw nothing, and the cancellation that owns the call finishes it.
+            log.info("call %s: retry suppressed at the send boundary, the call was hung up", call.call_id)
+            return False
         except DeviceError as exc:
             retry.error = exc
             if retry.cancelled:
@@ -495,7 +502,10 @@ class CallController:
                 raise _DialRefused(str(exc)) from exc
             raise
         finally:
-            if call.redial is retry:
+            # A cancelled reservation stays on the call: a later hangup, shutdown or
+            # audio_error replaces the ending task and must hand it the same resolved
+            # outcome, or a provably unplaced call would be reported unknown.
+            if call.redial is retry and not retry.cancelled:
                 call.redial = None
             retry.resolved.set()
 
@@ -1041,6 +1051,7 @@ class CallController:
         if call.finalizing:
             return
         call.finalizing = True
+        call.redial = None
         call.audio_ready = False
         call.output_open = False
         call.generation += 1

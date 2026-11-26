@@ -50,6 +50,10 @@ class DeviceError(RuntimeError):
     pass
 
 
+class CommandSuppressed(DeviceError):
+    """The caller's `should_send` declined at the send boundary; no byte reached the phone."""
+
+
 def _error_code(exc: BaseException) -> str:
     code = getattr(exc, "code", None)
     if isinstance(code, str) and code:
@@ -523,7 +527,15 @@ class DeviceHub:
             finally:
                 self._events.task_done()
 
-    async def command(self, command: str, call_id: str | None = None, *, timeout: float = 10, **payload: Any) -> dict[str, Any]:
+    async def command(
+        self,
+        command: str,
+        call_id: str | None = None,
+        *,
+        timeout: float = 10,
+        should_send: Callable[[], bool] | None = None,
+        **payload: Any,
+    ) -> dict[str, Any]:
         link = self._link
         if link is None or not self.connected:
             raise DeviceError("device_not_connected")
@@ -538,6 +550,11 @@ class DeviceHub:
                 async with self._send_lock:
                     if self._link is not link:
                         raise DeviceError("device_replaced")
+                    # The caller's cancellation check runs here, after waiting for the lock
+                    # and in the same step as the send: a control write that held the lock
+                    # cannot leave a command queued past its cancellation.
+                    if should_send is not None and not should_send():
+                        raise CommandSuppressed(f"suppressed: {command}")
                     await link.send(json.dumps(message, separators=(",", ":")))
                 return await future
         except TimeoutError as exc:
