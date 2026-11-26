@@ -9,6 +9,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -19,6 +20,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
 import java.util.Locale
@@ -84,6 +86,20 @@ class DoctorScreenshotTest(private val matrixCase: MatrixCase) {
             composeRule.onNode(isDialog())
                 .captureRoboImage("src/test/screenshots/doctor_confirm_${variant.slug}.png")
         } else {
+            val disclosure = matrixCase.state.openedDetails
+            if (disclosure != null) {
+                // This state records the expanded evidence itself: open Details with a semantics
+                // click (no ripple to settle), then bring the raw record into the viewport, so a
+                // 200 % capture shows the expanded content rather than the top of the screen.
+                composeRule.onNodeWithContentDescription(disclosure, substring = true)
+                    .performScrollTo()
+                    .performSemanticsAction(SemanticsActions.OnClick)
+                composeRule.waitForIdle()
+                composeRule.onAllNodesWithText(matrixCase.state.anchorText!!, substring = true)
+                    .onFirst()
+                    .performScrollTo()
+                    .assertIsDisplayed()
+            }
             composeRule.onNodeWithTag(CAPTURE_TAG).assertAccessible()
             composeRule.onNodeWithTag(CAPTURE_TAG)
                 .captureRoboImage("src/test/screenshots/doctor_${matrixCase.state.slug}_${variant.slug}.png")
@@ -196,7 +212,29 @@ enum class DoctorState(val slug: String) {
     },
     DURING_CALL("during_call") {
         override fun build(): DoctorUiState = DoctorSamples.duringCall()
+    },
+    DETAILS_RELAY("details_relay") {
+        override fun build(): DoctorUiState = DoctorSamples.severalFailures().let { state ->
+            state.copy(rows = state.rows.filter { it.kind == DoctorItemKind.RELAY }, selected = null)
+        }
+
+        override val openedDetails: String get() = "Details: Relay configuration"
+        override val anchorText: String get() = "2 custom relay(s)"
+    },
+    DETAILS_EXIT("details_exit") {
+        override fun build(): DoctorUiState = DoctorSamples.severalFailures().let { state ->
+            state.copy(rows = state.rows.filter { it.kind == DoctorItemKind.LAST_CRASH }, selected = null)
+        }
+
+        override val openedDetails: String get() = "Details: Last process exit"
+        override val anchorText: String get() = "reason_16"
     };
 
     abstract fun build(): DoctorUiState
+
+    /** The Details disclosure this state opens, or null when the screen stays closed. */
+    open val openedDetails: String? get() = null
+
+    /** The raw record the opened Details must show before the capture. */
+    open val anchorText: String? get() = null
 }

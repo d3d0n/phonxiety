@@ -253,6 +253,122 @@ class DoctorEvaluatorTest {
     }
 
     @Test
+    fun aCrashTheHandlerRecordedStillReadsAsACrash() {
+        // CrashReports.recordCrash() stores the exception class as the reason and marks the kind.
+        val rows = TestData.rows(
+            snapshot = TestData.snapshot(
+                lastCrash = CrashReports.Report(
+                    atEpochMs = 1_796_495_000_000L,
+                    kind = CrashReports.Kind.CRASH,
+                    reason = "java.lang.IllegalStateException",
+                    description = "the bridge started twice",
+                    memoryLimiter = false,
+                    detail = "thread=main\njava.lang.IllegalStateException: the bridge started twice"
+                )
+            )
+        )
+        val crash = TestData.row(rows, DoctorEvaluator.ID_LAST_CRASH)
+        assertEquals("Crashed", crash.summaryText())
+        // The exception class stays visible, under Details.
+        assertTrue(crash.detailsText().contains("java.lang.IllegalStateException"))
+    }
+
+    @Test
+    fun theMemoryLimiterKeepsItsDiagnosisEvenWhenTheReasonIsAnExceptionClass() {
+        // reportOf() writes the limiter as its own flag; it must win over whatever names the death.
+        val rows = TestData.rows(
+            snapshot = TestData.snapshot(
+                lastCrash = CrashReports.Report(
+                    atEpochMs = 1_796_495_000_000L,
+                    kind = CrashReports.Kind.LOW_MEMORY,
+                    reason = "crash",
+                    description = "MemoryLimiter:AnonSwap",
+                    memoryLimiter = true,
+                    detail = null
+                )
+            )
+        )
+        val crash = TestData.row(rows, DoctorEvaluator.ID_LAST_CRASH)
+        assertEquals("Stopped by the system to free memory", crash.summaryText())
+    }
+
+    @Test
+    fun theSystemMemoryLimiterRecordKeepsItsDiagnosis() {
+        // Exactly what reportOf() writes for a REASON_LOW_MEMORY exit with a limiter description.
+        val rows = TestData.rows(
+            snapshot = TestData.snapshot(
+                lastCrash = CrashReports.Report(
+                    atEpochMs = 1_796_495_000_000L,
+                    kind = CrashReports.Kind.LOW_MEMORY,
+                    reason = "low_memory",
+                    description = "MemoryLimiter:AnonSwap",
+                    memoryLimiter = true,
+                    detail = null
+                )
+            )
+        )
+        val crash = TestData.row(rows, DoctorEvaluator.ID_LAST_CRASH)
+        assertEquals("Stopped by the system to free memory", crash.summaryText())
+        assertTrue(crash.detailsText().contains("MemoryLimiter:AnonSwap"))
+    }
+
+    @Test
+    fun anAnrStaysNotResponding() {
+        val rows = TestData.rows(
+            snapshot = TestData.snapshot(
+                lastCrash = CrashReports.Report(
+                    atEpochMs = 1_796_495_000_000L,
+                    kind = CrashReports.Kind.ANR,
+                    reason = "anr",
+                    description = null,
+                    memoryLimiter = false,
+                    detail = "ANR in com.phonxiety.bridge"
+                )
+            )
+        )
+        val crash = TestData.row(rows, DoctorEvaluator.ID_LAST_CRASH)
+        assertEquals("Not responding", crash.summaryText())
+    }
+
+    @Test
+    fun thePermissionChangeSaysTheProcessWasStopped() {
+        // REASON_PERMISSION_CHANGE establishes a stop, not a restart.
+        val rows = TestData.rows(
+            snapshot = TestData.snapshot(
+                lastCrash = CrashReports.Report(
+                    atEpochMs = 1_796_495_000_000L,
+                    kind = CrashReports.Kind.EXIT,
+                    reason = "permission_change",
+                    description = null,
+                    memoryLimiter = false,
+                    detail = null
+                )
+            )
+        )
+        val crash = TestData.row(rows, DoctorEvaluator.ID_LAST_CRASH)
+        assertEquals("Stopped after a permission change", crash.summaryText())
+    }
+
+    @Test
+    fun aDeathNothingDescribesSaysTheReasonIsUnavailable() {
+        val rows = TestData.rows(
+            snapshot = TestData.snapshot(
+                lastCrash = CrashReports.Report(
+                    atEpochMs = 1_796_495_000_000L,
+                    kind = CrashReports.Kind.EXIT,
+                    reason = "reason_99",
+                    description = null,
+                    memoryLimiter = false,
+                    detail = null
+                )
+            )
+        )
+        val crash = TestData.row(rows, DoctorEvaluator.ID_LAST_CRASH)
+        assertEquals("Reason unavailable", crash.summaryText())
+        assertTrue(crash.detailsText().contains("reason_99"))
+    }
+
+    @Test
     fun aCheckTheAppDidNotWriteKeepsItsEvidenceBehindDetails() {
         val rows = TestData.rows(
             daemon = DaemonProbe.Reached(

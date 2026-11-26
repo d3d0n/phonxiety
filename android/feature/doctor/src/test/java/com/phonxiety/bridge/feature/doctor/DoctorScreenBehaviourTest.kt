@@ -1,15 +1,10 @@
 package com.phonxiety.bridge.feature.doctor
 
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -18,12 +13,9 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithContentDescription
-import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import androidx.compose.ui.test.performSemanticsAction
-import com.github.takahirom.roborazzi.captureRoboImage
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
 import java.io.File
 import org.junit.Assert.assertEquals
@@ -44,10 +36,6 @@ import org.robolectric.annotation.GraphicsMode
 class DoctorScreenBehaviourTest {
     @get:Rule
     val composeRule = createComposeRule()
-
-    private companion object {
-        const val CAPTURE_TAG = "doctor_behaviour_capture"
-    }
 
     @Test
     fun tappingACheckShowsItsDetailBelowTheGroups() {
@@ -111,49 +99,6 @@ class DoctorScreenBehaviourTest {
             .performScrollTo()
             .performClick()
         composeRule.onAllNodesWithText("reason_16", substring = true).onFirst().assertExists()
-    }
-
-    /**
-     * The open Details state, at the phone's own width. The state is narrowed to the rows that
-     * belong to the section so the card fits one viewport: a scrolled capture would drift by a
-     * pixel between runs and the golden would prove nothing.
-     */
-    @Test
-    fun theDaemonsReportOpenedAtPhoneWidth() {
-        val all = DoctorSamples.severalFailures()
-        renderForCapture(all.copy(rows = all.rows.filter { it.kind.group == DoctorGroup.DAEMON }))
-        // A semantics click starts no ripple, so the capture does not depend on animation timing.
-        composeRule.onNodeWithContentDescription("Details: Relay configuration", substring = true)
-            .performSemanticsAction(SemanticsActions.OnClick)
-        composeRule.waitForIdle()
-        composeRule.onNodeWithTag(CAPTURE_TAG).assertAccessible()
-        composeRule.onNodeWithTag(CAPTURE_TAG)
-            .captureRoboImage("src/test/screenshots/doctor_details_relay_411_light.png")
-    }
-
-    @Test
-    fun theProcessExitOpenedAtPhoneWidth() {
-        val all = DoctorSamples.severalFailures()
-        renderForCapture(all.copy(rows = all.rows.filter { it.kind == DoctorItemKind.LAST_CRASH }))
-        composeRule.onNodeWithContentDescription("Details: Last process exit", substring = true)
-            .performSemanticsAction(SemanticsActions.OnClick)
-        composeRule.waitForIdle()
-        composeRule.onAllNodesWithText("Updated · ", substring = true).onFirst().assertIsDisplayed()
-        composeRule.onNodeWithTag(CAPTURE_TAG).assertAccessible()
-        composeRule.onNodeWithTag(CAPTURE_TAG)
-            .captureRoboImage("src/test/screenshots/doctor_details_exit_411_light.png")
-    }
-
-    private fun renderForCapture(state: DoctorUiState) {
-        composeRule.setContent {
-            PhonxietyTheme(dynamicColor = false) {
-                Surface(color = MaterialTheme.colorScheme.background) {
-                    Box(modifier = Modifier.fillMaxSize().testTag(CAPTURE_TAG)) {
-                        DoctorScreen(state = state, callbacks = DoctorCallbacks())
-                    }
-                }
-            }
-        }
     }
 
     @Test

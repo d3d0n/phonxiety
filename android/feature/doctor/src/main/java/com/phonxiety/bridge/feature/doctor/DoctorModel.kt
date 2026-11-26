@@ -2,6 +2,7 @@ package com.phonxiety.bridge.feature.doctor
 
 import android.app.ApplicationExitInfo
 import androidx.annotation.StringRes
+import com.phonxiety.bridge.CrashReports
 import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.root.Overlay
 import com.phonxiety.bridge.root.RootId
@@ -173,6 +174,32 @@ private fun exitReasonName(reason: String?): String? {
         ApplicationExitInfo.REASON_PACKAGE_STATE_CHANGE -> "package_state_change"
         ApplicationExitInfo.REASON_PACKAGE_UPDATED -> "package_updated"
         else -> null
+    }
+}
+
+/**
+ * The last process exit as one phrase, from the whole record the recorder wrote. A `reason` alone
+ * is not the death: the crash handler stores the exception class there while marking the kind, and
+ * the system reports the memory limiter as a separate flag. Reading only the reason would call a
+ * crash "Reason unavailable" and drop a memory-limiter diagnosis, so the flag and the kind are read
+ * first and the reason names the rest. "Reason unavailable" is left for a record where none of them
+ * describes the cause; the raw fields stay under Details either way.
+ */
+@StringRes
+fun lastExitLabel(report: CrashReports.Report): Int {
+    if (report.memoryLimiter) return R.string.doctor_exit_memory
+    return when (report.kind) {
+        CrashReports.Kind.ANR -> R.string.doctor_exit_not_responding
+
+        CrashReports.Kind.LOW_MEMORY -> R.string.doctor_exit_memory
+
+        // A handler-written crash has an exception class as its reason; that is still a crash.
+        CrashReports.Kind.CRASH -> {
+            val named = exitReasonLabel(report.reason)
+            if (named == R.string.doctor_exit_unavailable) R.string.doctor_exit_crashed else named
+        }
+
+        CrashReports.Kind.EXIT -> exitReasonLabel(report.reason)
     }
 }
 

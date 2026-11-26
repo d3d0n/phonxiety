@@ -139,13 +139,13 @@
     <string name="doctor_exit_signaled">Killed by a signal</string>
     <string name="doctor_exit_self">Closed itself</string>
     <string name="doctor_exit_startup">Crashed on startup</string>
-    <string name="doctor_exit_permission">Restarted after a permission change</string>
+    <string name="doctor_exit_permission">Stopped after a permission change</string>
     <string name="doctor_exit_resources">Stopped for using too many resources</string>
     <string name="doctor_exit_user">Killed by a user request</string>
-    <string name="doctor_exit_user_stopped">Stopped by the user</string>
+    <string name="doctor_exit_user_stopped">Stopped because its user session ended</string>
     <string name="doctor_exit_dependency">Stopped because another process died</string>
-    <string name="doctor_exit_frozen">Frozen by the system</string>
-    <string name="doctor_exit_package">App package changed</string>
+    <string name="doctor_exit_frozen">Stopped by App Freezer</string>
+    <string name="doctor_exit_package">Stopped after a package state change</string>
     <string name="doctor_exit_updated">Updated</string>
     <string name="doctor_exit_unavailable">Reason unavailable</string>
     <string name="doctor_evidence_link_connecting">Connecting</string>

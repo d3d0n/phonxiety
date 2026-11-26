@@ -251,8 +251,8 @@ object DoctorEvaluator {
                     crash.kind == CrashReports.Kind.CRASH -> DoctorSeverity.WARN
                     else -> DoctorSeverity.OK
                 },
-                // The system's reason in words, then when: the code itself stays under Details.
-                summary = listOf(UiText.Res(exitReasonLabel(crash.reason))),
+                // The whole record in words, then when: the code itself stays under Details.
+                summary = listOf(UiText.Res(lastExitLabel(crash))),
                 summaryAtEpochMs = crash.atEpochMs,
                 details = listOfNotNull(
                     UiText.Literal(crash.summary()),
