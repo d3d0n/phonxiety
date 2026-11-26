@@ -73,7 +73,7 @@ class HangupTileService : TileService() {
     }
 
     override fun onClick() {
-        if (BridgeRuntime.state.value.call == null) {
+        if (BridgeRuntime.state.value.call?.takeIf { it.phase != CallPhase.ENDED } == null) {
             updateTileState()
             return
         }

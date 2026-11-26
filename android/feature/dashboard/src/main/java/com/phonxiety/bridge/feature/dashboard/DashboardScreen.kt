@@ -127,7 +127,7 @@ fun DashboardScreen(
                 PrimaryActionButton(label = "Set up this phone", onClick = onOpenSetup)
             } else {
                 QuickActionsCard(
-                    inCall = state.bridge.call != null,
+                    inCall = state.bridge.call.isLive(),
                     onNewCall = onNewCall,
                     onRunLinkTest = onRunLinkTest,
                     onOpenDoctor = onOpenDoctor,
@@ -139,7 +139,7 @@ fun DashboardScreen(
                 DeviceCard(state.bridge.device, state.simOperator)
                 PermissionCard(state.bridge.device.missingPermissions, onOpenSetup)
                 PairingCard(
-                    inCall = state.bridge.call != null,
+                    inCall = state.bridge.call.isLive(),
                     onOpenSetup = onOpenSetup,
                     onUnpair = onUnpair
                 )
@@ -260,6 +260,9 @@ private fun QuickActionsCard(
         }
     }
 }
+
+/** An ended call stays on the card for review; only a call still in progress blocks the actions. */
+private fun CallState?.isLive(): Boolean = this != null && phase != CallPhase.ENDED
 
 @Composable
 private fun CallCard(call: CallState?, nowEpochMs: Long, onOpenLiveCall: (String) -> Unit) {
