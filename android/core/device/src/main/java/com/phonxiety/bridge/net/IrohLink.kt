@@ -394,6 +394,53 @@ internal class IrohLinkLifecycle(
 }
 
 /**
+ * The admission token an escalation took, carried across the link's one
+ * terminal transition.
+ *
+ * A relay-only escalation or a network recycle admits itself before it acts,
+ * and the transition it triggers may not be its own: the endpoint shutdown it
+ * starts can make a reader or the closed watcher win `downOnce` first.  If the
+ * escalation released the token when its own `fail()` returned, the door would
+ * open while the winning failure has not yet reached the supervisor and the
+ * engine — a dial reserving a call in that window is aborted by the very
+ * link-down still being published.  So the token is handed to the transition
+ * instead: whichever failure claims it releases the token after
+ * [DeviceLink.Listener.onLinkDown] has returned, i.e. once the supervisor has
+ * dropped the link and the engine has seen it down.
+ *
+ * A link that is already finished has no transition left to carry the token;
+ * [attach] then refuses and its caller releases it at once.  [finish] is also
+ * what a cancelled link calls: the supervisor cancels a link only after it
+ * dropped it, so no publication is left to release the token.
+ */
+internal class IrohLinkAdmission {
+    private val lock = Any()
+    private var finished = false
+    private var held: IdleLinkAction? = null
+
+    /** Hands [action] to the terminal transition; false means the caller must release it itself. */
+    fun attach(action: IdleLinkAction): Boolean = synchronized(lock) {
+        if (finished) return false
+        check(held == null) { "one escalation token at a time" }
+        held = action
+        true
+    }
+
+    /**
+     * The link's end is final: release the token, if one is attached, outside
+     * the registry lock so a dial waiting on the admission can reserve.
+     */
+    fun finish() {
+        val action = synchronized(lock) {
+            if (finished) return
+            finished = true
+            held.also { held = null }
+        }
+        action?.release()
+    }
+}
+
+/**
  * The link's late-bound subscriptions: the relay-only monitor, the endpoint's
  * own network-change watch and Android's default-network watch.
  *
@@ -513,6 +560,9 @@ private class IrohLink(
 
     /** Late-bound subscriptions; publication is terminal-state aware. */
     private val watchers = IrohLinkWatchers { cancelled.get() || downOnce.get() }
+
+    /** Carries an escalation's admission token to whichever failure ends this link. */
+    private val admission = IrohLinkAdmission()
 
     /** Serializes a destructive escalation with cancellation; recycles this link's endpoint only. */
     private val lifecycle = IrohLinkLifecycle(
@@ -763,21 +813,43 @@ private class IrohLink(
             BridgeLog.i(TAG, "$reason: a call or another link action owns the link, keeping the iroh endpoint")
             return
         }
-        try {
-            when (pathMonitor?.admitNetworkRecycle() ?: IrohNetworkDecision.HELD) {
-                IrohNetworkDecision.RECYCLE -> lifecycle.run(recycle = true) {
+        when (pathMonitor?.admitNetworkRecycle() ?: IrohNetworkDecision.HELD) {
+            IrohNetworkDecision.RECYCLE -> withAdmission(action) {
+                lifecycle.run(recycle = true) {
                     BridgeLog.i(TAG, "$reason: recreating the iroh endpoint")
                     fail(listener, reason)
                 }
-
-                IrohNetworkDecision.DURING_CALL ->
-                    BridgeLog.i(TAG, "$reason during a call: keeping the iroh endpoint")
-
-                IrohNetworkDecision.HELD ->
-                    BridgeLog.i(TAG, "$reason inside the escalation cooldown: keeping the iroh link")
             }
-        } finally {
+
+            IrohNetworkDecision.DURING_CALL -> {
+                BridgeLog.i(TAG, "$reason during a call: keeping the iroh endpoint")
+                action.release()
+            }
+
+            IrohNetworkDecision.HELD -> {
+                BridgeLog.i(TAG, "$reason inside the escalation cooldown: keeping the iroh link")
+                action.release()
+            }
+        }
+    }
+
+    /**
+     * Runs [act] with [action] handed to the link's terminal transition: the
+     * winning failure releases it after the engine has seen the link down.
+     * A finished link has no transition left, so the token comes back here and
+     * null tells the caller nothing was escalated.
+     */
+    private fun <T> withAdmission(action: IdleLinkAction, act: () -> T): T? {
+        if (!admission.attach(action)) {
             action.release()
+            return null
+        }
+        try {
+            return act()
+        } catch (t: Throwable) {
+            // Nothing was published: give the door back instead of leaving it shut.
+            admission.finish()
+            throw t
         }
     }
 
@@ -829,7 +901,9 @@ private class IrohLink(
      * LinkSupervisor re-dials through the usual backoff.  The engine admission
      * makes the check-and-act atomic: a call reserved a moment earlier is never
      * aborted by this callback, and the run is serialized with cancellation so
-     * a stale callback cannot close a replacement endpoint.
+     * a stale callback cannot close a replacement endpoint.  The admission is
+     * not released here: the failure that actually ends the link releases it,
+     * and only once the supervisor and the engine have seen the link down.
      *
      * Returns false only when the action was refused and may be retried (a call
      * owns the link); a finished link counts as handled.
@@ -839,8 +913,13 @@ private class IrohLink(
             BridgeLog.i(TAG, "relay only: a call owns the link, keeping the iroh link")
             return false
         }
-        return try {
-            val outcome = lifecycle.run(escalation.recycleEndpoint) {
+        // The admission outlives this callback: whichever failure wins the
+        // link's end — this one, or the closed watcher the endpoint shutdown
+        // wakes first — releases it only after the engine has seen the link
+        // down, so a dial arriving meanwhile waits instead of reserving a call
+        // that very failure is about to abort.
+        val handled = withAdmission(action) {
+            lifecycle.run(escalation.recycleEndpoint) {
                 BridgeLog.w(
                     TAG,
                     if (escalation.recycleEndpoint) {
@@ -850,11 +929,9 @@ private class IrohLink(
                     }
                 )
                 fail(listener, "relay_only")
-            }
-            outcome == IrohActionOutcome.EXECUTED
-        } finally {
-            action.release()
+            } == IrohActionOutcome.EXECUTED
         }
+        return handled ?: false
     }
 
     override fun sendText(message: String): Boolean {
@@ -880,18 +957,29 @@ private class IrohLink(
         return true
     }
 
+    /**
+     * Reports the link down exactly once.  The winner of [downOnce] also owns
+     * any escalation's admission token: it releases it in a `finally`, after
+     * [DeviceLink.Listener.onLinkDown] has returned — the supervisor has
+     * dropped this link and the engine has seen it down — never before, and a
+     * losing failure releases nothing.
+     */
     private fun fail(listener: DeviceLink.Listener, reason: String) {
         if (cancelled.get()) return
         if (!downOnce.compareAndSet(false, true)) return
         lifecycle.close()
-        releaseWatchers()
-        BridgeLog.w(TAG, "iroh paths at link down ($reason): ${describePaths()}")
-        route = null
-        runCatching { connection?.close(0, reason.toByteArray(Charsets.UTF_8)) }
-        controlOutbound.close()
-        audioOutbound.close()
-        listener.onLinkDown(reason)
-        scope.cancel()
+        try {
+            releaseWatchers()
+            BridgeLog.w(TAG, "iroh paths at link down ($reason): ${describePaths()}")
+            route = null
+            runCatching { connection?.close(0, reason.toByteArray(Charsets.UTF_8)) }
+            controlOutbound.close()
+            audioOutbound.close()
+            listener.onLinkDown(reason)
+        } finally {
+            admission.finish()
+            scope.cancel()
+        }
     }
 
     /** Releases every attached subscription outside the registry lock. */
@@ -913,6 +1001,10 @@ private class IrohLink(
         downOnce.set(true)
         lifecycle.close()
         releaseWatchers()
+        // The supervisor drops a link before it cancels it, so no link-down
+        // publication is left; a token an escalation still holds comes back now
+        // instead of leaving the admission shut for good.
+        admission.finish()
         route = null
         controlOutbound.close()
         audioOutbound.close()

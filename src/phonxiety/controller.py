@@ -27,6 +27,15 @@ KEYPRESS_COOLDOWN_S = 3.0  # LiveKit's IVR navigator uses the same per-step cool
 # that, so a caller bounding close() must allow more than 20 s (tests use 30 s).
 CLOSE_TASK_BUDGET_S = 15.0
 CLOSE_CANCEL_BUDGET_S = 5.0
+# A phone that refuses `dial` proved it placed no call (its link is being rebuilt, or the
+# command never left the daemon), so the user's call is retried once after waiting up to
+# DIAL_RETRY_WAIT_S for the phone's link.  An ambiguous end of the link is never retried.
+DIAL_REFUSALS = frozenset({"link_down", "device_not_connected", "device_replaced"})
+DIAL_RETRY_WAIT_S = 20.0
+
+
+class _DialRefused(DeviceError):
+    """The phone refused the dial before placing anything and the one retry did not get through."""
 
 
 @dataclass(slots=True)
@@ -90,6 +99,7 @@ class CallController:
         archive_dir: Path | None = None,
         device_wait: float = 15,
         link_wait: float = 90,
+        dial_retry_wait: float = DIAL_RETRY_WAIT_S,
         farewell_timeout: float = 8,
         farewell_quiet: float = 0.8,
         review_quiet: float = 2.0,
@@ -105,6 +115,7 @@ class CallController:
         self._archive_dir = archive_dir
         self._device_wait = device_wait
         self._link_wait = link_wait
+        self._dial_retry_wait = dial_retry_wait
         self._farewell_timeout = farewell_timeout
         self._farewell_quiet = farewell_quiet
         self._review_quiet = review_quiet
@@ -365,27 +376,70 @@ class CallController:
             payload: dict[str, Any] = {"destination": call.request.destination}
             if call.request.phone_account:
                 payload["phone_account"] = call.request.phone_account
-            await self.device.command("dial", call.call_id, **payload)
-            log.info("call %s: dial accepted by the phone", call.call_id)
+            await self._dial(call, payload)
         except asyncio.CancelledError:
             raise
+        except _DialRefused as exc:
+            log.warning("call %s: preparation failed: %s", call.call_id, exc)
+            if not call.finalizing:
+                await self._fail(call, str(exc), unknown=False)
         except Exception as exc:
             log.warning("call %s: preparation failed: %s", call.call_id, exc)
             if not call.finalizing:
                 row = self.store.row(call.call_id)
                 submitted = bool(row["dial_submitted"])
-                await self._fail(call, str(exc), unknown=submitted)
+                # A proven refusal means the phone placed nothing, so this is an
+                # explicit failure, not an unknown outcome to reconcile.
+                refused = isinstance(exc, DeviceError) and str(exc) in DIAL_REFUSALS
+                await self._fail(call, str(exc), unknown=submitted and not refused)
 
-    async def _await_link(self, call: _Call) -> None:
+    async def _dial(self, call: _Call, payload: dict[str, Any]) -> None:
+        """Dial the number, waiting out one link refusal instead of losing the call.
+
+        The phone refuses a dial outright (``link_down``) while it rebuilds its
+        link; the user's call is not lost to that.  Only a refusal that proves
+        nothing was placed is retried, and only once.  An ambiguous end of the
+        link — a command timeout, or the link dropping after the command went
+        out — is never retried: the phone may already be ringing someone, and a
+        second dial would call twice.
+        """
+        # A link drop before the phone accepts this dial is part of the dial, not
+        # the call's end; the device event must not finalize the call under it.
+        call.awaiting_link = True
+        try:
+            try:
+                await self.device.command("dial", call.call_id, **payload)
+            except DeviceError as exc:
+                if str(exc) not in DIAL_REFUSALS or call.finalizing or self._closing:
+                    raise
+                log.info("call %s: phone refused the dial (%s); waiting for its link", call.call_id, exc)
+                try:
+                    await self._await_dial_link(call)
+                    await self.device.command("dial", call.call_id, **payload)
+                except DeviceError as retry_exc:
+                    raise _DialRefused(str(retry_exc)) from retry_exc
+            log.info("call %s: dial accepted by the phone", call.call_id)
+        finally:
+            call.awaiting_link = False
+
+    async def _await_dial_link(self, call: _Call) -> None:
+        """Wait, bounded, for the link a refused dial needs, then let the caller retry once."""
+        deadline = time.monotonic() + self._dial_retry_wait
+        if not self.device.connected and not await self.device.wait_connected(self._dial_retry_wait):
+            raise DeviceError("device_not_connected")
+        await self._await_link(call, budget=max(0.0, deadline - time.monotonic()))
+
+    async def _await_link(self, call: _Call, budget: float | None = None) -> None:
         """Dial only over a link that carries call audio right now.
 
         A phone that has just joined a network can spend its first minute on a
         path that delays or drops audio. Ringing someone into silence is worse
         than dialing a little later, so wait for a one-second echo probe to pass.
+        [budget] shortens the wait, e.g. for the one retry after a refusal.
         """
         if not self.device.info.get("capabilities", {}).get("link_test"):
             return
-        deadline = time.monotonic() + self._link_wait
+        deadline = time.monotonic() + (self._link_wait if budget is None else budget)
         call.awaiting_link = True
         try:
             while True:
