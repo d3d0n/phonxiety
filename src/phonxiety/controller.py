@@ -14,7 +14,7 @@ from . import far_end
 from .archive import write_call_record
 from .audio.recording import CallRecorder
 from .audio.share import make_shareable
-from .device import DeviceError, DeviceHub
+from .device import CommandSuppressed, DeviceError, DeviceHub
 from .interfaces import ToolHandler, VoiceCallbacks, VoiceSession, line_action
 from .models import CallRequest, CallState, TERMINAL_STATES
 from .prompts import render
@@ -36,6 +36,21 @@ DIAL_RETRY_WAIT_S = 20.0
 
 class _DialRefused(DeviceError):
     """The phone refused the dial before placing anything and the one retry did not get through."""
+
+
+@dataclass(slots=True)
+class _DialRetry:
+    """One retry dial: reserved under the controller lock, sent after the lock is released.
+
+    The phone may take its full command timeout to answer the dial, so a hangup marks this
+    reservation instead of waiting for the command.  `resolved` is set once the command has
+    an outcome; until then `cancelled` is the pending cancellation.
+    """
+
+    resolved: asyncio.Event = field(default_factory=asyncio.Event)
+    cancelled: bool = False
+    accepted: bool = False
+    error: DeviceError | None = None
 
 
 @dataclass(slots=True)
@@ -81,6 +96,8 @@ class _Call:
     release_awake: Callable[[], None] | None = None
     # Not dialed yet and waiting for a usable link: a link drop is part of the wait, not a failure.
     awaiting_link: bool = False
+    # The retry dial currently reserved or in flight, so a hangup can cancel it.
+    redial: _DialRetry | None = None
     # Paused from the phone: the agent keeps talking into the session but nothing reaches the line.
     muted: bool = False
     marks: list[dict[str, Any]] = field(default_factory=list)
@@ -221,6 +238,11 @@ class CallController:
             call = self._calls[call_id]
             call.end_reason = reason
             log.info("call %s: hangup requested (%s)", call_id, reason)
+            # The retry dial is sent without the lock, so a hangup only marks its reservation
+            # here; the dial that is already out is dropped by `_disconnect` once it resolves.
+            retry = call.redial
+            if retry is not None:
+                retry.cancelled = True
             call.generation += 1
             call.output_open = False
             self._cancel(call.work_task)
@@ -230,7 +252,7 @@ class CallController:
                 self._begin_finalize(call)
             else:
                 self.store.begin_ending(call_id)
-                call.ending_task = self._spawn(self._disconnect(call, flush=True), f"hangup:{call_id}")
+                call.ending_task = self._spawn(self._disconnect(call, flush=True, retry=retry), f"hangup:{call_id}")
         await self._notify()
         return self.store.snapshot(call_id)
 
@@ -401,7 +423,9 @@ class CallController:
         nothing was placed is retried, and only once.  An ambiguous end of the
         link — a command timeout, or the link dropping after the command went
         out — is never retried: the phone may already be ringing someone, and a
-        second dial would call twice.
+        second dial would call twice.  The ring deadline of the refused dial is
+        held through the wait and restarted with the retry, and a call cancelled
+        during the wait is never dialed again.
         """
         # A link drop before the phone accepts this dial is part of the dial, not
         # the call's end; the device event must not finalize the call under it.
@@ -413,14 +437,77 @@ class CallController:
                 if str(exc) not in DIAL_REFUSALS or call.finalizing or self._closing:
                     raise
                 log.info("call %s: phone refused the dial (%s); waiting for its link", call.call_id, exc)
+                # A refused dial placed nothing, so its ring deadline is held here; the
+                # retry starts a fresh one when it goes out.
+                self._cancel(call.ring_task)
+                call.ring_task = None
                 try:
                     await self._await_dial_link(call)
-                    await self.device.command("dial", call.call_id, **payload)
-                except DeviceError as retry_exc:
-                    raise _DialRefused(str(retry_exc)) from retry_exc
+                except DeviceError as wait_exc:
+                    # The wait sent no second command, so the refusal still proves nothing was placed.
+                    raise _DialRefused(str(wait_exc)) from wait_exc
+                if not await self._redial(call, payload):
+                    return
             log.info("call %s: dial accepted by the phone", call.call_id)
         finally:
             call.awaiting_link = False
+
+    async def _redial(self, call: _Call, payload: dict[str, Any]) -> bool:
+        """Send the one retry a refusal earned, unless the call stopped being dialed meanwhile.
+
+        Eligibility is decided under the controller lock and the retry is reserved there, but
+        the dial itself goes out after the lock is released: the phone can take its full
+        command timeout to answer, and a hangup, the ring deadline, a phone event or shutdown
+        must never wait for that.  A hangup that reaches the reservation before the command
+        goes out suppresses it.  One that reaches it afterwards leaves the ending to
+        `_disconnect`, which drops a line the phone accepts after refusing its earlier hangup.
+        False leaves the call to the cancellation that owns it.
+        """
+        async with self._lock:
+            state = self.store.state(call.call_id)
+            if (
+                self._closing
+                or not self._owned(call)
+                or call.finalizing
+                or state not in (CallState.DIALING, CallState.PREPARING)
+            ):
+                log.info("call %s: retry skipped, the call is %s", call.call_id, state.value)
+                return False
+            retry = _DialRetry()
+            call.redial = retry
+            call.ring_task = self._spawn(self._ring_timeout(call), f"ring:{call.call_id}")
+        try:
+            if retry.cancelled:
+                log.info("call %s: retry suppressed, the call was hung up", call.call_id)
+                return False
+            await self.device.command(
+                "dial", call.call_id, should_send=lambda: not retry.cancelled, **payload
+            )
+            retry.accepted = True
+            return True
+        except CommandSuppressed:
+            # The hangup reached the reservation before the command left the daemon: the
+            # phone saw nothing, and the cancellation that owns the call finishes it.
+            log.info("call %s: retry suppressed at the send boundary, the call was hung up", call.call_id)
+            return False
+        except DeviceError as exc:
+            retry.error = exc
+            if retry.cancelled:
+                # The hangup owns this ending; `_disconnect` decides from the outcome whether
+                # a line was placed, so it is never reported twice.
+                return False
+            # This command went out. A refusal code proves the phone placed nothing;
+            # anything else may have rung the far end, so the outcome stays unknown.
+            if str(exc) in DIAL_REFUSALS:
+                raise _DialRefused(str(exc)) from exc
+            raise
+        finally:
+            # A cancelled reservation stays on the call: a later hangup, shutdown or
+            # audio_error replaces the ending task and must hand it the same resolved
+            # outcome, or a provably unplaced call would be reported unknown.
+            if call.redial is retry and not retry.cancelled:
+                call.redial = None
+            retry.resolved.set()
 
     async def _await_dial_link(self, call: _Call) -> None:
         """Wait, bounded, for the link a refused dial needs, then let the caller retry once."""
@@ -905,7 +992,7 @@ class CallController:
             call.error = call.error or "playback_drain_timeout"
         await self._disconnect(call, flush=False)
 
-    async def _disconnect(self, call: _Call, *, flush: bool) -> None:
+    async def _disconnect(self, call: _Call, *, flush: bool, retry: _DialRetry | None = None) -> None:
         call.output_open = False
         try:
             if flush:
@@ -915,8 +1002,37 @@ class CallController:
             async with asyncio.timeout(8):
                 await call.ended.wait()
         except (DeviceError, TimeoutError) as exc:
+            if retry is not None and not call.finalizing:
+                # The hangup can be refused before the phone has processed the retry dial.
+                # The retry decides whether a line exists: drop it if the phone took the
+                # dial, keep the unknown outcome if it may have, and finish the cancelled
+                # call locally if nothing was placed.
+                await retry.resolved.wait()
+                if retry.accepted:
+                    try:
+                        await self.device.command("hangup", call.call_id, timeout=5)
+                        async with asyncio.timeout(8):
+                            await call.ended.wait()
+                        return
+                    except (DeviceError, TimeoutError) as again:
+                        if call.finalizing:
+                            return
+                        await self._fail(call, f"hangup_unconfirmed: {again}", unknown=True)
+                        return
+                if retry.error is not None and str(retry.error) not in DIAL_REFUSALS:
+                    await self._fail(call, f"hangup_unconfirmed: {retry.error}", unknown=True)
+                    return
+                await self._end_locally(call)
+                return
             if not call.finalizing:
                 await self._fail(call, f"hangup_unconfirmed: {exc}", unknown=True)
+
+    async def _end_locally(self, call: _Call) -> None:
+        """Finish a call the phone provably never placed: its dials were refused and nothing rang."""
+        outcome = self._phone_outcome(False, None, call.end_reason)
+        if self.store.terminate(call.call_id, CallState.ENDED, outcome, error=call.error):
+            self._begin_finalize(call)
+            await self._notify()
 
     async def _fail(self, call: _Call, error: str, *, unknown: bool) -> None:
         call.error = error[:1000]
@@ -935,6 +1051,7 @@ class CallController:
         if call.finalizing:
             return
         call.finalizing = True
+        call.redial = None
         call.audio_ready = False
         call.output_open = False
         call.generation += 1
