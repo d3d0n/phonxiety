@@ -1,0 +1,15 @@
+Quick Settings tile hangs up a call, Magisk 31.1, Pixel 6a (Android 17), release-signed app 0603a4c, daemon 547ea37, 2026-11-26
+
+The hang-up tile (com.phonxiety.bridge/.feature.widgets.HangupTileService) added to Quick Settings.
+Call c1e0bcc8 to the owner's test number, placed from the app:
+  20:40:43  request created
+  20:40:52  dial accepted by the phone; dialing
+  20:40:59  active: opus 32 kbit/s, link through the self-hosted relay, RTT 161 ms
+            the far end and the agent talked; the task agent did not ask to finish
+  20:42:05  the tile was tapped in the expanded Quick Settings (tile-hangup.png, after the tap;
+            the Wi-Fi network name blacked out)
+  20:42:05.9 phone reports ending, then ended, disconnect cause LOCAL; the daemon sent no hangup:
+            the phone ended the call itself
+
+Record: state ended, call_outcome answered, task_outcome incomplete (the task was cut short by
+the hang-up), 11 turns, link carried 3213 frames to the phone and 3341 back, no error.

@@ -1,0 +1,29 @@
+Pairing by a person with the camera, Magisk 31.1, Pixel 6a (Android 17), release-signed app 0603a4c, daemon 547ea37, 2026-11-26
+
+Clean slate (adb, root): module and /data/adb/phonxiety removed, reboot, release APK installed with adb.
+
+Wizard:
+  root granted in Magisk -> Superuser, Install module, Reboot now
+  20:18:13  sys.boot_completed
+            the wizard reached its pairing step; `phonxiety pair` showed the code on the computer and
+            a person scanned it with the Google code scanner on the phone; the wizard stored the
+            pairing and started its link test
+            the link test failed: the phone and the computer had no direct path (the home network's
+            internet was down and the two could not reach each other on it), and the self-hosted
+            iroh relay refused the new phone endpoint, because its access allowlist still named the
+            endpoint id of the previous install ("The relay denied our authentication (not
+            authorized)")
+            the relay's allowlist was updated (and later opened to every endpoint); the wizard's
+            retry passed
+  20:21:55  daemon: "Phone bluejay connected from iroh"
+  20:21:56  `phonxiety status`: connected; the wizard passed its link test
+
+=> 222.6 s from sys.boot_completed to connected. Not a budget run: the time went to the relay
+   refusal and its fix. The budget runs on Magisk, which paired through `mise run phone:pair`
+   instead of the camera, reached connected 9 s (setup-magisk-from-scratch.txt) and 20.3 s after
+   sys.boot_completed.
+
+Relay-only check afterwards: phone Wi-Fi off, the link came up through the self-hosted relay,
+RTT 266 ms.
+
+User actions: grant root in Magisk (one toggle), Install module, Reboot now, scan the code.

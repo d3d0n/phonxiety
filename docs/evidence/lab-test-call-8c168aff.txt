@@ -1,0 +1,17 @@
+Test call from the Lab with both audio probes armed, Magisk 31.1, Pixel 6a (Android 17), release-signed app 0603a4c, daemon 547ea37, 2026-11-26
+
+Lab -> Test call to the owner's test number, "Loop the far end back" on,
+"Play a tone" on, tone length 5 s (lab-test-call-probes.png, the number blacked out):
+  20:38:33  request created from the Lab ("Placed · 8c168aff-…")
+  20:38:42  dial accepted by the phone; dialing
+  20:38:52  active: opus 32 kbit/s, link through the self-hosted relay, RTT 173 ms
+  20:38:52  daemon: "test probes hold the finish for 10.0 s" (loopback and tone start with the
+            audio; the agent cannot end the call before they ran)
+  20:39:22  hangup requested (duration_limit, the Lab's 30 s); accepted by the phone; ended,
+            disconnect cause LOCAL
+
+Record: state ended, call_outcome answered, task_outcome succeeded, far end person, 5 turns,
+link carried 1359 frames to the phone and 1491 back, no error. After the call the Lab showed
+"Answered" under Test call result.
+
+Not confirmed: what the far end heard of the loopback and the tone.

@@ -1,0 +1,14 @@
+Live call started and finished from the app, Magisk 31.1, Pixel 6a (Android 17), release-signed app 0603a4c, daemon 547ea37, 2026-11-26
+
+Call 16c4961f, placed from the app's New call to the owner's test number:
+  20:32:59  request created from the app
+  20:33:07  dial accepted by the phone; dialing
+  20:33:14  active: opus 32 kbit/s, link direct, RTT 46 ms
+            the live screen showed the transcript as it happened: the agent's greeting, the far
+            end's answers and the agent's reply, with partial turns and "Waiting for the next turn"
+            (live-call-from-app.png, the number blacked out)
+  20:33:37  the task agent finished the call: outcome succeeded
+  20:33:38  hangup accepted by the phone; ended, disconnect cause LOCAL
+
+Record: state ended, call_outcome answered, task_outcome succeeded, far end person, 5 turns,
+link carried 1103 frames to the phone and 1184 back, no error.
