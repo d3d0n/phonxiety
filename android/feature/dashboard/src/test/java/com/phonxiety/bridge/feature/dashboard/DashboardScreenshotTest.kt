@@ -175,6 +175,40 @@ class DashboardScreenshotTest {
     ) { setScreen(fontScale = 2f, width = 320.dp) }
 
     @Test
+    fun theEndpointShowsAShortFormAndTheWholeKeyOnRequest() {
+        setScreen()
+        // The row is readable: eight characters, an ellipsis, the last four.
+        composeRule.onNodeWithText("864b90b7…cc62").assertExists()
+        composeRule.onNodeWithText(DashboardSamples.ENDPOINT_ID).assertDoesNotExist()
+
+        composeRule.onNodeWithText("Show full ID").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        // The whole key is text the reader can select and copy.
+        composeRule.onNodeWithText(DashboardSamples.ENDPOINT_ID).assertExists()
+        composeRule.onNodeWithText("Hide full ID").assertExists()
+        composeRule.onNodeWithText("Show full ID").assertDoesNotExist()
+    }
+
+    @Test
+    fun theWholeEndpointAfterTheDisclosureIsOpened() {
+        setScreen()
+        composeRule.onNodeWithText("Show full ID").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        // A key that fills several lines must still be one legible block.
+        composeRule.onNodeWithTag(SCREEN_TAG).assertAccessible()
+        composeRule.onNodeWithTag(SCREEN_TAG)
+            .captureRoboImage("src/test/screenshots/dashboard_endpoint_full_411_light.png")
+    }
+
+    @Test
+    fun theTransportIsSpelledTheSameWayEverywhere() {
+        setScreen()
+        // The project and the library style it lowercase, like a stylized proper noun.
+        composeRule.onNodeWithText("iroh").assertExists()
+        composeRule.onNodeWithText("Iroh").assertDoesNotExist()
+    }
+
+    @Test
     fun theUnpairConfirmation() {
         setScreen()
         openUnpairDialog()

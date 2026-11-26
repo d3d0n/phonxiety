@@ -490,11 +490,6 @@ object IrohSupport {
     }
 
     fun ticketIsValid(ticket: String): Boolean = endpointId(ticket) != null
-
-    /** First 8 and last 4 characters of the endpoint id, for the UI. */
-    fun shortEndpointId(ticket: String): String? = endpointId(ticket)?.let { id ->
-        if (id.length <= 12) id else id.take(8) + "…" + id.takeLast(4)
-    }
 }
 
 /** What came of one destructive link action. */

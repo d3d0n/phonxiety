@@ -541,7 +541,7 @@ class BridgeEngine(
                 reconnects = links.reconnects(),
                 address = chosen?.host ?: when (config) {
                     is BridgeConfig.Address -> config.host
-                    is BridgeConfig.Iroh -> IrohSupport.shortEndpointId(config.ticket)
+                    is BridgeConfig.Iroh -> IrohSupport.endpointId(config.ticket)
                 }
             )
             // Nothing else may reach this link before its hello: the daemon
