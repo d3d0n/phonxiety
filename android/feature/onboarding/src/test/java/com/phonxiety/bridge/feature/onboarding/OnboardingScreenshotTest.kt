@@ -2,15 +2,18 @@ package com.phonxiety.bridge.feature.onboarding
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.github.takahirom.roborazzi.captureRoboImage
@@ -56,7 +59,7 @@ class OnboardingScreenshotTest(private val case: MatrixCase) {
                         modifier = Modifier
                             .testTag(SCREEN_TAG)
                             .width(case.variant.widthDp.dp)
-                            .fillMaxSize()
+                            .height(case.variant.heightDp.dp)
                             .background(MaterialTheme.colorScheme.background)
                     ) {
                         OnboardingScreen(state = case.state, callbacks = OnboardingCallbacks())
@@ -66,8 +69,17 @@ class OnboardingScreenshotTest(private val case: MatrixCase) {
         }
         composeRule.waitForIdle()
         composeRule.onNodeWithTag(SCREEN_TAG).assertAccessible()
-        composeRule.onNodeWithTag(SCREEN_TAG)
-            .captureRoboImage("src/test/screenshots/wizard_${case.stateName}_${case.variant.slug}.png")
+        val name = "src/test/screenshots/wizard_${case.stateName}_${case.variant.slug}"
+        composeRule.onNodeWithTag(SCREEN_TAG).captureRoboImage("$name.png")
+        if (case.variant.lowerSection) {
+            // Decision 10: a phone-height viewport shows only the first screen, so the lower
+            // sections are recorded as well, by scrolling to the page's last line.
+            composeRule.onNode(hasScrollAction())
+                .performScrollToNode(hasText(FOOTER, substring = true))
+            composeRule.waitForIdle()
+            composeRule.onNodeWithTag(SCREEN_TAG).assertAccessible()
+            composeRule.onNodeWithTag(SCREEN_TAG).captureRoboImage("${name}_scrolled.png")
+        }
     }
 
     data class MatrixCase(
@@ -80,22 +92,44 @@ class OnboardingScreenshotTest(private val case: MatrixCase) {
 
     data class Variant(
         val widthDp: Int,
+        val heightDp: Int,
         val dark: Boolean,
         val fontScale: Float,
         val dynamic: Boolean,
+        /** Whether the phone-height viewport also records its lower sections. */
+        val lowerSection: Boolean = false,
         val slug: String
     )
 
     companion object {
         private const val SCREEN_TAG = "onboarding_screen"
 
+        /**
+         * 411 dp is captured as one full page, as before. 320 dp at 200 % uses a phone's own height
+         * (891 dp) instead of a 2600 dp sheet, because that is the viewport the layout has to survive;
+         * its lower sections come from a second, scrolled capture.
+         */
         private val allVariants = listOf(
-            Variant(411, dark = false, fontScale = 1f, dynamic = false, slug = "411_light"),
-            Variant(411, dark = true, fontScale = 1f, dynamic = false, slug = "411_dark"),
-            Variant(411, dark = false, fontScale = 1f, dynamic = true, slug = "411_dynamic"),
-            Variant(320, dark = false, fontScale = 2f, dynamic = false, slug = "320_font200_light"),
-            Variant(320, dark = true, fontScale = 2f, dynamic = false, slug = "320_font200_dark")
+            Variant(411, heightDp = FULL_PAGE_DP, dark = false, fontScale = 1f, dynamic = false, slug = "411_light"),
+            Variant(411, heightDp = FULL_PAGE_DP, dark = true, fontScale = 1f, dynamic = false, slug = "411_dark"),
+            Variant(411, heightDp = FULL_PAGE_DP, dark = false, fontScale = 1f, dynamic = true, slug = "411_dynamic"),
+            Variant(
+                widthDp = 320,
+                heightDp = PHONE_DP,
+                dark = false,
+                fontScale = 2f,
+                dynamic = false,
+                lowerSection = true,
+                slug = "320_font200_light"
+            ),
+            Variant(320, heightDp = PHONE_DP, dark = true, fontScale = 2f, dynamic = false, slug = "320_font200_dark")
         )
+
+        /** The page's last line; scrolling to it is what makes the lower sections reachable. */
+        private const val FOOTER = "No cloud, no analytics"
+
+        private const val PHONE_DP = 891
+        private const val FULL_PAGE_DP = 2600
 
         /** States whose layout is exercised by every variant of the matrix. */
         private val representative = setOf(

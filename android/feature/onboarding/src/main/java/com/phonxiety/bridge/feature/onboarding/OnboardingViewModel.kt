@@ -65,6 +65,12 @@ class OnboardingViewModel internal constructor(
     private val _pairingError = MutableStateFlow<String?>(null)
     val pairingError: StateFlow<String?> = _pairingError.asStateFlow()
 
+    /**
+     * A stored pairing the repository can read. This is the proof the paste sheet closes on: the
+     * wizard's own "Checking" is only a probe and says nothing about whether a link was accepted.
+     */
+    val pairingConfirmed: StateFlow<Boolean> = pairingRepository.paired
+
     private val coordinator = SetupCoordinator(
         backend = backend,
         pairing = pairingRepository,

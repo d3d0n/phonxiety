@@ -90,6 +90,12 @@ data class OnboardingUiState(
     /** The repository's rejection reason; the screen turns it into words and keeps it as evidence. */
     val pairingError: String? = null,
     /**
+     * A stored pairing the repository can actually read. The paste sheet closes and clears only on
+     * this proof, never on the wizard merely leaving "Not paired": a resume probe passes through
+     * "Checking" while it re-reads the device, and the typed link has to survive that.
+     */
+    val pairingConfirmed: Boolean = false,
+    /**
      * Providers that did not answer `su` but left files or a manager app behind. Reported so a
      * migration makes sense; this app never deletes them.
      */
@@ -141,10 +147,11 @@ fun OnboardingScreen(
         onPairingSheetVisibleChange(visible)
     }
 
-    // A successful pairing leaves "Not paired", and the sheet that produced it closes with it.
-    val unpaired = state.wizard is WizardState.NeedsPairing
-    LaunchedEffect(unpaired) {
-        if (!unpaired && sheetVisible) {
+    // Only a confirmed pairing closes and clears the sheet that produced it. Leaving "Not paired"
+    // is not proof: a resume probe shows "Checking" for a moment and then settles back, and the
+    // link someone pasted must still be there when they return from another app.
+    LaunchedEffect(state.pairingConfirmed) {
+        if (state.pairingConfirmed && sheetVisible) {
             setSheetVisible(false)
             pastedLink = ""
         }
@@ -167,6 +174,12 @@ fun OnboardingScreen(
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
                     SetupHeader()
+                    // A rejection is inline next to the field at "Not paired". A deep link that
+                    // arrives while the wizard is at another step has no such place, so the note
+                    // stays here in the person's words instead of the feedback being dropped.
+                    state.pairingError?.takeIf { state.wizard !is WizardState.NeedsPairing }?.let { error ->
+                        PairingRejectionNote(error, callbacks.onDismissPairingError)
+                    }
                     WizardCard(state = state, callbacks = callbacks)
                     StepsSection(
                         wizard = state.wizard,
@@ -202,6 +215,21 @@ fun OnboardingScreen(
             }
         )
     }
+}
+
+/**
+ * The pairing rejection when no pairing surface is on screen. It carries the same localized words as
+ * the field's supporting text and stays until dismissed, so a deep link opened at another step is
+ * not silently dropped.
+ */
+@Composable
+private fun PairingRejectionNote(error: String, onDismiss: () -> Unit) {
+    ErrorCard(
+        title = stringResource(R.string.onboarding_pair_rejected_title),
+        message = pairingRejectionText(error).asString(),
+        dismissLabel = stringResource(R.string.onboarding_action_dismiss),
+        onDismiss = onDismiss
+    )
 }
 
 @Composable

@@ -8,6 +8,7 @@ import com.phonxiety.bridge.data.PairResult
 import com.phonxiety.bridge.data.PairingRepository
 import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.root.DetectedProvider
+import com.phonxiety.bridge.root.DoctorReason
 import com.phonxiety.bridge.root.InstallOperation
 import com.phonxiety.bridge.root.ModuleState
 import com.phonxiety.bridge.root.Overlay
@@ -26,6 +27,7 @@ import com.phonxiety.bridge.root.VerifyReport
 import com.phonxiety.bridge.root.WizardEvent
 import com.phonxiety.bridge.root.WizardState
 import java.io.OutputStream
+import java.util.Locale
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -108,6 +110,63 @@ class SetupCoordinatorTest {
 
         coordinator.dispatch(WizardEvent.RebootRequested)
         assertEquals(listOf(RebootReason.MODULE_INSTALL), backend.reboots)
+    }
+
+    @Test
+    fun aFailedLinkTestReadsTheLossAsAPercentage() = runTest {
+        // The daemon reports the loss as a fraction (1 - echoed / sent); the person reads a percent.
+        val original = Locale.getDefault()
+        Locale.setDefault(Locale.US)
+        try {
+            backend.detection = RootDetection(SuStatus.GRANTED, listOf(MAGISK))
+            backend.module = ModuleState.Enabled("0.3.0", 3)
+            backend.verify = PASSED
+            permissions.missingState = mutableListOf()
+            pairing.pairedState.value = true
+            appApi.linkTest = ApiResult.Success(
+                status = 200,
+                result = buildJsonObject {
+                    put("healthy", false)
+                    put("p50", 41)
+                    put("loss", 0.2)
+                }
+            )
+
+            coordinator.start()
+
+            val doctor = coordinator.wizard.value as WizardState.Doctor
+            assertEquals(DoctorReason.LINK_TEST_FAILED, doctor.reason)
+            assertEquals("41\u00A0ms median · 20% loss", doctor.detail)
+        } finally {
+            Locale.setDefault(original)
+        }
+    }
+
+    @Test
+    fun aLinkTestWithoutALossIsNotAZero() = runTest {
+        val original = Locale.getDefault()
+        Locale.setDefault(Locale.US)
+        try {
+            backend.detection = RootDetection(SuStatus.GRANTED, listOf(MAGISK))
+            backend.module = ModuleState.Enabled("0.3.0", 3)
+            backend.verify = PASSED
+            permissions.missingState = mutableListOf()
+            pairing.pairedState.value = true
+            appApi.linkTest = ApiResult.Success(
+                status = 200,
+                result = buildJsonObject {
+                    put("healthy", false)
+                    put("p50", 41)
+                }
+            )
+
+            coordinator.start()
+
+            val doctor = coordinator.wizard.value as WizardState.Doctor
+            assertEquals("41\u00A0ms median · — loss", doctor.detail)
+        } finally {
+            Locale.setDefault(original)
+        }
     }
 
     @Test

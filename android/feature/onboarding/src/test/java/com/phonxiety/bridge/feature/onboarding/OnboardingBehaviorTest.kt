@@ -9,13 +9,17 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
@@ -23,6 +27,7 @@ import com.phonxiety.bridge.root.InstallOperation
 import com.phonxiety.bridge.root.ModuleState
 import com.phonxiety.bridge.root.WizardState
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -161,12 +166,90 @@ class OnboardingBehaviorTest {
         )
         labels.forEach { (stateName, label) ->
             show(OnboardingUiState(wizard = sample(stateName)))
-            composeRule.onNodeWithText(label).assertExists()
-            // Two lines at 200 % are still whole; a clipped or ellipsized label would be taller.
-            val height = composeRule.onNodeWithText(label).fetchSemanticsNode().size.height
-            val limit = with(composeRule.density) { 110.dp.roundToPx() }
-            assertTrue("$label is not whole at 200%: $height px", height <= limit)
+            // Existence proves nothing: a clipped label keeps its text. What a clipped or
+            // ellipsized label actually shows is caught below, on the rendered text layout and on
+            // the node's visible bounds rather than on a height cap.
+            val node = composeRule
+                .onNodeWithText(label, useUnmergedTree = true)
+                .fetchSemanticsNode()
+            val layouts = mutableListOf<TextLayoutResult>()
+            requireNotNull(node.config[SemanticsActions.GetTextLayoutResult].action) {
+                "$label has no text layout"
+            }.invoke(layouts)
+            val layout = layouts.single()
+            // Compose lays a centred label's paragraph out at the full available width, so
+            // TextLayoutResult.didOverflowWidth reads true even when every glyph fits (the
+            // paragraph spans the constraint while the node is only as wide as the text). The
+            // reliable evidence of a clipped label is an ellipsis, a vertically squeezed layout,
+            // or a node that sits outside the screen.
+            assertFalse("$label overflows its height at 200%", layout.didOverflowHeight)
+            assertTrue(
+                "$label is wider than its visible bounds: ${layout.size} vs ${node.size}",
+                layout.size.width <= node.size.width
+            )
+            assertTrue(
+                "$label is taller than its visible bounds: ${layout.size} vs ${node.size}",
+                layout.size.height <= node.size.height
+            )
+            (0 until layout.lineCount).forEach { line ->
+                assertFalse("$label is ellipsized on line $line", layout.isLineEllipsized(line))
+            }
+            val screen = composeRule.onRoot().fetchSemanticsNode().size
+            val bounds = node.boundsInRoot
+            assertTrue(
+                "$label sits outside the screen: $bounds in $screen",
+                bounds.left >= 0f && bounds.top >= 0f &&
+                    bounds.right <= screen.width.toFloat() && bounds.bottom <= screen.height.toFloat()
+            )
         }
+    }
+
+    @Test
+    fun aPastedLinkSurvivesAResumeProbe() {
+        host()
+        show(OnboardingUiState(wizard = sample("needs_pairing")))
+        composeRule.onNodeWithText("Paste pairing link").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNode(hasSetTextAction())
+            .performTextInput("phonxiety://pair?token=abc")
+        composeRule.waitForIdle()
+
+        // Coming back from another app probes the device: "Checking" is transient and is not proof
+        // that the link was accepted, so the text stays where the person left it.
+        show(OnboardingUiState(wizard = WizardState.Checking))
+        composeRule.onNodeWithText("phonxiety://pair?token=abc").assertExists()
+        show(OnboardingUiState(wizard = sample("needs_pairing")))
+        composeRule.onNodeWithText("phonxiety://pair?token=abc").assertExists()
+
+        // A stored pairing does close the sheet and clear the field.
+        show(OnboardingUiState(wizard = sample("first_link_test"), pairingConfirmed = true))
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("phonxiety://pair?token=abc").assertDoesNotExist()
+    }
+
+    @Test
+    fun aRejectionAtAnotherStepKeepsItsWords() {
+        var dismissed = 0
+        host(OnboardingCallbacks(onDismissPairingError = { dismissed++ }))
+        // A pairing deep link opened while the wizard is at "No root": the pairing step's inline
+        // error is not on screen, so the note is what keeps the rejection in the person's words.
+        show(OnboardingUiState(wizard = sample("no_root"), pairingError = "pair_link_invalid"))
+        composeRule.onNodeWithText("The pairing was rejected").assertExists()
+        composeRule
+            .onNodeWithText("That is not a pairing link. Copy it again from phonxiety pair.")
+            .assertExists()
+        composeRule.onNodeWithText("Dismiss").performClick()
+        assertEquals(1, dismissed)
+    }
+
+    @Test
+    fun theFirstLinkTestCopyCoversBothDeadlines() {
+        host()
+        show(OnboardingUiState(wizard = sample("first_link_test")))
+        // Waiting for the link and the request that follows are separate deadlines.
+        composeRule.onNodeWithText("30 s", substring = true).assertExists()
+        composeRule.onNodeWithText("25 s", substring = true).assertExists()
+        composeRule.onNodeWithText("up to 25 seconds", substring = true).assertDoesNotExist()
     }
 
     @Test

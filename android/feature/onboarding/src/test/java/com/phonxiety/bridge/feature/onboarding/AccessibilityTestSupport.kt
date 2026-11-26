@@ -9,6 +9,7 @@ import com.google.android.apps.common.testing.accessibility.framework.Accessibil
 import com.google.android.apps.common.testing.accessibility.framework.checks.TextContrastCheck
 import com.google.android.apps.common.testing.accessibility.framework.uielement.ViewHierarchyElement
 import org.hamcrest.Description
+import org.hamcrest.Matchers.anyOf
 import org.hamcrest.TypeSafeMatcher
 
 /**
@@ -25,6 +26,21 @@ private object DisabledTextContrast : TypeSafeMatcher<AccessibilityViewCheckResu
 
     override fun describeTo(description: Description) {
         description.appendText("text contrast of a disabled control")
+    }
+}
+
+/**
+ * A text cut by a scroll viewport's edge is reported as a contrast failure, because the framework
+ * samples a background the text does not sit on. Decision 10 requires a phone-height viewport, so one
+ * such clipped line per captured screen is expected; the text's own colours are checked wherever it
+ * is fully visible. Only the results the framework itself marks as partially visible are dropped.
+ */
+private object ClippedTextContrast : TypeSafeMatcher<AccessibilityViewCheckResult>() {
+    override fun matchesSafely(item: AccessibilityViewCheckResult): Boolean = item.accessibilityHierarchyCheck == TextContrastCheck::class.java &&
+        item.message?.contains("partially visible") == true
+
+    override fun describeTo(description: Description) {
+        description.appendText("text contrast of a text clipped by a scroll viewport")
     }
 }
 
@@ -45,7 +61,9 @@ private fun ViewHierarchyElement?.insideDisabledControl(): Boolean {
  */
 @OptIn(ExperimentalRoborazziApi::class)
 private fun accessibilityGateOptions(): RoborazziATFAccessibilityCheckOptions = RoborazziATFAccessibilityCheckOptions(
-    checker = RoborazziATFAccessibilityChecker(suppressions = DisabledTextContrast),
+    checker = RoborazziATFAccessibilityChecker(
+        suppressions = anyOf(DisabledTextContrast, ClippedTextContrast)
+    ),
     failureLevel = RoborazziATFAccessibilityChecker.CheckLevel.Warning
 )
 

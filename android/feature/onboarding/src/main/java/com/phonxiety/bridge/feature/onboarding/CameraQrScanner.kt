@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.mlkit.vision.barcode.BarcodeScanner
@@ -61,7 +62,11 @@ import java.util.concurrent.atomic.AtomicBoolean
 internal fun QrScanDialog(
     onCode: (String) -> Unit,
     onDismiss: () -> Unit,
-    onPasteRequested: () -> Unit
+    onPasteRequested: () -> Unit,
+    /** The camera area; a test that cannot start a camera supplies a stand-in. */
+    preview: @Composable (Modifier) -> Unit = { modifier ->
+        CameraQrPreview(onCode = onCode, modifier = modifier)
+    }
 ) {
     val context = LocalContext.current
     var granted by remember { mutableStateOf(cameraGranted(context)) }
@@ -75,6 +80,12 @@ internal fun QrScanDialog(
             asked = true
             permission.launch(Manifest.permission.CAMERA)
         }
+    }
+    // The Settings action leaves this dialog open in the background; coming back has to re-read the
+    // grant, or a camera the person just allowed would keep showing the explanation.
+    LifecycleResumeEffect(Unit) {
+        granted = cameraGranted(context)
+        onPauseOrDispose { }
     }
 
     AlertDialog(
@@ -95,9 +106,8 @@ internal fun QrScanDialog(
         title = { Text(stringResource(R.string.onboarding_scanner_title)) },
         text = {
             if (granted) {
-                CameraQrPreview(
-                    onCode = onCode,
-                    modifier = Modifier
+                preview(
+                    Modifier
                         .fillMaxWidth()
                         .height(280.dp)
                 )

@@ -192,7 +192,7 @@
     <string name="onboarding_pair_code_unknown">The link could not be read. Run phonxiety pair again and copy the whole link.</string>
 
     <!-- First link test. -->
-    <string name="onboarding_link_test_body">Testing the link. This can take up to 25 seconds.</string>
+    <string name="onboarding_link_test_body">Connecting to the computer can take up to 30 s. The link test itself can then take 25 s more.</string>
 
     <!-- Ready. -->
     <string name="onboarding_ready_title">The bridge is running</string>

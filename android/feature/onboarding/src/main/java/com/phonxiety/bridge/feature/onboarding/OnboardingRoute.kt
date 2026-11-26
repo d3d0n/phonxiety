@@ -44,6 +44,7 @@ fun OnboardingRoute(
 ) {
     val wizard by viewModel.wizard.collectAsStateWithLifecycle()
     val pairingError by viewModel.pairingError.collectAsStateWithLifecycle()
+    val pairingConfirmed by viewModel.pairingConfirmed.collectAsStateWithLifecycle()
     val detection by viewModel.detection.collectAsStateWithLifecycle()
     val installPhase by viewModel.installPhase.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -141,6 +142,7 @@ fun OnboardingRoute(
             state = OnboardingUiState(
                 wizard = wizard,
                 pairingError = pairingError,
+                pairingConfirmed = pairingConfirmed,
                 leftovers = detection?.leftovers.orEmpty(),
                 installPhase = installPhase
             ),

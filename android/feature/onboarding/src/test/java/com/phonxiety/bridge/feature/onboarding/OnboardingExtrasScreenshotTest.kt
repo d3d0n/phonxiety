@@ -10,6 +10,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onLast
@@ -17,6 +19,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
@@ -80,7 +83,6 @@ class OnboardingExtrasScreenshotTest {
     }
 
     @Test
-    @Config(qualifiers = "w411dp-h2600dp-xxhdpi")
     fun theOpenStepPlanAtTwoHundredPercent() {
         setScreen(
             OnboardingUiState(wizard = requireNotNull(OnboardingSamples.states["verify_failed"])),
@@ -92,6 +94,13 @@ class OnboardingExtrasScreenshotTest {
         composeRule.onNodeWithTag(SCREEN_TAG).assertAccessible()
         composeRule.onNodeWithTag(SCREEN_TAG)
             .captureRoboImage("src/test/screenshots/wizard_steps_expanded_320_font200_light.png")
+        // A phone-height viewport at 200 % cuts the plan in half; the rest is recorded as well.
+        composeRule.onNode(hasScrollAction())
+            .performScrollToNode(hasText("No cloud, no analytics", substring = true))
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag(SCREEN_TAG).assertAccessible()
+        composeRule.onNodeWithTag(SCREEN_TAG)
+            .captureRoboImage("src/test/screenshots/wizard_steps_expanded_320_font200_light_scrolled.png")
     }
 
     @Test
@@ -137,6 +146,7 @@ class OnboardingExtrasScreenshotTest {
             }
         }
         composeRule.waitForIdle()
+        composeRule.onAllNodes(isDialog()).onLast().assertAccessible()
         composeRule.onAllNodes(isDialog()).onLast()
             .captureRoboImage("src/test/screenshots/wizard_camera_blocked_411_light.png")
     }

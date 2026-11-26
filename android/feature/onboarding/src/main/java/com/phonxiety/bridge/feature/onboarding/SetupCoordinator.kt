@@ -19,6 +19,7 @@ import com.phonxiety.bridge.root.SuStatus
 import com.phonxiety.bridge.root.WizardEffect
 import com.phonxiety.bridge.root.WizardEvent
 import com.phonxiety.bridge.root.WizardState
+import java.text.NumberFormat
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -35,6 +36,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
@@ -402,20 +404,27 @@ class SetupCoordinator(
     }
 
     /**
-     * The measurement, in the units a person reads: a median and a loss percentage. A missing
+     * The measurement, in the units a person reads: a median and a loss percentage. The server
+     * reports the loss as a fraction, so it is formatted, not suffixed: 0.2 reads "20 %". A missing
      * figure stays "—" instead of a fabricated zero, and the units are joined by a no-break space.
      */
     private fun describeLinkTest(record: JsonObject?): String {
         if (record == null) return "the daemon returned no link-test record"
-        val p50 = record["p50"]?.jsonPrimitive?.contentOrNull ?: "—"
-        val loss = record["loss"]?.jsonPrimitive?.contentOrNull ?: "—"
-        return "$p50\u00A0ms median · $loss% loss"
+        val p50 = record["p50"]?.jsonPrimitive?.contentOrNull ?: MISSING
+        val loss = record["loss"]?.jsonPrimitive?.doubleOrNull?.let(::formatLoss) ?: MISSING
+        return "$p50\u00A0ms median · $loss loss"
     }
+
+    /** [fraction] is `1 - echoed / sent`, as the daemon reports it. */
+    private fun formatLoss(fraction: Double): String = NumberFormat.getPercentInstance().format(fraction)
 
     private companion object {
         const val LINK_READY_TIMEOUT_MS = 30_000L
         const val REBOOT_SURVIVAL_WINDOW_MS = ModuleController.REBOOT_SURVIVAL_WINDOW_SECONDS * 1000L
         const val LINK_TEST_SECONDS = 5
         const val LINK_TEST_TIMEOUT_MS = 25_000L
+
+        /** A figure the device did not report: never a fabricated zero. */
+        const val MISSING = "\u2014"
     }
 }
