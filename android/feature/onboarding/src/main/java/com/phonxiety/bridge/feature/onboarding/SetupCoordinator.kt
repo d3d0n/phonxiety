@@ -181,7 +181,8 @@ class SetupCoordinator(
             // Only a pass is remembered: a past failure says nothing about the link now, so every
             // probe after one runs the test again instead of parking the wizard on the old result.
             linkTestPassed = if (paired && preferences.linkTestPassed == true) true else null,
-            progress = runCatching { progressStore.read() }.getOrNull()
+            progress = runCatching { progressStore.read() }.getOrNull(),
+            metamodulePending = capabilities?.metamodulePending ?: false
         )
     }
 

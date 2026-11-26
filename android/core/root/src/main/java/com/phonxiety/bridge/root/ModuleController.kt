@@ -103,7 +103,9 @@ data class ProbeSnapshot(
     val missingRuntime: List<RuntimePermission> = emptyList(),
     val paired: Boolean = false,
     val linkTestPassed: Boolean? = null,
-    val progress: ProgressRecord? = null
+    val progress: ProgressRecord? = null,
+    /** A metamodule is staged but not active yet; see [RootCapabilities.metamodulePending]. */
+    val metamodulePending: Boolean = false
 )
 
 /** The install/verify wizard state machine. The UI renders it; it holds no Android types. */
@@ -305,6 +307,14 @@ object ModuleController {
         )
 
         ModuleState.Absent -> when {
+            snapshot.overlay == Overlay.METAMODULE_MISSING && snapshot.metamodulePending ->
+                // The metamodule is staged: its overlay mounts on the next boot. Installing Phonxiety
+                // before that boot is refused by ksud, so the wizard only asks for the reboot.
+                Transition(
+                    WizardState.RebootPending(provider, RebootReason.METAMODULE_INSTALL, module),
+                    listOf(WizardEffect.PersistProgress(InstallOperation.PREPARE_METAMODULE, provider.id))
+                )
+
             snapshot.overlay == Overlay.METAMODULE_MISSING ->
                 Transition(WizardState.ProviderPrep(provider, PrepReason.METAMODULE_MISSING))
 
@@ -427,11 +437,9 @@ object ModuleController {
         if (state !is WizardState.Installing) return Transition(state)
         if (result.isSuccess) {
             val reason = when (state.operation) {
-                InstallOperation.INSTALL, InstallOperation.PREPARE_METAMODULE ->
-                    RebootReason.MODULE_INSTALL
-
+                InstallOperation.INSTALL -> RebootReason.MODULE_INSTALL
+                InstallOperation.PREPARE_METAMODULE -> RebootReason.METAMODULE_INSTALL
                 InstallOperation.UPDATE -> RebootReason.MODULE_UPDATE
-
                 InstallOperation.ROLLBACK -> RebootReason.MODULE_ROLLBACK
             }
             return Transition(WizardState.RebootPending(state.provider, reason, state.module))
@@ -457,6 +465,7 @@ object ModuleController {
                     when (state.reason) {
                         RebootReason.MODULE_UPDATE -> InstallOperation.UPDATE
                         RebootReason.MODULE_ROLLBACK -> InstallOperation.ROLLBACK
+                        RebootReason.METAMODULE_INSTALL -> InstallOperation.PREPARE_METAMODULE
                         else -> InstallOperation.INSTALL
                     },
                     state.provider.id

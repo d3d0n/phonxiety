@@ -174,7 +174,52 @@ class ProviderCommandsTest {
         }
         val provider = KernelSuProvider(kernelSuProvider(), shell().first, environment)
 
-        assertEquals(Overlay.METAMODULE_PRESENT, provider.capabilities().systemOverlay)
+        val capabilities = provider.capabilities()
+
+        assertEquals(Overlay.METAMODULE_PRESENT, capabilities.systemOverlay)
+        assertFalse(capabilities.metamodulePending)
+    }
+
+    @Test
+    fun kernelSuStagedMetamoduleIsMissingAndPending() = runTest {
+        val environment = stagedMetamoduleEnvironment()
+        val provider = KernelSuProvider(kernelSuProvider(), shell().first, environment)
+
+        val capabilities = provider.capabilities()
+
+        // `ksud` has copied the module in and left its `update` marker: not mounted until a boot.
+        assertEquals(Overlay.METAMODULE_MISSING, capabilities.systemOverlay)
+        assertTrue(capabilities.metamodulePending)
+    }
+
+    @Test
+    fun kernelSuNextStagedMetamoduleIsAlsoPending() = runTest {
+        val provider = KernelSuProvider(
+            kernelSuProvider(id = RootId.KERNELSU_NEXT),
+            shell().first,
+            stagedMetamoduleEnvironment()
+        )
+
+        assertEquals(Overlay.METAMODULE_MISSING, provider.capabilities().systemOverlay)
+        assertTrue(provider.capabilities().metamodulePending)
+    }
+
+    @Test
+    fun kernelSuUnreadableMetamoduleDirectoryIsNotTreatedAsPending() = runTest {
+        val environment = FakeEnvironment().apply {
+            dirs[RootCommand.MODULES_DIR] = listOf("meta-overlayfs")
+            files["${RootCommand.MODULES_DIR}/meta-overlayfs/module.prop"] =
+                "id=meta-overlayfs\nmetamodule=1\n"
+        }
+
+        assertFalse(metamoduleIsPending(environment, "meta-overlayfs"))
+    }
+
+    private fun stagedMetamoduleEnvironment(): FakeEnvironment = FakeEnvironment().apply {
+        dirs[RootCommand.MODULES_DIR] = listOf("meta-overlayfs")
+        dirs["${RootCommand.MODULES_DIR}/meta-overlayfs"] = listOf("module.prop", MODULE_UPDATE_MARKER)
+        files["${RootCommand.MODULES_DIR}/meta-overlayfs/module.prop"] =
+            "id=meta-overlayfs\nname=meta-overlayfs\nmetamodule=1\n"
     }
 
     @Test

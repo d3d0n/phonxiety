@@ -91,6 +91,22 @@ suspend fun findMetamodule(environment: RootEnvironment): String? {
     return null
 }
 
+/**
+ * The marker `ksud` leaves in `/data/adb/modules/<id>` while a module is staged for the next boot
+ * (`userspace/ksud/src/module.rs`: `ensure_file_exists(modules/<id>/update)`; the boot handler
+ * renames `modules_update/<id>` over `modules/<id>` and drops the marker).
+ */
+internal const val MODULE_UPDATE_MARKER: String = "update"
+
+/**
+ * True when [moduleId] sits in `/data/adb/modules` with the `update` marker: staged, not mounted.
+ * A directory that cannot be listed proves nothing, so it answers false and keeps today's routing.
+ */
+suspend fun metamoduleIsPending(environment: RootEnvironment, moduleId: String): Boolean {
+    val entries = environment.listDir("${RootCommand.MODULES_DIR}/$moduleId") ?: return false
+    return MODULE_UPDATE_MARKER in entries
+}
+
 internal suspend fun readModuleProp(environment: RootEnvironment, dir: String): ModuleProp? = environment.readFile("$dir/module.prop")?.let(::parseModuleProp)
 
 // ---------------------------------------------------------------------------------------------
@@ -212,8 +228,13 @@ class KernelSuProvider(
 ) : RootProvider {
     override suspend fun capabilities(): RootCapabilities {
         val metamodule = findMetamodule(environment)
+        val pending = metamodule != null && metamoduleIsPending(environment, metamodule)
         return RootCapabilities(
-            systemOverlay = if (metamodule != null) Overlay.METAMODULE_PRESENT else Overlay.METAMODULE_MISSING,
+            systemOverlay = if (metamodule != null && !pending) {
+                Overlay.METAMODULE_PRESENT
+            } else {
+                Overlay.METAMODULE_MISSING
+            },
             hotInstall = true,
             updateJson = true,
             webUi = true,
@@ -225,7 +246,8 @@ class KernelSuProvider(
                 BootStage.BOOT_COMPLETED
             ),
             managerPackage = detected.managerPackage ?: defaultManagerPackage(detected.id),
-            coexistenceWarning = COEXISTENCE_WARNING
+            coexistenceWarning = COEXISTENCE_WARNING,
+            metamodulePending = pending
         )
     }
 
