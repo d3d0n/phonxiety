@@ -1,9 +1,7 @@
 package com.phonxiety.bridge.designsystem.component
 
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
+import android.animation.ValueAnimator
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -18,24 +16,29 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import com.phonxiety.bridge.designsystem.PhonxietyColors
+import com.phonxiety.bridge.designsystem.LocalStatusColors
+import com.phonxiety.bridge.designsystem.R
+import com.phonxiety.bridge.designsystem.StatusColorPair
 
 /** Semantic tone of a [StatusPill]; the theme decides the actual colours. */
 enum class StatusTone { POSITIVE, WARNING, NEGATIVE, NEUTRAL, ACCENT }
 
 /** The link path as the dashboard and the wizard label it. */
-enum class LinkPath { DIRECT, RELAY, OFFLINE }
+enum class LinkPath { DIRECT, RELAY, OFFLINE, UNKNOWN }
 
 /**
  * Small labelled capsule for a state that must never be mistaken for another: link path, call
- * phase, permission verdict. [pulse] is for transitional states (`connecting`) only.
+ * phase, permission verdict. [pulse] is for transitional states (`connecting`) only; it runs at
+ * most three cycles and stops when the system animator scale is off.
+ *
+ * The visible label is the whole accessible name: the tone is a colour, not something to announce.
  */
 @Composable
 fun StatusPill(
@@ -44,63 +47,65 @@ fun StatusPill(
     modifier: Modifier = Modifier,
     pulse: Boolean = false
 ) {
-    val dark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
-    val container = when (tone) {
-        StatusTone.POSITIVE -> MaterialTheme.colorScheme.tertiaryContainer
-        StatusTone.WARNING -> if (dark) PhonxietyColors.WarnDark.copy(alpha = 0.24f) else PhonxietyColors.Warn.copy(alpha = 0.14f)
-        StatusTone.NEGATIVE -> MaterialTheme.colorScheme.errorContainer
-        StatusTone.NEUTRAL -> MaterialTheme.colorScheme.surfaceVariant
-        StatusTone.ACCENT -> MaterialTheme.colorScheme.primaryContainer
+    val colors = LocalStatusColors.current
+    val pair: StatusColorPair = when (tone) {
+        StatusTone.POSITIVE -> colors.positive
+        StatusTone.WARNING -> colors.warning
+        StatusTone.NEGATIVE -> colors.negative
+        StatusTone.NEUTRAL -> colors.neutral
+        StatusTone.ACCENT -> colors.accent
     }
-    val content = when (tone) {
-        StatusTone.POSITIVE -> MaterialTheme.colorScheme.onTertiaryContainer
-        StatusTone.WARNING -> if (dark) PhonxietyColors.WarnDark else PhonxietyColors.Warn
-        StatusTone.NEGATIVE -> MaterialTheme.colorScheme.onErrorContainer
-        StatusTone.NEUTRAL -> MaterialTheme.colorScheme.onSurfaceVariant
-        StatusTone.ACCENT -> MaterialTheme.colorScheme.onPrimaryContainer
-    }
-    val dotAlpha = if (pulse) {
-        val transition = rememberInfiniteTransition(label = "status-pill")
-        val alpha by transition.animateFloat(
-            initialValue = 1f,
-            targetValue = 0.3f,
-            animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
-            label = "status-pill-alpha"
-        )
-        alpha
+    val dotColor = if (tone == StatusTone.NEUTRAL) colors.neutralIndicator else pair.content
+    val pulseAlpha = if (pulse && ValueAnimator.areAnimatorsEnabled()) {
+        val alpha = remember { Animatable(1f) }
+        LaunchedEffect(Unit) {
+            repeat(PULSE_CYCLES) {
+                alpha.animateTo(PULSE_LOW_ALPHA, tween(PULSE_HALF_CYCLE_MS))
+                alpha.animateTo(1f, tween(PULSE_HALF_CYCLE_MS))
+            }
+        }
+        alpha.value
     } else {
         1f
     }
     Surface(
-        modifier = modifier.semantics { contentDescription = "$label ${tone.name.lowercase()}" },
+        modifier = modifier.semantics(mergeDescendants = true) {},
         shape = CircleShape,
-        color = container,
-        contentColor = content
+        color = pair.container,
+        contentColor = pair.content
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Start
         ) {
-            val dotColor = if (tone == StatusTone.NEUTRAL) MaterialTheme.colorScheme.outline else content
             Box(
                 modifier = Modifier
                     .size(8.dp)
-                    .background(dotColor.copy(alpha = dotAlpha), CircleShape)
+                    .background(dotColor.copy(alpha = pulseAlpha), CircleShape)
             )
             Spacer(Modifier.width(6.dp))
-            Text(text = label, style = MaterialTheme.typography.labelMedium)
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = pair.content
+            )
         }
     }
 }
 
-/** The link path pill: Direct is good, Relay is a warning, Offline is neutral. */
+/** The link path pill. Only a measured path gets a name; an unmeasured one stays "Unknown". */
 @Composable
 fun LinkPathPill(path: LinkPath, modifier: Modifier = Modifier) {
-    val (tone, label) = when (path) {
-        LinkPath.DIRECT -> StatusTone.POSITIVE to "Direct"
-        LinkPath.RELAY -> StatusTone.WARNING to "Relay"
-        LinkPath.OFFLINE -> StatusTone.NEUTRAL to "Offline"
+    val (tone, labelId) = when (path) {
+        LinkPath.DIRECT -> StatusTone.POSITIVE to R.string.designsystem_path_direct
+        LinkPath.RELAY -> StatusTone.WARNING to R.string.designsystem_path_relay
+        LinkPath.OFFLINE -> StatusTone.NEUTRAL to R.string.designsystem_path_offline
+        LinkPath.UNKNOWN -> StatusTone.NEUTRAL to R.string.designsystem_path_unknown
     }
-    StatusPill(label = label, tone = tone, modifier = modifier)
+    StatusPill(label = stringResource(labelId), tone = tone, modifier = modifier)
 }
+
+private const val PULSE_CYCLES = 3
+private const val PULSE_HALF_CYCLE_MS = 400
+private const val PULSE_LOW_ALPHA = 0.35f
