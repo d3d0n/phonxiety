@@ -11,6 +11,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
@@ -181,6 +182,17 @@ class CallsScreenshotTest {
         setScreen(filled(), onOutcomeChange = { requested = it })
         composeRule.onNodeWithText("Declined").performClick()
         assertEquals("declined", requested)
+    }
+
+    @Test
+    fun theFilterChipsWrapInsteadOfRunningOffTheEdge() {
+        setScreen(filled(), fontScale = 2f, width = 320.dp)
+        // A label cut at the edge reads as a broken control; the chips are the only nodes these
+        // words exist on in this sample.
+        for (label in listOf("Declined", "Disconnected")) {
+            val bounds = composeRule.onNodeWithText(label).getUnclippedBoundsInRoot()
+            assertTrue("$label stays inside the screen", bounds.right.value <= 320f)
+        }
     }
 
     @Test

@@ -16,6 +16,7 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
@@ -241,6 +242,25 @@ class CallDetailScreenshotTest {
         )
         composeRule.onNodeWithText("No summary was produced.").assertExists()
         composeRule.onNodeWithText("The summary appears when the call ends.").assertDoesNotExist()
+    }
+
+    @Test
+    fun aResultWithoutAStatusLeavesNoEmptyRowAtTwoHundredPercent() {
+        setScreen(
+            finished().copy(snapshot = detailSnapshot().copy(resultStatus = null)),
+            fontScale = 2f,
+            width = 320.dp
+        )
+        scrollToNode("Table for two on Thursday")
+        composeRule.onAllNodesWithText("Summary ready").assertCountEquals(0)
+        val subtitle = composeRule.onNodeWithText("Complete").getUnclippedBoundsInRoot()
+        val summary = composeRule.onNodeWithText("Table for two on Thursday").getUnclippedBoundsInRoot()
+        assertEquals(
+            "the content follows the subtitle at the card's own spacing, with no empty status row",
+            10f,
+            (summary.top - subtitle.bottom).value,
+            1f
+        )
     }
 
     @Test

@@ -362,16 +362,20 @@ private fun ResultCard(state: CallDetailUiState) {
     val snapshot = state.snapshot
     val summary = snapshot?.summary
     val fields = state.summaryFields
+    // Resolved before the slot: a null slot adds no row and no gap, an empty one still would.
+    val statusLabel = resultLabel(snapshot?.resultStatus)
     SectionCard(
         title = stringResource(R.string.call_detail_result_title),
         subtitle = snapshot?.taskOutcome?.takeIf { it.isNotBlank() }?.let(::humanize),
-        status = {
-            resultLabel(snapshot?.resultStatus)?.let { label ->
+        status = if (statusLabel != null) {
+            {
                 StatusPill(
-                    label = label,
+                    label = statusLabel,
                     tone = if (snapshot?.resultStatus == "ready") StatusTone.POSITIVE else StatusTone.NEUTRAL
                 )
             }
+        } else {
+            null
         }
     ) {
         if (summary.isNullOrBlank() && fields.isEmpty()) {
