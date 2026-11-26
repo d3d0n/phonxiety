@@ -102,7 +102,7 @@ fun OnboardingScreen(
             Column {
                 Text(text = "Set up phonxiety", style = MaterialTheme.typography.headlineMedium)
                 Text(
-                    text = "One button. You grant root once and accept one reboot; everything else is derived.",
+                    text = "One button. You grant root once and accept the reboots your provider needs; everything else is derived.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -614,7 +614,13 @@ internal fun WizardState.toSteps(): List<SetupStep> {
         is WizardState.RootDenied -> this.provider
         else -> null
     }
-    val moduleDetail = (this as? WizardState.InstallFailed)?.let { "failed" }
+    // Before the metamodule's boot Phonxiety itself is not installed yet: only the overlay is staged.
+    val metamoduleReboot = (this as? WizardState.RebootPending)?.reason == RebootReason.METAMODULE_INSTALL
+    val moduleDetail = when {
+        this is WizardState.InstallFailed -> "failed"
+        metamoduleReboot -> "metamodule staged"
+        else -> null
+    }
     val doneBefore: Int
     val active: Int?
     val failed: Int?
@@ -650,7 +656,7 @@ internal fun WizardState.toSteps(): List<SetupStep> {
         }
 
         is WizardState.RebootPending -> {
-            doneBefore = 2
+            doneBefore = if (metamoduleReboot) 1 else 2
             active = 2
             failed = null
         }

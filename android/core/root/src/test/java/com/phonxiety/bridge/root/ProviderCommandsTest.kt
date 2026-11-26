@@ -217,7 +217,8 @@ class ProviderCommandsTest {
 
     private fun stagedMetamoduleEnvironment(): FakeEnvironment = FakeEnvironment().apply {
         dirs[RootCommand.MODULES_DIR] = listOf("meta-overlayfs")
-        dirs["${RootCommand.MODULES_DIR}/meta-overlayfs"] = listOf("module.prop", MODULE_UPDATE_MARKER)
+        // KernelSU v3.3.1 `module.rs` stages a module with this literal marker file.
+        dirs["${RootCommand.MODULES_DIR}/meta-overlayfs"] = listOf("module.prop", "update")
         files["${RootCommand.MODULES_DIR}/meta-overlayfs/module.prop"] =
             "id=meta-overlayfs\nname=meta-overlayfs\nmetamodule=1\n"
     }
