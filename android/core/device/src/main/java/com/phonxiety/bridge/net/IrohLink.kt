@@ -17,7 +17,6 @@ import computer.iroh.EndpointAddr
 import computer.iroh.EndpointOptions
 import computer.iroh.EndpointTicket
 import computer.iroh.IrohAndroid
-import computer.iroh.NetworkChangeCallback
 import computer.iroh.PathChangeCallback
 import computer.iroh.PathSnapshot
 import computer.iroh.RecvStream
@@ -441,8 +440,8 @@ internal class IrohLinkAdmission {
 }
 
 /**
- * The link's late-bound subscriptions: the relay-only monitor, the endpoint's
- * own network-change watch and Android's default-network watch.
+ * The link's late-bound subscriptions: the relay-only monitor and Android's
+ * default-network watch.
  *
  * Their registration finishes after readers may already have failed the link,
  * so both sides share one lock and publication checks the link's terminal state
@@ -455,7 +454,6 @@ internal class IrohLinkWatchers(private val isClosed: () -> Boolean) {
     private val lock = Any()
     private var stopped = false
     private var monitor: IrohPathMonitor? = null
-    private var endpointWatch: (() -> Unit)? = null
     private var networkWatch: (() -> Unit)? = null
 
     /** The monitor while it is attached; null once the link ended. */
@@ -464,21 +462,16 @@ internal class IrohLinkWatchers(private val isClosed: () -> Boolean) {
     /** Attaches the relay-only monitor; false means the caller cancels it now. */
     fun attachMonitor(pathMonitor: IrohPathMonitor): Boolean = attach { monitor = pathMonitor }
 
-    /** Attaches the endpoint's network-change watch; false means the caller closes it now. */
-    fun attachEndpointWatch(release: () -> Unit): Boolean = attach { endpointWatch = release }
-
     /** Attaches Android's network watch; false means the caller unregisters it now. */
     fun attachNetworkWatch(release: () -> Unit): Boolean = attach { networkWatch = release }
 
     /** Stops accepting handles and returns every release to run outside the lock. */
     fun detachAll(): List<() -> Unit> = synchronized(lock) {
         stopped = true
-        val releases = ArrayList<() -> Unit>(3)
+        val releases = ArrayList<() -> Unit>(2)
         networkWatch?.let { releases += it }
-        endpointWatch?.let { releases += it }
         monitor?.let { attached -> releases += { attached.cancel() } }
         networkWatch = null
-        endpointWatch = null
         monitor = null
         releases
     }
@@ -651,13 +644,12 @@ private class IrohLink(
             } else {
                 pathMonitor.cancel()
             }
-            val watch = endpoint.watchNetworkChange(object : NetworkChangeCallback {
-                override suspend fun onChange() = onNetworkChange("iroh_network_changed", listener)
-            })
-            val closeWatch: () -> Unit = {
-                runCatching { watch.close() }
-            }
-            if (!watchers.attachEndpointWatch(closeWatch)) closeWatch()
+            // Android's default-network callback is the only network-change source.
+            // iroh's own netmon (`Endpoint.watchNetworkChange`) is not subscribed: on
+            // Android 17 it reported changes continuously, thousands per second, and
+            // recycled the endpoint at every cooldown expiry while the network stayed
+            // the same.  iroh still migrates the connection internally on address
+            // changes; only a replaced or lost default network recycles the endpoint.
             val unwatch = IrohSupport.watchNetwork(context) { reason -> onNetworkChange(reason, listener) }
             if (!watchers.attachNetworkWatch(unwatch)) unwatch()
         } catch (t: Throwable) {
