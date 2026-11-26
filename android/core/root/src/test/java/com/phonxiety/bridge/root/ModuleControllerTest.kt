@@ -16,7 +16,8 @@ class ModuleControllerTest {
         missingRuntime: List<RuntimePermission> = emptyList(),
         paired: Boolean = false,
         linkTestPassed: Boolean? = null,
-        progress: ProgressRecord? = null
+        progress: ProgressRecord? = null,
+        metamodulePending: Boolean = false
     ): ProbeSnapshot = ProbeSnapshot(
         detection = detection,
         module = module,
@@ -25,7 +26,8 @@ class ModuleControllerTest {
         missingRuntime = missingRuntime,
         paired = paired,
         linkTestPassed = linkTestPassed,
-        progress = progress
+        progress = progress,
+        metamodulePending = metamodulePending
     )
 
     private fun probe(snapshot: ProbeSnapshot): Transition = ModuleController.reduce(WizardState.Checking, WizardEvent.ProbeCompleted(snapshot))
@@ -182,15 +184,230 @@ class ModuleControllerTest {
 
         val transition = ModuleController.reduce(
             installing,
-            WizardEvent.InstallResult(
-                ProviderResult.Success("meta-overlayfs: installed\nphonxiety: installed")
+            WizardEvent.InstallResult(ProviderResult.Success("meta-overlayfs: installed"))
+        )
+
+        assertEquals(
+            WizardState.RebootPending(kernelSu, RebootReason.METAMODULE_INSTALL, ModuleState.Absent),
+            transition.state
+        )
+    }
+
+    // --- KernelSU metamodule: two boots ------------------------------------------------------
+
+    @Test
+    fun aStagedMetamoduleAsksForTheRebootAndInstallsNothing() {
+        val transition = probe(
+            snapshot(
+                detection = RootDetection(SuStatus.GRANTED, listOf(kernelSu)),
+                overlay = Overlay.METAMODULE_MISSING,
+                metamodulePending = true
             )
         )
 
         assertEquals(
-            WizardState.RebootPending(kernelSu, RebootReason.MODULE_INSTALL, ModuleState.Absent),
+            WizardState.RebootPending(kernelSu, RebootReason.METAMODULE_INSTALL, ModuleState.Absent),
             transition.state
         )
+        assertEquals(
+            listOf(WizardEffect.PersistProgress(InstallOperation.PREPARE_METAMODULE, RootId.KERNELSU)),
+            transition.effects
+        )
+    }
+
+    @Test
+    fun theMetamoduleRebootKeepsTheProgressAsAPreparation() {
+        val pending = WizardState.RebootPending(
+            kernelSu,
+            RebootReason.METAMODULE_INSTALL,
+            ModuleState.Absent
+        )
+
+        val transition = ModuleController.reduce(pending, WizardEvent.RebootRequested)
+
+        assertEquals(pending, transition.state)
+        assertEquals(
+            listOf(
+                WizardEffect.Reboot(RebootReason.METAMODULE_INSTALL),
+                WizardEffect.PersistProgress(InstallOperation.PREPARE_METAMODULE, RootId.KERNELSU)
+            ),
+            transition.effects
+        )
+    }
+
+    @Test
+    fun theWizardRebuiltFromAStagedMetamoduleLandsOnTheRebootStep() {
+        // Process death before the reboot: nothing survives except the probe and the journal.
+        val transition = probe(
+            snapshot(
+                detection = RootDetection(SuStatus.GRANTED, listOf(kernelSu)),
+                overlay = Overlay.METAMODULE_MISSING,
+                metamodulePending = true,
+                progress = ProgressRecord(InstallOperation.PREPARE_METAMODULE, RootId.KERNELSU, 1L)
+            )
+        )
+
+        val pending = transition.state as WizardState.RebootPending
+        assertEquals(RebootReason.METAMODULE_INSTALL, pending.reason)
+        assertTrue(transition.effects.none { it is WizardEffect.InstallModule })
+        assertEquals(
+            listOf(WizardEffect.PersistProgress(InstallOperation.PREPARE_METAMODULE, RootId.KERNELSU)),
+            transition.effects
+        )
+    }
+
+    @Test
+    fun afterTheMetamoduleBootTheProbeIsReadyToInstallTheModule() {
+        val transition = probe(
+            snapshot(
+                detection = RootDetection(SuStatus.GRANTED, listOf(kernelSu)),
+                overlay = Overlay.METAMODULE_PRESENT,
+                metamodulePending = false,
+                progress = ProgressRecord(InstallOperation.PREPARE_METAMODULE, RootId.KERNELSU, 1L)
+            )
+        )
+
+        assertEquals(WizardState.ReadyToInstall(kernelSu, ModuleState.Absent, false), transition.state)
+    }
+
+    // --- Magisk and APatch keep their single-boot flow ---------------------------------------
+
+    private val apatch = apatchProvider()
+
+    @Test
+    fun magiskInstallsThenRebootsThenResumesAfterTheBoot() {
+        val ready = probe(snapshot()).state
+        assertEquals(WizardState.ReadyToInstall(magisk, ModuleState.Absent, false), ready)
+
+        val installing = ModuleController.reduce(ready, WizardEvent.InstallRequested)
+        assertEquals(
+            listOf(
+                WizardEffect.InstallModule(RootId.MAGISK, InstallOperation.INSTALL),
+                WizardEffect.PersistProgress(InstallOperation.INSTALL, RootId.MAGISK)
+            ),
+            installing.effects
+        )
+
+        val pending = ModuleController.reduce(
+            installing.state,
+            WizardEvent.InstallResult(ProviderResult.Success("installed"))
+        ).state
+        assertEquals(
+            WizardState.RebootPending(magisk, RebootReason.MODULE_INSTALL, ModuleState.Absent),
+            pending
+        )
+
+        assertEquals(
+            listOf(
+                WizardEffect.Reboot(RebootReason.MODULE_INSTALL),
+                WizardEffect.PersistProgress(InstallOperation.INSTALL, RootId.MAGISK)
+            ),
+            ModuleController.reduce(pending, WizardEvent.RebootRequested).effects
+        )
+
+        val afterBoot = probe(
+            snapshot(module = ModuleState.Enabled("0.3.0", 3), verify = passingReport(), paired = true)
+        )
+        assertEquals(WizardState.FirstLinkTest(magisk, null), afterBoot.state)
+    }
+
+    @Test
+    fun apatchInstallsThenRebootsWithTheInstallOperation() {
+        val ready = probe(snapshot(detection = RootDetection(SuStatus.GRANTED, listOf(apatch)))).state
+        assertEquals(WizardState.ReadyToInstall(apatch, ModuleState.Absent, false), ready)
+
+        val installing = ModuleController.reduce(ready, WizardEvent.InstallRequested)
+        assertEquals(InstallOperation.INSTALL, (installing.state as WizardState.Installing).operation)
+
+        val pending = ModuleController.reduce(
+            installing.state,
+            WizardEvent.InstallResult(ProviderResult.Success("installed"))
+        ).state
+        assertEquals(
+            WizardState.RebootPending(apatch, RebootReason.MODULE_INSTALL, ModuleState.Absent),
+            pending
+        )
+        assertEquals(
+            listOf(
+                WizardEffect.Reboot(RebootReason.MODULE_INSTALL),
+                WizardEffect.PersistProgress(InstallOperation.INSTALL, RootId.APATCH)
+            ),
+            ModuleController.reduce(pending, WizardEvent.RebootRequested).effects
+        )
+
+        val afterBoot = probe(
+            snapshot(
+                detection = RootDetection(SuStatus.GRANTED, listOf(apatch)),
+                module = ModuleState.Enabled("0.3.0", 3),
+                verify = passingReport(),
+                paired = true
+            )
+        )
+        assertEquals(WizardState.FirstLinkTest(apatch, null), afterBoot.state)
+    }
+
+    @Test
+    fun apatchStagedUpdateStillAsksForItsOwnReboot() {
+        val transition = probe(
+            snapshot(
+                detection = RootDetection(SuStatus.GRANTED, listOf(apatch)),
+                module = ModuleState.Staged("0.4.0", 4)
+            )
+        )
+
+        assertEquals(
+            WizardState.RebootPending(apatch, RebootReason.MODULE_UPDATE, ModuleState.Staged("0.4.0", 4)),
+            transition.state
+        )
+        assertEquals(
+            listOf(WizardEffect.PersistProgress(InstallOperation.UPDATE, RootId.APATCH)),
+            transition.effects
+        )
+
+        assertEquals(
+            listOf(
+                WizardEffect.Reboot(RebootReason.MODULE_UPDATE),
+                WizardEffect.PersistProgress(InstallOperation.UPDATE, RootId.APATCH)
+            ),
+            ModuleController.reduce(transition.state, WizardEvent.RebootRequested).effects
+        )
+
+        val afterBoot = probe(
+            snapshot(
+                detection = RootDetection(SuStatus.GRANTED, listOf(apatch)),
+                module = ModuleState.Enabled("0.4.0", 4),
+                verify = passingReport(),
+                paired = true
+            )
+        )
+        assertEquals(WizardState.FirstLinkTest(apatch, null), afterBoot.state)
+    }
+
+    @Test
+    fun magiskAndApatchRollbackRebootKeepsTheRollbackProgress() {
+        listOf(magisk to RootId.MAGISK, apatch to RootId.APATCH).forEach { (provider, id) ->
+            val installing = ModuleController.reduce(
+                WizardState.ReadyToInstall(provider, ModuleState.Enabled("0.3.0", 3)),
+                WizardEvent.RollbackRequested
+            )
+            assertEquals(InstallOperation.ROLLBACK, (installing.state as WizardState.Installing).operation)
+
+            val pending = ModuleController.reduce(
+                installing.state,
+                WizardEvent.InstallResult(ProviderResult.Success("removed"))
+            ).state
+            assertEquals(
+                WizardState.RebootPending(provider, RebootReason.MODULE_ROLLBACK, ModuleState.Enabled("0.3.0", 3)),
+                pending
+            )
+            assertEquals(
+                listOf(
+                    WizardEffect.Reboot(RebootReason.MODULE_ROLLBACK),
+                    WizardEffect.PersistProgress(InstallOperation.ROLLBACK, id)
+                ),
+                ModuleController.reduce(pending, WizardEvent.RebootRequested).effects
+            )
+        }
     }
 
     @Test

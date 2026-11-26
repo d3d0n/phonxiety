@@ -15,6 +15,7 @@ import com.phonxiety.bridge.root.RebootReason
 import com.phonxiety.bridge.root.RootCapabilities
 import com.phonxiety.bridge.root.RootDetection
 import com.phonxiety.bridge.root.RootDetector
+import com.phonxiety.bridge.root.RootEnvironment
 import com.phonxiety.bridge.root.RootProvider
 import com.phonxiety.bridge.root.RootProviders
 import com.phonxiety.bridge.root.RootShell
@@ -31,7 +32,9 @@ import java.io.File
  * the caller's IO dispatcher; nothing here touches the main thread.
  */
 class AndroidRootBackend(
-    private val context: Context,
+    context: Context,
+    private val shell: RootShell = RootShell(),
+    private val environment: RootEnvironment = ShellRootEnvironment(shell, AndroidPackageInventory(context)),
     private val zipBuilder: suspend () -> File = {
         moduleZipBuilder(
             context = context,
@@ -40,8 +43,6 @@ class AndroidRootBackend(
     },
     private val metamoduleSource: MetamoduleSource = HttpMetamoduleSource(File(context.cacheDir, "metamodules"))
 ) : RootBackend {
-    private val shell = RootShell()
-    private val environment = ShellRootEnvironment(shell, AndroidPackageInventory(context))
     private val detector = RootDetector(shell, environment)
     private val rebooter = PowerManagerRebooter(context)
     private val verifyChecker = VerifyChecker(AndroidAppFactsProbe(context))
@@ -63,34 +64,26 @@ class AndroidRootBackend(
             // the module and letting the next boot restore the stock overlay.
             InstallOperation.ROLLBACK -> rootProvider.removeModule(ModuleController.MODULE_ID)
 
-            // One reboot total: the metamodule is mounted by the next boot, and Phonxiety is staged
-            // in the same module store, so both apply together when the phone comes back.
-            InstallOperation.PREPARE_METAMODULE -> prepareMetamoduleAndModule(rootProvider)
+            // The metamodule mounts on the next boot; Phonxiety is installed after that boot, because
+            // ksud refuses a module install while a metamodule is still staged.
+            InstallOperation.PREPARE_METAMODULE -> prepareMetamodule(rootProvider)
         }
     }
 
     override suspend fun reboot(provider: DetectedProvider, reason: RebootReason): ProviderResult = provider(provider).reboot(reason)
 
-    private suspend fun prepareMetamoduleAndModule(rootProvider: RootProvider): ProviderResult {
+    /** Exactly one module: the pinned metamodule. The app zip is not built and not installed here. */
+    private suspend fun prepareMetamodule(rootProvider: RootProvider): ProviderResult {
         val metamodule = when (val result = metamoduleSource.zip()) {
             is MetamoduleResult.Ready -> result.file
             is MetamoduleResult.Failed -> return ProviderResult.Failure(result.reason, exitCode = METAMODULE_EXIT)
         }
         val meta = rootProvider.installModule(metamodule)
-        if (!meta.isSuccess) {
-            return ProviderResult.Failure(
-                output = "meta-overlayfs: ${meta.outputText()}",
-                exitCode = METAMODULE_EXIT
-            )
-        }
-        val app = rootProvider.installModule(zipBuilder())
-        return if (app.isSuccess) {
-            ProviderResult.Success(
-                output = "meta-overlayfs: ${meta.outputText()}\nphonxiety: ${app.outputText()}"
-            )
+        return if (meta.isSuccess) {
+            ProviderResult.Success("meta-overlayfs: ${meta.outputText()}")
         } else {
             ProviderResult.Failure(
-                output = "meta-overlayfs: ${meta.outputText()}\nphonxiety: ${app.outputText()}",
+                output = "meta-overlayfs: ${meta.outputText()}",
                 exitCode = METAMODULE_EXIT
             )
         }

@@ -21,6 +21,9 @@ enum class BootStage { POST_FS_DATA, POST_MOUNT, SERVICE, BOOT_COMPLETED, PREINI
 /** Why the app is asking for a reboot; also the `PowerManager` reason string. */
 enum class RebootReason {
     MODULE_INSTALL,
+
+    /** A metamodule was staged; it mounts only after the next boot, before Phonxiety can install. */
+    METAMODULE_INSTALL,
     MODULE_UPDATE,
     MODULE_ROLLBACK,
     USER_REQUEST;
@@ -28,7 +31,7 @@ enum class RebootReason {
     /** `PowerManager.reboot(reason)` on Android requires a short lowercase token. */
     val powerManagerReason: String
         get() = when (this) {
-            MODULE_INSTALL, MODULE_UPDATE, MODULE_ROLLBACK -> "module_update"
+            MODULE_INSTALL, METAMODULE_INSTALL, MODULE_UPDATE, MODULE_ROLLBACK -> "module_update"
             USER_REQUEST -> "userrequested"
         }
 }
@@ -97,7 +100,12 @@ data class RootCapabilities(
     val actionButton: Boolean,
     val bootStages: Set<BootStage>,
     val managerPackage: String?,
-    val coexistenceWarning: String?
+    val coexistenceWarning: String?,
+    /**
+     * A metamodule is staged in `/data/adb/modules` but not mounted yet: KernelSU's `ksud` writes an
+     * `update` marker and the module becomes active on the next boot. Only KernelSU/Next reports it.
+     */
+    val metamodulePending: Boolean = false
 )
 
 /** Result of probing `su -c id`. */

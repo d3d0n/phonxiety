@@ -83,6 +83,11 @@ object OnboardingSamples {
             result = installFailure
         ),
         "reboot_pending" to WizardState.RebootPending(magisk, RebootReason.MODULE_INSTALL),
+        "reboot_pending_metamodule" to WizardState.RebootPending(
+            kernelSu,
+            RebootReason.METAMODULE_INSTALL,
+            ModuleState.Absent
+        ),
         "verify" to WizardState.Verify(magisk, passedReport),
         "verify_failed" to WizardState.Verify(magisk, failedReport),
         "needs_runtime" to WizardState.NeedsRuntime(

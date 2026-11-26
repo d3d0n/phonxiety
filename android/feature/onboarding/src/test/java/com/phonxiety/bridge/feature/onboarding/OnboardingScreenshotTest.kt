@@ -70,6 +70,9 @@ class OnboardingScreenshotTest {
     fun rebootPending() = capture("reboot_pending", state("reboot_pending"))
 
     @Test
+    fun rebootPendingMetamodule() = capture("reboot_pending_metamodule", state("reboot_pending_metamodule"))
+
+    @Test
     fun verify() = capture("verify", state("verify"))
 
     @Test

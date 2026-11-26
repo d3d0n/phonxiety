@@ -315,7 +315,7 @@ private fun WizardCard(
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Text(
-                    text = "Install it here: the pinned meta-overlayfs 1.3.1 archive is downloaded, its SHA-256 checked, then installed together with Phonxiety — one reboot applies both.",
+                    text = "Install it here: the pinned meta-overlayfs 1.3.1 archive is downloaded, its SHA-256 checked, then installed on its own. The next boot activates the overlay; Phonxiety is installed after that boot.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -344,12 +344,21 @@ private fun WizardCard(
             }
 
             is WizardState.RebootPending -> {
+                val metamodule = wizard.reason == RebootReason.METAMODULE_INSTALL
                 Text(
-                    text = "One reboot, then everything else is automatic.",
+                    text = if (metamodule) {
+                        "The metamodule activates on the next boot."
+                    } else {
+                        "One reboot, then everything else is automatic."
+                    },
                     style = MaterialTheme.typography.titleMedium
                 )
                 Text(
-                    text = "The module's privileged allowlist and the priv-app APK only appear after a boot overlay. The wizard resumes here by itself when the phone comes back.",
+                    text = if (metamodule) {
+                        "Phonxiety is installed after the overlay is mounted, so this boot comes first. The wizard resumes here by itself and continues with the module install."
+                    } else {
+                        "The module's privileged allowlist and the priv-app APK only appear after a boot overlay. The wizard resumes here by itself when the phone comes back."
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -730,6 +739,7 @@ private fun VerifyOutcome.label(): String = when (this) {
 
 private fun RebootReason.humanLabel(): String = when (this) {
     RebootReason.MODULE_INSTALL -> "module install"
+    RebootReason.METAMODULE_INSTALL -> "metamodule install"
     RebootReason.MODULE_UPDATE -> "module update"
     RebootReason.MODULE_ROLLBACK -> "module rollback"
     RebootReason.USER_REQUEST -> "user request"
