@@ -66,4 +66,32 @@ class FormattersTest {
         composeRule.setContent { Text(formatDuration(7_500)) }
         composeRule.onNodeWithText("2\u00A0h\u00A005\u00A0min").assertTextEquals("2\u00A0h\u00A005\u00A0min")
     }
+
+    @Test
+    fun aResultValueReadsAsWordsOrAsANumber() {
+        // A boolean answers a question in words; it is not the serialized "true".
+        assertEquals(ResultText("Yes", mono = false), resultText("true", boolean = true, yes = "Yes", no = "No"))
+        assertEquals(ResultText("No", mono = false), resultText("false", boolean = false, yes = "Yes", no = "No"))
+        // A sentence stays prose even when the daemon typed it as a string of digits and words.
+        assertEquals(
+            ResultText("Table for two at 21:00", mono = false),
+            resultText("Table for two at 21:00", boolean = null, yes = "Yes", no = "No")
+        )
+        // Measurements, times and codes keep tabular figures.
+        assertEquals(ResultText("21:00", mono = true), resultText("21:00", boolean = null, yes = "Yes", no = "No"))
+        assertEquals(ResultText("2", mono = true), resultText("2", boolean = null, yes = "Yes", no = "No"))
+        // A one-word answer is an answer, not a code.
+        assertEquals(ResultText("requested", mono = false), resultText("requested", boolean = null, yes = "Yes", no = "No"))
+    }
+
+    @Test
+    fun theFarEndVocabularyIsOneMapping() {
+        assertEquals("Person", farEndLabel("person", resources))
+        assertEquals("IVR", farEndLabel("ivr", resources))
+        assertEquals("Voicemail", farEndLabel("voicemail", resources))
+        // A name the daemon already wrote keeps its spelling.
+        assertEquals("Bella Napoli", farEndLabel("Bella Napoli", resources))
+        // A key this build does not know is still readable, with its words separated.
+        assertEquals("Call center", farEndLabel("call_center", resources))
+    }
 }

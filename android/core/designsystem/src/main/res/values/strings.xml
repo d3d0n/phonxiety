@@ -6,6 +6,13 @@
     <string name="designsystem_show_details">Show details</string>
     <string name="designsystem_hide_details">Hide details</string>
 
+    <string name="designsystem_value_yes">Yes</string>
+    <string name="designsystem_value_no">No</string>
+
+    <string name="designsystem_far_end_person">Person</string>
+    <string name="designsystem_far_end_ivr">IVR</string>
+    <string name="designsystem_far_end_voicemail">Voicemail</string>
+
     <string name="designsystem_step_done">Done</string>
     <string name="designsystem_step_in_progress">In progress</string>
     <string name="designsystem_step_failed">Failed</string>
