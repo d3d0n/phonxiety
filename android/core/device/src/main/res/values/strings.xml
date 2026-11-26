@@ -2,14 +2,45 @@
 <resources>
     <string name="app_name">Phonxiety</string>
 
-    <!-- Foreground-service notifications -->
+    <!-- Notification channels.  The IDs are shipped: renaming one would leave the owner with a
+         second settings row they cannot delete, so only the name and the description change. -->
     <string name="notification_channel_link">Device link</string>
     <string name="notification_channel_link_description">Keeps the phonxiety device link available</string>
     <string name="notification_channel_call">Call bridge</string>
     <string name="notification_channel_call_description">Shown while Telecom has a bridged call active</string>
-    <string name="notification_link_title">phonxiety bridge</string>
-    <string name="notification_call_title">phonxiety call bridge</string>
+    <string name="notification_channel_setup">Setup</string>
+    <string name="notification_channel_setup_description">Reminds you to finish the module install after a reboot</string>
+
+    <!-- The device-link card -->
+    <string name="notification_bridge_connected">Connected to the computer</string>
+    <string name="notification_bridge_detail">%1$s · %2$d&#160;ms</string>
+    <string name="notification_bridge_in_call">In call</string>
+    <string name="notification_bridge_connecting">Reconnecting…</string>
+    <string name="notification_bridge_connecting_text">Trying the next route</string>
+    <string name="notification_bridge_offline">No link to the computer</string>
+    <string name="notification_bridge_offline_text">Tap to check the link</string>
+    <string name="notification_path_direct">Direct</string>
+    <string name="notification_path_relay">Relay</string>
+    <string name="notification_path_unknown">Path unknown</string>
+
+    <!-- The live-call card -->
+    <string name="notification_call_dialling">Dialling</string>
+    <string name="notification_call_active">Call in progress</string>
+    <string name="notification_call_ending">Ending the call</string>
+    <string name="notification_call_ready">Call bridge ready</string>
+    <string name="notification_call_ready_text">Waiting for a call to start</string>
+    <string name="notification_call_phase_dialling">Dialling</string>
+    <string name="notification_call_phase_live">Live</string>
+    <string name="notification_call_phase_ending">Ending</string>
+    <string name="action_hang_up">Hang up</string>
+
+    <!-- Lock-screen versions: no number, no transcript, nothing about the call's content. -->
+    <string name="notification_public_title">phonxiety</string>
+    <string name="notification_public_bridge_text">Device link is running</string>
+    <string name="notification_public_call_text">Call in progress</string>
+    <string name="notification_public_setup_text">Setup needs finishing</string>
+
+    <!-- The engine's link-state callback still names these two; the card follows the state. -->
     <string name="notification_link_waiting">waiting for host</string>
     <string name="notification_link_connected">connected to host</string>
-    <string name="notification_call_active">Call audio bridge active</string>
 </resources>

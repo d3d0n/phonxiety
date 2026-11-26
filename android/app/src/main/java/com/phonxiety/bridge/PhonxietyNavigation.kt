@@ -1,5 +1,6 @@
 package com.phonxiety.bridge
 
+import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
@@ -19,6 +20,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
 import androidx.navigation3.runtime.NavBackStack
 import androidx.navigation3.runtime.NavKey
@@ -47,21 +49,30 @@ import kotlinx.serialization.modules.subclass
 sealed interface AppSignal {
     data class Pair(val link: String) : AppSignal
 
+    /** A notification tap that lands on the dashboard. */
+    data object Dashboard : AppSignal
+
+    /** The live call card's tap, for one call. */
+    data class LiveCall(val callId: String) : AppSignal
+
     data object Doctor : AppSignal
+
+    /** The setup reminder's tap. */
+    data object Setup : AppSignal
 }
 
 /** One top-level destination: what the navigation suite draws and where it leads. */
 private data class TopLevel(
     val key: NavKey,
-    val label: String,
+    @StringRes val label: Int,
     val icon: ImageVector
 )
 
 private val TOP_LEVEL = listOf(
-    TopLevel(DashboardKey, "Home", Icons.Filled.Home),
-    TopLevel(CallsKey, "Calls", Icons.Filled.Call),
-    TopLevel(LabKey, "Lab", Icons.Filled.Build),
-    TopLevel(SettingsKey, "Settings", Icons.Filled.Settings)
+    TopLevel(DashboardKey, R.string.nav_home, Icons.Filled.Home),
+    TopLevel(CallsKey, R.string.nav_calls, Icons.Filled.Call),
+    TopLevel(LabKey, R.string.nav_lab, Icons.Filled.Build),
+    TopLevel(SettingsKey, R.string.nav_settings, Icons.Filled.Settings)
 )
 
 /**
@@ -100,24 +111,9 @@ fun PhonxietyNavigationHost(
     val backStack = rememberNavBackStack(configuration, start)
 
     LaunchedEffect(signal) {
-        when (val current = signal) {
-            is AppSignal.Pair -> {
-                val last = backStack.lastOrNull()
-                if (last is OnboardingKey) {
-                    backStack[backStack.lastIndex] = OnboardingKey(current.link)
-                } else {
-                    backStack.add(OnboardingKey(current.link))
-                }
-                onSignalConsumed()
-            }
-
-            AppSignal.Doctor -> {
-                if (backStack.lastOrNull() !is DoctorKey) backStack.add(DoctorKey)
-                onSignalConsumed()
-            }
-
-            null -> Unit
-        }
+        val current = signal ?: return@LaunchedEffect
+        backStack.openSignal(current)
+        onSignalConsumed()
     }
 
     val activity = context as? android.app.Activity
@@ -146,7 +142,7 @@ fun PhonxietyNavigationHost(
                             contentDescription = null
                         )
                     },
-                    label = { Text(destination.label) }
+                    label = { Text(stringResource(destination.label)) }
                 )
             }
         },
@@ -253,6 +249,34 @@ private fun navigationSuiteType(): NavigationSuiteType {
     return if (wide) NavigationSuiteType.NavigationRail else NavigationSuiteType.NavigationBar
 }
 
+/** The one place an [AppSignal] becomes a screen, shared by a cold start and `onNewIntent`. */
+internal fun MutableList<NavKey>.openSignal(signal: AppSignal) {
+    when (signal) {
+        is AppSignal.Pair -> {
+            if (lastOrNull() is OnboardingKey) {
+                this[lastIndex] = OnboardingKey(signal.link)
+            } else {
+                add(OnboardingKey(signal.link))
+            }
+        }
+
+        AppSignal.Dashboard -> showDashboard()
+
+        is AppSignal.LiveCall -> {
+            val key = LiveCallKey(signal.callId)
+            if (lastOrNull() != key) {
+                // A tap brings that call's screen to the top instead of stacking a second copy.
+                indexOf(key).takeIf { it >= 0 }?.let { removeAt(it) }
+                add(key)
+            }
+        }
+
+        AppSignal.Doctor -> if (lastOrNull() !is DoctorKey) add(DoctorKey)
+
+        AppSignal.Setup -> if (lastOrNull() !is OnboardingKey) add(OnboardingKey())
+    }
+}
+
 private fun NavBackStack<NavKey>.push(key: NavKey) {
     if (lastOrNull() == key) return
     add(key)
@@ -269,7 +293,7 @@ private fun NavBackStack<NavKey>.openSection(key: NavKey) {
     }
 }
 
-private fun NavBackStack<NavKey>.showDashboard() {
+private fun MutableList<NavKey>.showDashboard() {
     if (lastOrNull() is DashboardKey) return
     clear()
     add(DashboardKey)

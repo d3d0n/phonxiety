@@ -72,6 +72,8 @@ android {
     testOptions {
         unitTests {
             isReturnDefaultValues = true
+            // The entry-point tests read the app's own strings and draw its notifications.
+            isIncludeAndroidResources = true
         }
     }
 
@@ -186,4 +188,7 @@ dependencies {
     implementation(platform(libs.androidx.compose.bom))
 
     testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.junit)
 }

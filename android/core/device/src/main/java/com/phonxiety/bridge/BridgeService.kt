@@ -6,7 +6,12 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.IBinder
-import com.phonxiety.bridge.device.R
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.map
 
 /**
  * Idle device link.  The app starts it when it is paired, from [MainActivity]
@@ -23,7 +28,6 @@ import com.phonxiety.bridge.device.R
 class BridgeService : Service() {
     companion object {
         private const val TAG = "PhonxietyBridge"
-        private const val NOTIFICATION_ID = 0x5048
 
         /** Starts the link as a foreground service; safe to call repeatedly. */
         fun start(context: Context) {
@@ -49,14 +53,20 @@ class BridgeService : Service() {
 
     @Volatile private var foregroundReady = false
     private var engine: BridgeEngine? = null
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var card: Job? = null
+
+    private val slot by lazy {
+        NotificationSlot<BridgeNotice>(getSystemService(NotificationManager::class.java), Notifications.BRIDGE_ID)
+    }
 
     override fun onCreate() {
         super.onCreate()
         runCatching { Notifications.ensureChannels(this) }
         try {
             startForeground(
-                NOTIFICATION_ID,
-                Notifications.bridge(this, getString(R.string.notification_link_waiting)),
+                Notifications.BRIDGE_ID,
+                Notifications.bridge(this, BridgeNotice.Offline),
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
             )
             foregroundReady = true
@@ -78,23 +88,26 @@ class BridgeService : Service() {
         } catch (e: BridgeConfigException) {
             BridgeLog.e(TAG, "bridge config unavailable: ${e.code}")
             BridgeRuntime.forgetPairing()
-            stopForeground(Service.STOP_FOREGROUND_REMOVE)
+            tearDownForeground()
             stopSelf(startId)
             return Service.START_NOT_STICKY
         } catch (e: Exception) {
             BridgeLog.e(TAG, "bridge config unreadable: ${e.javaClass.simpleName}")
             BridgeRuntime.forgetPairing()
-            stopForeground(Service.STOP_FOREGROUND_REMOVE)
+            tearDownForeground()
             stopSelf(startId)
             return Service.START_NOT_STICKY
         }
 
         BridgeRuntime.rememberPairing(config.kind)
-        val created = BridgeEngine(applicationContext, config) { textRes ->
-            updateNotification(getString(textRes))
-        }
+        // The card follows the state, which carries the path, the latency and the call; the
+        // engine's per-link callback only names a string and would lose two of the three.
+        val created = BridgeEngine(applicationContext, config) { }
         engine = created
         BridgeRuntime.attach(created)
+        card = slot.follow(created.state.map(BridgeNotice::of), scope) { notice ->
+            Notifications.bridge(this, notice)
+        }
         created.start()
         return Service.START_STICKY
     }
@@ -102,23 +115,21 @@ class BridgeService : Service() {
     override fun onDestroy() {
         val current = engine
         engine = null
+        card?.cancel()
+        card = null
+        scope.cancel()
         if (current != null) BridgeRuntime.detach(current)
         current?.close()
-        foregroundReady = false
+        tearDownForeground()
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun updateNotification(text: String) {
-        if (!foregroundReady) return
-        try {
-            getSystemService(NotificationManager::class.java)?.notify(
-                NOTIFICATION_ID,
-                Notifications.bridge(this, text)
-            )
-        } catch (_: Exception) {
-            // The service may be going away.
-        }
+    /** The explicit cancel an ongoing card must have, whatever ended the service (F13). */
+    private fun tearDownForeground() {
+        foregroundReady = false
+        slot.remove()
+        stopForeground(Service.STOP_FOREGROUND_REMOVE)
     }
 }

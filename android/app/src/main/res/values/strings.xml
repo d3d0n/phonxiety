@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Top-level navigation labels -->
+    <string name="nav_home">Home</string>
+    <string name="nav_calls">Calls</string>
+    <string name="nav_lab">Lab</string>
+    <string name="nav_settings">Settings</string>
+
+    <!-- The reminder posted after the reboot the wizard asked for -->
+    <string name="notification_setup_title">Finish the module install</string>
+    <string name="notification_setup_text">Open phonxiety to verify it.</string>
+</resources>
