@@ -122,14 +122,22 @@ class EngineStateStore {
         }
     }
 
+    /**
+     * Places a new call, or replays the start of the one the store already shows. A duplicate dial
+     * for the same [callId] is not a new call: the placement time, the recorded answer and the phase
+     * stay, or a replay would restart the ring the call has already rung, flash the card back to
+     * dialing and lose the connect time.
+     */
     fun callStarted(callId: String, destinationMasked: String, startedAtEpochMs: Long) {
         mutable.update {
+            val existing = it.call?.takeIf { call -> call.callId == callId }
             it.copy(
                 call = CallState(
                     callId = callId,
                     destinationMasked = destinationMasked,
-                    phase = CallPhase.DIALING,
-                    startedAtEpochMs = startedAtEpochMs
+                    phase = existing?.phase ?: CallPhase.DIALING,
+                    startedAtEpochMs = existing?.startedAtEpochMs ?: startedAtEpochMs,
+                    connectedAtEpochMs = existing?.connectedAtEpochMs
                 )
             )
         }
@@ -143,13 +151,29 @@ class EngineStateStore {
      * counts from the answer rather than from the moment it opened.
      */
     fun callPhase(phase: CallPhase, connectTimeMillis: Long? = null) {
+        advance(phase, connectTimeMillis, stampWhenUnknown = true)
+    }
+
+    /**
+     * Replays a phase of a call that answered before this process observed it: the intent a restart
+     * restored from the ledger, or a duplicate dial of a call already owned. Unlike [callPhase] this
+     * never stamps an answer of its own, because the engine's clock at replay is the moment the
+     * restore ran, not when the line came up. Only Telecom's [connectTimeMillis] may supply the
+     * stamp, and an already recorded one is kept.
+     */
+    fun callPhaseReplayed(phase: CallPhase, connectTimeMillis: Long? = null) {
+        advance(phase, connectTimeMillis, stampWhenUnknown = false)
+    }
+
+    private fun advance(phase: CallPhase, connectTimeMillis: Long?, stampWhenUnknown: Boolean) {
         mutable.update { current ->
             val call = current.call ?: return@update current
             val connectedAt = when {
                 call.connectedAtEpochMs != null -> call.connectedAtEpochMs
                 phase != CallPhase.ACTIVE -> null
                 connectTimeMillis != null && connectTimeMillis > 0 -> connectTimeMillis
-                else -> System.currentTimeMillis()
+                stampWhenUnknown -> System.currentTimeMillis()
+                else -> null
             }
             current.copy(call = call.copy(phase = phase, connectedAtEpochMs = connectedAt))
         }

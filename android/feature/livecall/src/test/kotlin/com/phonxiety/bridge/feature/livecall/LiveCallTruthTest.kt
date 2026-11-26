@@ -82,6 +82,24 @@ class LiveCallTruthTest {
         assertEquals("00:34", formatTimer(midCall, connectedAt + 34_000))
     }
 
+    /**
+     * An end that beats the record's duration still counts from the answer: the bridge's stamp is
+     * the known one, and placement includes the ring the answer reset.
+     */
+    @Test
+    fun theEndedHeaderUsesTheBridgesConnectUntilTheRecordArrives() {
+        val connectedAt = 1_764_000_020_000L
+        val endedEarly = live.copy(
+            state = "ended",
+            ended = true,
+            endedAtMs = connectedAt + 16_000,
+            connectedAtMs = null,
+            bridgeConnectedAtMs = connectedAt,
+            createdAtMs = connectedAt - 30_000
+        )
+        assertEquals("00:16", formatTimer(endedEarly, nowEpochMs = connectedAt + 60_000))
+    }
+
     @Test
     fun aPartialFirstTurnIsInProgressNotAFuture() {
         val firstWords = live.copy(

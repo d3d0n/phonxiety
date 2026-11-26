@@ -528,6 +528,122 @@ class LiveCallViewModelTest {
         advanceUntilIdle()
     }
 
+    /**
+     * The end can arrive before the final record does. Until that record carries the duration, the
+     * header counts from the answer the engine already recorded, not from placement: the ringing
+     * time the answer reset must not come back for the seconds the record is late.
+     */
+    @Test
+    fun theEndedHeaderKeepsTheBridgesConnectUntilTheRecordSuppliesIt() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        val placedAt = (System.currentTimeMillis() - 600_000) / 1_000.0
+        api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "active", createdAt = placedAt, connectedAt = null))
+        val bridge = FakeBridgeState()
+        val viewModel = LiveCallViewModel(api, bridge)
+        viewModel.bind(CALL_ID)
+        runCurrent()
+
+        val bridgeConnect = System.currentTimeMillis() - 5_000
+        bridge.emit(
+            BridgeState(call = CallState(CALL_ID, "+998 ·· 67", CallPhase.ACTIVE, (placedAt * 1_000).toLong(), bridgeConnect))
+        )
+        runCurrent()
+        assertEquals(bridgeConnect, viewModel.state.value.timerStartMs)
+
+        // The end arrives first; the record read afterwards still has no connected_at.
+        api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(endedEvent(1))))
+        advanceUntilIdle()
+
+        val ended = viewModel.state.value
+        assertTrue(ended.ended)
+        assertNull("the record still has no connect time of its own", ended.connectedAtMs)
+        assertEquals("the known answer is not replaced by placement", bridgeConnect, ended.timerStartMs)
+        assertTrue(
+            "the ended header counts the conversation, not the ten minutes before it",
+            ended.callSecondsElapsed!! in 4..6
+        )
+
+        // The delayed record finally supplies its own duration, and an ended call is its header.
+        val recordConnect = (System.currentTimeMillis() - 30_000) / 1_000.0
+        api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "ended", createdAt = placedAt, connectedAt = recordConnect))
+        viewModel.reload()
+        runCurrent()
+        assertEquals((recordConnect * 1_000).toLong(), viewModel.state.value.timerStartMs)
+    }
+
+    /**
+     * The engine takes a running call out of its state when the link drops. The answer it recorded
+     * belongs to the call on screen, so the count keeps it instead of falling back to placement.
+     */
+    @Test
+    fun aLostLinkMidCallKeepsTheKnownAnswer() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        api.callSnapshot = ApiOutcome.Ok(
+            200,
+            snapshot(state = "active", createdAt = (System.currentTimeMillis() - 60_000) / 1_000.0, connectedAt = null)
+        )
+        val bridge = FakeBridgeState()
+        val viewModel = LiveCallViewModel(api, bridge)
+        viewModel.bind(CALL_ID)
+        runCurrent()
+
+        val bridgeConnect = System.currentTimeMillis() - 5_000
+        bridge.emit(BridgeState(call = CallState(CALL_ID, "+998 ·· 67", CallPhase.ACTIVE, 1_000, bridgeConnect)))
+        runCurrent()
+        assertEquals(bridgeConnect, viewModel.state.value.timerStartMs)
+
+        // The link drops: the store no longer carries the running call.
+        bridge.emit(BridgeState(call = null))
+        runCurrent()
+        assertNull("the phone reports no call any more", viewModel.state.value.localPhase)
+        assertEquals(
+            "the answer does not leave with the link",
+            bridgeConnect,
+            viewModel.state.value.timerStartMs
+        )
+
+        // The record's end arrives with no connect time of its own.
+        api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(endedEvent(1))))
+        advanceUntilIdle()
+        assertTrue(viewModel.state.value.ended)
+        assertEquals(
+            "the ended header still starts at the answer",
+            bridgeConnect,
+            viewModel.state.value.timerStartMs
+        )
+    }
+
+    /** The retained answer belongs to one call: binding another one does not inherit it. */
+    @Test
+    fun bindingAnotherCallDoesNotInheritTheAnswer() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        api.callSnapshot = ApiOutcome.Failure(404, "call_not_found", "no call")
+        val bridge = FakeBridgeState()
+        val viewModel = LiveCallViewModel(api, bridge)
+        viewModel.bind(CALL_ID)
+        runCurrent()
+
+        val bridgeConnect = System.currentTimeMillis() - 5_000
+        val bridgeCall = CallState(CALL_ID, "+998 ·· 67", CallPhase.ACTIVE, 1_000, bridgeConnect)
+        bridge.emit(BridgeState(call = bridgeCall))
+        runCurrent()
+        assertEquals(bridgeConnect, viewModel.state.value.bridgeConnectedAtMs)
+
+        viewModel.bind("call-2026-11-27")
+        runCurrent()
+        assertNull("another call starts over", viewModel.state.value.bridgeConnectedAtMs)
+
+        // The bridge still reports the previous call; it is not the one on screen.
+        bridge.emit(BridgeState(call = bridgeCall))
+        runCurrent()
+        assertNull("the previous call's answer is not borrowed", viewModel.state.value.bridgeConnectedAtMs)
+
+        // Both polls are open now; close them so nothing is left spinning on the test clock.
+        api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(endedEvent(1))))
+        api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(endedEvent(1))))
+        advanceUntilIdle()
+    }
+
     private fun viewModel(api: FakeDaemonApi): LiveCallViewModel = LiveCallViewModel(api, FakeBridgeState())
 
     private companion object {

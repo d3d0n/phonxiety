@@ -60,9 +60,11 @@ data class LiveCallUiState(
     /** The record's own connect time; null until a snapshot or event carries `connected_at`. */
     val connectedAtMs: Long? = null,
     /**
-     * The bridge's own connect time for this call, when it is the one on screen. The engine records
+     * The bridge's own connect time for the call on screen, once it is known. The engine records
      * it once at the answer, so a screen opened mid-call counts the conversation from the connect
-     * rather than from the moment it opened, and nothing here has to guess.
+     * rather than from the moment it opened, and nothing here has to guess. A lost link can empty
+     * the bridge's call before the record's own end arrives; what was known stays, because it
+     * belongs to this call and the screen is still showing it.
      */
     val bridgeConnectedAtMs: Long? = null,
     val createdAtMs: Long? = null,
@@ -101,11 +103,12 @@ data class LiveCallUiState(
      * chip never showed is not added back. A running call counts from the bridge's own connect
      * stamp, which the engine records once at the answer: that time is the same however late the
      * screen opens, and the record's `connected_at` from another clock is only the fallback. An
-     * ended call's header is the record's connected duration.
+     * ended call's header is the record's connected duration; a bridge stamp it already knew stands
+     * in while that duration is still on its way.
      */
     val timerStartMs: Long?
         get() = when {
-            ended -> connectedAtMs ?: createdAtMs
+            ended -> connectedAtMs ?: bridgeConnectedAtMs ?: createdAtMs
             else -> bridgeConnectedAtMs ?: connectedAtMs ?: createdAtMs
         }
 
@@ -295,7 +298,11 @@ class LiveCallViewModel @Inject constructor(
                     it.copy(
                         audio = bridge.audio,
                         localPhase = call?.phase,
-                        bridgeConnectedAtMs = call?.connectedAtEpochMs
+                        // The engine's answer stamp belongs to the call on screen: a link loss that
+                        // empties the bridge call, or an ended event that beats the final record,
+                        // must not hand the count back to placement. Binding another call builds a
+                        // fresh state, which is the only reset this needs.
+                        bridgeConnectedAtMs = call?.connectedAtEpochMs ?: it.bridgeConnectedAtMs
                     )
                 }
             }
