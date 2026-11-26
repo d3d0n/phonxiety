@@ -1,6 +1,7 @@
 package com.phonxiety.bridge.feature.livecall
 
 import android.os.Handler
+import android.os.SystemClock
 import com.phonxiety.bridge.model.CallPhase
 import com.phonxiety.bridge.model.CallState
 
@@ -20,12 +21,18 @@ import com.phonxiety.bridge.model.CallState
  * call (an incoming one, one the computer placed) find nothing to spend. The delay covers the
  * placement reply: the daemon answers the composer only after Telecom has already drawn its screen,
  * so the call is marked as this phone's a moment after the stop.
+ *
+ * The token is also scoped to that first cover. A resumed screen, a deliberate leave, an exhausted
+ * wait for the reply and a hangup all close it, so a placement reply that lands late, or an
+ * unrelated cover that follows, cannot pull the live screen over somebody else's call screen. The
+ * return itself is only issued while the placed call is [CallPhase.DIALING] or [CallPhase.ACTIVE].
  */
 class CallFrontReturn(
     private val handler: Handler,
     private val call: () -> CallState?,
     private val screenInteractive: () -> Boolean,
-    private val openFront: () -> Unit
+    private val openFront: () -> Unit,
+    private val clock: () -> Long = { SystemClock.elapsedRealtime() }
 ) {
     /** Set between [onUserLeaveHint] and the next resume: the user walked away on purpose. */
     private var userLeft = false
@@ -37,23 +44,29 @@ class CallFrontReturn(
 
     fun onResume() {
         userLeft = false
-        handler.removeCallbacks(tick)
+        abandonWait()
+        // The screen is seen again without the return: the cover it was meant for is over.
+        LiveCallFront.closeOpportunity()
     }
 
     /** Home and Recents; the system in-call screen appearing is not a user leave. */
     fun onUserLeaveHint() {
         userLeft = true
+        abandonWait()
+        LiveCallFront.closeOpportunity()
     }
 
     fun onDestroy() {
-        handler.removeCallbacks(tick)
+        abandonWait()
+        // A destroyed activity cannot return, and a replacement closes the opportunity on resume.
+        LiveCallFront.closeOpportunity()
     }
 
     /** The token of a call that already ended cannot return, so it is dropped here. */
     fun onStart() {
-        val placed = LiveCallFront.placedCallId()
+        val placed = LiveCallFront.placedCallId() ?: return
         val current = call()
-        if (placed != null && current?.callId == placed && current.phase == CallPhase.ENDED) {
+        if (current != null && current.callId == placed && !recoverable(current)) {
             LiveCallFront.forget(placed)
         }
     }
@@ -63,30 +76,40 @@ class CallFrontReturn(
      * false while it is finishing or only being recreated for a configuration change.
      */
     fun onStop(canReturn: Boolean) {
-        handler.removeCallbacks(tick)
+        abandonWait()
         if (!canReturn) return
-        // Only a stop that may follow a composer placement arms the wait. Every later stop of a
-        // call whose token is spent, and every cover by a call this phone did not place, is left to
-        // Telecom's own screen.
-        if (!LiveCallFront.awaitsCover()) return
+        // Only a stop inside the initial cover opportunity arms the wait. Every later stop of a
+        // call whose token is spent or gone, and every cover by a call this phone did not place,
+        // is left to Telecom's own screen.
+        if (!LiveCallFront.awaitsCover(clock())) return
         attemptsLeft = RETURN_ATTEMPTS
         handler.postDelayed(tick, RETURN_DELAY_MS)
     }
 
     private fun attempt() {
-        if (userLeft) return
-        val pending = LiveCallFront.pendingCallId()
-        if (pending == null) {
-            // The placement reply is still travelling; give it a few ticks to land.
-            if (LiveCallFront.awaitsCover() && call()?.phase != CallPhase.ENDED) retry()
+        if (userLeft) {
+            LiveCallFront.closeOpportunity()
             return
         }
+        val now = clock()
+        val pending = LiveCallFront.pendingCallId(now)
         val current = call()
+        if (pending == null) {
+            // The placement reply is still travelling; give it a few ticks to land. A call that is
+            // already hanging up is not worth waiting for.
+            if (LiveCallFront.awaitsCover(now) && (current == null || recoverable(current))) {
+                retry()
+            } else {
+                LiveCallFront.closeOpportunity()
+            }
+            return
+        }
         if (current == null || current.callId != pending) {
             retry()
             return
         }
-        if (current.phase == CallPhase.ENDED) {
+        if (!recoverable(current)) {
+            // Hanging up: nobody may be pulled over the end-of-call screen.
             LiveCallFront.forget(pending)
             return
         }
@@ -95,15 +118,27 @@ class CallFrontReturn(
             LiveCallFront.forget(pending)
             return
         }
-        if (!LiveCallFront.claimReturn(pending)) return
+        if (!LiveCallFront.claimReturn(pending, now)) return
         openFront()
     }
 
     private fun retry() {
-        if (attemptsLeft <= 0) return
+        if (attemptsLeft <= 0) {
+            // The placement reply never came: the cover it belongs to is over.
+            LiveCallFront.closeOpportunity()
+            return
+        }
         attemptsLeft--
         handler.postDelayed(tick, RETURN_RETRY_MS)
     }
+
+    private fun abandonWait() {
+        attemptsLeft = 0
+        handler.removeCallbacks(tick)
+    }
+
+    private fun recoverable(state: CallState): Boolean = state.phase == CallPhase.DIALING ||
+        state.phase == CallPhase.ACTIVE
 
     private companion object {
         /** Long enough for the in-call screen to settle, short enough to still count as a cover. */
