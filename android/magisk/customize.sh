@@ -20,4 +20,14 @@ set_perm "$MODPATH/action.sh" 0 0 0755
 set_perm_recursive "$MODPATH/webroot" 0 0 0755 0644
 
 ui_print "- phonxiety bridge is a privileged app; the system partition overlay is active after reboot"
-ui_print "- After the reboot open Phonxiety and pair it with the daemon"
+
+# An update keeps the pairing and settings. Magisk, KernelSU and APatch all keep the installed copy
+# at /data/adb/modules/<id> while staging the new one under /data/adb/modules_update, and MODPATH
+# points at that staged copy, so the module's id directory already existing means this is an update.
+MODULE_ID="$(basename "$MODPATH")"
+if [ -n "$MODULE_ID" ] && [ -d "/data/adb/modules/$MODULE_ID" ]; then
+    ui_print "- Update: the pairing and settings are kept"
+    ui_print "- The update applies after the reboot"
+else
+    ui_print "- After the reboot open Phonxiety and pair it with the daemon"
+fi
