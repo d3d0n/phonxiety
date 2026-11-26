@@ -154,5 +154,7 @@ data class SettingsUiState(
     val phone: PhoneSettings = PhoneSettings(),
     val connection: ConnectionUi = ConnectionUi(),
     val autoTune: AutoTuneUi = AutoTuneUi(),
-    val message: UiText? = null
+    val message: UiText? = null,
+    /** True while the last message can be undone from its snackbar (a bulk revert). */
+    val undoAvailable: Boolean = false
 )

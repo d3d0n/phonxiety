@@ -22,6 +22,8 @@
         <item quantity="other">Reverted %1$d changes</item>
     </plurals>
     <string name="settings_message_nothing_to_revert">Nothing to revert</string>
+    <string name="settings_message_changes_restored">Changes restored</string>
+    <string name="settings_autotune_undo">Undo</string>
     <string name="settings_error_whole_number">Enter a whole number</string>
 
     <!-- Connection card -->

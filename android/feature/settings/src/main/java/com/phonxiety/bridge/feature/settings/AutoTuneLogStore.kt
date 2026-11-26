@@ -98,9 +98,9 @@ class AutoTuneLogStore(
         }
     }
 
-    suspend fun markReverted(ids: Set<String>): List<AutoTuneLogEntry> = withContext(Dispatchers.IO) {
+    suspend fun markReverted(ids: Set<String>, reverted: Boolean = true): List<AutoTuneLogEntry> = withContext(Dispatchers.IO) {
         mutex.withLock {
-            val next = read().map { entry -> if (entry.id in ids) entry.copy(reverted = true) else entry }
+            val next = read().map { entry -> if (entry.id in ids) entry.copy(reverted = reverted) else entry }
             write(next)
             next
         }

@@ -89,6 +89,11 @@ class AutoTuneLogStoreTest {
 
         assertEquals(true, loaded.reverted)
         assertEquals(stored.reasonArgs, loaded.reasonArgs)
+
+        // Undo puts the record back without losing why it happened.
+        val restored = store.markReverted(setOf(stored.id), reverted = false).single()
+        assertEquals(false, restored.reverted)
+        assertEquals(stored.reasonArgs, restored.reasonArgs)
     }
 
     @Test

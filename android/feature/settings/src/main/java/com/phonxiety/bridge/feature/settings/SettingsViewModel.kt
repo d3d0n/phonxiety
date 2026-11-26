@@ -64,6 +64,9 @@ class SettingsViewModel @Inject constructor(
     private var latestLinkTest: com.phonxiety.bridge.model.LinkTestResult? = null
     private val evaluateLock = Mutex()
 
+    /** The entries a bulk revert just undid, so its snackbar can put them back. */
+    private var lastReverted: List<AutoTuneLogEntry> = emptyList()
+
     init {
         viewModelScope.launch {
             phonePreferences.settings.collect { settings ->
@@ -408,16 +411,42 @@ class SettingsViewModel @Inject constructor(
     fun revertEverything() {
         viewModelScope.launch {
             val pending = _state.value.autoTune.changes.filterNot { it.reverted }
+            if (pending.isEmpty()) {
+                _state.update {
+                    it.copy(
+                        autoTune = it.autoTune.copy(changes = _state.value.autoTune.changes),
+                        message = UiText.Res(R.string.settings_message_nothing_to_revert),
+                        undoAvailable = false
+                    )
+                }
+                return@launch
+            }
             for (entry in pending.asReversed()) revert(entry)
             val log = changeLog.markReverted(pending.map { it.id }.toSet())
+            lastReverted = pending
             _state.update {
                 it.copy(
                     autoTune = it.autoTune.copy(changes = log),
-                    message = if (pending.isEmpty()) {
-                        UiText.Res(R.string.settings_message_nothing_to_revert)
-                    } else {
-                        UiText.Plural(R.plurals.settings_message_reverted, pending.size)
-                    }
+                    message = UiText.Plural(R.plurals.settings_message_reverted, pending.size),
+                    undoAvailable = true
+                )
+            }
+        }
+    }
+
+    /** Puts back what a bulk revert undid; the snackbar offers this instead of a confirmation. */
+    fun undoRevertEverything() {
+        viewModelScope.launch {
+            val undone = lastReverted
+            if (undone.isEmpty()) return@launch
+            for (entry in undone) reapply(entry)
+            val log = changeLog.markReverted(undone.map { it.id }.toSet(), reverted = false)
+            lastReverted = emptyList()
+            _state.update {
+                it.copy(
+                    autoTune = it.autoTune.copy(changes = log),
+                    message = UiText.Res(R.string.settings_message_changes_restored),
+                    undoAvailable = false
                 )
             }
         }
@@ -437,7 +466,22 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun consumeMessage() = _state.update { it.copy(message = null) }
+    /** Puts a reverted change back: the value it set is the value to write again. */
+    private suspend fun reapply(entry: AutoTuneLogEntry) {
+        when (TuneKey.of(entry.key)) {
+            TuneKey.CODEC -> phonePreferences.update { it.copy(preferredCodec = PhoneCodec.normalize(entry.to)) }
+
+            TuneKey.MAX_BITRATE -> entry.to.toIntOrNull()?.let { to ->
+                phonePreferences.update { it.copy(maxBitrate = to) }
+            }
+
+            TuneKey.WIFI_LOW_LATENCY -> phonePreferences.update { it.copy(wifiLowLatency = entry.to == "true") }
+
+            null -> Unit
+        }
+    }
+
+    fun consumeMessage() = _state.update { it.copy(message = null, undoAvailable = false) }
 
     private fun ApiOutcome.Failure.describe(): String = "$code: $message"
 }

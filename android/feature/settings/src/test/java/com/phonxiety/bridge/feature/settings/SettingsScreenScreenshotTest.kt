@@ -76,7 +76,7 @@ class SettingsScreenScreenshotTest(private val matrixCase: SettingsMatrixCase) {
                 }
             }
         }
-        composeRule.onNodeWithText("Evaluate now").performScrollTo()
+        composeRule.onNodeWithText("Revert everything").performScrollTo()
         composeRule.onNodeWithTag(CAPTURE_TAG).assertAccessible()
         composeRule.onNodeWithTag(CAPTURE_TAG)
             .captureRoboImage("src/test/screenshots/settings_lower_sections.png")

@@ -27,8 +27,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -106,9 +108,16 @@ fun SettingsRoute(
     val snackbar = remember { SnackbarHostState() }
     val resources = LocalResources.current
     val message = state.message?.asString(resources)
+    val undoLabel = stringResource(R.string.settings_autotune_undo)
     LaunchedEffect(state.message) {
         if (message == null) return@LaunchedEffect
-        snackbar.showSnackbar(message)
+        val result = snackbar.showSnackbar(
+            message = message,
+            actionLabel = if (state.undoAvailable) undoLabel else null,
+            withDismissAction = false,
+            duration = SnackbarDuration.Short
+        )
+        if (result == SnackbarResult.ActionPerformed) viewModel.undoRevertEverything()
         viewModel.consumeMessage()
     }
     SettingsScreen(
@@ -647,10 +656,6 @@ private fun AutoTuneCard(autoTune: AutoTuneUi, callbacks: SettingsCallbacks) {
                     label = stringResource(R.string.settings_autotune_evaluate),
                     onClick = callbacks.onEvaluateNow
                 )
-                InCardTextButton(
-                    label = stringResource(R.string.settings_autotune_revert_all),
-                    onClick = callbacks.onRevertEverything
-                )
             }
             autoTune.lastEvaluatedAtMs?.let { at ->
                 Text(
@@ -700,6 +705,12 @@ private fun AutoTuneCard(autoTune: AutoTuneUi, callbacks: SettingsCallbacks) {
                         )
                     }
                 }
+            }
+            if (autoTune.changes.isNotEmpty()) {
+                InCardTextButton(
+                    label = stringResource(R.string.settings_autotune_revert_all),
+                    onClick = callbacks.onRevertEverything
+                )
             }
         }
     }

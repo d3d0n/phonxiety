@@ -187,7 +187,7 @@ class SettingsViewModelTest {
     }
 
     @Test
-    fun `auto-tune applies measured changes, logs them and reverts them all`() = runBlocking<Unit> {
+    fun `auto-tune applies measured changes, logs them, reverts them all and offers an undo`() = runBlocking<Unit> {
         prefs.settings.value = PhoneSettings(
             preferredCodec = PhoneCodec.PCM,
             maxBitrate = 32_000,
@@ -239,6 +239,15 @@ class SettingsViewModelTest {
         assertEquals("pcm", prefs.settings.value.preferredCodec)
         assertEquals(32_000, prefs.settings.value.maxBitrate)
         assertTrue(prefs.settings.value.wifiLowLatency)
+        assertTrue("the snackbar can put the changes back", vm.state.value.undoAvailable)
+
+        // The bulk revert is undoable from its snackbar instead of being confirmed up front.
+        vm.undoRevertEverything()
+        withTimeout(5_000) { vm.state.first { state -> state.autoTune.changes.none { it.reverted } } }
+        assertEquals("opus", prefs.settings.value.preferredCodec)
+        assertEquals(16_000, prefs.settings.value.maxBitrate)
+        assertFalse(prefs.settings.value.wifiLowLatency)
+        assertFalse(vm.state.value.undoAvailable)
     }
 
     @Test
