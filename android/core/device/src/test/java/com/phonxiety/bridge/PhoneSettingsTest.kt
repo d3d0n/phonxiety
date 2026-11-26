@@ -44,6 +44,28 @@ class PhoneSettingsTest {
     }
 
     @Test
+    fun `the draft keeps a plus typed before its digits`() {
+        assertEquals("+", PhoneSettings.draftNumber("+"))
+        assertEquals("+", PhoneSettings.draftNumber(" + "))
+        assertEquals("+9", PhoneSettings.draftNumber("+9"))
+        assertEquals("", PhoneSettings.draftNumber(""))
+        assertEquals("+", PhoneSettings.draftNumber("+ "))
+        assertEquals("911", PhoneSettings.draftNumber("911"))
+    }
+
+    @Test
+    fun `typing a plus one key at a time reaches the whole number`() {
+        val typed = "+998901234567"
+        var draft = ""
+        for (index in typed.indices) {
+            // What the field hands the view model: the draft plus the new key.
+            draft = PhoneSettings.draftNumber(draft + typed[index])
+            assertEquals("the draft keeps everything typed so far", typed.substring(0, index + 1), draft)
+        }
+        assertEquals(typed, PhoneSettings.sanitizeNumber(draft))
+    }
+
+    @Test
     fun `the codec normaliser accepts the three values the protocol knows`() {
         assertEquals("opus", PhoneCodec.normalize(" OPUS "))
         assertEquals("pcm", PhoneCodec.normalize("pcm"))

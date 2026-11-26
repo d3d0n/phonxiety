@@ -22,6 +22,12 @@ internal object AppStorage {
     fun deviceProtected(context: Context): Context = context.applicationContext.createDeviceProtectedStorageContext()
 
     /**
+     * Where a DataStore keeps `name.preferences_pb`: `files/datastore` under
+     * [filesDir], the layout `preferencesDataStore` uses.
+     */
+    fun dataStoreFile(filesDir: File, name: String): File = File(File(filesDir, "datastore"), "$name.preferences_pb")
+
+    /**
      * Moves a credential-protected file into device-protected storage when the
      * device-protected copy does not exist yet.  Requires an unlocked user; a
      * locked device leaves both copies untouched.
@@ -87,7 +93,8 @@ internal object AppStorage {
         }
     }
 
-    private fun userUnlocked(context: Context): Boolean = try {
+    /** True once the user's credential-protected storage is readable. */
+    fun userUnlocked(context: Context): Boolean = try {
         context.getSystemService(UserManager::class.java)?.isUserUnlocked != false
     } catch (_: Exception) {
         false
