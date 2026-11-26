@@ -29,7 +29,7 @@ plugins {
 // ktlint as a formatting-only gate.  The Gradle plugin is declared above for
 // editor integration; the check itself runs the CLI so it sees exactly the
 // same file set for every module and needs no per-module configuration.
-val ktlintCli: Configuration by configurations.creating {
+val ktlintCli: Configuration = configurations.create("ktlintCli") {
     isCanBeConsumed = false
     isCanBeResolved = true
 }
@@ -50,7 +50,12 @@ tasks.register<JavaExec>("ktlintCheck") {
     classpath = ktlintCli
     mainClass.set("com.pinterest.ktlint.Main")
     inputs.files(ktlintSources())
+    inputs.file(rootDir.resolve(".editorconfig"))
+    // A recorded pass makes the task up to date until a source or the style changes.
+    val passed = layout.buildDirectory.file("ktlint/check.passed")
+    outputs.file(passed)
     args(ktlintSources().files.map { it.absolutePath })
+    doLast { passed.get().asFile.writeText("ok\n") }
 }
 
 tasks.register<JavaExec>("ktlintFormat") {
