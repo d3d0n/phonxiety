@@ -137,7 +137,8 @@ interface PhonePreferences {
  * The settings file earlier versions kept in credential-protected storage,
  * `files/datastore/phone-settings.preferences_pb`.  That storage is readable only after the user
  * unlocks the phone, so every access is gated on [unlocked]: a locked device shows the file as
- * absent and the next attempt happens after unlock, never a default written over it.
+ * absent and the next attempt happens after unlock, never a default written over it.  The file
+ * stays after the migration: a rollback to an earlier version reads its settings from it.
  */
 internal class LegacyPhoneSettingsFile(
     private val file: File,
@@ -154,9 +155,6 @@ internal class LegacyPhoneSettingsFile(
             null
         }
     }
-
-    /** True when the old copy is gone, so a later start has nothing left to apply. */
-    fun discard(): Boolean = !file.exists() || file.delete()
 
     private companion object {
         const val TAG = "PhonxietySettings"
@@ -229,8 +227,8 @@ class PhoneSettingsStore internal constructor(
      * Applies the credential-protected file once.  A locked user leaves it alone and the next
      * access after unlock tries again; what it holds wins over everything this store may already
      * have written, because a default written while the real values were unreadable may not
-     * replace them.  The migration marker is written in the same edit, so a file that survives a
-     * failed delete is never applied a second time over newer values.
+     * replace them.  The migration marker is written in the same edit, and the old file is left in
+     * place for a rollback, so it is never applied a second time over newer values.
      */
     private suspend fun migrate() {
         if (migrated) return
@@ -256,7 +254,6 @@ class PhoneSettingsStore internal constructor(
                     preferences[MIGRATED_FROM_CREDENTIAL] = true
                 }
                 migrated = true
-                if (!legacy.discard()) BridgeLog.w(TAG, "phone settings: could not remove the old file")
             }
         }
     }

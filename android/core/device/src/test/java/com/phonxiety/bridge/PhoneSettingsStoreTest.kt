@@ -11,8 +11,10 @@ import java.io.File
 import java.nio.file.Files
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -45,7 +47,7 @@ class PhoneSettingsStoreTest {
     }
 
     @Test
-    fun `a store that starts unlocked takes the credential-protected values and removes the file`() = runBlocking {
+    fun `a store that starts unlocked takes the credential-protected values and keeps the file`() = runBlocking {
         writeCe(stored)
         unlocked = true
         val store = store()
@@ -59,7 +61,7 @@ class PhoneSettingsStoreTest {
         assertEquals("custom", loaded.relayMode)
         assertEquals(listOf("https://relay.example:443"), loaded.relayUrls)
         assertEquals(listOf("https://daemon.example:443"), loaded.daemonRelayUrls)
-        assertTrue("the old copy is gone once it is applied", !ceFile.exists())
+        assertTrue("the old copy stays for a rollback to an earlier version", ceFile.isFile)
 
         // The same values are on disk, not only in memory: a later process reads them back.
         val persisted = readFile(deFile)
@@ -93,7 +95,7 @@ class PhoneSettingsStoreTest {
         assertEquals(PhoneCodec.PCM, migrated.preferredCodec)
         assertEquals("the stored bitrate beats the pre-unlock write", 24_000, migrated.maxBitrate)
         collector.cancel()
-        assertTrue("the collector saw the migration without asking again", !ceFile.exists())
+        assertTrue("the old copy stays for a rollback to an earlier version", ceFile.isFile)
 
         // And the disk holds the migrated values, so the next process starts with them.
         assertEquals("+998901234567", readFile(deFile)[stringPreferencesKey("test_number")])
@@ -129,17 +131,29 @@ class PhoneSettingsStoreTest {
     }
 
     @Test
-    fun `the migration is marked on disk so a leftover file is never applied twice`() = runBlocking {
+    fun `the migration is marked on disk so the kept file is never applied twice`() = runBlocking {
         writeCe(stored)
         unlocked = true
-        store().read()
+        val first = store()
+        first.read()
 
         val persisted = readFile(deFile)
         assertTrue(
             "the marker travels with the values, in the same write",
             persisted[booleanPreferencesKey("migrated_from_credential_protected")] == true
         )
-        assertTrue("nothing is left to migrate", !ceFile.exists())
+
+        // The user changes a setting after the migration, then the next process starts while the
+        // old file is still there: the file is a leftover now, and the newer choice stays.
+        first.update { it.copy(preferredCodec = PhoneCodec.OPUS, testNumber = "+998901234567") }
+        // One store per file: the first one closes before the next process's store opens it.
+        scopes.forEach { it.coroutineContext[Job]?.cancelAndJoin() }
+        val next = store()
+
+        val loaded = next.read()
+        assertEquals(PhoneCodec.OPUS, loaded.preferredCodec)
+        assertEquals("+998901234567", loaded.testNumber)
+        assertTrue("the old copy is still there for a rollback", ceFile.isFile)
     }
 
     @Test
