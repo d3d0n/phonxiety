@@ -19,6 +19,7 @@ from phonxiety.controller import (
     CLOSE_TASK_BUDGET_S,
     CallController,
 )
+from phonxiety.device import DeviceError
 from phonxiety.models import CallRequest, CallState
 from phonxiety.store import CallStore
 
@@ -226,6 +227,7 @@ class _Tasks:
 
 class _ControllerCase(unittest.IsolatedAsyncioTestCase):
     review_quiet = 30.0
+    controller_options: dict[str, Any] = {}
 
     async def asyncSetUp(self) -> None:
         self.directory = tempfile.TemporaryDirectory()
@@ -257,6 +259,7 @@ class _ControllerCase(unittest.IsolatedAsyncioTestCase):
             self.store, self.device, factory, self.tasks, keep_awake=keep_awake, device_wait=0.3, link_wait=0.4,
             farewell_timeout=2, farewell_quiet=0.01, review_quiet=self.review_quiet,
             archive_dir=Path(self.directory.name) / "archive",
+            **self.controller_options,
         )
         await self.controller.start()
 
@@ -738,6 +741,93 @@ class LinkReadinessTests(_ControllerCase):
         await asyncio.wait_for(self.device.dialled.wait(), 2)
         await self.controller.hangup_call(call["call_id"])
         await self.controller.wait_call_result(call["call_id"], wait_s=1)
+
+
+class DialRefusalCase(_ControllerCase):
+    """Shared harness: the phone refuses dials before placing them."""
+
+    def _refuse_dials(self, times: int, *, link_drops: bool = True) -> None:
+        """The phone refuses the next `times` dials with `link_down`, placing nothing."""
+        base = self.device.command
+        left = {"count": times}
+
+        async def command(name: str, call_id: str | None = None, **payload: Any) -> dict[str, Any]:
+            if name == "dial" and left["count"] > 0:
+                left["count"] -= 1
+                self.device.commands.append((name, call_id, payload))
+                if link_drops:
+                    self.device.connected = False
+                raise DeviceError("link_down")
+            return await base(name, call_id, **payload)
+
+        self.device.command = command
+
+    def _dial_attempts(self) -> int:
+        return sum(1 for command, _, _ in self.device.commands if command == "dial")
+
+
+class DialRefusalTests(DialRefusalCase):
+    """A phone that refuses a dial before placing it must not cost the user the call."""
+
+    controller_options = {"dial_retry_wait": 2.0}
+
+    async def test_a_refused_dial_waits_for_the_link_and_rings_once(self) -> None:
+        self._refuse_dials(1)
+        call = await self.controller.place_call(request())
+        await asyncio.wait_for(self.device.arrived_waiting.wait(), 1)  # the daemon is waiting for the phone
+        self.assertEqual(self._dial_attempts(), 1)  # not retried before the phone is back
+        self.assertNotIn(self.store.state(call["call_id"]), (CallState.FAILED, CallState.UNKNOWN, CallState.CANCELLED))
+
+        self.device.arrived.set()
+        await asyncio.wait_for(self.device.dialled.wait(), 2)  # the retry was accepted
+        self.assertEqual(self._dial_attempts(), 2)
+        self.assertEqual(len(self.voices), 1)  # the caller's single call, not a second one
+        await self.controller.on_device_event({"type": "call_state", "call_id": call["call_id"], "state": "active"})
+        await self.controller.hangup_call(call["call_id"])
+        result = await self.controller.wait_call_result(call["call_id"], wait_s=1)
+        self.assertEqual((result["state"], result["call_outcome"]), ("ended", "answered"))
+
+    async def test_a_dial_refused_twice_ends_with_an_explicit_error(self) -> None:
+        self._refuse_dials(2, link_drops=False)
+        call = await self.controller.place_call(request())
+        result = await self.controller.wait_call_result(call["call_id"], wait_s=2)
+        self.assertEqual(
+            (result["state"], result["call_outcome"], result["error"], result["result_status"]),
+            ("failed", "not_started", "link_down", "ready"),
+        )
+        self.assertEqual(self._dial_attempts(), 2)
+
+    async def test_a_dial_lost_to_the_link_is_never_rung_twice(self) -> None:
+        # The link dropped after the command went out: the phone may already be ringing,
+        # so the daemon reports the outcome as unknown and does not dial again.
+        base = self.device.command
+
+        async def command(name: str, call_id: str | None = None, **payload: Any) -> dict[str, Any]:
+            if name == "dial":
+                self.device.commands.append((name, call_id, payload))
+                self.device.connected = False
+                raise DeviceError("device_disconnected")
+            return await base(name, call_id, **payload)
+
+        self.device.command = command
+        call = await self.controller.place_call(request())
+        result = await self.controller.wait_call_result(call["call_id"], wait_s=2)
+        self.assertEqual((result["state"], result["call_outcome"]), ("unknown", "unknown"))
+        self.assertEqual(self._dial_attempts(), 1)
+
+
+class DialRetryBoundTests(DialRefusalCase):
+    controller_options = {"dial_retry_wait": 0.2}
+
+    async def test_a_phone_that_never_comes_back_ends_the_call_explicitly(self) -> None:
+        self._refuse_dials(1)  # the link dropped and the phone never returns
+        call = await self.controller.place_call(request())
+        result = await self.controller.wait_call_result(call["call_id"], wait_s=2)
+        self.assertEqual(
+            (result["state"], result["call_outcome"], result["error"]),
+            ("failed", "not_started", "device_not_connected"),
+        )
+        self.assertEqual(self._dial_attempts(), 1)
 
 
 class ShutdownBudgetTests(unittest.TestCase):
