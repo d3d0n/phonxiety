@@ -395,6 +395,21 @@ class ModuleControllerTest {
     }
 
     @Test
+    fun theLocalNetworkGrantIsRequiredBeforePairing() {
+        val missing = listOf(RuntimePermission.ACCESS_LOCAL_NETWORK)
+        val transition = probe(
+            snapshot(
+                module = ModuleState.Enabled("0.3.0", 3),
+                verify = passingReport(),
+                missingRuntime = missing
+            )
+        )
+
+        assertEquals(WizardState.NeedsRuntime(magisk, missing), transition.state)
+        assertEquals(listOf(WizardEffect.ClearProgress, WizardEffect.RequestRuntimePermissions), transition.effects)
+    }
+
+    @Test
     fun pairingStartsTheFirstLinkTest() {
         val transition = ModuleController.reduce(
             WizardState.NeedsPairing(magisk),

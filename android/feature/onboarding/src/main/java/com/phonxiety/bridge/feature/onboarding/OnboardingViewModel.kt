@@ -105,11 +105,16 @@ constructor(
         )
     }
 
-    /** Root grants happen in the provider's own UI; coming back to the app probes again. */
+    /**
+     * Root grants happen in the provider's own UI and a pairing can arrive while the app is in the
+     * background (`mise run phone:pair` writes the config and restarts the service); coming back is
+     * exactly when a re-read matters. `NeedsRuntime` is deliberately not re-probed: its dialog is
+     * system-owned, and re-asking on every resume would nag a user who denied a permission.
+     */
     fun onReturnedToForeground() {
         when (coordinator.wizard.value) {
             is WizardState.RootDenied, is WizardState.ProviderPrep, is WizardState.Indeterminate,
-            is WizardState.Conflict -> launchRecheck()
+            is WizardState.Conflict, is WizardState.NeedsPairing -> launchRecheck()
 
             else -> Unit
         }

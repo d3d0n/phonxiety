@@ -2,6 +2,7 @@ package com.phonxiety.bridge.feature.onboarding
 
 import android.content.Context
 import android.content.pm.PackageManager
+import android.content.pm.PermissionInfo
 import com.phonxiety.bridge.root.AndroidAppFactsProbe
 import com.phonxiety.bridge.root.AndroidPackageInventory
 import com.phonxiety.bridge.root.DetectedProvider
@@ -110,11 +111,57 @@ class AndroidRootBackend(
 /** The provider's captured output, or a placeholder when it printed nothing. */
 private fun ProviderResult.outputText(): String = tail(lines = 20).joinToString("\n").ifEmpty { "the provider printed nothing" }
 
-/** Runtime permissions from `Context.checkSelfPermission`, in the wizard's fixed order. */
+/**
+ * Runtime permissions from the platform, in the wizard's fixed order.
+ *
+ * The set is filtered twice, because `checkSelfPermission` alone answers "not granted" for
+ * permissions a dialog cannot grant: [RuntimePermission.ACCESS_LOCAL_NETWORK] exists as a runtime
+ * permission only from Android 17 (before that the platform does not know the name, and the app's
+ * local-network access is implicit), and a permission that is declared but not dangerous is granted
+ * at install. Asking for either would park the wizard on `NeedsRuntime` forever.
+ */
 class AndroidPermissionChecker(context: Context) : RuntimePermissionChecker {
     private val appContext = context.applicationContext
 
-    override fun missing(): List<RuntimePermission> = RuntimePermission.entries.filter { permission ->
-        appContext.checkSelfPermission(permission.androidName) != PackageManager.PERMISSION_GRANTED
-    }
+    override fun missing(): List<RuntimePermission> = permissionsToRequest(
+        needed = RuntimePermission.entries,
+        declared = declaredPermissions(),
+        runtime = runtimePermissions(),
+        granted = RuntimePermission.entries
+            .filter { appContext.checkSelfPermission(it.androidName) == PackageManager.PERMISSION_GRANTED }
+            .map { it.androidName }
+            .toSet()
+    )
+
+    private fun declaredPermissions(): Set<String> = runCatching {
+        appContext.packageManager
+            .getPackageInfo(appContext.packageName, PackageManager.PackageInfoFlags.of(PackageManager.GET_PERMISSIONS.toLong()))
+            .requestedPermissions
+            ?.toSet()
+            .orEmpty()
+    }.getOrDefault(emptySet())
+
+    private fun runtimePermissions(): Set<String> = RuntimePermission.entries
+        .map { it.androidName }
+        .filterTo(mutableSetOf()) { name ->
+            val info = runCatching {
+                appContext.packageManager.getPermissionInfo(name, 0)
+            }.getOrNull() ?: return@filterTo false
+            info.protectionLevel and PermissionInfo.PROTECTION_MASK_BASE == PermissionInfo.PROTECTION_DANGEROUS
+        }
+}
+
+/**
+ * The wizard's permission set: everything the engine needs that this build declares and treats as a
+ * runtime permission, minus what is already granted. A dialog cannot grant an undeclared or
+ * non-runtime permission, so those never hold `NeedsRuntime`.
+ */
+internal fun permissionsToRequest(
+    needed: List<RuntimePermission>,
+    declared: Set<String>,
+    runtime: Set<String>,
+    granted: Set<String>
+): List<RuntimePermission> = needed.filter { permission ->
+    val name = permission.androidName
+    name in declared && name in runtime && name !in granted
 }

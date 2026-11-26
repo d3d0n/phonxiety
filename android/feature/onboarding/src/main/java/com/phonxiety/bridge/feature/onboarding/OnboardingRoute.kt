@@ -13,8 +13,10 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.net.toUri
@@ -40,6 +42,7 @@ fun OnboardingRoute(
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    var inlineScanner by remember { mutableStateOf(false) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -50,7 +53,10 @@ fun OnboardingRoute(
 
     val scanner = rememberQrScanner(
         onCode = viewModel::pair,
-        onFailure = { message -> scope.launch { snackbar.showSnackbar(message) } }
+        onUnavailable = { reason ->
+            scope.launch { snackbar.showSnackbar(reason) }
+            inlineScanner = true
+        }
     )
 
     LaunchedEffect(viewModel) {
@@ -80,6 +86,16 @@ fun OnboardingRoute(
     LifecycleResumeEffect(Unit) {
         viewModel.onReturnedToForeground()
         onPauseOrDispose { }
+    }
+
+    if (inlineScanner) {
+        QrScanDialog(
+            onCode = { raw ->
+                inlineScanner = false
+                viewModel.pair(raw)
+            },
+            onDismiss = { inlineScanner = false }
+        )
     }
 
     Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { padding ->
