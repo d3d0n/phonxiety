@@ -38,15 +38,24 @@ What each phase of [`mobile-client-plan.md`](mobile-client-plan.md) produced on 
 - **Aggregate check at 2d7abce.**
   - `./gradlew assembleDebug assembleRelease testDebugUnitTest lint ktlintCheck verifyRoborazziDebug :app:testReleaseUnitTest` exit 0.
   - `uv run pytest -q` 237 passed.
-- **Fixes following the phone pass at 0603a4c.** Landed at eab6a35. **Device verification of these fixes is pending:** the phone pass covered the build at 0603a4c, not this revision.
+- **Fixes following the phone pass at 0603a4c.** Landed at eab6a35 and confirmed on the phone with release 0.4.0 (below).
   - The Lab test number is the field's own draft: storage seeds it once, and a slow write can no longer replay an older value over a newer keystroke.
   - A label/value row stacks when its label, its gap and the value's 96 dp minimum width do not fit, instead of squeezing the label to one letter a line. Call detail and the live call read result values as words, prose or numbers, never the serialized boolean.
   - The live call follows the phone's dialing or connected state over a stale "Preparing" record, and an unconfirmed end reads "Call status unknown" with the daemon's reason behind Details and a refresh. The card explains a lost connection only when the daemon's own reason says the link was lost; an unacknowledged hang-up leaves the phone connected, so that case stays cause-neutral. The card scrolls with the transcript, and its controls fold, so the card, the transcript and the pinned action stay reachable at 320 dp and 200% text. The phone's own ended phase no longer ends a stale record: the end, its time, the timer and the controls come only with the daemon's terminal state.
   - Empty meters read "—"; the far-end name comes from one shared mapping; the Lab names the call id on its own labelled line; the Doctor overlay row keeps the package path behind Details.
   - The Lab view-model tests were flaky under parallel load: `leaving the lab stops the read and coming back resumes it` timed out waiting for a transient waiting state, which a longer timeout cannot recover. They now run on a controlled test dispatcher, wait on virtual time with an explicit barrier in the fake API for the parked read, use real time only for the two IO paths, and cancel their view models. `:feature:lab:testDebugUnitTest --rerun-tasks` passed 5 consecutive runs.
   - Aggregate check at the end of this pass: `./gradlew assembleDebug assembleRelease testDebugUnitTest lint ktlintCheck verifyRoborazziDebug :app:testReleaseUnitTest` exit 0.
-- **Open.**
-  - The lock-screen view of the live-call notification needs a call.
+- **Phone pass on release 0.4.0** (2026-11-26, `/tmp/ux-shots-040`, 25 screens plus targeted checks and two calls). Confirmed on the phone:
+  - long result values stack under their label and a boolean reads "Yes" (`call-detail-boolean.png`); the call header reads "Person · Ended"; turns read Agent and Far end;
+  - the Doctor overlay row keeps the package path behind Details;
+  - the live call reads "Preparing", then "Dialing" from the phone's own state, with no "Agent listening" before the connect and every empty meter "—" (`live-call-dialing-meters.png`); once live the pill and the levels appear;
+  - the Lab names "Test call placed" and the call ID on its own line, then the result card (`lab-test-call-placed.png`);
+  - on the lock screen during a call only the system's ongoing-call notification shows; the bridge's two notifications are on silent channels with private visibility, so nothing about the agent or the transcript reaches the lock screen (`lock-screen-during-call.png`).
+- **Found in that pass and fixed:**
+  - the phone settings were read before unlock and came up as defaults for the whole process; they now live in device-protected storage, the old file migrates once it is readable and stays for a rollback (`settings-before-unlock.txt`);
+  - a leading "+" typed into the Lab test number was erased;
+  - result fields the agent left empty read "null"; they now read "Not reported".
+- **Open.** The live header timer counted from placing the call instead of the connect; the transcript subtitle, the jump control on an ended call and the Lab loopback hint after a test call need wording fixes. Fix in progress.
 
 ## Setup kept on the daemon host
 
