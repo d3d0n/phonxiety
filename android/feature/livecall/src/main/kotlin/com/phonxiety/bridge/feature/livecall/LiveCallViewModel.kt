@@ -57,7 +57,13 @@ data class LiveCallUiState(
     val summary: String? = null,
     val summaryFields: JsonObject? = null,
     val audioCodec: String? = null,
+    /** The record's own connect time; null until a snapshot or event carries `connected_at`. */
     val connectedAtMs: Long? = null,
+    /**
+     * The moment this screen saw the phone report its call active. Once stamped, the running header
+     * counts from it for the rest of the call, so the number never moves between two clocks.
+     */
+    val phoneConnectedAtMs: Long? = null,
     val createdAtMs: Long? = null,
     /** When the call stopped, so the timer stops with it. */
     val endedAtMs: Long? = null,
@@ -87,9 +93,24 @@ data class LiveCallUiState(
     /** The daemon's word wins, except where the phone is provably ahead of a stale record. */
     val phase: String? get() = reconcilePhase(state, daemonCallState(localPhase))
 
+    /**
+     * Where the header's count starts. Before the line is up it counts from placement, ring
+     * included; the connection then restarts it at zero, because the count is the conversation,
+     * the way the system's call chip begins at the answer. That reset is intentional: the ring the
+     * chip never showed is not added back. Once the phone has stamped its own connect, the running
+     * count stays on that stamp for the rest of the call, so a later record `connected_at` cannot
+     * move it between clocks; the record's time starts the count only when there is no phone stamp,
+     * as when the screen opens mid-call. An ended call's header is the record's connected duration.
+     */
+    val timerStartMs: Long?
+        get() = when {
+            ended -> connectedAtMs ?: phoneConnectedAtMs ?: createdAtMs
+            else -> phoneConnectedAtMs ?: connectedAtMs ?: createdAtMs
+        }
+
     val callSecondsElapsed: Long?
         get() {
-            val start = connectedAtMs ?: createdAtMs ?: return null
+            val start = timerStartMs ?: return null
             val end = (if (ended) endedAtMs else null) ?: System.currentTimeMillis()
             return ((end - start).coerceAtLeast(0)) / 1000
         }
@@ -268,7 +289,18 @@ class LiveCallViewModel @Inject constructor(
             bridgeState.state.collect { bridge ->
                 val bound = boundCallId
                 val localPhase = bridge.call?.takeIf { bound != null && it.callId == bound }?.phase
-                _state.update { it.copy(audio = bridge.audio, localPhase = localPhase) }
+                // The phone's own ACTIVE is this screen's one sighting of the line connecting. The
+                // first sighting is kept and starts the running count; the record's `connected_at`
+                // is a fallback only when the screen has no phone stamp of its own.
+                val phoneActiveAtMs = System.currentTimeMillis()
+                    .takeIf { localPhase == CallPhase.ACTIVE }
+                _state.update {
+                    it.copy(
+                        audio = bridge.audio,
+                        localPhase = localPhase,
+                        phoneConnectedAtMs = it.phoneConnectedAtMs ?: phoneActiveAtMs
+                    )
+                }
             }
         }
     }

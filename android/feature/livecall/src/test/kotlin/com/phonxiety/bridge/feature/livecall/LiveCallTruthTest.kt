@@ -3,6 +3,7 @@ package com.phonxiety.bridge.feature.livecall
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.phonxiety.bridge.model.CallPhase
+import com.phonxiety.bridge.model.PartialTurn
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
@@ -26,6 +27,95 @@ class LiveCallTruthTest {
     fun theTimerRunsWhileTheCallDoes() {
         // Started at 1_764_000_005_000; 39 s later the screen still counts, in MM:SS.
         assertEquals("00:39", formatTimer(live, nowEpochMs = 1_764_000_044_000L))
+    }
+
+    /**
+     * The count restarts when the line connects: the ring counts from placement, then the
+     * conversation counts from zero, the way the system's call chip begins at the answer. That
+     * reset is deliberate, not continuity.
+     */
+    @Test
+    fun theTimerRestartsAtTheConnect() {
+        val created = 1_764_000_000_000L
+        val preparing = LiveCallUiState(state = "preparing", createdAtMs = created)
+        assertEquals("00:03", formatTimer(preparing, created + 3_000))
+        val dialing = preparing.copy(localPhase = CallPhase.DIALING)
+        assertEquals("00:10", formatTimer(dialing, created + 10_000))
+
+        // The phone reports the line up 20 s after placement. The count restarts at the connection,
+        // not at the ring the system's call chip never counted.
+        val phoneSawActiveAt = created + 20_000
+        val active = dialing.copy(
+            state = "active",
+            localPhase = CallPhase.ACTIVE,
+            phoneConnectedAtMs = phoneSawActiveAt
+        )
+        assertEquals("00:00", formatTimer(active, phoneSawActiveAt))
+        assertEquals("00:04", formatTimer(active, phoneSawActiveAt + 4_000))
+    }
+
+    /**
+     * Once the phone has stamped its own connect, the running count keeps that stamp. A record
+     * `connected_at` from another clock cannot move the number mid-call; the ended header is the
+     * record's connected duration.
+     */
+    @Test
+    fun theTimerKeepsThePhonesConnectOnceStamped() {
+        val phoneSawActiveAt = 1_764_000_020_000L
+        val active = live.copy(
+            state = "active",
+            phoneConnectedAtMs = phoneSawActiveAt,
+            connectedAtMs = phoneSawActiveAt - 7_000
+        )
+        assertEquals("00:05", formatTimer(active, phoneSawActiveAt + 5_000))
+
+        val endedAt = phoneSawActiveAt + 16_000
+        val ended = active.copy(state = "ended", ended = true, endedAtMs = endedAt)
+        assertEquals("00:23", formatTimer(ended, endedAt + 60_000))
+    }
+
+    /** A screen opened mid-call has no phone stamp, so the record's connect time starts the count. */
+    @Test
+    fun theRecordStartsTheCountWhenTheScreenOpensMidCall() {
+        val connectedAt = 1_764_000_005_000L
+        val midCall = live.copy(state = "active", phoneConnectedAtMs = null, connectedAtMs = connectedAt)
+        assertEquals("00:34", formatTimer(midCall, connectedAt + 34_000))
+    }
+
+    @Test
+    fun aPartialFirstTurnIsInProgressNotAFuture() {
+        val firstWords = live.copy(
+            turns = emptyList(),
+            partials = listOf(PartialTurn("agent", "Good evening", null))
+        )
+        assertEquals("First turn in progress", transcriptSubtitle(firstWords, resources))
+        // Nothing on screen is still a wait for the first words.
+        assertEquals(
+            "Waiting for the first turn",
+            transcriptSubtitle(firstWords.copy(partials = emptyList()), resources)
+        )
+        // A finished turn brings the count back.
+        assertEquals(
+            "1 turn",
+            transcriptSubtitle(firstWords.copy(partials = emptyList(), turns = live.turns.take(1)), resources)
+        )
+    }
+
+    /** A link that is down never claims present-tense progress, whatever arrived before it. */
+    @Test
+    fun aDroppedLinkDoesNotClaimTheAgentIsWorking() {
+        val working = live.copy(reconnecting = true, activity = "working")
+        assertEquals("5 turns", transcriptSubtitle(working, resources))
+
+        val partialOnly = live.copy(
+            reconnecting = true,
+            activity = "working",
+            turns = emptyList(),
+            partials = listOf(PartialTurn("user", "Let me check the", null))
+        )
+        assertEquals("Waiting for the first turn", transcriptSubtitle(partialOnly, resources))
+        assertNotEquals("First turn in progress", transcriptSubtitle(partialOnly, resources))
+        assertNotEquals("The agent is working", transcriptSubtitle(partialOnly, resources))
     }
 
     @Test
@@ -132,5 +222,10 @@ class LiveCallTruthTest {
         assertEquals("Reservation time", humanizeToken("reservation_time"))
         assertEquals("Follow up", humanizeToken("follow-up"))
         assertEquals("Ready", humanizeToken("ready"))
+    }
+
+    private companion object {
+        /** One bridge poll: how far the phone's sighting of a connect can trail the record's. */
+        const val SKEW_MS = 1_000L
     }
 }

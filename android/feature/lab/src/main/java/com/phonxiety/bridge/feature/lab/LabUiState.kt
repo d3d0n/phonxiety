@@ -30,10 +30,12 @@ data class LabUiState(
     /** Loopback and a tone only make sense while this phone owns a live call. */
     val audioEnabled: Boolean get() = callPhase == "active" && callId != null
 
+    // The bridge keeps the last call it saw after it ends. That record is no call to run audio
+    // inside any more, so the card asks for a new one instead of one to go active.
     val audioDisabledReason: UiText?
         get() = when {
             loopbackSupported == false && toneSupported == false -> UiText.Res(R.string.lab_audio_reason_none)
-            callPhase == null -> UiText.Res(R.string.lab_audio_reason_no_call)
+            callPhase == null || callPhase == "ended" -> UiText.Res(R.string.lab_audio_reason_no_call)
             callPhase != "active" -> UiText.Res(R.string.lab_audio_reason_not_active)
             else -> null
         }
