@@ -392,10 +392,11 @@ def _primary_address() -> str:
 def _tailscale_address() -> str | None:
     """IPv4 address of this computer in its tailnet while Tailscale is connected."""
     import ipaddress
-    import shutil
     import subprocess
 
-    binary = shutil.which("tailscale")
+    from .net.tailnet import tailscale_binary
+
+    binary = tailscale_binary()
     if binary is None:
         return None
     try:
@@ -405,10 +406,84 @@ def _tailscale_address() -> str | None:
         return None
 
 
-def _cmd_pair(args: argparse.Namespace) -> None:
+# Past this version the QR has too many modules to scan comfortably from a terminal.
+PAIRING_QR_MAX_VERSION = 20
+
+
+def _qr_version(payload: str) -> int:
+    import segno
+
+    try:
+        return segno.make_qr(payload, error="l").version
+    except segno.DataOverflowError:
+        # Too long for any QR; the caller trims addresses until it fits.
+        return PAIRING_QR_MAX_VERSION + 1
+
+
+def _pairing_payload(
+    base: dict[str, str],
+    certificate: str | None,
+    addresses: list[tuple[str, str]],
+) -> str:
+    """The QR link: the pairing itself, its certificate pin and the extra addresses."""
     from urllib.parse import urlencode
 
+    pairs: list[tuple[str, str]] = list(base.items())
+    if certificate:
+        pairs.append(("cert", certificate))
+    pairs.extend(addresses)
+    return "phonxiety://pair?" + urlencode(pairs)
+
+
+def _fitted_pairing_payload(
+    base: dict[str, str],
+    certificate: str | None,
+    lan: list[str],
+    tailscale: list[str],
+) -> tuple[str, tuple[int, int], tuple[int, int]]:
+    """The payload whose QR stays scannable, with the least useful addresses dropped first.
+
+    Returns the payload, its untrimmed ``(bytes, version)`` and the final one.
+    LAN addresses score above tailnet ones, so the tailnet tail goes first.
+    """
+    lan_urls = list(lan)
+    tailscale_urls = list(tailscale)
+
+    def build() -> str:
+        return _pairing_payload(
+            base,
+            certificate,
+            [("lan", url) for url in lan_urls] + [("tailscale", url) for url in tailscale_urls],
+        )
+
+    payload = build()
+    version = _qr_version(payload)
+    before = (len(payload), version)
+    while version > PAIRING_QR_MAX_VERSION and (lan_urls or tailscale_urls):
+        if tailscale_urls:
+            tailscale_urls.pop()
+        else:
+            lan_urls.pop()
+        payload = build()
+        version = _qr_version(payload)
+    return payload, before, (len(payload), version)
+
+
+def _render_pairing_qr(payload: str) -> None:
+    import segno
+
+    segno.make_qr(payload, error="l").terminal(compact=True)
+
+
+def _address_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str) and item.startswith("wss://")]
+
+
+def _cmd_pair(args: argparse.Namespace) -> None:
     settings = _settings()
+    qr_report: tuple[tuple[int, int], tuple[int, int]] | None = None
     if args.host or args.lan or args.tailscale:
         from .net.tls import device_identity
 
@@ -434,6 +509,7 @@ def _cmd_pair(args: argparse.Namespace) -> None:
             "app_token": settings.app_token,
             "cert": fingerprint,
         }
+        payload = _pairing_payload(query, None, [])
         summary = [f"Daemon address:      {url}", f"Certificate SHA-256: {fingerprint}"]
     else:
         _ensure_daemon(settings)
@@ -449,7 +525,21 @@ def _cmd_pair(args: argparse.Namespace) -> None:
         app_token = pairing.get("app_token") if isinstance(pairing, dict) else None
         if not isinstance(app_token, str) or not app_token:
             app_token = settings.app_token
-        config = query = {"iroh": ticket, "token": settings.device_token, "app_token": app_token}
+        certificate = pairing.get("certificate") if isinstance(pairing, dict) else None
+        if not isinstance(certificate, str) or not certificate:
+            certificate = None
+        lan = _address_list(pairing.get("lan") if isinstance(pairing, dict) else None)
+        tailscale = _address_list(pairing.get("tailscale") if isinstance(pairing, dict) else None)
+        base = {"iroh": ticket, "token": settings.device_token, "app_token": app_token}
+        config = dict(base)
+        if certificate:
+            config["cert_sha256"] = certificate
+        if lan:
+            config["lan"] = lan
+        if tailscale:
+            config["tailscale"] = tailscale
+        payload, before, after = _fitted_pairing_payload(base, certificate, lan, tailscale)
+        qr_report = (before, after)
         summary = [
             f"Daemon endpoint: {pairing.get('endpoint_id')}",
             "The phone dials this id over iroh: no address, no VPN app.",
@@ -458,10 +548,13 @@ def _cmd_pair(args: argparse.Namespace) -> None:
         print(json.dumps(config, separators=(",", ":")))
         return
 
-    import segno
-
-    segno.make_qr("phonxiety://pair?" + urlencode(query), error="l").terminal(compact=True)
+    _render_pairing_qr(payload)
     print("\n".join(summary))
+    if qr_report is not None:
+        before, after = qr_report
+        print(f"QR payload: {before[0]} bytes, version {before[1]}")
+        if after != before:
+            print(f"QR payload after trimming: {after[0]} bytes, version {after[1]}")
     print("Scan the code in the Phonxiety app. It carries the phone credential: do not share it.")
 
 

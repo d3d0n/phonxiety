@@ -10,14 +10,13 @@ import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.BridgeStateRepository
 import com.phonxiety.bridge.data.DaemonApi
 import com.phonxiety.bridge.designsystem.UiText
-import com.phonxiety.bridge.model.ConnectionInfo
 import com.phonxiety.bridge.model.LinkState
 import com.phonxiety.bridge.model.PathKind
+import com.phonxiety.bridge.net.CandidateMerge
 import com.phonxiety.bridge.net.CandidateStore
 import com.phonxiety.bridge.net.ConnectionMode
 import com.phonxiety.bridge.net.RelayModeSetting
 import com.phonxiety.bridge.net.RelayOptions
-import com.phonxiety.bridge.net.StoredCandidate
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
@@ -276,7 +275,7 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             when (val outcome = api.info()) {
                 is ApiOutcome.Ok -> {
-                    val stored = candidateStore.merge(learnedCandidates(outcome.value.connection))
+                    val stored = CandidateMerge.store(candidateStore, outcome.value.connection)
                     _state.update {
                         it.copy(
                             connection = it.connection.copy(candidates = stored, refreshing = false, error = null)
@@ -294,14 +293,6 @@ class SettingsViewModel @Inject constructor(
                 }
             }
         }
-    }
-
-    /** The daemon's `lan` and `tailscale` addresses as stored candidates; needs its certificate pin. */
-    private fun learnedCandidates(connection: ConnectionInfo?): List<StoredCandidate> {
-        val pin = connection?.certificate?.takeIf { it.length == 64 } ?: return emptyList()
-        return (connection.lan + connection.tailscale)
-            .distinct()
-            .map { StoredCandidate(it, pin, CandidateStore.Source.LEARNED) }
     }
 
     /** Keeps the daemon's relay list where the engine can read it for the daemon relay mode. */

@@ -271,7 +271,7 @@ class LinkTestAndProbeTests(_ApiCase):
         self.assertEqual((status, body["verdict"], body["loss"]), (200, "failed", 0.8))
 
     async def test_probe_reports_tailscale_unavailable_without_the_binary(self) -> None:
-        with mock.patch("phonxiety.app_api.shutil.which", return_value=None), \
+        with mock.patch("phonxiety.app_api.tailscale_binary", return_value=None), \
                 mock.patch.object(self.device, "status", return_value={"connected": True, "peer": "iroh:abcd"}):
             status, body = await self.call("POST", "/app/v1/probe", body={"candidates": ["iroh", "tailscale"]})
         self.assertEqual(status, 200)
@@ -302,7 +302,7 @@ class LinkTestAndProbeTests(_ApiCase):
         self.assertIsInstance(iroh["rtt_ms"], float)
 
     async def test_tailscale_has_no_rtt_when_it_is_not_the_path(self) -> None:
-        with mock.patch("phonxiety.app_api.shutil.which", return_value="/usr/bin/tailscale"), \
+        with mock.patch("phonxiety.app_api.tailscale_binary", return_value="/usr/bin/tailscale"), \
                 mock.patch("phonxiety.app_api.tailscale_addresses", return_value=["100.64.0.2"]), \
                 mock.patch.object(self.device, "status", return_value={"connected": True, "peer": "iroh:abcd"}):
             status, body = await self.call("POST", "/app/v1/probe", body={"candidates": ["tailscale"]})
@@ -315,7 +315,7 @@ class LinkTestAndProbeTests(_ApiCase):
         self.assertIn("linked over iroh", tailscale["detail"])
 
     async def test_probe_reports_every_tailnet_address_and_the_path(self) -> None:
-        with mock.patch("phonxiety.app_api.shutil.which", return_value="/usr/bin/tailscale"), \
+        with mock.patch("phonxiety.app_api.tailscale_binary", return_value="/usr/bin/tailscale"), \
                 mock.patch("phonxiety.app_api.tailscale_addresses", return_value=["100.64.0.2", "fd7a:115c:a1e0::2"]), \
                 mock.patch.object(self.device, "status", return_value={"connected": True, "peer": "100.64.0.5"}):
             status, body = await self.call("POST", "/app/v1/probe", body={"candidates": ["tailscale"]})

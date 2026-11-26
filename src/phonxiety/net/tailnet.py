@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -23,6 +24,14 @@ import time
 TAILNET_V4 = ipaddress.ip_network("100.64.0.0/10")
 TAILNET_V6 = ipaddress.ip_network("fd7a:115c:a1e0::/48")
 MAGIC_DNS_SUFFIX = ".ts.net"
+
+# Where the installers put the CLI.  A launchd job inherits no PATH, so the
+# daemon cannot rely on `which` alone.
+TAILSCALE_LOCATIONS = (
+    "/opt/homebrew/bin/tailscale",
+    "/usr/local/bin/tailscale",
+    "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+)
 
 _PRIVATE = tuple(
     ipaddress.ip_network(network)
@@ -81,8 +90,20 @@ def path_kind(peer: str | None) -> str:
     return "lan" if _is_private(address) else "address"
 
 
-def _tailscale_binary() -> str | None:
-    return shutil.which("tailscale")
+def tailscale_binary() -> str | None:
+    """The Tailscale CLI, from PATH or the locations its installers use.
+
+    Only an executable regular file counts.  The daemon under launchd has no
+    PATH of its own, so the known locations are what makes the tailnet path
+    available there.
+    """
+    found = shutil.which("tailscale")
+    if found is not None:
+        return found
+    for path in TAILSCALE_LOCATIONS:
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    return None
 
 
 def tailscale_addresses() -> list[str]:
@@ -92,7 +113,7 @@ def tailscale_addresses() -> list[str]:
     to ``tailscale status --json`` when the short form is unavailable.  Never
     raises: a missing or stopped Tailscale simply reports nothing.
     """
-    binary = _tailscale_binary()
+    binary = tailscale_binary()
     if binary is None:
         return []
     found: list[str] = []

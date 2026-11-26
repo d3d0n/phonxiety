@@ -3,7 +3,9 @@ package com.phonxiety.bridge
 import android.annotation.SuppressLint
 import android.content.Context
 import android.net.Uri
+import com.phonxiety.bridge.net.CandidateMerge
 import com.phonxiety.bridge.net.IrohSupport
+import com.phonxiety.bridge.net.StoredCandidate
 import java.io.File
 import java.util.Locale
 import org.json.JSONObject
@@ -45,7 +47,9 @@ sealed class BridgeConfig {
     data class Iroh(
         val ticket: String,
         override val token: String,
-        override val appToken: String? = null
+        override val appToken: String? = null,
+        /** The daemon certificate pin, when the pairing carried one. */
+        val certSha256: String? = null
     ) : BridgeConfig() {
         override val kind: Kind get() = Kind.IROH
     }
@@ -84,14 +88,27 @@ sealed class BridgeConfig {
          * Structural rules for an iroh ticket; the ticket must additionally
          * parse with the bindings (`IrohSupport.endpointId`).
          */
-        fun validateIroh(ticket: String, token: String, appToken: String? = null): Iroh {
+        fun validateIroh(
+            ticket: String,
+            token: String,
+            appToken: String? = null,
+            certSha256: String? = null
+        ): Iroh {
             if (ticket.isEmpty()) throw BridgeConfigException(BridgeConfigError.IROH_MISSING)
             if (ticket.any { it.isWhitespace() || it.isISOControl() }) {
                 throw BridgeConfigException(BridgeConfigError.IROH_INVALID)
             }
             validateToken(token)
             validateAppToken(appToken)
-            return Iroh(ticket = ticket, token = token, appToken = appToken?.trim()?.ifEmpty { null })
+            if (certSha256 != null && !CERT.matches(certSha256)) {
+                throw BridgeConfigException(BridgeConfigError.CERT_INVALID)
+            }
+            return Iroh(
+                ticket = ticket,
+                token = token,
+                appToken = appToken?.trim()?.ifEmpty { null },
+                certSha256 = certSha256?.lowercase(Locale.US)
+            )
         }
 
         fun isPairingHost(scheme: String?, host: String?): Boolean = scheme.equals(PAIR_SCHEME, ignoreCase = true) && host.equals(PAIR_HOST, ignoreCase = true)
@@ -134,7 +151,16 @@ class BridgeConfigException(val error: BridgeConfigError) : Exception(error.code
 }
 
 sealed class PairingResult {
-    data class Valid(val config: BridgeConfig) : PairingResult()
+    /**
+     * [config] is the transport; [candidates] are the other addresses the QR
+     * carried, already pinned to the daemon certificate.  A pairing link from
+     * before those parameters existed simply has none.
+     */
+    data class Valid(
+        val config: BridgeConfig,
+        val candidates: List<StoredCandidate> = emptyList()
+    ) : PairingResult()
+
     data class Invalid(val error: BridgeConfigError) : PairingResult()
 }
 
@@ -178,10 +204,15 @@ object BridgeConfigLoader {
         if (hasIroh == hasUrl) throw BridgeConfigException(BridgeConfigError.KIND_INVALID)
         val token = json.optString("token", "").trim()
         val appToken = if (json.has("app_token") && !json.isNull("app_token")) json.optString("app_token") else null
-        if (hasIroh) {
-            return BridgeConfig.validateIroh(json.optString("iroh", "").trim(), token, appToken)
-        }
         val hasCert = json.has("cert_sha256") && !json.isNull("cert_sha256")
+        if (hasIroh) {
+            return BridgeConfig.validateIroh(
+                json.optString("iroh", "").trim(),
+                token,
+                appToken,
+                if (hasCert) json.optString("cert_sha256") else null
+            )
+        }
         return BridgeConfig.validateAddress(
             url = json.optString("url", "").trim(),
             token = token,
@@ -202,7 +233,12 @@ object BridgeConfigLoader {
             is BridgeConfig.Address ->
                 BridgeConfig.validateAddress(config.url, config.token, config.certSha256, config.appToken)
 
-            is BridgeConfig.Iroh -> BridgeConfig.validateIroh(config.ticket, config.token, config.appToken)
+            is BridgeConfig.Iroh -> BridgeConfig.validateIroh(
+                config.ticket,
+                config.token,
+                config.appToken,
+                config.certSha256
+            )
         }
         val json = JSONObject().put("token", stored.token)
         if (stored.appToken != null) json.put("app_token", stored.appToken)
@@ -212,7 +248,10 @@ object BridgeConfigLoader {
                 if (stored.certSha256 != null) json.put("cert_sha256", stored.certSha256)
             }
 
-            is BridgeConfig.Iroh -> json.put("iroh", stored.ticket)
+            is BridgeConfig.Iroh -> {
+                json.put("iroh", stored.ticket)
+                if (stored.certSha256 != null) json.put("cert_sha256", stored.certSha256)
+            }
         }
         try {
             AppStorage.writeAtomically(
@@ -264,13 +303,14 @@ object BridgeConfigLoader {
 /**
  * Parses `phonxiety://pair?iroh=<ticket>&token=<token>` and
  * `phonxiety://pair?url=<url>&token=<token>&cert=<64 hex>`, and applies the
- * same validation as [BridgeConfigLoader].  An iroh ticket is additionally
- * parsed by the bindings, so [parse] must run off the main thread.  The link is
- * not logged.
+ * same validation as [BridgeConfigLoader].  Both forms may carry a `cert` pin
+ * and repeated `lan` / `tailscale` addresses; those become the pairing's
+ * candidates.  An iroh ticket is additionally parsed by the bindings, so
+ * [parse] must run off the main thread.  The link is not logged.
  */
 object PairingLink {
     @SuppressLint("UseKtx")
-    fun parse(link: String): PairingResult {
+    fun parse(link: String, ticketValid: (String) -> Boolean = { IrohSupport.ticketIsValid(it) }): PairingResult {
         val uri = try {
             Uri.parse(link)
         } catch (_: Exception) {
@@ -283,6 +323,7 @@ object PairingLink {
         val appToken = queryParameter(uri, "app_token")
         val iroh = queryParameter(uri, "iroh")
         val url = queryParameter(uri, "url")
+        val cert = queryParameter(uri, "cert")
         if (iroh == null && url == null) {
             return PairingResult.Invalid(BridgeConfigError.PAIR_LINK_INVALID)
         }
@@ -295,11 +336,17 @@ object PairingLink {
                 return PairingResult.Invalid(BridgeConfigError.PAIR_TOKEN_MISSING)
             }
             return try {
-                val config = BridgeConfig.validateIroh(iroh, token, appToken)
-                if (!IrohSupport.ticketIsValid(config.ticket)) {
+                val config = BridgeConfig.validateIroh(iroh, token, appToken, cert)
+                if (!ticketValid(config.ticket)) {
                     PairingResult.Invalid(BridgeConfigError.PAIR_IROH_INVALID)
                 } else {
-                    PairingResult.Valid(config)
+                    PairingResult.Valid(
+                        config,
+                        CandidateMerge.fromPairing(
+                            config.certSha256,
+                            queryParameters(uri, "lan") + queryParameters(uri, "tailscale")
+                        )
+                    )
                 }
             } catch (e: BridgeConfigException) {
                 PairingResult.Invalid(
@@ -313,9 +360,14 @@ object PairingLink {
         }
         if (url.isNullOrEmpty()) return PairingResult.Invalid(BridgeConfigError.PAIR_URL_MISSING)
         if (token.isNullOrEmpty()) return PairingResult.Invalid(BridgeConfigError.PAIR_TOKEN_MISSING)
-        val cert = queryParameter(uri, "cert")
         return try {
-            PairingResult.Valid(BridgeConfig.validateAddress(url, token, cert, appToken))
+            PairingResult.Valid(
+                BridgeConfig.validateAddress(url, token, cert, appToken),
+                CandidateMerge.fromPairing(
+                    cert,
+                    queryParameters(uri, "lan") + queryParameters(uri, "tailscale")
+                )
+            )
         } catch (e: BridgeConfigException) {
             PairingResult.Invalid(e.error)
         }
@@ -325,5 +377,11 @@ object PairingLink {
         uri.getQueryParameter(name)
     } catch (_: Exception) {
         null
+    }
+
+    private fun queryParameters(uri: Uri, name: String): List<String> = try {
+        uri.getQueryParameters(name).orEmpty()
+    } catch (_: Exception) {
+        emptyList()
     }
 }

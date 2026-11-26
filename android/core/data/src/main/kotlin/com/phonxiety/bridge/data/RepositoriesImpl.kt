@@ -8,6 +8,8 @@ import com.phonxiety.bridge.BridgeService
 import com.phonxiety.bridge.PairingLink
 import com.phonxiety.bridge.PairingResult
 import com.phonxiety.bridge.model.BridgeState
+import com.phonxiety.bridge.net.CandidateMerge
+import com.phonxiety.bridge.net.CandidateStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -98,6 +100,10 @@ class DevicePairingRepository internal constructor(
                     val previous = BridgeConfigLoader.snapshot(context)
                     try {
                         val stored = BridgeConfigLoader.write(context, parsed.config)
+                        // The QR's other addresses belong to this pairing only: a
+                        // different daemon's stored addresses are replaced together
+                        // with the identity in one write.
+                        CandidateStore.of(context).rebind(CandidateMerge.identity(stored), parsed.candidates)
                         try {
                             BridgeRuntime.rememberPairing(stored.kind)
                             startService(context)

@@ -47,7 +47,7 @@ from .auth import default_auth_path
 from .device import PROTOCOL_VERSION, PROTOCOL_VERSIONS, DeviceError
 from .models import CallLimits, CallRequest, TERMINAL_STATES, TestAudioOptions
 from .net.framing import frame
-from .net.tailnet import addresses_for, path_kind, tailscale_addresses
+from .net.tailnet import addresses_for, path_kind, tailscale_addresses, tailscale_binary
 from .settings import (
     MAX_CONSTRAINTS_CHARS,
     MAX_DURATION_RANGE,
@@ -784,7 +784,7 @@ class AppApi:
         return path_kind(peer)
 
     def _tailscale_candidate(self, rtt: float | None, connected: bool) -> dict[str, Any]:
-        if shutil.which("tailscale") is None:
+        if tailscale_binary() is None:
             return {"name": "tailscale", "available": False, "reachable": False, "rtt_ms": None,
                     "reason": "not_installed"}
         addresses = tailscale_addresses()

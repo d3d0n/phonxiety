@@ -7,6 +7,8 @@ import android.content.Intent
 import com.phonxiety.bridge.BridgeConfig
 import com.phonxiety.bridge.BridgeConfigLoader
 import com.phonxiety.bridge.BridgeRuntime
+import com.phonxiety.bridge.net.CandidateStore
+import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -108,6 +110,43 @@ class DevicePairingRepositoryTest {
         repository.refresh()
 
         assertFalse(repository.paired.value)
+    }
+
+    @Test
+    fun aPairingLinkStoresTheAddressesItCarriedAndRePairingReplacesThem() = runTest {
+        BridgeConfigLoader.delete(context)
+        File(context.createDeviceProtectedStorageContext().filesDir, "link-candidates.json").delete()
+        val repository = DevicePairingRepository(context)
+        val pinA = "a".repeat(64)
+        val pinB = "b".repeat(64)
+
+        val first = repository.pair(
+            "phonxiety://pair?url=wss%3A%2F%2F192.168.1.10%3A18763%2Fdevice&token=device-token" +
+                "&cert=$pinA" +
+                "&lan=wss%3A%2F%2F192.168.1.11%3A18763%2Fdevice" +
+                "&tailscale=wss%3A%2F%2F100.64.0.2%3A18763%2Fdevice"
+        )
+
+        assertTrue(first is PairResult.Paired)
+        val stored = CandidateStore.of(context)
+        assertEquals(
+            listOf(
+                "wss://192.168.1.11:18763/device",
+                "wss://100.64.0.2:18763/device"
+            ),
+            stored.load().map { it.url }
+        )
+        assertTrue(stored.load().all { it.certSha256 == pinA })
+
+        val second = repository.pair(
+            "phonxiety://pair?url=wss%3A%2F%2F192.168.1.20%3A18763%2Fdevice&token=other-token" +
+                "&cert=$pinB" +
+                "&lan=wss%3A%2F%2F192.168.1.21%3A18763%2Fdevice"
+        )
+
+        assertTrue(second is PairResult.Paired)
+        assertEquals(listOf("wss://192.168.1.21:18763/device"), stored.load().map { it.url })
+        assertEquals("cert:$pinB", stored.pairingIdentity())
     }
 
     @Test

@@ -169,7 +169,7 @@ def _deterministic() -> Any:
             "phonxiety.app_api.addresses_for",
             return_value={"lan": [LAN_ADDRESS], "tailscale": [TAILNET_ADDRESS]},
         ),
-        mock.patch("phonxiety.app_api.shutil.which", return_value=None),
+        mock.patch("phonxiety.app_api.tailscale_binary", return_value=None),
         mock.patch(
             "phonxiety.app_api.shutil.disk_usage",
             return_value=types.SimpleNamespace(free=10 * 1024**3),

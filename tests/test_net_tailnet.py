@@ -13,6 +13,7 @@ from phonxiety.net.tailnet import (
     parse_address,
     path_kind,
     tailscale_addresses,
+    tailscale_binary,
 )
 
 
@@ -75,8 +76,33 @@ class ReportedAddressTests(unittest.TestCase):
         self.assertNotIn("wss://wrong", addresses_for(18763)["lan"])
 
     def test_tailscale_addresses_without_the_binary(self) -> None:
-        with mock.patch("phonxiety.net.tailnet.shutil.which", return_value=None):
+        with mock.patch.object(tailnet.shutil, "which", return_value=None), \
+                mock.patch.object(tailnet, "TAILSCALE_LOCATIONS", ()):
             self.assertEqual([], tailscale_addresses())
+
+    def test_the_binary_is_found_at_a_known_location_without_a_path(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as directory:
+            fake = Path(directory) / "tailscale"
+            fake.write_text("#!/bin/sh\n", encoding="utf-8")
+            fake.chmod(0o755)
+            with mock.patch.object(tailnet.shutil, "which", return_value=None), \
+                    mock.patch.object(tailnet, "TAILSCALE_LOCATIONS", (str(fake),)):
+                self.assertEqual(str(fake), tailscale_binary())
+
+    def test_a_known_location_that_is_not_executable_is_not_the_binary(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as directory:
+            plain = Path(directory) / "tailscale"
+            plain.write_text("not a program\n", encoding="utf-8")
+            plain.chmod(0o644)
+            with mock.patch.object(tailnet.shutil, "which", return_value=None), \
+                    mock.patch.object(tailnet, "TAILSCALE_LOCATIONS", (str(plain),)):
+                self.assertIsNone(tailscale_binary())
 
     def test_tailscale_addresses_read_both_families(self) -> None:
         results = {"-4": "100.64.0.2\n", "-6": "fd7a:115c:a1e0::2\n"}

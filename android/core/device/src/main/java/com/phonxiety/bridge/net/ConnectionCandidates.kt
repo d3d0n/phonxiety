@@ -118,12 +118,28 @@ internal object CandidatePlanner {
     fun plan(
         config: BridgeConfig,
         stored: List<StoredCandidate> = emptyList(),
-        discovered: List<DiscoveredDaemon> = emptyList()
+        discovered: List<DiscoveredDaemon> = emptyList(),
+        storeIdentity: String? = null
     ): List<Candidate> {
-        val pin = when (config) {
-            is BridgeConfig.Address -> config.certSha256
-            is BridgeConfig.Iroh -> stored.firstNotNullOfOrNull { it.certSha256 }
+        // A store written for another pairing holds another daemon's addresses.
+        // They are never dialled with this config's token, even before the
+        // store is rebound to the current pairing.
+        val foreignStore = storeIdentity != null && storeIdentity != CandidateMerge.identity(config)
+        val storedPins = if (foreignStore) {
+            emptyList()
+        } else {
+            stored.mapNotNull { it.certSha256?.takeIf(String::isNotBlank)?.lowercase() }.distinct()
         }
+        val pin = when (config) {
+            is BridgeConfig.Address -> config.certSha256?.lowercase()
+
+            // An iroh pairing carries its pin when the QR (or config file) had one.
+            // Without it, only an unambiguous stored pin can be trusted; mixed
+            // pins mean the document still holds another daemon's addresses.
+            is BridgeConfig.Iroh -> config.certSha256?.lowercase() ?: storedPins.singleOrNull()
+        }
+        val ambiguous = !foreignStore && config is BridgeConfig.Iroh &&
+            config.certSha256 == null && storedPins.size > 1
         val primary = when (config) {
             is BridgeConfig.Iroh -> Candidate.iroh()
 
@@ -131,9 +147,16 @@ internal object CandidatePlanner {
                 Candidate.address(config.url, config.certSha256, source = CandidateStore.Source.PAIRED, primary = true)
         }
         val addresses = buildList {
-            for (candidate in stored) {
-                if (candidate.certSha256.isNullOrBlank()) continue
-                add(Candidate.address(candidate.url, candidate.certSha256, candidate.source))
+            if (!foreignStore) {
+                for (candidate in stored) {
+                    val cert = candidate.certSha256 ?: continue
+                    if (cert.isBlank()) continue
+                    // Defence in depth: an address pinned to another daemon is never
+                    // dialled with this pairing's token, even if it is in the store.
+                    if (ambiguous) continue
+                    if (pin == null || !cert.equals(pin, ignoreCase = true)) continue
+                    add(Candidate.address(candidate.url, cert, candidate.source))
+                }
             }
             for (daemon in discovered) {
                 val cert = daemon.certSha256 ?: continue

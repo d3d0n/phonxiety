@@ -45,11 +45,13 @@ import com.phonxiety.bridge.model.LinkDiagnostics
 import com.phonxiety.bridge.model.LinkError
 import com.phonxiety.bridge.model.LinkKind
 import com.phonxiety.bridge.net.CandidateLinkFactory
+import com.phonxiety.bridge.net.CandidateMerge
 import com.phonxiety.bridge.net.CandidateStore
 import com.phonxiety.bridge.net.ConnectionMode
 import com.phonxiety.bridge.net.DeviceLink
 import com.phonxiety.bridge.net.ExecutorLinkScheduler
 import com.phonxiety.bridge.net.IrohSupport
+import com.phonxiety.bridge.net.LinkCandidateRefresh
 import com.phonxiety.bridge.net.LinkSelector
 import com.phonxiety.bridge.net.LinkSupervisor
 import com.phonxiety.bridge.net.RelayModeSetting
@@ -243,7 +245,15 @@ class BridgeEngine(
         clock = { SystemClock.elapsedRealtime() }
     )
 
+    /** Asks the daemon for its other addresses once the hello is answered. */
+    private val candidateRefresh = LinkCandidateRefresh(
+        store = CandidateStore.of(appContext),
+        appToken = { appToken },
+        exchange = { exchange(it) }
+    )
+
     private val telecom: TelecomManager? = appContext.getSystemService(TelecomManager::class.java)
+
     private val wakeLock: PowerManager.WakeLock? =
         appContext.getSystemService(PowerManager::class.java)
             ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "phonxiety:bridge")
@@ -322,6 +332,9 @@ class BridgeEngine(
         }
         try {
             scheduler.schedule({
+                // A config written from outside the app (the host pairing task) must
+                // not leave another daemon's addresses behind this token.
+                safe { CandidateStore.of(appContext).bind(CandidateMerge.identity(config)) }
                 safe { adoptExistingCalls() }
                 safe { restoreAbandonedMuteAtStartup() }
                 safe { links.start() }
@@ -549,7 +562,10 @@ class BridgeEngine(
             // Nothing else may reach this link before its hello: the daemon
             // reads the first control frame as the handshake.
             val hello = sendHello()
-            if (hello) engineScope.launch { refreshCapabilities() }
+            if (hello) {
+                engineScope.launch { refreshCapabilities() }
+                engineScope.launch(Dispatchers.IO) { candidateRefresh.refresh() }
+            }
             applyWifiLock()
             return hello
         }
@@ -565,6 +581,7 @@ class BridgeEngine(
         override fun onLinkDown(reason: String) {
             lastRouteKey = null
             helloDelivered = false
+            candidateRefresh.linkDown()
             capabilityWatch.helloGone()
             applyWifiLock()
             stateStore.linkDown(LinkError(code = reason, message = linkMessage(reason), atEpochMs = System.currentTimeMillis()))

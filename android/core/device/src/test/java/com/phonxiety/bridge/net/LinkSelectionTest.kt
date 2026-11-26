@@ -68,6 +68,22 @@ class LinkSelectionTest {
     }
 
     @Test
+    fun aKnownPinDropsStoredAndMdnsAddressesOfAnotherDaemon() {
+        val config = BridgeConfig.validateIroh("ticket", "token", certSha256 = pin)
+        val other = "b".repeat(64)
+        val stored = listOf(StoredCandidate("wss://192.168.1.10:18763/device", other))
+        val discovered = listOf(
+            DiscoveredDaemon("192.168.1.30", 18763, other, 3, "phonxiety-b"),
+            DiscoveredDaemon("192.168.1.31", 18763, pin, 3, "phonxiety-a")
+        )
+
+        val plan = CandidatePlanner.plan(config, stored, discovered)
+
+        assertEquals(listOf(LinkKind.IROH, LinkKind.WEBSOCKET), plan.map { it.kind })
+        assertEquals("wss://192.168.1.31:18763/device", plan[1].url)
+    }
+
+    @Test
     fun modeFiltersCandidates() {
         val lan = lanCandidate()
         val tailnet = tailnetCandidate()
