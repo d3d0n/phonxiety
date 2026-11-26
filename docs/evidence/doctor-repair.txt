@@ -1,0 +1,21 @@
+Doctor repair on the Pixel 6a (Magisk 31.1), app 5650466, daemon 383f3df, 2026-11-26
+
+Broken on purpose (adb, root):
+  touch /data/adb/modules/phonxiety_bridge/disable
+  pm revoke com.phonxiety.bridge android.permission.RECORD_AUDIO
+
+Doctor (Home -> Doctor): "23 of 25 checks pass"
+  Module enabled: Failed - "the disable flag is set; the overlay is not mounted" -> Re-enable the module
+  Record audio: Failed - "not granted" -> Grant again
+
+Fix 1, Re-enable the module (CONFIRM: "Clears the module's disable flag through the root manager.
+The phone reboots so the overlay is mounted from the next boot on." Rollback text shown) -> Run it, 06:38:53
+  phone rebooted; adb back after 6 s; sys.boot_completed after 10 s more (06:39:17)
+  daemon `phonxiety status`: phone connected 28 s after boot_completed (06:39:45)
+  /data/adb/modules/phonxiety_bridge/: action.sh icon module.prop system webroot  (no disable flag)
+Fix 2, Grant again (CONFIRM, shows the system dialog) -> "While using the app"
+  Doctor: Record audio OK, 24 -> 25 of 25 checks pass
+
+Gap found: the daemon kept `calling unavailable - the phone reports no call audio` until the link was
+re-established, because capabilities travel only in hello. Card HelloFirst (wave 9) makes the phone
+refresh the link when its call capabilities change while idle.
