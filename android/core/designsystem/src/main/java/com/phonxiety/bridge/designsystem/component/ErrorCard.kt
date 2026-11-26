@@ -45,35 +45,9 @@ fun ErrorCard(
     message: String,
     modifier: Modifier = Modifier,
     output: String? = null,
-    initiallyExpanded: Boolean = false
-) {
-    ErrorCardContent(
-        title = title,
-        message = message,
-        modifier = modifier,
-        output = output,
-        initiallyExpanded = initiallyExpanded,
-        actionLabel = null,
-        onAction = null,
-        dismissLabel = null,
-        onDismiss = null
-    )
-}
-
-/**
- * The action shape. [onAction] is the last parameter so the older
- * `ErrorCard(title, message, actionLabel = "Retry") { retry() }` call keeps binding its trailing
- * lambda to the action.
- */
-@Composable
-fun ErrorCard(
-    title: String,
-    message: String,
-    modifier: Modifier = Modifier,
-    output: String? = null,
     initiallyExpanded: Boolean = false,
     actionLabel: String? = null,
-    onAction: () -> Unit
+    onAction: (() -> Unit)? = null
 ) {
     ErrorCardContent(
         title = title,

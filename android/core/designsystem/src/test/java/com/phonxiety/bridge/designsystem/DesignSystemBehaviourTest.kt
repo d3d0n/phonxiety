@@ -1,5 +1,6 @@
 package com.phonxiety.bridge.designsystem
 
+import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -157,6 +158,22 @@ class DesignSystemBehaviourTest {
         composeRule.runOnIdle {
             assertEquals(1, retries)
         }
+    }
+
+    /** The original shapes compile and show no action: a label without a callback, or a null one. */
+    @Test
+    fun legacyErrorCardWithoutACallbackShowsNoAction() {
+        composeRule.setContent {
+            PhonxietyTheme(dynamicColor = false) {
+                Column {
+                    ErrorCard("Label only", "No callback.", actionLabel = "Retry")
+                    ErrorCard("Null callback", "Explicitly none.", onAction = null)
+                }
+            }
+        }
+        composeRule.onNodeWithText("Label only").assertExists()
+        composeRule.onNodeWithText("Null callback").assertExists()
+        composeRule.onNodeWithText("Retry").assertDoesNotExist()
     }
 
     @Test
