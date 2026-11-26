@@ -3,9 +3,11 @@ package com.phonxiety.bridge.feature.onboarding
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.phonxiety.bridge.BridgeRuntime
 import com.phonxiety.bridge.BridgeService
 import com.phonxiety.bridge.data.AppApi
 import com.phonxiety.bridge.data.DevicePairingRepository
+import com.phonxiety.bridge.model.LinkState
 import com.phonxiety.bridge.root.FileProgressStore
 import com.phonxiety.bridge.root.ProgressStore
 import com.phonxiety.bridge.root.WizardEvent
@@ -15,12 +17,14 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /** Where the wizard keeps the install journal; the boot receiver reads the same file. */
@@ -39,7 +43,8 @@ class OnboardingViewModel internal constructor(
     private val pairingRepository: DevicePairingRepository,
     appApi: AppApi,
     backend: RootBackend,
-    permissions: RuntimePermissionChecker = AndroidPermissionChecker(context)
+    permissions: RuntimePermissionChecker = AndroidPermissionChecker(context),
+    linkState: Flow<LinkState> = BridgeRuntime.state.map { it.link }
 ) : ViewModel() {
     /** The wired wizard: the app's root backend, its permissions and the process-wide service. */
     @Inject
@@ -70,7 +75,8 @@ class OnboardingViewModel internal constructor(
                 _pairingError.value = request.reason
             }
             _requests.tryEmit(request)
-        }
+        },
+        linkState = linkState
     )
 
     val wizard: StateFlow<WizardState> = coordinator.wizard
@@ -79,6 +85,19 @@ class OnboardingViewModel internal constructor(
         viewModelScope.launch(Dispatchers.IO) {
             pairingRepository.refresh()
             coordinator.start()
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            // A pairing can appear without this screen's scanner or paste field: `mise run phone:pair`,
+            // the service rewriting its config, or the repository noticing a link change. Reading the
+            // cache afresh and dispatching the resume probe is what makes the wizard advance by itself;
+            // the coordinator drops the observation if the wizard already moved on, a local attempt is
+            // still running, or the last local attempt was rejected.
+            pairingRepository.paired.collect { paired ->
+                if (paired) {
+                    pairingRepository.refresh()
+                    coordinator.onPairingObserved()
+                }
+            }
         }
     }
 

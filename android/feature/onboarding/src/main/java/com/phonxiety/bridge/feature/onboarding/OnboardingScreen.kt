@@ -66,6 +66,8 @@ data class OnboardingCallbacks(
     val onPrimary: () -> Unit = {},
     val onSecondary: () -> Unit = {},
     val onScanQr: () -> Unit = {},
+    /** Opens the in-app CameraX scanner on purpose, for phones without the Google scanner. */
+    val onCameraScan: () -> Unit = {},
     val onPairLink: (String) -> Unit = {},
     val onDismissPairingError: () -> Unit = {},
     val onOpenManager: (String) -> Unit = {},
@@ -150,6 +152,15 @@ fun OnboardingScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("Scan QR code")
+                }
+                TextButton(
+                    onClick = {
+                        showPairing = false
+                        callbacks.onCameraScan()
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Use this phone's camera")
                 }
                 OutlinedTextField(
                     value = pastedLink,

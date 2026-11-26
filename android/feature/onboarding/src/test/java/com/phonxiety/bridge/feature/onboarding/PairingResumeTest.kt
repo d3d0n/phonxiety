@@ -73,7 +73,8 @@ class PairingResumeTest {
             DevicePairingRepository(context),
             appApi,
             backend,
-            FakePermissions()
+            FakePermissions(),
+            readyLink()
         )
 
         assertEquals(

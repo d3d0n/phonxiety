@@ -79,7 +79,8 @@ class SetupCoordinatorTest {
             preferences = preferences,
             permissions = permissions,
             serviceStarter = { serviceStarts++ },
-            host = { hosts += it }
+            host = { hosts += it },
+            linkState = readyLink()
         )
     }
 

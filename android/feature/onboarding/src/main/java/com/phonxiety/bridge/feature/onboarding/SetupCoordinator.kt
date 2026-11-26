@@ -1,9 +1,11 @@
 package com.phonxiety.bridge.feature.onboarding
 
+import com.phonxiety.bridge.BridgeRuntime
 import com.phonxiety.bridge.data.ApiResult
 import com.phonxiety.bridge.data.AppApi
 import com.phonxiety.bridge.data.PairResult
 import com.phonxiety.bridge.data.PairingRepository
+import com.phonxiety.bridge.model.LinkState
 import com.phonxiety.bridge.root.ModuleController
 import com.phonxiety.bridge.root.ModuleState
 import com.phonxiety.bridge.root.Overlay
@@ -15,9 +17,12 @@ import com.phonxiety.bridge.root.SuStatus
 import com.phonxiety.bridge.root.WizardEffect
 import com.phonxiety.bridge.root.WizardEvent
 import com.phonxiety.bridge.root.WizardState
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
@@ -58,13 +63,31 @@ class SetupCoordinator(
     private val preferences: SetupPreferences,
     private val permissions: RuntimePermissionChecker,
     private val serviceStarter: () -> Unit,
-    private val host: (SetupHostRequest) -> Unit
+    private val host: (SetupHostRequest) -> Unit,
+    /** The bridge's link state; a stored pairing is not a live transport. */
+    private val linkState: Flow<LinkState> = BridgeRuntime.state.map { it.link }
 ) {
     private val mutex = Mutex()
     private val _wizard = MutableStateFlow<WizardState>(WizardState.Checking)
     val wizard: StateFlow<WizardState> = _wizard.asStateFlow()
 
     private var detection: RootDetection? = null
+
+    /**
+     * A scanner or paste attempt is running. Observations of the stored pairing must not advance the
+     * wizard while the attempt's own outcome decides what the person is told.
+     */
+    private var localPairingInFlight = false
+
+    /**
+     * The last local attempt was rejected while the wizard sat at "Unpaired". It may still have left
+     * a readable config behind (the store writes before the service starts), so ambient observations
+     * of that pairing stay ignored; an explicit attempt or a probe re-checks the world.
+     */
+    private var localPairingRejected = false
+
+    /** The automatic scan is one per visit to "Unpaired", never one per probe or recomposition. */
+    private var autoPairingLaunched = false
 
     /** First entry and every "resume after reboot": re-derive the state from the device. */
     suspend fun start() {
@@ -73,19 +96,51 @@ class SetupCoordinator(
 
     suspend fun dispatch(event: WizardEvent) = mutex.withLock { handle(event) }
 
+    /**
+     * A stored pairing appeared while the wizard sat at "Unpaired": `mise run phone:pair`, the
+     * service rewriting its config, or a link change the repository noticed. The admission check
+     * runs under the same lock as every transition, so an observation that lost the race is a
+     * no-op: a probe or first link test already admitted has moved the wizard on, and an unresolved
+     * or rejected local attempt keeps the wizard where it stands.
+     */
+    suspend fun onPairingObserved() {
+        mutex.withLock {
+            if (localPairingInFlight || localPairingRejected) return@withLock
+            if (_wizard.value !is WizardState.NeedsPairing) return@withLock
+            // The probe a resume would run, so the wizard lands on the same next step by itself.
+            handle(WizardEvent.RecheckRequested)
+        }
+    }
+
     /** Validates and stores a `phonxiety://pair` link or a scanned QR payload. */
     suspend fun pair(link: String) {
-        val result = runCatching { pairing.pair(link) }
-            .getOrElse { error -> PairResult.Invalid(error.message ?: "the pairing link could not be read") }
-        when (result) {
-            PairResult.Paired -> {
-                host(SetupHostRequest.Message("Paired with the computer"))
-                if (_wizard.value is WizardState.NeedsPairing) {
-                    dispatch(WizardEvent.PairingCompleted)
-                }
-            }
+        mutex.withLock {
+            localPairingInFlight = true
+            try {
+                val result = runCatching { pairing.pair(link) }
+                    .getOrElse { error ->
+                        PairResult.Invalid(error.message ?: "the pairing link could not be read")
+                    }
+                when (result) {
+                    PairResult.Paired -> {
+                        localPairingRejected = false
+                        host(SetupHostRequest.Message("Paired with the computer"))
+                        if (_wizard.value is WizardState.NeedsPairing) {
+                            handle(WizardEvent.PairingCompleted)
+                        }
+                    }
 
-            is PairResult.Invalid -> host(SetupHostRequest.PairingRejected(result.reason))
+                    is PairResult.Invalid -> {
+                        // The store writes the config before the service starts, so a rejected
+                        // attempt can leave a readable pairing behind. Only an explicit attempt or
+                        // a probe may act on it; an ambient observation must not.
+                        if (_wizard.value is WizardState.NeedsPairing) localPairingRejected = true
+                        host(SetupHostRequest.PairingRejected(result.reason))
+                    }
+                }
+            } finally {
+                localPairingInFlight = false
+            }
         }
     }
 
@@ -107,6 +162,12 @@ class SetupCoordinator(
     private suspend fun handle(event: WizardEvent) {
         val transition = ModuleController.reduce(_wizard.value, event)
         _wizard.value = transition.state
+        if (transition.state !is WizardState.NeedsPairing) {
+            // Leaving "Unpaired" ends the visit: a later visit may auto-launch again, and an old
+            // rejection no longer gates a fresh pairing attempt.
+            localPairingRejected = false
+            autoPairingLaunched = false
+        }
         transition.effects.forEach { perform(it) }
     }
 
@@ -127,7 +188,16 @@ class SetupCoordinator(
                 requestBatteryExemption()
             }
 
-            WizardEffect.StartPairing -> host(SetupHostRequest.StartPairing)
+            WizardEffect.StartPairing -> {
+                // One automatic scanner per visit to "Unpaired". A probe round trip, a resume or a
+                // recomposition must not reopen it (and reopening after a Cancelled scan would be
+                // endless); the explicit Scan button bypasses this and always works. A request that
+                // arrives after the wizard advanced is dropped instead of covering the next step.
+                if (_wizard.value is WizardState.NeedsPairing && !autoPairingLaunched) {
+                    autoPairingLaunched = true
+                    host(SetupHostRequest.StartPairing)
+                }
+            }
 
             WizardEffect.RunLinkTest -> runLinkTest()
 
@@ -210,7 +280,26 @@ class SetupCoordinator(
         handle(WizardEvent.InstallResult(result))
     }
 
+    /**
+     * The first test needs a live link, not just a stored pairing: the scanner, paste and
+     * `mise run phone:pair` all publish `paired` before the transport comes up, and a 503 from a
+     * still-connecting link must not be recorded as a failed test. One request follows the wait.
+     */
+    private suspend fun awaitLink(): Boolean = withTimeoutOrNull(LINK_READY_TIMEOUT_MS) {
+        linkState.first { it is LinkState.Up }
+    } != null
+
     private suspend fun runLinkTest() {
+        if (!awaitLink()) {
+            handle(
+                WizardEvent.LinkTestCompleted(
+                    false,
+                    "the link to the computer did not come up within ${LINK_READY_TIMEOUT_MS / 1000} s; " +
+                        "check that the computer is running and reachable, then retry"
+                )
+            )
+            return
+        }
         val outcome = withTimeoutOrNull(LINK_TEST_TIMEOUT_MS) {
             runCatching {
                 appApi.request(
@@ -247,6 +336,7 @@ class SetupCoordinator(
     }
 
     private companion object {
+        const val LINK_READY_TIMEOUT_MS = 30_000L
         const val LINK_TEST_SECONDS = 5
         const val LINK_TEST_TIMEOUT_MS = 25_000L
     }
