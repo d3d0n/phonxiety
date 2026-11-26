@@ -188,6 +188,6 @@
     </plurals>
     <string name="lab_level_debug">Debug</string>
     <string name="lab_level_info">Info</string>
-    <string name="lab_level_warn">Warn</string>
+    <string name="lab_level_warn">Warning</string>
     <string name="lab_level_error">Error</string>
 </resources>
