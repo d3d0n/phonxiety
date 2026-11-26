@@ -9,6 +9,8 @@ import com.phonxiety.bridge.data.PairingRepository
 import com.phonxiety.bridge.designsystem.component.LinkPath
 import com.phonxiety.bridge.designsystem.formatDuration
 import com.phonxiety.bridge.model.BridgeState
+import com.phonxiety.bridge.model.CallPhase
+import com.phonxiety.bridge.model.CallState
 import com.phonxiety.bridge.model.LinkKind
 import com.phonxiety.bridge.model.LinkState
 import com.phonxiety.bridge.model.PathKind
@@ -136,6 +138,70 @@ class DashboardViewModelTest {
         assertEquals(R.string.dashboard_permission_microphone, knownPermission("android.permission.RECORD_AUDIO"))
         assertEquals(R.string.dashboard_permission_local_network, knownPermission("android.permission.ACCESS_LOCAL_NETWORK"))
         assertNull(knownPermission("android.permission.SOMETHING_NEW"))
+    }
+
+    @Test
+    fun theCallCardCountsTheConversationFromTheConnect() {
+        val call = CallState(
+            callId = "call",
+            destinationMasked = "+998 ·· 42",
+            phase = CallPhase.ACTIVE,
+            startedAtEpochMs = 1_000,
+            connectedAtEpochMs = 31_000
+        )
+        val timing = callTiming(call)
+        // The answer restarts the count, as the system's call chip does; placement is not a duration.
+        assertEquals(R.string.dashboard_duration, timing.labelRes)
+        assertEquals(31_000L, timing.elapsedStartEpochMs)
+        assertNull("a live call counts against the clock", timing.elapsedEndEpochMs)
+        assertEquals("Connected at takes the same stamp", 31_000L, timing.connectedAtEpochMs)
+    }
+
+    @Test
+    fun anEndedCallFreezesTheDurationAtTheEnd() {
+        val call = CallState(
+            callId = "call",
+            destinationMasked = "+998 ·· 42",
+            phase = CallPhase.ENDED,
+            startedAtEpochMs = 1_000,
+            connectedAtEpochMs = 31_000,
+            endedAtEpochMs = 91_000
+        )
+        val timing = callTiming(call)
+        // 60 s of conversation, and the card counts to the end rather than to its own clock.
+        assertEquals(R.string.dashboard_duration, timing.labelRes)
+        assertEquals(31_000L, timing.elapsedStartEpochMs)
+        assertEquals(91_000L, timing.elapsedEndEpochMs)
+        assertEquals(31_000L, timing.connectedAtEpochMs)
+    }
+
+    @Test
+    fun theRingIsDialingAndNotADuration() {
+        val call = CallState(
+            callId = "call",
+            destinationMasked = "+998 ·· 42",
+            phase = CallPhase.DIALING,
+            startedAtEpochMs = 1_000
+        )
+        val timing = callTiming(call)
+        assertEquals(R.string.dashboard_phase_dialing, timing.labelRes)
+        assertEquals(1_000L, timing.elapsedStartEpochMs)
+        assertNull("there is no connect time yet", timing.connectedAtEpochMs)
+    }
+
+    @Test
+    fun anEndedCallWithoutAConnectHasNoDuration() {
+        val call = CallState(
+            callId = "call",
+            destinationMasked = "+998 ·· 42",
+            phase = CallPhase.ENDED,
+            startedAtEpochMs = 1_000
+        )
+        val timing = callTiming(call)
+        // The line never carried a conversation: neither a running duration nor a connect time.
+        assertEquals(R.string.dashboard_duration, timing.labelRes)
+        assertNull(timing.elapsedStartEpochMs)
+        assertNull(timing.connectedAtEpochMs)
     }
 
     @Test

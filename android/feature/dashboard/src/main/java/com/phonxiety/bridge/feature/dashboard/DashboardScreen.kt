@@ -319,6 +319,7 @@ private fun CallCard(call: CallState?, nowEpochMs: Long, onOpenLiveCall: (String
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         } else {
+            val timing = callTiming(call)
             TileRow {
                 StatTile(
                     label = stringResource(R.string.dashboard_destination),
@@ -326,15 +327,15 @@ private fun CallCard(call: CallState?, nowEpochMs: Long, onOpenLiveCall: (String
                     mono = true
                 )
                 StatTile(
-                    label = stringResource(R.string.dashboard_duration),
-                    value = call.startedAtEpochMs
-                        ?.let { formatElapsedTime(secondsBetween(it, nowEpochMs)) }
+                    label = stringResource(timing.labelRes),
+                    value = timing.elapsedStartEpochMs
+                        ?.let { formatElapsedTime(secondsBetween(it, timing.elapsedEndEpochMs ?: nowEpochMs)) }
                         ?: MISSING_VALUE,
                     mono = true
                 )
                 StatTile(
                     label = stringResource(R.string.dashboard_connected_at),
-                    value = call.startedAtEpochMs?.let { timeOf(context, it) } ?: MISSING_VALUE,
+                    value = timing.connectedAtEpochMs?.let { timeOf(context, it) } ?: MISSING_VALUE,
                     mono = true
                 )
             }
@@ -767,6 +768,50 @@ internal fun PathKind.toDesignPath(): LinkPath = when (this) {
     PathKind.UNKNOWN -> LinkPath.UNKNOWN
 }
 
+/**
+ * What the call card's timing tile counts and how it names itself. The ring before the line
+ * connects counts from placement and is labelled Dialing, the live screen's own word, so it never
+ * reads as a call duration; the system's call chip also starts at the answer. From the connect the
+ * tile is the conversation's Duration and counts from the bridge's connect stamp, and "Connected
+ * at" takes the same stamp, not the placement time. Once the call has ended the count stops at the
+ * bridge's end stamp, so the last call keeps the duration it ended with.
+ */
+internal data class CallTiming(
+    val labelRes: Int,
+    val elapsedStartEpochMs: Long?,
+    /** Where the count stops; null while the call is still running and the card uses its clock. */
+    val elapsedEndEpochMs: Long?,
+    val connectedAtEpochMs: Long?
+)
+
+internal fun callTiming(call: CallState): CallTiming {
+    val connected = call.connectedAtEpochMs
+    return when {
+        connected != null -> CallTiming(
+            labelRes = R.string.dashboard_duration,
+            elapsedStartEpochMs = connected,
+            elapsedEndEpochMs = call.endedAtEpochMs.takeIf { call.phase == CallPhase.ENDED },
+            connectedAtEpochMs = connected
+        )
+
+        call.phase == CallPhase.DIALING -> CallTiming(
+            labelRes = R.string.dashboard_phase_dialing,
+            elapsedStartEpochMs = call.startedAtEpochMs,
+            elapsedEndEpochMs = null,
+            connectedAtEpochMs = null
+        )
+
+        // Ending or ended without a connect: the line never carried a conversation, so there is
+        // nothing to time and no connect to report.
+        else -> CallTiming(
+            labelRes = R.string.dashboard_duration,
+            elapsedStartEpochMs = null,
+            elapsedEndEpochMs = null,
+            connectedAtEpochMs = null
+        )
+    }
+}
+
 @Composable
 internal fun phaseLabel(phase: CallPhase): String = stringResource(
     when (phase) {
@@ -968,9 +1013,20 @@ object DashboardSamples {
             callId = "preview",
             destinationMasked = "+998 ·· 42",
             phase = CallPhase.ACTIVE,
-            startedAtEpochMs = now - TimeUnit.SECONDS.toMillis(74)
+            startedAtEpochMs = now - TimeUnit.SECONDS.toMillis(74),
+            // The answer came 34 s after the ring; the card counts the conversation from here.
+            connectedAtEpochMs = now - TimeUnit.SECONDS.toMillis(40)
         ),
         audio = direct.audio.copy(rxLevelDbfs = -8f, txLevelDbfs = -34f, drops = 43_200)
+    )
+
+    /** The ring, before the answer: the card counts it but calls it Dialing, not a duration. */
+    val dialing = relayInCall.copy(
+        call = relayInCall.call?.copy(
+            phase = CallPhase.DIALING,
+            startedAtEpochMs = now - TimeUnit.SECONDS.toMillis(9),
+            connectedAtEpochMs = null
+        )
     )
 
     val offline = BridgeState(

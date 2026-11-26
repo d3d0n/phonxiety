@@ -124,9 +124,9 @@ class EngineStateStore {
 
     /**
      * Places a new call, or replays the start of the one the store already shows. A duplicate dial
-     * for the same [callId] is not a new call: the placement time, the recorded answer and the phase
-     * stay, or a replay would restart the ring the call has already rung, flash the card back to
-     * dialing and lose the connect time.
+     * for the same [callId] is not a new call: the placement time, the recorded answer, the end and
+     * the phase stay, or a replay would restart the ring the call has already rung, flash the card
+     * back to dialing and lose the connect time.
      */
     fun callStarted(callId: String, destinationMasked: String, startedAtEpochMs: Long) {
         mutable.update {
@@ -137,7 +137,8 @@ class EngineStateStore {
                     destinationMasked = destinationMasked,
                     phase = existing?.phase ?: CallPhase.DIALING,
                     startedAtEpochMs = existing?.startedAtEpochMs ?: startedAtEpochMs,
-                    connectedAtEpochMs = existing?.connectedAtEpochMs
+                    connectedAtEpochMs = existing?.connectedAtEpochMs,
+                    endedAtEpochMs = existing?.endedAtEpochMs
                 )
             )
         }
@@ -168,22 +169,29 @@ class EngineStateStore {
     private fun advance(phase: CallPhase, connectTimeMillis: Long?, stampWhenUnknown: Boolean) {
         mutable.update { current ->
             val call = current.call ?: return@update current
+            val now = System.currentTimeMillis()
             val connectedAt = when {
                 call.connectedAtEpochMs != null -> call.connectedAtEpochMs
                 phase != CallPhase.ACTIVE -> null
                 connectTimeMillis != null && connectTimeMillis > 0 -> connectTimeMillis
-                stampWhenUnknown -> System.currentTimeMillis()
+                stampWhenUnknown -> now
                 else -> null
             }
-            current.copy(call = call.copy(phase = phase, connectedAtEpochMs = connectedAt))
+            // The end belongs to the call like the answer: the first one is kept, so a replayed
+            // terminal report cannot restart the count an ended call's duration is frozen at.
+            val endedAt = when {
+                call.endedAtEpochMs != null -> call.endedAtEpochMs
+                phase != CallPhase.ENDED -> null
+                else -> now
+            }
+            current.copy(
+                call = call.copy(phase = phase, connectedAtEpochMs = connectedAt, endedAtEpochMs = endedAt)
+            )
         }
     }
 
     fun callEnded() {
-        mutable.update { current ->
-            val call = current.call ?: return@update current
-            current.copy(call = call.copy(phase = CallPhase.ENDED))
-        }
+        advance(CallPhase.ENDED, connectTimeMillis = null, stampWhenUnknown = true)
     }
 
     /** Sets the live stream's codec before its first 100 ms publish; ignored once the stream is gone. */

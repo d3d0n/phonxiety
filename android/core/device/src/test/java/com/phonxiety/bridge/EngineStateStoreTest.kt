@@ -177,6 +177,51 @@ class EngineStateStoreTest {
     }
 
     @Test
+    fun theEndTimeIsRecordedOnceAtTheEnd() {
+        val store = EngineStateStore()
+        store.callStarted("c1", "+******1234", 2_000)
+        store.callPhase(CallPhase.ACTIVE, connectTimeMillis = 1_500)
+        assertNull("a live call has no end yet", store.state.value.call?.endedAtEpochMs)
+
+        store.callPhase(CallPhase.ENDING)
+        assertNull("a call on its way out is still running", store.state.value.call?.endedAtEpochMs)
+
+        val before = System.currentTimeMillis()
+        store.callPhase(CallPhase.ENDED)
+        val after = System.currentTimeMillis()
+        val ended = store.state.value.call?.endedAtEpochMs
+        assertTrue("the engine's clock stamps the end", ended != null && ended in before..after)
+        assertEquals("the answer keeps its own stamp", 1_500L, store.state.value.call?.connectedAtEpochMs)
+
+        // A replayed terminal report keeps the first end, or the frozen duration would move.
+        store.callPhaseReplayed(CallPhase.ENDED)
+        assertEquals(ended, store.state.value.call?.endedAtEpochMs)
+        store.callEnded()
+        assertEquals(ended, store.state.value.call?.endedAtEpochMs)
+
+        // A duplicate dial of the ended call is still that call: the end stays.
+        store.callStarted("c1", "+******1234", 9_000)
+        assertEquals(ended, store.state.value.call?.endedAtEpochMs)
+    }
+
+    @Test
+    fun callEndedStampsTheEndAndTheNextCallStartsClean() {
+        val store = EngineStateStore()
+        store.callStarted("c1", "+******1234", 2_000)
+        store.callPhase(CallPhase.ACTIVE, connectTimeMillis = 1_500)
+
+        val before = System.currentTimeMillis()
+        store.callEnded()
+        val after = System.currentTimeMillis()
+        val ended = store.state.value.call?.endedAtEpochMs
+        assertEquals(CallPhase.ENDED, store.state.value.call?.phase)
+        assertTrue(ended != null && ended in before..after)
+
+        store.callStarted("c2", "+******5678", 9_000)
+        assertNull("a new call has not ended", store.state.value.call?.endedAtEpochMs)
+    }
+
+    @Test
     fun endedCallStaysVisibleUntilTheNextCall() = runTest {
         val store = EngineStateStore()
         store.state.test {
