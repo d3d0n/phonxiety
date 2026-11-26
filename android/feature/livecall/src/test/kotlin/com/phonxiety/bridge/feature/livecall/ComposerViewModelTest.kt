@@ -1,6 +1,7 @@
 package com.phonxiety.bridge.feature.livecall
 
 import com.phonxiety.bridge.data.ApiOutcome
+import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.ApiLimits
 import com.phonxiety.bridge.model.DaemonInfo
 import com.phonxiety.bridge.model.ValidationResult
@@ -23,7 +24,7 @@ import org.junit.Before
 import org.junit.Test
 
 /**
- * The composer's two promises: validation is the daemon's and it is debounced, and what is dialled
+ * The composer's two promises: validation is the daemon's and it is debounced, and what is dialed
  * is exactly what the confirmation listed.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -62,7 +63,7 @@ class ComposerViewModelTest {
         assertEquals(1, api.validateRequests.size)
         assertEquals("+998901234567", api.validateRequests.single().destination)
         assertTrue(viewModel.state.value.valid == true)
-        assertEquals(listOf("no result fields"), viewModel.state.value.warnings)
+        assertEquals(listOf(UiText.Literal("no result fields")), viewModel.state.value.warnings)
     }
 
     @Test
@@ -96,7 +97,10 @@ class ComposerViewModelTest {
         viewModel.onGoalChange("Ask something")
         advanceUntilIdle()
 
-        assertEquals("emergency numbers cannot be called by the agent", viewModel.state.value.destinationError)
+        assertEquals(
+            UiText.Res(R.string.composer_error_destination_emergency),
+            viewModel.state.value.destinationError
+        )
         assertNull(viewModel.state.value.goalError)
         assertFalse(viewModel.state.value.ready)
     }
@@ -210,6 +214,45 @@ class ComposerViewModelTest {
         advanceUntilIdle()
 
         assertEquals("call-2026-11-26", LiveCallFront.pendingCallId())
+    }
+
+    @Test
+    fun aFailedCheckKeepsTheDaemonsSentenceAndItsCode() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        api.info = ApiOutcome.Ok(200, DaemonInfo())
+        api.validation = ApiOutcome.Failure(503, "link_down", "the bridge service is not running")
+
+        val viewModel = ComposerViewModel(api)
+        advanceUntilIdle()
+        viewModel.onDestinationChange("+998901234567")
+        viewModel.onGoalChange("Book a table for two")
+        advanceUntilIdle()
+
+        val issue = viewModel.state.value.requestIssue
+        assertNotNull(issue)
+        assertEquals(UiText.Literal("the bridge service is not running"), issue?.headline)
+        assertEquals("link_down", issue?.detail)
+        assertFalse(viewModel.state.value.ready)
+    }
+
+    @Test
+    fun aFailedPlacementKeepsTheMessageAndTheCodeApart() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        api.info = ApiOutcome.Ok(200, DaemonInfo())
+        api.validation = ApiOutcome.Ok(200, ValidationResult(valid = true))
+        api.place = ApiOutcome.Failure(502, "link_down", "the daemon is unreachable")
+
+        val viewModel = ComposerViewModel(api)
+        advanceUntilIdle()
+        viewModel.onDestinationChange("+998901234567")
+        viewModel.onGoalChange("Book a table for two on Thursday")
+        advanceUntilIdle()
+        viewModel.confirm()
+        advanceUntilIdle()
+
+        assertEquals(UiText.Literal("the daemon is unreachable"), viewModel.state.value.placeError)
+        assertEquals("link_down", viewModel.state.value.placeErrorDetail)
+        assertFalse(viewModel.state.value.placing)
     }
 
     @Test

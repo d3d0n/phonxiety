@@ -6,6 +6,7 @@ import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.BridgeStateRepository
 import com.phonxiety.bridge.data.DaemonApi
 import com.phonxiety.bridge.data.daemonCallState
+import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.AudioState
 import com.phonxiety.bridge.model.CallEvent
 import com.phonxiety.bridge.model.CallMark
@@ -70,7 +71,9 @@ data class LiveCallUiState(
     val busy: Boolean = false,
     /** The hang-up reached the daemon; the call is ending until a terminal state arrives. */
     val hangingUp: Boolean = false,
-    val error: String? = null,
+    val error: UiText? = null,
+    /** The daemon's code for [error], shown behind the details disclosure. */
+    val errorCode: String? = null,
     val ended: Boolean = false,
     val missing: Boolean = false
 ) {
@@ -130,14 +133,14 @@ class LiveCallViewModel @Inject constructor(
         val snapshot = _state.value
         val text = snapshot.instruction.trim()
         if (text.isEmpty() || snapshot.busy || snapshot.hangingUp) return
-        _state.update { it.copy(busy = true, error = null) }
+        _state.update { it.copy(busy = true, error = null, errorCode = null) }
         viewModelScope.launch {
             when (val outcome = api.instruction(snapshot.callId, text)) {
                 is ApiOutcome.Ok -> _state.update {
-                    it.copy(busy = false, instruction = "", error = null)
+                    it.copy(busy = false, instruction = "", error = null, errorCode = null)
                 }
 
-                is ApiOutcome.Failure -> _state.update { it.copy(busy = false, error = outcome.message) }
+                is ApiOutcome.Failure -> _state.update { it.copy(busy = false, error = UiText.Literal(outcome.message), errorCode = outcome.code) }
             }
         }
     }
@@ -145,15 +148,15 @@ class LiveCallViewModel @Inject constructor(
     fun togglePause() {
         val snapshot = _state.value
         if (snapshot.busy || snapshot.hangingUp) return
-        _state.update { it.copy(busy = true, error = null) }
+        _state.update { it.copy(busy = true, error = null, errorCode = null) }
         viewModelScope.launch {
             val outcome = if (snapshot.muted) api.resume(snapshot.callId) else api.pause(snapshot.callId)
             when (outcome) {
                 is ApiOutcome.Ok -> _state.update {
-                    it.copy(busy = false, muted = outcome.value.muted, error = null)
+                    it.copy(busy = false, muted = outcome.value.muted, error = null, errorCode = null)
                 }
 
-                is ApiOutcome.Failure -> _state.update { it.copy(busy = false, error = outcome.message) }
+                is ApiOutcome.Failure -> _state.update { it.copy(busy = false, error = UiText.Literal(outcome.message), errorCode = outcome.code) }
             }
         }
     }
@@ -161,7 +164,7 @@ class LiveCallViewModel @Inject constructor(
     fun summarizeNow() {
         val snapshot = _state.value
         if (snapshot.summarizing || snapshot.hangingUp) return
-        _state.update { it.copy(summarizing = true, error = null) }
+        _state.update { it.copy(summarizing = true, error = null, errorCode = null) }
         viewModelScope.launch {
             when (val outcome = api.summarize(snapshot.callId)) {
                 is ApiOutcome.Ok -> _state.update {
@@ -172,7 +175,7 @@ class LiveCallViewModel @Inject constructor(
                     )
                 }
 
-                is ApiOutcome.Failure -> _state.update { it.copy(summarizing = false, error = outcome.message) }
+                is ApiOutcome.Failure -> _state.update { it.copy(summarizing = false, error = UiText.Literal(outcome.message), errorCode = outcome.code) }
             }
         }
     }
@@ -180,11 +183,11 @@ class LiveCallViewModel @Inject constructor(
     fun sendDtmf(digits: String) {
         val snapshot = _state.value
         if (digits.isBlank() || snapshot.busy || snapshot.hangingUp) return
-        _state.update { it.copy(busy = true, error = null) }
+        _state.update { it.copy(busy = true, error = null, errorCode = null) }
         viewModelScope.launch {
             when (val outcome = api.dtmf(snapshot.callId, digits)) {
                 is ApiOutcome.Ok -> _state.update { it.copy(busy = false) }
-                is ApiOutcome.Failure -> _state.update { it.copy(busy = false, error = outcome.message) }
+                is ApiOutcome.Failure -> _state.update { it.copy(busy = false, error = UiText.Literal(outcome.message), errorCode = outcome.code) }
             }
         }
     }
@@ -192,11 +195,11 @@ class LiveCallViewModel @Inject constructor(
     fun mark(kind: String, note: String? = null) {
         val snapshot = _state.value
         if (snapshot.busy || snapshot.hangingUp) return
-        _state.update { it.copy(busy = true, error = null) }
+        _state.update { it.copy(busy = true, error = null, errorCode = null) }
         viewModelScope.launch {
             when (val outcome = api.addMark(snapshot.callId, kind, note)) {
                 is ApiOutcome.Ok -> _state.update { it.copy(busy = false, marks = outcome.value.marks) }
-                is ApiOutcome.Failure -> _state.update { it.copy(busy = false, error = outcome.message) }
+                is ApiOutcome.Failure -> _state.update { it.copy(busy = false, error = UiText.Literal(outcome.message), errorCode = outcome.code) }
             }
         }
     }
@@ -204,7 +207,7 @@ class LiveCallViewModel @Inject constructor(
     fun hangUp() {
         val snapshot = _state.value
         if (snapshot.busy || snapshot.hangingUp || snapshot.ended) return
-        _state.update { it.copy(busy = true, hangingUp = true, error = null) }
+        _state.update { it.copy(busy = true, hangingUp = true, error = null, errorCode = null) }
         viewModelScope.launch {
             when (val outcome = api.hangup(snapshot.callId)) {
                 is ApiOutcome.Ok -> {
@@ -215,7 +218,7 @@ class LiveCallViewModel @Inject constructor(
                 }
 
                 is ApiOutcome.Failure -> _state.update {
-                    it.copy(busy = false, hangingUp = false, error = "${outcome.message} (${outcome.code})")
+                    it.copy(busy = false, hangingUp = false, error = UiText.Literal(outcome.message), errorCode = outcome.code)
                 }
             }
         }
@@ -277,9 +280,15 @@ class LiveCallViewModel @Inject constructor(
 
             is ApiOutcome.Failure -> _state.update {
                 if (outcome.status == 404) {
-                    it.copy(loading = false, missing = true, error = "the daemon does not know this call")
+                    // The empty state explains this; an extra invented sentence would not.
+                    it.copy(loading = false, missing = true)
                 } else {
-                    it.copy(loading = false, reconnecting = true, error = outcome.message)
+                    it.copy(
+                        loading = false,
+                        reconnecting = true,
+                        error = UiText.Literal(outcome.message),
+                        errorCode = outcome.code
+                    )
                 }
             }
         }

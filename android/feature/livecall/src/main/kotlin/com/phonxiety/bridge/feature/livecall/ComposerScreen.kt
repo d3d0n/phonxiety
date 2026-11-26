@@ -1,58 +1,77 @@
 package com.phonxiety.bridge.feature.livecall
 
+import android.content.res.Resources
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.InputChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextFieldColors
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.phonxiety.bridge.designsystem.UiText
+import com.phonxiety.bridge.designsystem.asString
 import com.phonxiety.bridge.designsystem.component.ErrorCard
 import com.phonxiety.bridge.designsystem.component.KeyValueRow
 import com.phonxiety.bridge.designsystem.component.PrimaryActionButton
+import com.phonxiety.bridge.designsystem.component.ScreenScaffold
 import com.phonxiety.bridge.designsystem.component.SectionCard
 import com.phonxiety.bridge.designsystem.component.StatusPill
 import com.phonxiety.bridge.designsystem.component.StatusTone
+import com.phonxiety.bridge.designsystem.formatPhoneNumber
+import java.text.NumberFormat
 
 /** Where a composer can be opened from: fresh, or prefilled by "call again". */
 data class ComposerIntent(
@@ -98,7 +117,7 @@ fun ComposerRoute(
 
 /**
  * The brief. Validation is the daemon's, shown as it arrives; the review step repeats every field
- * that will be dialled, because the number and the goal are the two things a wrong tap costs.
+ * that will be dialed, because the number and the goal are the two things a wrong tap costs.
  */
 @Composable
 fun ComposerScreen(
@@ -119,202 +138,68 @@ fun ComposerScreen(
     modifier: Modifier = Modifier
 ) {
     Box(modifier = modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .windowInsetsPadding(WindowInsets.safeDrawing)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = onBack) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        modifier = Modifier.size(22.dp)
-                    )
+        ScreenScaffold(title = stringResource(R.string.composer_title), onBack = onBack) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                if (state.validating) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
-                Text(text = "New call", style = MaterialTheme.typography.titleLarge)
-            }
-            if (state.validating) {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-            }
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                SectionCard(
-                    title = "Who",
-                    subtitle = "An E.164 number or a short service number",
-                    status = {
-                        when {
-                            state.valid == true -> StatusPill("Valid", StatusTone.POSITIVE)
-                            state.valid == false -> StatusPill("Check the brief", StatusTone.NEGATIVE)
-                            else -> StatusPill("Draft", StatusTone.NEUTRAL)
-                        }
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState())
+                        .padding(vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    WhoCard(state, onDestinationChange)
+                    WhyCard(state, onGoalChange, onContextChange, onConstraintsChange)
+                    FieldsCard(
+                        state = state,
+                        onFieldDraftChange = onFieldDraftChange,
+                        onAddField = onAddField,
+                        onRemoveField = onRemoveField
+                    )
+                    LimitsCard(
+                        state = state,
+                        onMaxDurationChange = onMaxDurationChange,
+                        onRingTimeoutChange = onRingTimeoutChange
+                    )
+                    if (state.warnings.isNotEmpty()) {
+                        WarningsCard(state.warnings)
                     }
-                ) {
-                    OutlinedTextField(
-                        value = state.destination,
-                        onValueChange = onDestinationChange,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .semantics { contentDescription = "Destination number" },
-                        label = { Text("Number") },
-                        placeholder = { Text("+998 90 123 45 67") },
-                        singleLine = true,
-                        isError = state.destinationError != null,
-                        supportingText = state.destinationError?.let { message -> { Text(message) } },
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Phone,
-                            imeAction = ImeAction.Next
-                        ),
-                        shape = MaterialTheme.shapes.medium
-                    )
-                }
-                SectionCard(title = "Why", subtitle = "What the agent must accomplish") {
-                    OutlinedTextField(
-                        value = state.goal,
-                        onValueChange = onGoalChange,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .semantics { contentDescription = "Goal" },
-                        label = { Text("Goal and brief") },
-                        placeholder = { Text("Book a table for two on Thursday at 20:00") },
-                        minLines = 3,
-                        maxLines = 6,
-                        isError = state.goalError != null,
-                        supportingText = state.goalError?.let { message -> { Text(message) } },
-                        shape = MaterialTheme.shapes.medium
-                    )
-                    OutlinedTextField(
-                        value = state.context,
-                        onValueChange = onContextChange,
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Context") },
-                        placeholder = { Text("Name, order number, anything the agent should know") },
-                        minLines = 2,
-                        maxLines = 4,
-                        shape = MaterialTheme.shapes.medium
-                    )
-                    OutlinedTextField(
-                        value = state.constraints,
-                        onValueChange = onConstraintsChange,
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Constraints") },
-                        placeholder = { Text("Do not pay a deposit; ask for a window seat if possible") },
-                        minLines = 2,
-                        maxLines = 4,
-                        shape = MaterialTheme.shapes.medium
-                    )
-                }
-                SectionCard(
-                    title = "What to bring back",
-                    subtitle = "Each field becomes a labelled answer in the result"
-                ) {
-                    if (state.resultFields.isEmpty()) {
-                        Text(
-                            text = "No fields yet: the summary will be free text.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                    state.requestIssue?.let { issue ->
+                        ErrorCard(
+                            title = stringResource(R.string.live_call_action_failed_title),
+                            message = issue.headline.asString(),
+                            output = issue.detail
                         )
                     }
-                    state.resultFields.forEach { field ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            AssistChip(
-                                onClick = { onRemoveField(field) },
-                                label = { Text(field) },
-                                trailingIcon = {
-                                    Icon(
-                                        imageVector = Icons.Filled.Close,
-                                        contentDescription = "Remove $field",
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                            )
-                        }
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(
-                            value = state.fieldDraft,
-                            onValueChange = onFieldDraftChange,
-                            modifier = Modifier.weight(1f),
-                            label = { Text("Field") },
-                            placeholder = { Text("reservation_time") },
-                            singleLine = true,
-                            shape = MaterialTheme.shapes.medium
+                    state.placeError?.let { message ->
+                        ErrorCard(
+                            title = stringResource(R.string.composer_error_title),
+                            message = message.asString(),
+                            output = state.placeErrorDetail
                         )
-                        Spacer(Modifier.width(6.dp))
-                        IconButton(
-                            onClick = onAddField,
-                            enabled = state.fieldDraft.isNotBlank() && state.resultFields.size < ComposerViewModel.MAX_FIELDS
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Add,
-                                contentDescription = "Add the field",
-                                modifier = Modifier.size(22.dp)
-                            )
-                        }
                     }
                 }
-                SectionCard(title = "Limits", subtitle = "The daemon enforces these; the phone cannot extend them") {
-                    LimitSlider(
-                        label = "Longest call",
-                        value = state.maxDurationSeconds,
-                        range = ComposerViewModel.MIN_DURATION..(state.limits.maxDurationSeconds ?: ComposerViewModel.MAX_DURATION_LIMIT),
-                        step = 30,
-                        format = ::formatMinutes
-                    ) { onMaxDurationChange(it) }
-                    LimitSlider(
-                        label = "Ring timeout",
-                        value = state.ringTimeoutSeconds,
-                        range = ComposerViewModel.MIN_RING_TIMEOUT..(state.limits.ringTimeoutSeconds ?: ComposerViewModel.RING_TIMEOUT_LIMIT),
-                        step = 5,
-                        format = { "$it s" }
-                    ) { onRingTimeoutChange(it) }
-                    if (state.limits.callsPerHour != null) {
-                        KeyValueRow(label = "Calls per hour", value = state.limits.callsPerHour.toString(), mono = true)
-                    }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 12.dp)
+                ) {
+                    PrimaryActionButton(
+                        label = when {
+                            state.placing -> stringResource(R.string.composer_action_placing)
+                            state.validating -> stringResource(R.string.composer_action_checking)
+                            state.valid == false -> correctionLabel(state)
+                            state.valid == true -> stringResource(R.string.composer_action_review)
+                            else -> stringResource(R.string.composer_action_finish)
+                        },
+                        onClick = onReview,
+                        enabled = state.ready,
+                        busy = state.placing,
+                        supportingText = state.firstFieldError?.asString()
+                    )
                 }
-                if (state.warnings.isNotEmpty()) {
-                    SectionCard(title = "Worth knowing", status = { StatusPill("Warnings", StatusTone.WARNING) }) {
-                        state.warnings.forEach { warning ->
-                            Text(
-                                text = "· $warning",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-                state.error?.let { message ->
-                    ErrorCard(title = "The call was not placed", message = message)
-                }
-            }
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp)
-            ) {
-                PrimaryActionButton(
-                    label = when {
-                        state.placing -> "Dialling…"
-                        state.valid == true -> "Review and place"
-                        else -> "Finish the brief"
-                    },
-                    onClick = onReview,
-                    enabled = state.ready,
-                    busy = state.placing
-                )
             }
         }
         if (state.confirming) {
@@ -327,32 +212,377 @@ fun ComposerScreen(
     }
 }
 
+/** Above this scale two labels no longer fit side by side in a sheet. */
+private const val STACK_ACTIONS_AT_FONT_SCALE = 1.5f
+
+/**
+ * The action names the field that is actually wrong: editing the number cannot fix an oversized
+ * goal, and a request that never reached the daemon is nobody's field.
+ */
+@Composable
+private fun correctionLabel(state: ComposerUiState): String = stringResource(
+    when {
+        state.destinationIssue != null -> R.string.composer_action_fix_number
+        state.goalIssue != null -> R.string.composer_action_fix_goal
+        else -> R.string.composer_status_check_brief
+    }
+)
+
+/** The border carries the field's edge; onSurfaceVariant keeps it far above the 3:1 floor. */
+@Composable
+internal fun fieldColors(): TextFieldColors = OutlinedTextFieldDefaults.colors(
+    unfocusedBorderColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    focusedBorderColor = MaterialTheme.colorScheme.primary
+)
+
+/**
+ * A field's failure in the product's words, with the daemon's own sentence behind Details: the
+ * local line says what to change; the raw diagnostic is what makes a bug report actionable.
+ */
+@Composable
+private fun FieldError(issue: ComposerIssue) {
+    val shown = issue.headline.asString()
+    val raw = issue.detail?.takeIf { it.isNotBlank() && it != shown }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(shown)
+        if (raw != null) {
+            var open by rememberSaveable(raw) { mutableStateOf(false) }
+            TextButton(
+                onClick = { open = !open },
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Text(
+                    stringResource(
+                        if (open) {
+                            com.phonxiety.bridge.designsystem.R.string.designsystem_hide_details
+                        } else {
+                            com.phonxiety.bridge.designsystem.R.string.designsystem_show_details
+                        }
+                    )
+                )
+            }
+            if (open) {
+                Text(
+                    text = raw,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+        }
+    }
+}
+
+/** The daemon's field limit stays on screen; going over it turns the count into the error color. */
+@Composable
+private fun GoalLength(used: Int) {
+    val numbers = NumberFormat.getIntegerInstance()
+    Text(
+        text = stringResource(
+            R.string.composer_goal_counter,
+            numbers.format(used),
+            numbers.format(COMPOSER_GOAL_LIMIT)
+        ),
+        color = if (used > COMPOSER_GOAL_LIMIT) {
+            MaterialTheme.colorScheme.error
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        }
+    )
+}
+
+@Composable
+private fun WhoCard(state: ComposerUiState, onDestinationChange: (String) -> Unit) {
+    SectionCard(
+        title = stringResource(R.string.composer_who_title),
+        subtitle = stringResource(R.string.composer_who_subtitle),
+        status = {
+            when {
+                state.valid == true -> StatusPill(
+                    label = stringResource(R.string.composer_status_valid),
+                    tone = StatusTone.POSITIVE
+                )
+
+                state.destinationError != null -> StatusPill(
+                    label = stringResource(R.string.composer_status_check_number),
+                    tone = StatusTone.NEGATIVE
+                )
+
+                state.goalError != null -> StatusPill(
+                    label = stringResource(R.string.composer_status_check_goal),
+                    tone = StatusTone.NEGATIVE
+                )
+
+                state.valid == false -> StatusPill(
+                    label = stringResource(R.string.composer_status_check_brief),
+                    tone = StatusTone.NEGATIVE
+                )
+
+                else -> StatusPill(
+                    label = stringResource(R.string.composer_status_draft),
+                    tone = StatusTone.NEUTRAL
+                )
+            }
+        }
+    ) {
+        OutlinedTextField(
+            value = state.destination,
+            onValueChange = onDestinationChange,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text(stringResource(R.string.composer_number_label)) },
+            placeholder = { Text(stringResource(R.string.composer_number_placeholder)) },
+            minLines = 1,
+            maxLines = 2,
+            isError = state.destinationIssue != null,
+            supportingText = state.destinationIssue?.let { issue -> { FieldError(issue) } },
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Phone,
+                imeAction = ImeAction.Next
+            ),
+            colors = fieldColors(),
+            shape = MaterialTheme.shapes.medium
+        )
+    }
+}
+
+@Composable
+private fun WhyCard(
+    state: ComposerUiState,
+    onGoalChange: (String) -> Unit,
+    onContextChange: (String) -> Unit,
+    onConstraintsChange: (String) -> Unit
+) {
+    SectionCard(
+        title = stringResource(R.string.composer_why_title),
+        subtitle = stringResource(R.string.composer_why_subtitle)
+    ) {
+        OutlinedTextField(
+            value = state.goal,
+            onValueChange = onGoalChange,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text(stringResource(R.string.composer_goal_label)) },
+            placeholder = { Text(stringResource(R.string.composer_goal_placeholder)) },
+            minLines = 3,
+            maxLines = 6,
+            isError = state.goalIssue != null,
+            supportingText = {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    state.goalIssue?.let { issue -> FieldError(issue) }
+                    GoalLength(state.goal.length)
+                }
+            },
+            colors = fieldColors(),
+            shape = MaterialTheme.shapes.medium
+        )
+        OutlinedTextField(
+            value = state.context,
+            onValueChange = onContextChange,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text(stringResource(R.string.composer_context_label)) },
+            placeholder = { Text(stringResource(R.string.composer_context_placeholder)) },
+            minLines = 2,
+            maxLines = 4,
+            colors = fieldColors(),
+            shape = MaterialTheme.shapes.medium
+        )
+        OutlinedTextField(
+            value = state.constraints,
+            onValueChange = onConstraintsChange,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text(stringResource(R.string.composer_constraints_label)) },
+            placeholder = { Text(stringResource(R.string.composer_constraints_placeholder)) },
+            minLines = 2,
+            maxLines = 4,
+            colors = fieldColors(),
+            shape = MaterialTheme.shapes.medium
+        )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun FieldsCard(
+    state: ComposerUiState,
+    onFieldDraftChange: (String) -> Unit,
+    onAddField: () -> Unit,
+    onRemoveField: (String) -> Unit
+) {
+    SectionCard(
+        title = stringResource(R.string.composer_fields_title),
+        subtitle = stringResource(R.string.composer_fields_subtitle)
+    ) {
+        if (state.resultFields.isEmpty()) {
+            Text(
+                text = stringResource(R.string.composer_fields_empty),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            state.resultFields.forEach { field ->
+                InputChip(
+                    selected = false,
+                    onClick = { onRemoveField(field) },
+                    label = { Text(humanizeToken(field)) },
+                    trailingIcon = {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = stringResource(
+                                R.string.composer_remove_field,
+                                humanizeToken(field)
+                            ),
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                )
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = state.fieldDraft,
+                onValueChange = onFieldDraftChange,
+                modifier = Modifier.weight(1f),
+                label = { Text(stringResource(R.string.composer_field_label)) },
+                placeholder = { Text(stringResource(R.string.composer_field_placeholder)) },
+                singleLine = true,
+                colors = fieldColors(),
+                shape = MaterialTheme.shapes.medium
+            )
+            Spacer(Modifier.width(6.dp))
+            IconButton(
+                onClick = onAddField,
+                enabled = state.fieldDraft.isNotBlank() && state.resultFields.size < ComposerViewModel.MAX_FIELDS
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Add,
+                    contentDescription = stringResource(R.string.composer_add_field),
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LimitsCard(
+    state: ComposerUiState,
+    onMaxDurationChange: (Int) -> Unit,
+    onRingTimeoutChange: (Int) -> Unit
+) {
+    SectionCard(
+        title = stringResource(R.string.composer_limits_title),
+        subtitle = stringResource(R.string.composer_limits_subtitle)
+    ) {
+        LimitSlider(
+            label = stringResource(R.string.composer_longest_call),
+            value = state.maxDurationSeconds,
+            range = ComposerViewModel.MIN_DURATION..(state.limits.maxDurationSeconds ?: ComposerViewModel.MAX_DURATION_LIMIT),
+            step = 30,
+            onChange = onMaxDurationChange
+        )
+        LimitSlider(
+            label = stringResource(R.string.composer_ring_timeout),
+            value = state.ringTimeoutSeconds,
+            range = ComposerViewModel.MIN_RING_TIMEOUT..(state.limits.ringTimeoutSeconds ?: ComposerViewModel.RING_TIMEOUT_LIMIT),
+            step = 5,
+            onChange = onRingTimeoutChange
+        )
+        if (state.limits.callsPerHour != null) {
+            KeyValueRow(
+                label = stringResource(R.string.composer_calls_per_hour),
+                value = state.limits.callsPerHour.toString(),
+                mono = true
+            )
+        }
+    }
+}
+
+@Composable
+private fun WarningsCard(warnings: List<UiText>) {
+    SectionCard(
+        title = stringResource(R.string.composer_warnings_title),
+        status = {
+            StatusPill(
+                label = stringResource(R.string.composer_warnings_pill),
+                tone = StatusTone.WARNING
+            )
+        }
+    ) {
+        warnings.forEach { warning ->
+            Text(
+                text = stringResource(R.string.composer_warning_bullet, warning.asString()),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/**
+ * A value the daemon enforces, with a stepper on each side so the number can be set without
+ * dragging, the step count the slider honours, and the value in the units it is read in.
+ */
 @Composable
 private fun LimitSlider(
     label: String,
     value: Int,
     range: IntRange,
     step: Int,
-    format: (Int) -> String,
     onChange: (Int) -> Unit
 ) {
-    Column(modifier = Modifier.fillMaxWidth()) {
+    val shorter = pluralStringResource(R.plurals.composer_shorter, step, step)
+    val longer = pluralStringResource(R.plurals.composer_longer, step, step)
+    // At 200 % text a label beside three stepper cells wraps mid-word; the label takes its own line.
+    val stacked = LocalDensity.current.fontScale >= STACK_ACTIONS_AT_FONT_SCALE
+    val stepper: @Composable () -> Unit = {
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.End
         ) {
-            Text(text = label, style = MaterialTheme.typography.bodyMedium)
+            IconButton(
+                onClick = { onChange(value - step) },
+                enabled = value - step >= range.first,
+                modifier = Modifier.semantics { contentDescription = shorter }
+            ) {
+                Text(text = "−", style = MaterialTheme.typography.titleLarge)
+            }
             Text(
-                text = format(value),
+                text = formatMinutes(value),
                 style = MaterialTheme.typography.bodyMedium,
-                fontFamily = FontFamily.Monospace
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.widthIn(min = 64.dp),
+                textAlign = TextAlign.Center
             )
+            IconButton(
+                onClick = { onChange(value + step) },
+                enabled = value + step <= range.last,
+                modifier = Modifier.semantics { contentDescription = longer }
+            ) {
+                Text(text = "+", style = MaterialTheme.typography.titleLarge)
+            }
+        }
+    }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        if (stacked) {
+            Text(text = label, style = MaterialTheme.typography.bodyMedium)
+            stepper()
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(text = label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                stepper()
+            }
         }
         Slider(
             value = value.toFloat(),
             onValueChange = { raw -> onChange((raw / step).toInt() * step) },
             valueRange = range.first.toFloat()..range.last.toFloat(),
+            steps = ((range.last - range.first) / step - 1).coerceAtLeast(0),
             modifier = Modifier.fillMaxWidth()
         )
     }
@@ -369,64 +599,123 @@ private fun ConfirmSheet(
     onDismiss: () -> Unit
 ) {
     val request = state.request
+    val destination = formatPhoneNumber(request.destination)
+    val title = stringResource(R.string.composer_confirm_title)
     Box(modifier = Modifier.fillMaxSize()) {
+        // A scrim is a touch shortcut, not a control: it stays nameless for TalkBack because the
+        // sheet's own Edit button is the documented way out.
         Surface(
             modifier = Modifier
-                .fillMaxSize(),
-            color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.4f),
-            onClick = onDismiss
+                .fillMaxSize()
+                .pointerInput(Unit) { detectTapGestures { onDismiss() } },
+            color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.4f)
         ) {}
         Surface(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .widthIn(max = 560.dp)
-                .heightIn(max = 520.dp),
+                .heightIn(max = 560.dp)
+                .semantics { paneTitle = title },
             shape = MaterialTheme.shapes.extraLarge,
             color = MaterialTheme.colorScheme.surfaceContainerHigh
         ) {
-            Column(
-                modifier = Modifier
-                    .padding(horizontal = 20.dp, vertical = 18.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text(text = "Dial this now?", style = MaterialTheme.typography.titleLarge)
-                Text(
-                    text = "The daemon receives exactly this brief.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                KeyValueRow(label = "Number", value = request.destination, mono = true)
-                ReviewText(label = "Goal", value = request.goal)
-                if (request.context.isNotEmpty()) ReviewText(label = "Context", value = request.context)
-                if (request.constraints.isNotEmpty()) ReviewText(label = "Constraints", value = request.constraints)
-                KeyValueRow(
-                    label = "Result fields",
-                    value = request.resultFields.joinToString(", ").ifEmpty { "none" }
-                )
-                KeyValueRow(label = "Longest call", value = formatMinutes(request.maxDurationSeconds ?: 0))
-                KeyValueRow(label = "Ring timeout", value = "${request.ringTimeoutSeconds ?: 0} s")
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+            Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 18.dp)) {
+                // The review scrolls; the two buttons never move away from the bottom edge.
+                Column(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    Text(text = title, style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        text = stringResource(R.string.composer_confirm_body, destination),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    KeyValueRow(label = stringResource(R.string.composer_number_label), value = destination)
+                    if (destination != request.destination) {
+                        KeyValueRow(
+                            label = stringResource(R.string.composer_confirm_sent_as),
+                            value = request.destination,
+                            mono = true
+                        )
+                    }
+                    ReviewText(label = stringResource(R.string.composer_review_goal), value = request.goal)
+                    if (request.context.isNotEmpty()) {
+                        ReviewText(label = stringResource(R.string.composer_review_context), value = request.context)
+                    }
+                    if (request.constraints.isNotEmpty()) {
+                        ReviewText(
+                            label = stringResource(R.string.composer_review_constraints),
+                            value = request.constraints
+                        )
+                    }
+                    KeyValueRow(
+                        label = stringResource(R.string.composer_confirm_result_fields),
+                        value = request.resultFields
+                            .joinToString(", ") { humanizeToken(it) }
+                            .ifEmpty { stringResource(R.string.composer_confirm_none) }
+                    )
+                    KeyValueRow(
+                        label = stringResource(R.string.composer_longest_call),
+                        value = formatMinutes(request.maxDurationSeconds ?: 0)
+                    )
+                    KeyValueRow(
+                        label = stringResource(R.string.composer_ring_timeout),
+                        value = formatMinutes(request.ringTimeoutSeconds ?: 0)
+                    )
+                }
+                // Two labels side by side stop fitting long before 200 % text: stack them there
+                // rather than wrap a button label.
+                val stacked = LocalDensity.current.fontScale >= STACK_ACTIONS_AT_FONT_SCALE
+                val dismiss: @Composable (Modifier) -> Unit = { buttonModifier ->
                     OutlinedButton(
                         onClick = onDismiss,
-                        modifier = Modifier.weight(1f),
+                        modifier = buttonModifier,
                         enabled = !state.placing
                     ) {
-                        Text("Edit")
+                        Text(stringResource(R.string.composer_edit))
                     }
+                }
+                val confirm: @Composable (Modifier) -> Unit = { buttonModifier ->
                     Button(
                         onClick = onConfirm,
-                        modifier = Modifier.weight(1f),
+                        modifier = buttonModifier,
                         enabled = !state.placing,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = MaterialTheme.colorScheme.primary
                         )
                     ) {
-                        Text(if (state.placing) "Dialling…" else "Place call")
+                        Text(
+                            if (state.placing) {
+                                stringResource(R.string.composer_action_placing)
+                            } else {
+                                stringResource(R.string.composer_place_call)
+                            }
+                        )
+                    }
+                }
+                if (stacked) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        dismiss(Modifier.fillMaxWidth())
+                        confirm(Modifier.fillMaxWidth())
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        dismiss(Modifier.weight(1f))
+                        confirm(Modifier.weight(1f))
                     }
                 }
             }
@@ -446,8 +735,22 @@ private fun ReviewText(label: String, value: String) {
     }
 }
 
-internal fun formatMinutes(seconds: Int): String = when {
-    seconds < 60 -> "$seconds s"
-    seconds % 60 == 0 -> "${seconds / 60} min"
-    else -> "${seconds / 60} min ${seconds % 60} s"
+/** `60` → `1 min`, `90` → `1 min 30 s`: the units a limit is read in, never a raw second count. */
+internal fun formatMinutes(seconds: Int, resources: Resources): String = when {
+    seconds < 60 -> resources.getQuantityString(R.plurals.composer_duration_seconds, seconds, seconds)
+
+    seconds % 60 == 0 -> resources.getQuantityString(
+        R.plurals.composer_duration_minutes,
+        seconds / 60,
+        seconds / 60
+    )
+
+    else -> resources.getString(
+        R.string.composer_duration_minutes_seconds,
+        seconds / 60,
+        seconds % 60
+    )
 }
+
+@Composable
+internal fun formatMinutes(seconds: Int): String = formatMinutes(seconds, LocalResources.current)

@@ -36,6 +36,8 @@ import org.junit.Test
  * applied once, and a lost link resumes where it stopped.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
+@org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
+@org.robolectric.annotation.Config(sdk = [35])
 class LiveCallViewModelTest {
     private val dispatcher = StandardTestDispatcher()
 
@@ -201,7 +203,7 @@ class LiveCallViewModelTest {
     }
 
     @Test
-    fun pauseResumeSummariseDtmfAndMarksReachTheDaemon() = runTest(dispatcher) {
+    fun pauseResumeSummarizeDtmfAndMarksReachTheDaemon() = runTest(dispatcher) {
         val api = FakeDaemonApi()
         api.callSnapshot = ApiOutcome.Ok(200, snapshot())
         api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(endedEvent(1))))
@@ -335,7 +337,11 @@ class LiveCallViewModelTest {
 
         val turns = viewModel.state.value.turns
         assertEquals(listOf("assistant", "user"), turns.map { it.role })
-        assertEquals(listOf("Agent", "Far end"), turns.map { speakerLabel(it.role) })
+        val resources = org.robolectric.RuntimeEnvironment.getApplication().resources
+        assertEquals(
+            listOf("Agent", "Far end"),
+            turns.map { speakerLabel(it.role, resources) }
+        )
     }
 
     private fun viewModel(api: FakeDaemonApi): LiveCallViewModel = LiveCallViewModel(api, FakeBridgeState())
