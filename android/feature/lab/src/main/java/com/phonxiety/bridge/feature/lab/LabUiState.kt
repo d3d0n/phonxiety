@@ -1,8 +1,15 @@
 package com.phonxiety.bridge.feature.lab
 
+import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.LinkTestResult
-import com.phonxiety.bridge.model.ProbeCandidate
 import kotlinx.serialization.json.JsonObject
+
+/** A failure from the daemon: the sentence a person reads, and the code support needs. */
+data class LabFailure(val message: UiText, val code: String? = null) {
+    companion object {
+        fun of(message: String, code: String?): LabFailure = LabFailure(UiText.Literal(message), code)
+    }
+}
 
 /** Everything the test lab renders; the screen is a pure function of this. */
 data class LabUiState(
@@ -17,17 +24,17 @@ data class LabUiState(
     val callId: String? = null,
     val loopbackSupported: Boolean? = null,
     val toneSupported: Boolean? = null,
-    val message: String? = null,
+    val message: UiText? = null,
     val share: ShareRequest? = null
 ) {
     /** Loopback and a tone only make sense while this phone owns a live call. */
     val audioEnabled: Boolean get() = callPhase == "active" && callId != null
 
-    val audioDisabledReason: String?
+    val audioDisabledReason: UiText?
         get() = when {
-            loopbackSupported == false && toneSupported == false -> "This phone build offers neither loopback nor a test tone"
-            callPhase == null -> "Start a call first: loopback and the tone run inside one"
-            callPhase != "active" -> "The call has to be active before audio can loop back"
+            loopbackSupported == false && toneSupported == false -> UiText.Res(R.string.lab_audio_reason_none)
+            callPhase == null -> UiText.Res(R.string.lab_audio_reason_no_call)
+            callPhase != "active" -> UiText.Res(R.string.lab_audio_reason_not_active)
             else -> null
         }
 }
@@ -39,15 +46,34 @@ data class LinkTestUi(
     val running: Boolean = false,
     val last: LinkTestResult? = null,
     val history: List<LinkTestResult> = emptyList(),
-    val error: String? = null
+    val error: LabFailure? = null
 )
 
 data class ProbeUi(
     val selected: Set<String> = setOf("iroh", "lan", "tailscale"),
     val running: Boolean = false,
-    val candidates: List<ProbeCandidate> = emptyList(),
+    val rows: List<ProbeRowUi> = emptyList(),
     val checkedAt: String? = null,
-    val error: String? = null
+    val error: LabFailure? = null
+)
+
+/** How one path answered, as three states a reader can tell apart. */
+enum class ProbeVerdict { REACHED, NOT_REACHED, NOT_CHECKED }
+
+/**
+ * One path in the probe list. [verdict] never stands in for the other two: a path this phone could
+ * not measure is "Not checked" with a [note] saying why, never "Not reached". For the LAN path the
+ * measurement is this phone's own handshake; for the others it is the bridge's.
+ */
+data class ProbeRowUi(
+    val key: String,
+    val endpoint: String? = null,
+    val verdict: ProbeVerdict = ProbeVerdict.NOT_CHECKED,
+    val rttMs: Long? = null,
+    val note: UiText? = null,
+    val listenerNote: UiText? = null,
+    /** The daemon's own detail and reason, verbatim, shown only under Details. */
+    val details: String? = null
 )
 
 data class AudioUi(
@@ -55,8 +81,8 @@ data class AudioUi(
     val toneHz: Int = 1_000,
     val toneDbfs: Double = -20.0,
     val busy: Boolean = false,
-    val error: String? = null,
-    val note: String? = null
+    val error: LabFailure? = null,
+    val note: UiText? = null
 )
 
 data class TestCallUi(
@@ -65,34 +91,32 @@ data class TestCallUi(
     val confirming: Boolean = false,
     val placing: Boolean = false,
     val callId: String? = null,
-    val error: String? = null
+    val error: LabFailure? = null
 ) {
     val numberReady: Boolean get() = number.filter { it.isDigit() }.length >= 3
 }
 
 data class CodecTrialUi(
     val running: Boolean = false,
-    val step: String? = null,
+    val step: UiText? = null,
     val runs: List<CodecTrialRun> = emptyList(),
     val recommendation: CodecTrialRun? = null,
-    val error: String? = null
+    val error: LabFailure? = null
 )
 
-/** One measured profile of the codec trial. */
+/** One measured profile of the codec trial; the screen names it from [codec] and [bitrate]. */
 data class CodecTrialRun(
     val codec: String,
     val bitrate: Int?,
     val result: LinkTestResult
-) {
-    val label: String get() = if (codec == "opus" && bitrate != null) "Opus ${bitrate / 1000} kbit/s" else codec.uppercase()
-}
+)
 
 data class DiagnosticsUi(
     val loading: Boolean = false,
     val payload: String? = null,
     val exporting: Boolean = false,
     val bundleId: String? = null,
-    val error: String? = null
+    val error: LabFailure? = null
 )
 
 data class LogUi(
@@ -103,7 +127,17 @@ data class LogUi(
 )
 
 /** A finished cache file waiting for the screen to hand it to the system share sheet. */
-data class ShareRequest(val uri: android.net.Uri, val mimeType: String, val title: String)
+data class ShareRequest(val uri: android.net.Uri, val mimeType: String, val title: UiText)
+
+/**
+ * A daemon value this build has no words for: still readable, never an underscore in the UI. Known
+ * values always get a resource; this is the last resort for a value the daemon may add.
+ */
+internal fun humanize(value: String): String {
+    val words = value.replace('_', ' ').replace('-', ' ').trim()
+    if (words.isEmpty()) return value
+    return words.replaceFirstChar { it.uppercase() }
+}
 
 /** One persisted run: the daemon's record plus when this phone asked for it. */
 typealias LabLinkTest = LinkTestResult

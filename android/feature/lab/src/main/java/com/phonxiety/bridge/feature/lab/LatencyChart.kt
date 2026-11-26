@@ -15,14 +15,18 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 
 /**
  * RTT percentiles of one run as three bars, with a line at the 400 ms point above which a
- * conversation starts to feel queued. The numbers are also in the accessibility description:
- * the chart is a summary, the values are the evidence.
+ * conversation starts to feel queued. A measurement the daemon did not return stays an empty track
+ * with "—" under it, never a zero-height bar that reads as "0 ms".
+ *
+ * The numbers are also in the accessibility description: the chart is a summary, the values are the
+ * evidence.
  */
 @Composable
 fun LatencyPercentileChart(
@@ -31,20 +35,29 @@ fun LatencyPercentileChart(
     maxMs: Long?,
     modifier: Modifier = Modifier
 ) {
+    if (p50Ms == null && p95Ms == null && maxMs == null) return
     val track = MaterialTheme.colorScheme.surfaceVariant
     val bar = MaterialTheme.colorScheme.primary
     val worn = MaterialTheme.colorScheme.error
     val threshold = MaterialTheme.colorScheme.outline
     val top = maxOf((p50Ms ?: 0L).toFloat(), (p95Ms ?: 0L).toFloat(), (maxMs ?: 0L).toFloat(), THRESHOLD_MS)
-    val values = listOf(p50Ms ?: 0L, p95Ms ?: 0L, maxMs ?: 0L)
+    val values = listOf(p50Ms, p95Ms, maxMs)
+    val none = stringResource(R.string.lab_none)
+    val median = stringResource(R.string.lab_stat_median)
+    val p95 = stringResource(R.string.lab_stat_p95)
+    val worst = stringResource(R.string.lab_stat_worst)
+    val description = stringResource(
+        R.string.lab_chart_description,
+        p50Ms?.let(::millisText) ?: none,
+        p95Ms?.let(::millisText) ?: none,
+        maxMs?.let(::millisText) ?: none
+    )
     Column(modifier = modifier.fillMaxWidth()) {
         Canvas(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(84.dp)
-                .semantics {
-                    contentDescription = "RTT p50 ${p50Ms ?: 0} ms, p95 ${p95Ms ?: 0} ms, max ${maxMs ?: 0} ms"
-                }
+                .semantics { contentDescription = description }
         ) {
             val barGap = size.width * 0.06f
             val barWidth = (size.width - barGap * 2) / 3f
@@ -56,6 +69,7 @@ fun LatencyPercentileChart(
                     size = Size(barWidth, size.height),
                     cornerRadius = CornerRadius(6.dp.toPx())
                 )
+                if (value == null) return@forEachIndexed
                 val fraction = (value.toFloat() / top).coerceIn(0f, 1f)
                 val height = size.height * fraction
                 drawRoundRect(
@@ -77,9 +91,13 @@ fun LatencyPercentileChart(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            listOf("p50" to p50Ms, "p95" to p95Ms, "max" to maxMs).forEach { (label, value) ->
+            listOf(median to p50Ms, p95 to p95Ms, worst to maxMs).forEach { (label, value) ->
                 Text(
-                    text = "$label ${value?.let { "$it ms" } ?: "—"}",
+                    text = stringResource(
+                        R.string.lab_chart_caption,
+                        label,
+                        value?.let(::millisText) ?: none
+                    ),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f)
@@ -97,13 +115,15 @@ fun RttHistoryChart(p95Values: List<Long>, modifier: Modifier = Modifier) {
     val worn = MaterialTheme.colorScheme.error
     val grid = MaterialTheme.colorScheme.outlineVariant
     val top = maxOf(p95Values.max().toFloat(), THRESHOLD_MS)
+    val description = stringResource(
+        R.string.lab_history_chart_description,
+        millisText(p95Values.lastOrNull() ?: 0L)
+    )
     Canvas(
         modifier = modifier
             .fillMaxWidth()
             .height(56.dp)
-            .semantics {
-                contentDescription = "RTT p95 history, newest ${p95Values.lastOrNull() ?: 0} ms"
-            }
+            .semantics { contentDescription = description }
     ) {
         val usable = size.height - 4.dp.toPx()
         val step = if (p95Values.size > 1) size.width / (p95Values.size - 1) else 0f

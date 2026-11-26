@@ -38,7 +38,7 @@ data class CallAudioUiState(
     val playing: Boolean = false,
     val positionMs: Long = 0,
     val durationMs: Long? = null,
-    val error: String? = null
+    val error: CallsFailure? = null
 )
 
 data class CallDetailUiState(
@@ -50,7 +50,7 @@ data class CallDetailUiState(
     val refreshing: Boolean = false,
     val offline: Boolean = false,
     val missing: Boolean = false,
-    val error: String? = null,
+    val error: CallsFailure? = null,
     val hasMoreTranscript: Boolean = false,
     val loadingTranscript: Boolean = false,
     val deleting: Boolean = false,
@@ -130,7 +130,7 @@ class CallDetailViewModel @Inject constructor(
                         loading = false,
                         offline = failure.code !in MISSING_CODES,
                         missing = failure.code in MISSING_CODES,
-                        error = "${failure.message} (${failure.code})"
+                        error = CallsFailure.of(failure.message, failure.code)
                     )
                 }
                 return@launch
@@ -144,7 +144,7 @@ class CallDetailViewModel @Inject constructor(
                     loading = false,
                     refreshing = false,
                     offline = failure != null,
-                    error = failure?.let { f -> "${f.message} (${f.code})" },
+                    error = failure?.let { f -> CallsFailure.of(f.message, f.code) },
                     missing = false
                 )
             }
@@ -165,7 +165,7 @@ class CallDetailViewModel @Inject constructor(
                 it.copy(
                     loadingTranscript = false,
                     hasMoreTranscript = result.hasMore,
-                    error = failure?.let { f -> "${f.message} (${f.code})" } ?: it.error
+                    error = failure?.let { f -> CallsFailure.of(f.message, f.code) } ?: it.error
                 )
             }
         }
@@ -180,7 +180,7 @@ class CallDetailViewModel @Inject constructor(
                 is ApiOutcome.Ok -> _state.update { it.copy(marking = false, marks = outcome.value.marks) }
 
                 is ApiOutcome.Failure -> _state.update {
-                    it.copy(marking = false, error = "${outcome.message} (${outcome.code})")
+                    it.copy(marking = false, error = CallsFailure.of(outcome.message, outcome.code))
                 }
             }
         }
@@ -199,7 +199,7 @@ class CallDetailViewModel @Inject constructor(
                 }
 
                 is ApiOutcome.Failure -> _state.update {
-                    it.copy(deleting = false, error = "${outcome.message} (${outcome.code})")
+                    it.copy(deleting = false, error = CallsFailure.of(outcome.message, outcome.code))
                 }
             }
         }
@@ -224,7 +224,7 @@ class CallDetailViewModel @Inject constructor(
                 }
 
                 is com.phonxiety.bridge.data.ApiResult.Failure -> _state.update {
-                    it.copy(audio = it.audio.copy(downloading = false, error = "${result.message} (${result.code})"))
+                    it.copy(audio = it.audio.copy(downloading = false, error = CallsFailure.of(result.message, result.code)))
                 }
             }
         }

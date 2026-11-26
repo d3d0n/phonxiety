@@ -27,7 +27,7 @@ data class CallsUiState(
     val loaded: Boolean = false,
     val hasMore: Boolean = false,
     val offline: Boolean = false,
-    val error: String? = null
+    val error: CallsFailure? = null
 ) {
     val filtered: Boolean get() = filter.isFiltered
     val empty: Boolean get() = loaded && calls.isEmpty() && !refreshing
@@ -44,7 +44,7 @@ private data class Busy(
     val refreshing: Boolean = false,
     val loadingMore: Boolean = false,
     val offline: Boolean = false,
-    val error: String? = null
+    val error: CallsFailure? = null
 )
 
 /**
@@ -106,7 +106,7 @@ class CallsViewModel @Inject constructor(
                     it.copy(
                         refreshing = false,
                         offline = true,
-                        error = "${failure.message} (${failure.code})"
+                        error = CallsFailure.of(failure.message, failure.code)
                     )
                 }
             } else {
@@ -131,7 +131,7 @@ class CallsViewModel @Inject constructor(
             val failure = result.failure
             if (failure != null) {
                 busy.update {
-                    it.copy(loadingMore = false, offline = true, error = "${failure.message} (${failure.code})")
+                    it.copy(loadingMore = false, offline = true, error = CallsFailure.of(failure.message, failure.code))
                 }
             } else {
                 val known = current.items.mapTo(HashSet()) { it.callId }

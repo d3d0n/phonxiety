@@ -1,6 +1,7 @@
 package com.phonxiety.bridge.feature.lab
 
 import android.content.Context
+import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.phonxiety.bridge.BridgeConfigLoader
@@ -11,6 +12,7 @@ import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.ApiResult
 import com.phonxiety.bridge.data.BridgeStateRepository
 import com.phonxiety.bridge.data.DaemonApi
+import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.model.LinkTestResult
 import com.phonxiety.bridge.model.ProbeCandidate
@@ -21,6 +23,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.util.Locale
 import javax.inject.Inject
+import kotlin.math.roundToLong
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -106,7 +109,7 @@ class LabViewModel @Inject constructor(
                 }
 
                 is ApiOutcome.Failure -> _state.update {
-                    it.copy(link = it.link.copy(running = false, error = outcome.describe()))
+                    it.copy(link = it.link.copy(running = false, error = outcome.failure()))
                 }
             }
         }
@@ -127,12 +130,13 @@ class LabViewModel @Inject constructor(
         viewModelScope.launch {
             when (val outcome = api.probe(selected.sorted())) {
                 is ApiOutcome.Ok -> {
-                    val candidates = if ("lan" in selected) checkedLan(outcome.value.candidates) else outcome.value.candidates
+                    val candidates = outcome.value.candidates
+                    val rows = if ("lan" in selected) withPhoneCheck(candidates) else candidates.map(::daemonRow)
                     _state.update {
                         it.copy(
                             probe = it.probe.copy(
                                 running = false,
-                                candidates = candidates,
+                                rows = rows,
                                 checkedAt = outcome.value.checkedAt,
                                 error = null
                             )
@@ -141,23 +145,72 @@ class LabViewModel @Inject constructor(
                 }
 
                 is ApiOutcome.Failure -> _state.update {
-                    it.copy(probe = it.probe.copy(running = false, error = outcome.describe()))
+                    it.copy(probe = it.probe.copy(running = false, error = outcome.failure()))
                 }
             }
         }
     }
 
+    /** One of the bridge's own candidate rows: reached, not reached, or a path it did not measure. */
+    private fun daemonRow(candidate: ProbeCandidate): ProbeRowUi {
+        val endpoint = candidate.address?.let(::hostPort)
+        val rttMs = candidate.rttMs?.roundToLong()
+        // The bridge marks a path it never probed with "not_measured": that is a third state, not
+        // an unreachable one, and it never carries an RTT.
+        val notMeasured = candidate.reason == NOT_MEASURED
+        // The daemon's own words stay available verbatim under Details, whatever the verdict says.
+        val details = listOfNotNull(
+            candidate.detail?.takeIf { it.isNotBlank() },
+            candidate.reason?.takeIf { it.isNotBlank() }?.let { "reason: $it" }
+        ).joinToString("\n").ifBlank { null }
+        return when {
+            notMeasured -> ProbeRowUi(
+                key = candidate.name,
+                endpoint = endpoint,
+                verdict = ProbeVerdict.NOT_CHECKED,
+                note = reasonText(candidate.reason),
+                details = details
+            )
+
+            candidate.available && candidate.reachable -> ProbeRowUi(
+                key = candidate.name,
+                endpoint = endpoint,
+                verdict = ProbeVerdict.REACHED,
+                rttMs = rttMs,
+                note = rttMs?.let { UiText.Res(R.string.lab_probe_note_bridge_reached, listOf(millisText(it))) }
+                    ?: candidate.detail?.let { UiText.Literal(it) },
+                details = details
+            )
+
+            candidate.available -> ProbeRowUi(
+                key = candidate.name,
+                endpoint = endpoint,
+                verdict = ProbeVerdict.NOT_REACHED,
+                note = reasonText(candidate.reason) ?: UiText.Res(R.string.lab_probe_reason_listener),
+                details = details
+            )
+
+            else -> ProbeRowUi(
+                key = candidate.name,
+                endpoint = endpoint,
+                verdict = ProbeVerdict.NOT_CHECKED,
+                note = reasonText(candidate.reason) ?: UiText.Res(R.string.lab_probe_reason_none),
+                details = details
+            )
+        }
+    }
+
     /**
-     * Replaces the daemon's LAN answer with this phone's own measurement.
+     * Replaces the bridge's LAN answer with this phone's own measurement.
      *
-     * The daemon can only report whether its listener answers on its own LAN
-     * address; the question the lab asks is whether this phone's network
-     * reaches that address. The same pinned TLS handshake and bearer upgrade
-     * link selection uses answers it from here; the daemon's finding stays in
-     * the row's detail so both halves are visible.
+     * The bridge can only report whether its listener answers on its own LAN address; the question
+     * the lab asks is whether this phone's network reaches that address. The same pinned TLS
+     * handshake link selection uses answers it from here. A check that could not run leaves the row
+     * "Not checked" with the reason; only a check that ran and failed makes it "Not reached".
      */
-    private suspend fun checkedLan(candidates: List<ProbeCandidate>): List<ProbeCandidate> {
-        val row = candidates.firstOrNull { it.name == "lan" } ?: return candidates
+    private suspend fun withPhoneCheck(candidates: List<ProbeCandidate>): List<ProbeRowUi> {
+        val rows = candidates.map(::daemonRow)
+        val lan = candidates.firstOrNull { it.name == "lan" } ?: return rows
         val info = (api.info() as? ApiOutcome.Ok)?.value
         val urls = info?.connection?.lan.orEmpty()
         val pin = info?.connection?.certificate
@@ -168,46 +221,63 @@ class LabViewModel @Inject constructor(
             null
         }
         val answered = probes?.firstOrNull { it.reachable }
-
-        // Without the phone's own measurement the row says so: the daemon's listener answering is
-        // not this phone reaching it.
-        fun inconclusive(note: String) = row.copy(reachable = false, rttMs = null, reason = "inconclusive", detail = row.notes(note))
         val updated = when {
-            info == null -> inconclusive("the phone could not read the daemon's LAN addresses")
+            info == null -> notChecked(lan, R.string.lab_probe_note_no_info)
 
-            urls.isEmpty() -> inconclusive("the daemon reports no LAN address")
+            urls.isEmpty() -> notChecked(lan, R.string.lab_probe_note_no_lan)
 
-            token == null -> inconclusive("this phone is not paired, so it cannot authenticate a probe")
+            token == null -> notChecked(lan, R.string.lab_probe_note_unpaired)
 
-            probes == null -> inconclusive("the phone's own check failed")
+            probes == null -> notChecked(lan, R.string.lab_probe_note_check_failed)
 
-            else -> row.copy(
-                available = true,
-                reachable = answered != null,
-                rttMs = answered?.rttMs?.toDouble(),
-                address = answered?.address ?: urls.first(),
-                detail = "${phoneResult(probes, answered)} · ${daemonListener(row)}",
-                reason = when {
-                    answered != null -> null
-                    row.reachable -> "unreachable_from_phone"
-                    else -> row.reason ?: "no_listener_answer"
-                }
+            probes.isEmpty() -> notChecked(lan, R.string.lab_probe_note_no_result)
+
+            answered != null -> ProbeRowUi(
+                key = lan.name,
+                endpoint = hostPort(answered.address),
+                verdict = ProbeVerdict.REACHED,
+                rttMs = answered.rttMs,
+                note = UiText.Res(
+                    R.string.lab_probe_note_reached,
+                    listOf(hostPort(answered.address), millisText(answered.rttMs ?: 0L))
+                )
+            )
+
+            else -> ProbeRowUi(
+                key = lan.name,
+                endpoint = hostPort(urls.first()),
+                verdict = ProbeVerdict.NOT_REACHED,
+                note = UiText.Res(R.string.lab_probe_note_unreached, listOf(hostPort(urls.first()))),
+                listenerNote = listenerNote(lan)
             )
         }
-        return candidates.map { if (it.name == row.name) updated else it }
+        // This phone's own check replaces the verdict; the daemon's diagnostics stay under Details.
+        return rows.map { if (it.key == lan.name) updated.copy(details = updated.details ?: it.details) else it }
     }
 
-    private fun ProbeCandidate.notes(note: String): String = listOfNotNull(detail, note).joinToString(" · ")
+    /** A row this phone could not measure; the bridge's own listener answer stays a second line. */
+    private fun notChecked(candidate: ProbeCandidate, @StringRes note: Int): ProbeRowUi = ProbeRowUi(
+        key = candidate.name,
+        endpoint = candidate.address?.let(::hostPort),
+        verdict = ProbeVerdict.NOT_CHECKED,
+        note = UiText.Res(note),
+        listenerNote = listenerNote(candidate)
+    )
 
-    private fun phoneResult(probes: List<LanPathProbe>, answered: LanPathProbe?): String = when (answered) {
-        null -> "this phone could not reach ${probes.joinToString(", ") { it.address }}"
-        else -> "this phone: tls+auth to ${answered.address} in ${answered.rttMs} ms"
-    }
+    private fun listenerNote(candidate: ProbeCandidate): UiText = UiText.Res(
+        if (candidate.reachable) R.string.lab_probe_listener_answers else R.string.lab_probe_listener_silent
+    )
 
-    private fun daemonListener(row: ProbeCandidate): String = if (row.reachable) {
-        "the daemon's listener answers on its own LAN address"
-    } else {
-        "the daemon's listener does not answer there either"
+    private fun reasonText(reason: String?): UiText? = when (reason) {
+        null, "" -> null
+        "not_measured" -> UiText.Res(R.string.lab_probe_reason_not_measured)
+        "not_installed" -> UiText.Res(R.string.lab_probe_reason_not_installed)
+        "not_connected" -> UiText.Res(R.string.lab_probe_reason_not_connected)
+        "no_lan_address" -> UiText.Res(R.string.lab_probe_reason_no_lan_address)
+        "no_listener_answer" -> UiText.Res(R.string.lab_probe_reason_listener)
+        "unreachable_from_phone" -> UiText.Res(R.string.lab_probe_reason_unreachable_phone)
+        "inconclusive" -> UiText.Res(R.string.lab_probe_reason_unchecked)
+        else -> UiText.Literal(humanize(reason))
     }
 
     // -- loopback and tone ----------------------------------------------
@@ -223,13 +293,13 @@ class LabViewModel @Inject constructor(
                         audio = it.audio.copy(
                             busy = false,
                             loopbackOn = outcome.value.enabled,
-                            note = if (outcome.value.enabled) "The daemon echoes the uplink back" else null
+                            note = if (outcome.value.enabled) UiText.Res(R.string.lab_audio_on) else null
                         )
                     )
                 }
 
                 is ApiOutcome.Failure -> _state.update {
-                    it.copy(audio = it.audio.copy(busy = false, error = outcome.describe()))
+                    it.copy(audio = it.audio.copy(busy = false, error = outcome.failure()))
                 }
             }
         }
@@ -246,11 +316,16 @@ class LabViewModel @Inject constructor(
         viewModelScope.launch {
             when (val outcome = api.tone(current.audio.toneHz, current.audio.toneDbfs, TONE_SECONDS, current.callId)) {
                 is ApiOutcome.Ok -> _state.update {
-                    it.copy(audio = it.audio.copy(busy = false, note = "Tone played for ${TONE_SECONDS.toInt()} s"))
+                    it.copy(
+                        audio = it.audio.copy(
+                            busy = false,
+                            note = UiText.Res(R.string.lab_audio_played, listOf(TONE_SECONDS.toInt()))
+                        )
+                    )
                 }
 
                 is ApiOutcome.Failure -> _state.update {
-                    it.copy(audio = it.audio.copy(busy = false, error = outcome.describe()))
+                    it.copy(audio = it.audio.copy(busy = false, error = outcome.failure()))
                 }
             }
         }
@@ -284,12 +359,12 @@ class LabViewModel @Inject constructor(
                 is ApiOutcome.Ok -> _state.update {
                     it.copy(
                         testCall = it.testCall.copy(placing = false, callId = outcome.value.callId),
-                        message = "Test call placed"
+                        message = UiText.Res(R.string.lab_test_placed_message)
                     )
                 }
 
                 is ApiOutcome.Failure -> _state.update {
-                    it.copy(testCall = it.testCall.copy(placing = false, error = outcome.describe()))
+                    it.copy(testCall = it.testCall.copy(placing = false, error = outcome.failure()))
                 }
             }
         }
@@ -299,17 +374,17 @@ class LabViewModel @Inject constructor(
 
     fun runCodecTrial() {
         if (_state.value.trial.running) return
-        _state.update { it.copy(trial = CodecTrialUi(running = true, step = "Starting")) }
+        _state.update { it.copy(trial = CodecTrialUi(running = true, step = UiText.Res(R.string.lab_trial_step_opus_plain))) }
         viewModelScope.launch {
             val runs = mutableListOf<CodecTrialRun>()
             for (profile in TRIAL_PROFILES) {
-                _state.update { it.copy(trial = it.trial.copy(step = "Measuring ${profile.label}")) }
+                _state.update { it.copy(trial = it.trial.copy(step = profile.step())) }
                 when (val outcome = api.linkTest(TRIAL_SECONDS, profile.codec, "stream", profile.bitrate)) {
                     is ApiOutcome.Ok -> runs += CodecTrialRun(profile.codec, profile.bitrate, outcome.value)
 
                     is ApiOutcome.Failure -> {
                         _state.update {
-                            it.copy(trial = CodecTrialUi(running = false, runs = runs.toList(), error = outcome.describe()))
+                            it.copy(trial = CodecTrialUi(running = false, runs = runs.toList(), error = outcome.failure()))
                         }
                         return@launch
                     }
@@ -338,7 +413,7 @@ class LabViewModel @Inject constructor(
                     maxBitrate = recommended.bitrate ?: it.maxBitrate
                 )
             }
-            _state.update { it.copy(message = "Kept ${recommended.label} for the next call") }
+            _state.update { it.copy(message = UiText.Res(R.string.lab_trial_kept)) }
         }
     }
 
@@ -354,7 +429,7 @@ class LabViewModel @Inject constructor(
                 }
 
                 is ApiOutcome.Failure -> _state.update {
-                    it.copy(diagnostics = it.diagnostics.copy(loading = false, error = outcome.describe()))
+                    it.copy(diagnostics = it.diagnostics.copy(loading = false, error = outcome.failure()))
                 }
             }
         }
@@ -367,7 +442,7 @@ class LabViewModel @Inject constructor(
         viewModelScope.launch {
             when (val created = api.createDiagnosticsBundle()) {
                 is ApiOutcome.Failure -> _state.update {
-                    it.copy(diagnostics = it.diagnostics.copy(exporting = false, error = created.describe()))
+                    it.copy(diagnostics = it.diagnostics.copy(exporting = false, error = created.failure()))
                 }
 
                 is ApiOutcome.Ok -> {
@@ -389,7 +464,7 @@ class LabViewModel @Inject constructor(
                                 share = ShareRequest(
                                     LabShare.uriFor(context, file),
                                     "application/zip",
-                                    "Phonxiety diagnostics ${bundle.bundleId}"
+                                    UiText.Res(R.string.lab_diagnostics_bundle_title, listOf(bundle.bundleId))
                                 )
                             )
                         }
@@ -398,7 +473,10 @@ class LabViewModel @Inject constructor(
                             file.delete()
                             _state.update {
                                 it.copy(
-                                    diagnostics = it.diagnostics.copy(exporting = false, error = "${downloaded.code}: ${downloaded.message}")
+                                    diagnostics = it.diagnostics.copy(
+                                        exporting = false,
+                                        error = LabFailure.of(downloaded.message, downloaded.code)
+                                    )
                                 )
                             }
                         }
@@ -437,7 +515,11 @@ class LabViewModel @Inject constructor(
             _state.update {
                 it.copy(
                     logs = it.logs.copy(exporting = false),
-                    share = ShareRequest(LabShare.uriFor(context, file), "text/plain", "Phonxiety phone log")
+                    share = ShareRequest(
+                        LabShare.uriFor(context, file),
+                        "text/plain",
+                        UiText.Res(R.string.lab_log_chooser)
+                    )
                 )
             }
         }
@@ -466,10 +548,29 @@ class LabViewModel @Inject constructor(
         return stored
     }
 
-    private fun ApiOutcome.Failure.describe(): String = "$code: $message"
+    /** The daemon's failure as the screen shows it: the sentence, then the code behind details. */
+    private fun ApiOutcome.Failure.failure(): LabFailure = LabFailure.of(message, code)
+
+    private fun CodecProfile.step(): UiText = when {
+        codec == "opus" && bitrate != null -> UiText.Res(R.string.lab_trial_step_opus, listOf(bitrate / 1_000))
+        codec == "opus" -> UiText.Res(R.string.lab_trial_step_opus_plain)
+        else -> UiText.Res(R.string.lab_trial_step_pcm)
+    }
 
     private companion object {
         const val TONE_SECONDS = 5.0
         const val TRIAL_SECONDS = 3.0
     }
 }
+
+/** `192.0.2.10:18763` from the daemon's `wss://192.0.2.10:18763/device`. */
+internal fun hostPort(url: String): String {
+    val authority = url.substringAfter("://", url).substringBefore('/')
+    return authority.substringAfterLast('@')
+}
+
+/** A latency as the screen combines it: the unit travels with the number. */
+internal fun millisText(millis: Long): String = "$millis\u00A0ms"
+
+/** The daemon's marker for a path it did not probe; it is a state of its own, not "unreachable". */
+internal const val NOT_MEASURED = "not_measured"
