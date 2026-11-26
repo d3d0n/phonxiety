@@ -272,17 +272,81 @@ class ProviderCommandsTest {
     }
 
     @Test
-    fun magiskAndApatchOverlayIsBuiltIn() = runTest {
+    fun magiskOverlayIsBuiltIn() = runTest {
         val environment = FakeEnvironment()
         val magisk = MagiskProvider(magiskProvider(), shell().first, environment)
-        val apatch = ApatchProvider(apatchProvider(), shell().first, environment)
 
         assertEquals(Overlay.BUILT_IN, magisk.capabilities().systemOverlay)
         assertTrue(magisk.capabilities().updateJson)
         assertFalse(magisk.capabilities().webUi)
-        assertEquals(Overlay.BUILT_IN, apatch.capabilities().systemOverlay)
-        assertFalse(apatch.capabilities().updateJson)
-        assertTrue(apatch.capabilities().webUi)
+    }
+
+    @Test
+    fun anApdWithoutMetamoduleSupportKeepsTheBuiltInOverlay() = runTest {
+        val environment = FakeEnvironment()
+        val apatch = ApatchProvider(apatchProvider(), shell(apdProbe(supported = false)).first, environment)
+
+        val capabilities = apatch.capabilities()
+
+        assertEquals(Overlay.BUILT_IN, capabilities.systemOverlay)
+        assertFalse(capabilities.metamodulePending)
+        assertFalse(capabilities.updateJson)
+        assertTrue(capabilities.webUi)
+    }
+
+    @Test
+    fun apatchWithoutAMetamoduleCannotOverlaySystem() = runTest {
+        val environment = FakeEnvironment().apply { dirs[RootCommand.MODULES_DIR] = listOf("phonxiety_bridge") }
+        val apatch = ApatchProvider(apatchProvider(), shell(apdProbe(supported = true)).first, environment)
+
+        val capabilities = apatch.capabilities()
+
+        // apd 11282 has no overlay of its own: without a metamodule an enabled module is unstyled.
+        assertEquals(Overlay.METAMODULE_MISSING, capabilities.systemOverlay)
+        assertFalse(capabilities.metamodulePending)
+    }
+
+    @Test
+    fun apatchStagedMetamoduleIsMissingAndPending() = runTest {
+        // `apd module install` extracts into modules_update/<id> and creates the symlink over the
+        // still empty modules/<id>: the staged copy is the pending signal, not the `update` marker.
+        val environment = FakeEnvironment().apply {
+            dirs[RootCommand.MODULES_DIR] = listOf("meta-overlayfs")
+            dirs["${RootCommand.MODULES_DIR}/meta-overlayfs"] = emptyList()
+            dirs[RootCommand.MODULES_UPDATE_DIR] = listOf("meta-overlayfs")
+            files["${RootCommand.MODULES_UPDATE_DIR}/meta-overlayfs/module.prop"] =
+                "id=meta-overlayfs\nname=OverlayFS MetaModule\nmetamodule=1\nversion=1.3.1\n"
+        }
+        val apatch = ApatchProvider(apatchProvider(), shell(apdProbe(supported = true)).first, environment)
+
+        val capabilities = apatch.capabilities()
+
+        assertEquals(Overlay.METAMODULE_MISSING, capabilities.systemOverlay)
+        assertTrue(capabilities.metamodulePending)
+    }
+
+    @Test
+    fun apatchActiveMetamoduleMountsSystem() = runTest {
+        val environment = FakeEnvironment().apply {
+            dirs[RootCommand.MODULES_DIR] = listOf("meta-overlayfs")
+            files["${RootCommand.MODULES_DIR}/meta-overlayfs/module.prop"] =
+                "id=meta-overlayfs\nname=OverlayFS MetaModule\nmetamodule=1\nversion=1.3.1\n"
+        }
+        val apatch = ApatchProvider(apatchProvider("11282"), shell(apdProbe(supported = true)).first, environment)
+
+        val capabilities = apatch.capabilities()
+
+        assertEquals(Overlay.METAMODULE_PRESENT, capabilities.systemOverlay)
+        assertFalse(capabilities.metamodulePending)
+    }
+
+    /** Answers the capability probe and everything else with success. */
+    private fun apdProbe(supported: Boolean): (String) -> ShellOutput = { script ->
+        if (script == RootCommand.apdSupportsMetamodules().script) {
+            ShellOutput(exitCode = if (supported) 0 else 1)
+        } else {
+            ShellOutput()
+        }
     }
 
     @Test

@@ -102,8 +102,9 @@ data class RootCapabilities(
     val managerPackage: String?,
     val coexistenceWarning: String?,
     /**
-     * A metamodule is staged in `/data/adb/modules` but not mounted yet: KernelSU's `ksud` writes an
-     * `update` marker and the module becomes active on the next boot. Only KernelSU/Next reports it.
+     * A metamodule is staged but not mounted yet: KernelSU's `ksud` writes an `update` marker, APatch's
+     * `apd` keeps the whole staged copy under `modules_update`, and either way the metamodule becomes
+     * active on the next boot. Reported by KernelSU, KernelSU-Next and a metamodule-era `apd`.
      */
     val metamodulePending: Boolean = false
 )

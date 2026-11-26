@@ -35,7 +35,7 @@ object DoctorPolicy {
         DoctorItemKind.OVERLAY -> FixPlan(
             fix = DoctorFixId.REINSTALL_MODULE,
             risk = FixClass.CONFIRM,
-            effect = "Reinstalls the module with its APK and privapp allowlist together. A KernelSU install " +
+            effect = "Reinstalls the module with its APK and privapp allowlist together. An install " +
                 "without a metamodule needs one, or the overlay is never mounted.",
             rollback = "The previous zip stays in Updates; reinstall it to go back.",
             needsReboot = true

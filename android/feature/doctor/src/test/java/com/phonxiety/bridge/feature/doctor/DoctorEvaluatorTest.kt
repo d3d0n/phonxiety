@@ -125,7 +125,7 @@ class DoctorEvaluatorTest {
         )
         val overlay = TestData.row(rows, DoctorEvaluator.ID_OVERLAY)
         assertEquals(DoctorSeverity.FAIL, overlay.severity)
-        assertTrue(overlay.evidence.contains("KernelSU needs a metamodule"))
+        assertTrue(overlay.evidence.contains("the provider needs a metamodule"))
     }
 
     @Test

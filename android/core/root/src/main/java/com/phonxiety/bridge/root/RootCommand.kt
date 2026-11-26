@@ -35,6 +35,14 @@ class RootCommand private constructor(
 
         fun apdVersion(): RootCommand = RootCommand(listOf("apd", "-V"))
 
+        /**
+         * `grep -q -F /data/adb/metamodule /data/adb/apd`: exit 0 when this `apd` carries the
+         * metamodule directory as a literal, i.e. it delegates mounting instead of overlaying itself.
+         * `apd/src/defs.rs` defines `METAMODULE_DIR` as `/data/adb/` + `metamodule/`, so the string is
+         * in the binary; an older `apd` without it prints nothing and exits 1.
+         */
+        fun apdSupportsMetamodules(): RootCommand = RootCommand(listOf("grep", "-q", "-F", "/data/adb/metamodule", "/data/adb/apd"))
+
         /** `magisk --install-module <zip>`; the zip must already be under `/data/local/tmp`. */
         fun magiskInstallModule(zipPath: String): RootCommand = RootCommand(listOf("magisk", "--install-module", absolutePath(zipPath, "zip")))
 

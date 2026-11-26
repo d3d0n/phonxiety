@@ -16,6 +16,14 @@ class RootCommandTest {
     }
 
     @Test
+    fun theApdMetamoduleProbeReadsTheBinaryItself() {
+        assertEquals(
+            "grep -q -F /data/adb/metamodule /data/adb/apd",
+            RootCommand.apdSupportsMetamodules().script
+        )
+    }
+
+    @Test
     fun rebootAsksPowerManagerBeforeFallingBackToTheBinary() {
         // A plain `reboot` from a shell context is refused (PROP_ERROR_PERMISSION_DENIED):
         // `svc power reboot` is the binder call the managers themselves use.
