@@ -43,6 +43,7 @@ import com.phonxiety.bridge.model.PartialTurn
 import com.phonxiety.bridge.model.TranscriptTurn
 import java.util.Locale
 import java.util.TimeZone
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.After
@@ -185,6 +186,10 @@ class LiveCallScreenshotTest {
         composeRule
             .onNodeWithText("Table for two confirmed for Thursday at 21:00 under Rasulov.", substring = true)
             .assertExists()
+        // A field the daemon left empty reads as words, never as the serialized "null".
+        composeRule.onNodeWithText("Deposit").performScrollTo()
+        composeRule.onNodeWithText("Not reported").assertExists()
+        composeRule.onNodeWithText("null").assertDoesNotExist()
     }
 
     @Test
@@ -551,7 +556,8 @@ object LiveCallSamples {
             mapOf(
                 "reservation_time" to JsonPrimitive("Thursday 21:00"),
                 "party_size" to JsonPrimitive("2"),
-                "window_seat" to JsonPrimitive("requested")
+                "window_seat" to JsonPrimitive("requested"),
+                "deposit" to JsonNull
             )
         ),
         marks = listOf(CallMark("agreed", 1_764_000_041.0), CallMark("follow-up", 1_764_000_050.0, "confirm the window seat"))

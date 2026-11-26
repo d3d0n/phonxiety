@@ -79,6 +79,7 @@ import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.TranscriptTurn
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -398,7 +399,8 @@ private fun ResultCard(state: CallDetailUiState) {
             // value keeps tabular monospace.
             val display = resultText(
                 raw = value.render(),
-                boolean = (value as? JsonPrimitive)?.booleanOrNull
+                boolean = (value as? JsonPrimitive)?.booleanOrNull,
+                missing = value is JsonNull
             )
             KeyValueRow(label = humanize(key), value = display.text, mono = display.mono)
         }

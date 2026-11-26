@@ -8,6 +8,7 @@
 
     <string name="designsystem_value_yes">Yes</string>
     <string name="designsystem_value_no">No</string>
+    <string name="designsystem_value_not_reported">Not reported</string>
 
     <string name="designsystem_far_end_person">Person</string>
     <string name="designsystem_far_end_ivr">IVR</string>
