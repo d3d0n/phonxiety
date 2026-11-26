@@ -815,6 +815,12 @@ private fun TestCallResultCard(result: TestCallResultUi, onOpenCall: (String) ->
                 output = result.error.code
             )
 
+            result.unfinished -> Text(
+                text = stringResource(R.string.lab_test_result_unfinished),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
             result.summaryAbsent -> Text(
                 text = stringResource(R.string.lab_test_result_summary_absent),
                 style = MaterialTheme.typography.bodyMedium,

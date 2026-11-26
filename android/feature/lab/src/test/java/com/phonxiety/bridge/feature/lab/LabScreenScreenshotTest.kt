@@ -396,6 +396,20 @@ class LabScreenScreenshotTest {
     }
 
     @Test
+    fun aCallTheBridgeHasNotClosedSaysSoAndStillOpens() {
+        setScreen(
+            finishedTestCall(
+                testCallResult(resultStatus = null, summary = null).copy(outcome = null, unfinished = true)
+            )
+        )
+        composeRule.onNodeWithText("The bridge hasn't closed this call yet. Open the call record to follow it.")
+            .performScrollTo()
+            .assertExists()
+        composeRule.onNodeWithText("The bridge has no summary for this call.").assertDoesNotExist()
+        composeRule.onNodeWithText("Open the call record").assertExists()
+    }
+
+    @Test
     fun theThreeProbeVerdictsStayDistinct() {
         setScreen(previewLabState())
         composeRule.onAllNodesWithText("Reached").assertCountEquals(1)

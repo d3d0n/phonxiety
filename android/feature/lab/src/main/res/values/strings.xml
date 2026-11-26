@@ -136,6 +136,7 @@
     <string name="lab_test_result_summary_absent">The bridge has no summary for this call.</string>
     <string name="lab_test_result_open">Open the call record</string>
     <string name="lab_test_result_failed">The call record didn\'t load</string>
+    <string name="lab_test_result_unfinished">The bridge hasn\'t closed this call yet. Open the call record to follow it.</string>
     <string name="lab_test_outcome_answered">Answered</string>
     <string name="lab_test_outcome_no_answer">No answer</string>
     <string name="lab_test_outcome_busy">Busy</string>

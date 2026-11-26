@@ -66,6 +66,12 @@ class LabViewModel @Inject constructor(
     /** Which placement the running read belongs to; an older read may not publish over a newer call. */
     private var placement = 0
 
+    /**
+     * Whether the Lab is on screen. The view model outlives a push to the call record, and its
+     * bridge collector keeps running there: a hidden Lab starts no read and publishes nothing.
+     */
+    private var visible = true
+
     /** How long the record of a finished test call waits between refetches; tests shorten it. */
     @VisibleForTesting
     internal var resultRetryDelayMs: Long = RESULT_RETRY_MS
@@ -117,12 +123,14 @@ class LabViewModel @Inject constructor(
      * that was already read stays as it was fetched rather than being read again.
      */
     fun onLabShown() {
+        visible = true
         val callId = _state.value.testCall.callId ?: return
         readTestCallResult(callId)
     }
 
     /** The Lab left the screen — a push to the call record included: nothing of its read may land. */
     fun onLabHidden() {
+        visible = false
         resultJob?.cancel()
         resultJob = null
         resultCallId = null
@@ -476,9 +484,12 @@ class LabViewModel @Inject constructor(
     )
 
     /**
-     * Starts reading [callId]'s record unless this call's record is already read or being read.
+     * Starts reading [callId]'s record unless the Lab is hidden or this call's record is already
+     * read or being read. A published card that is not waiting is final, whether it holds the
+     * summary, an error or the daemon's unfinished call: repeated hints never start a new read.
      */
     private fun readTestCallResult(callId: String) {
+        if (!visible) return
         val result = _state.value.testCall.result
         if (result?.callId == callId && !result.waiting) return
         if (resultCallId == callId && resultJob?.isActive == true) return
@@ -497,10 +508,16 @@ class LabViewModel @Inject constructor(
      * So the record itself is watched for its terminal state, and the result card appears only
      * once the daemon calls the call over. The summary is then read in a bounded number of
      * attempts; [RESULT_ATTEMPTS] with the retry delay is the longest a person waits for it.
+     *
+     * A read that gives up says so: [RESULT_ATTEMPTS] failed reads in a row end on an error card,
+     * and a call the daemon has not finished after [LIVE_POLLS] reads ends on an unfinished card.
      */
     private suspend fun collectTestCallResult(callId: String, generation: Int) {
         var polls = 0
+        var failuresInARow = 0
         var record: CallSnapshot? = null
+        var failure: LabFailure? = null
+        var finished = false
         // Waiting for the daemon's verdict: the daemon caps a test call at 60 s, so a record that
         // outlives this is not one this screen is going to see finish.
         while (isCurrent(generation, callId)) {
@@ -508,21 +525,36 @@ class LabViewModel @Inject constructor(
             when (val outcome = api.call(callId)) {
                 is ApiOutcome.Ok -> {
                     record = outcome.value
-                    if (outcome.value.finished()) break
+                    failure = null
+                    failuresInARow = 0
+                    if (outcome.value.finished()) {
+                        finished = true
+                        break
+                    }
                 }
 
-                // A record that cannot be read is retried a few times, then left to the next hint.
-                is ApiOutcome.Failure -> if (polls >= RESULT_ATTEMPTS) return
+                is ApiOutcome.Failure -> {
+                    failure = outcome.failure()
+                    failuresInARow++
+                }
             }
-            if (polls >= LIVE_POLLS) return
+            if (failuresInARow >= RESULT_ATTEMPTS || polls >= LIVE_POLLS) break
             delay(resultRetryDelayMs)
         }
         if (!isCurrent(generation, callId)) return
+        if (!finished) {
+            val unreadable = failuresInARow >= RESULT_ATTEMPTS
+            val card = (record?.toResultCard(callId) ?: TestCallResultUi(callId = callId)).copy(
+                error = failure.takeIf { unreadable },
+                unfinished = !unreadable
+            )
+            publish(generation) { it.copy(testCall = it.testCall.copy(result = card)) }
+            return
+        }
         publish(generation) {
             it.copy(testCall = it.testCall.copy(result = TestCallResultUi(callId = callId, waiting = true)))
         }
-        var attempt = if (record == null) 0 else 1
-        var failure: LabFailure? = null
+        var attempt = 1
         while (isCurrent(generation, callId)) {
             if (record?.resultStatus == RESULT_READY || attempt >= RESULT_ATTEMPTS) break
             attempt++
@@ -537,29 +569,29 @@ class LabViewModel @Inject constructor(
             }
         }
         if (!isCurrent(generation, callId)) return
-        val found = record
-        val card = if (found == null) {
-            TestCallResultUi(callId = callId, waiting = false, error = failure)
-        } else {
-            TestCallResultUi(
-                callId = callId,
-                outcome = found.callOutcome,
-                resultStatus = found.resultStatus,
-                summary = found.summary,
-                durationSeconds = found.durationSeconds(),
-                codec = found.audioCodec,
-                waiting = false
-            )
-        }
+        val card = record?.toResultCard(callId) ?: TestCallResultUi(callId = callId, error = failure)
         publish(generation) { it.copy(testCall = it.testCall.copy(result = card)) }
     }
 
-    /** Whether a read still belongs to the current placement and the call the lab accepted. */
-    private fun isCurrent(generation: Int, callId: String): Boolean = generation == placement && _state.value.testCall.callId == callId
+    private fun CallSnapshot.toResultCard(callId: String): TestCallResultUi = TestCallResultUi(
+        callId = callId,
+        outcome = callOutcome,
+        resultStatus = resultStatus,
+        summary = summary,
+        durationSeconds = durationSeconds(),
+        codec = audioCodec,
+        waiting = false
+    )
 
-    /** Applies a read's answer only while its placement is still the current one. */
+    /**
+     * Whether a read still belongs to the current placement and the call the Lab accepted, while
+     * the Lab is on screen.
+     */
+    private fun isCurrent(generation: Int, callId: String): Boolean = visible && generation == placement && _state.value.testCall.callId == callId
+
+    /** Applies a read's answer only while its placement is current and the Lab is on screen. */
     private fun publish(generation: Int, change: (LabUiState) -> LabUiState) {
-        if (generation != placement) return
+        if (!visible || generation != placement) return
         _state.update(change)
     }
 

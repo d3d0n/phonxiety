@@ -132,7 +132,9 @@ data class TestCallResultUi(
     val durationSeconds: Long? = null,
     val codec: String? = null,
     val waiting: Boolean = false,
-    val error: LabFailure? = null
+    val error: LabFailure? = null,
+    /** The daemon had not finished the call when the Lab stopped reading its record. */
+    val unfinished: Boolean = false
 ) {
     /** The summary is only shown once the daemon says it is ready; pending is not an answer. */
     val summaryReady: Boolean get() = resultStatus == "ready" && !summary.isNullOrBlank()

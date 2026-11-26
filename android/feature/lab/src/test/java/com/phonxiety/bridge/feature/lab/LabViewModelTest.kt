@@ -461,6 +461,69 @@ class LabViewModelTest {
     }
 
     @Test
+    fun `a bridge update behind the call record starts no read`() = runBlocking<Unit> {
+        api.testCallHandler = { ApiOutcome.Ok(200, CallSnapshot(callId = "call-behind", profile = "test")) }
+        api.callHandler = { callId ->
+            ApiOutcome.Ok(200, CallSnapshot(callId = callId, state = "ended", resultStatus = "pending"))
+        }
+        val vm = viewModel()
+        vm.setTestNumber("+12025550123")
+        withTimeout(5_000) { vm.state.first { it.testCall.number == "+12025550123" } }
+        vm.requestTestCall()
+        vm.confirmTestCall()
+        withTimeout(5_000) { vm.state.first { it.testCall.result?.waiting == true } }
+
+        // Pushing the call record hides the Lab; the bridge keeps talking to the retained view model.
+        vm.onLabHidden()
+        delay(20)
+        val left = api.callRequests.size
+        bridge.flow.value = BridgeState(call = CallState("call-behind", "+12025550123", CallPhase.ENDED, 0L))
+        bridge.flow.value = BridgeState(call = CallState("call-behind", "+12025550123", CallPhase.ENDED, 1L))
+        delay(50)
+        assertEquals("an ended hint behind the call record reads nothing", left, api.callRequests.size)
+        assertTrue("what was read stays as it was", vm.state.value.testCall.result?.waiting == true)
+    }
+
+    @Test
+    fun `a record that never loads ends on an error and later hints leave it`() = runBlocking<Unit> {
+        api.testCallHandler = { ApiOutcome.Ok(200, CallSnapshot(callId = "call-lost", profile = "test")) }
+        api.callHandler = { ApiOutcome.Failure(503, "link_down", "the bridge service is not running") }
+        val vm = viewModel()
+        vm.setTestNumber("+12025550123")
+        withTimeout(5_000) { vm.state.first { it.testCall.number == "+12025550123" } }
+        vm.requestTestCall()
+        vm.confirmTestCall()
+
+        withTimeout(5_000) { vm.state.first { it.testCall.result?.error != null } }
+        val card = vm.state.value.testCall.result!!
+        assertFalse(card.waiting)
+        assertFalse(card.unfinished)
+        assertEquals(8, api.callRequests.size)
+
+        bridge.flow.value = BridgeState(call = CallState("call-lost", "+12025550123", CallPhase.ENDED, 0L))
+        bridge.flow.value = BridgeState(call = CallState("call-lost", "+12025550123", CallPhase.ENDED, 1L))
+        delay(50)
+        assertEquals("the answer is final: repeated ended hints read nothing", 8, api.callRequests.size)
+    }
+
+    @Test
+    fun `a call the bridge never closes ends on an unfinished card`() = runBlocking<Unit> {
+        api.testCallHandler = { ApiOutcome.Ok(200, CallSnapshot(callId = "call-long", profile = "test")) }
+        api.callHandler = { callId -> ApiOutcome.Ok(200, CallSnapshot(callId = callId, state = "active")) }
+        val vm = viewModel()
+        vm.setTestNumber("+12025550123")
+        withTimeout(5_000) { vm.state.first { it.testCall.number == "+12025550123" } }
+        vm.requestTestCall()
+        vm.confirmTestCall()
+
+        withTimeout(5_000) { vm.state.first { it.testCall.result?.unfinished == true } }
+        val card = vm.state.value.testCall.result!!
+        assertFalse(card.waiting)
+        assertNull(card.error)
+        assertEquals(90, api.callRequests.size)
+    }
+
+    @Test
     fun `a new placement never inherits the previous call's result`() = runBlocking<Unit> {
         var placements = 0
         api.testCallHandler = { _ ->
