@@ -262,6 +262,9 @@ internal class LinkSupervisor(
             // Building one attempt — a candidate plan or a probe — is itself an
             // attempt: a throw moves to the next dial instead of ending here.
             BridgeLog.w(TAG, "link attempt creation failed: ${t.javaClass.simpleName}")
+            // No candidate was selected, so the transport is unknown and this
+            // never feeds a transport's own recovery accounting.
+            factory.attemptEnded(AttemptOutcome.FAILED_BEFORE_OPEN, null)
             scheduleReconnect()
             return
         }
@@ -327,6 +330,7 @@ internal class LinkSupervisor(
             retireCurrentLocked()
         }
         if (!notify) return
+        factory.attemptEnded(AttemptOutcome.FAILED_BEFORE_OPEN, owner.kind)
         notifyDown("connect_timeout")
         runCatching { owner.cancel() }
     }
@@ -386,6 +390,10 @@ internal class LinkSupervisor(
             runCatching { owner.cancel() }
             return
         }
+        // This attempt's one outcome: it opened.  A later down is not a second
+        // classification, and the accepted-open state it carries is what keeps
+        // a post-open failure out of the transport's recovery accounting.
+        factory.attemptEnded(AttemptOutcome.OPENED, owner.kind)
         // A hello that throws is this attempt's failure, not the end of the
         // supervisor: report down and let the backoff re-dial.
         val hello = try {
@@ -419,14 +427,21 @@ internal class LinkSupervisor(
     }
 
     private fun handleDown(owner: DeviceLink, reason: String) {
+        var acceptedOpen = false
         val notify = synchronized(lock) {
             // Only the current attempt may report down.  A retired attempt that
             // surfaces late (e.g. after its deadline) is no longer the link, and
             // a replaced one must not disturb its successor.
             if (link !== owner) return
+            // Captured before the retirement clears it: an attempt that was
+            // accepted as open has already reported that one outcome, whatever
+            // reason brings it down now — `hello_failed` and `connect_failed`
+            // can both arrive after QUIC connected.
+            acceptedOpen = linkUp
             retireCurrentLocked()
         }
         if (!notify) return
+        if (!acceptedOpen) factory.attemptEnded(AttemptOutcome.FAILED_BEFORE_OPEN, owner.kind)
         notifyDown(reason)
     }
 
