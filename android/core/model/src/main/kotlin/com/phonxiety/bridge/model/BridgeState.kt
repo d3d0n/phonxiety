@@ -54,7 +54,13 @@ data class CallState(
      * Telecom's own connect time where it exists, so the screen counts the conversation even when
      * it opens long after the answer. Null until the call reaches [CallPhase.ACTIVE].
      */
-    val connectedAtEpochMs: Long? = null
+    val connectedAtEpochMs: Long? = null,
+    /**
+     * When the line ended, in wall-clock milliseconds. The engine records it once, from its own
+     * clock when the phase becomes [CallPhase.ENDED], so an ended call's duration is end minus
+     * connect and stops growing. Null before the call ends; a replayed end keeps the first stamp.
+     */
+    val endedAtEpochMs: Long? = null
 )
 
 @Serializable

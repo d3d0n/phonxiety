@@ -34,6 +34,7 @@ import com.phonxiety.bridge.designsystem.testing.assertAccessible
 import com.phonxiety.bridge.designsystem.testing.pinAnimationFrame
 import com.phonxiety.bridge.model.AudioState
 import com.phonxiety.bridge.model.BridgeState
+import com.phonxiety.bridge.model.CallPhase
 import com.phonxiety.bridge.model.LinkError
 import com.phonxiety.bridge.model.LinkState
 import com.phonxiety.bridge.model.PathKind
@@ -84,6 +85,7 @@ class DashboardScreenshotTest {
         dynamicColor: Boolean = false,
         fontScale: Float = 1f,
         width: Dp = 411.dp,
+        nowEpochMs: Long = DashboardSamples.now,
         onOpenLiveCall: (String) -> Unit = {},
         onNewCall: () -> Unit = {},
         onRunLinkTest: () -> Unit = {},
@@ -111,7 +113,7 @@ class DashboardScreenshotTest {
                             onRunLinkTest = onRunLinkTest,
                             onOpenUpdates = {},
                             onUnpair = onUnpair,
-                            nowEpochMs = DashboardSamples.now
+                            nowEpochMs = nowEpochMs
                         )
                     }
                 }
@@ -324,7 +326,8 @@ class DashboardScreenshotTest {
         // 74 s of ring is not the call: the tile is the 40 s since the answer, like the system chip.
         composeRule.onNodeWithText("Duration").assertExists()
         composeRule.onNodeWithText("00:40").assertExists()
-        composeRule.onNodeWithText("00:74").assertDoesNotExist()
+        // 74 s would read as 01:14, so the ring is never shown as this tile's duration.
+        composeRule.onNodeWithText("01:14").assertDoesNotExist()
     }
 
     @Test
@@ -335,6 +338,24 @@ class DashboardScreenshotTest {
         composeRule.onNodeWithText("00:09").assertExists()
         composeRule.onNodeWithText("Duration").assertDoesNotExist()
         composeRule.onNodeWithText("Connected at").assertExists()
+    }
+
+    @Test
+    fun anEndedCallKeepsTheDurationItEndedWith() {
+        // The sample answered 40 s before the fixed clock and the call ended 10 s later.
+        val ended = DashboardSamples.relayInCall.call!!.copy(
+            phase = CallPhase.ENDED,
+            endedAtEpochMs = DashboardSamples.now - 10_000
+        )
+        // Five minutes later the tile still reads the 30 s the conversation lasted.
+        setScreen(
+            bridge = DashboardSamples.relayInCall.copy(call = ended),
+            nowEpochMs = DashboardSamples.now + 5 * 60_000
+        )
+        composeRule.onNodeWithText("Ended").assertExists()
+        composeRule.onNodeWithText("Duration").assertExists()
+        composeRule.onNodeWithText("00:30").assertExists()
+        composeRule.onNodeWithText("05:30").assertDoesNotExist()
     }
 
     @Test

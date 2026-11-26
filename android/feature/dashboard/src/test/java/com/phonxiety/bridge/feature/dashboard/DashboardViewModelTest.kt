@@ -153,7 +153,26 @@ class DashboardViewModelTest {
         // The answer restarts the count, as the system's call chip does; placement is not a duration.
         assertEquals(R.string.dashboard_duration, timing.labelRes)
         assertEquals(31_000L, timing.elapsedStartEpochMs)
+        assertNull("a live call counts against the clock", timing.elapsedEndEpochMs)
         assertEquals("Connected at takes the same stamp", 31_000L, timing.connectedAtEpochMs)
+    }
+
+    @Test
+    fun anEndedCallFreezesTheDurationAtTheEnd() {
+        val call = CallState(
+            callId = "call",
+            destinationMasked = "+998 ·· 42",
+            phase = CallPhase.ENDED,
+            startedAtEpochMs = 1_000,
+            connectedAtEpochMs = 31_000,
+            endedAtEpochMs = 91_000
+        )
+        val timing = callTiming(call)
+        // 60 s of conversation, and the card counts to the end rather than to its own clock.
+        assertEquals(R.string.dashboard_duration, timing.labelRes)
+        assertEquals(31_000L, timing.elapsedStartEpochMs)
+        assertEquals(91_000L, timing.elapsedEndEpochMs)
+        assertEquals(31_000L, timing.connectedAtEpochMs)
     }
 
     @Test

@@ -329,7 +329,7 @@ private fun CallCard(call: CallState?, nowEpochMs: Long, onOpenLiveCall: (String
                 StatTile(
                     label = stringResource(timing.labelRes),
                     value = timing.elapsedStartEpochMs
-                        ?.let { formatElapsedTime(secondsBetween(it, nowEpochMs)) }
+                        ?.let { formatElapsedTime(secondsBetween(it, timing.elapsedEndEpochMs ?: nowEpochMs)) }
                         ?: MISSING_VALUE,
                     mono = true
                 )
@@ -773,11 +773,14 @@ internal fun PathKind.toDesignPath(): LinkPath = when (this) {
  * connects counts from placement and is labelled Dialing, the live screen's own word, so it never
  * reads as a call duration; the system's call chip also starts at the answer. From the connect the
  * tile is the conversation's Duration and counts from the bridge's connect stamp, and "Connected
- * at" takes the same stamp, not the placement time.
+ * at" takes the same stamp, not the placement time. Once the call has ended the count stops at the
+ * bridge's end stamp, so the last call keeps the duration it ended with.
  */
 internal data class CallTiming(
     val labelRes: Int,
     val elapsedStartEpochMs: Long?,
+    /** Where the count stops; null while the call is still running and the card uses its clock. */
+    val elapsedEndEpochMs: Long?,
     val connectedAtEpochMs: Long?
 )
 
@@ -787,12 +790,14 @@ internal fun callTiming(call: CallState): CallTiming {
         connected != null -> CallTiming(
             labelRes = R.string.dashboard_duration,
             elapsedStartEpochMs = connected,
+            elapsedEndEpochMs = call.endedAtEpochMs.takeIf { call.phase == CallPhase.ENDED },
             connectedAtEpochMs = connected
         )
 
         call.phase == CallPhase.DIALING -> CallTiming(
             labelRes = R.string.dashboard_phase_dialing,
             elapsedStartEpochMs = call.startedAtEpochMs,
+            elapsedEndEpochMs = null,
             connectedAtEpochMs = null
         )
 
@@ -801,6 +806,7 @@ internal fun callTiming(call: CallState): CallTiming {
         else -> CallTiming(
             labelRes = R.string.dashboard_duration,
             elapsedStartEpochMs = null,
+            elapsedEndEpochMs = null,
             connectedAtEpochMs = null
         )
     }
