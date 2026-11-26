@@ -56,7 +56,7 @@ class LiveCallTruthTest {
         // The daemon reports "idle" whenever no review is running; that is not the call's phase.
         val idle = live.copy(state = "active", activity = "idle")
         assertEquals("Live", phaseLabel(idle, resources))
-        assertEquals("Dialling", phaseLabel(live.copy(state = "dialing", activity = "idle"), resources))
+        assertEquals("Dialing", phaseLabel(live.copy(state = "dialing", activity = "idle"), resources))
         assertEquals("Ended", phaseLabel(ended.copy(activity = "idle"), resources))
     }
 
@@ -74,7 +74,7 @@ class LiveCallTruthTest {
     fun thePhonePhaseFillsInUntilTheDaemonReports() {
         val local = live.copy(state = null, localPhase = CallPhase.DIALING)
         assertEquals("dialing", local.phase)
-        assertEquals("Dialling", phaseLabel(local, resources))
+        assertEquals("Dialing", phaseLabel(local, resources))
 
         val remote = live.copy(state = "active", localPhase = CallPhase.ENDING)
         assertEquals("active", remote.phase)

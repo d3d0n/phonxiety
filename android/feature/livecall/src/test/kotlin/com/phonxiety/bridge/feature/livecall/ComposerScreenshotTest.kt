@@ -31,6 +31,7 @@ import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.ApiLimits
 import com.phonxiety.bridge.model.DaemonInfo
 import com.phonxiety.bridge.model.ValidationResult
+import java.text.NumberFormat
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -109,7 +110,7 @@ class ComposerScreenshotTest {
     fun widePhoneInDark() = render("411_dark") { setScreen(VALIDATED, dark = true) }
 
     @Test
-    fun widePhoneInDynamicColour() = render("411_dynamic") { setScreen(VALIDATED, dynamicColor = true) }
+    fun widePhoneInDynamicColor() = render("411_dynamic") { setScreen(VALIDATED, dynamicColor = true) }
 
     @Test
     fun smallScreenAtTwoHundredPercentInLight() = render("320_font200_light") { setScreen(VALIDATED, fontScale = 2f, width = 320.dp) }
@@ -131,6 +132,30 @@ class ComposerScreenshotTest {
             composeRule.onNodeWithTag(SCREEN_TAG).performTouchInput { swipeUp() }
         }
     ) { setScreen(VALIDATED) }
+
+    @Test
+    fun theLimitsAfterScrolling() = render(
+        "limits_411_light",
+        beforeCapture = { composeRule.onNodeWithText("Calls per hour").performScrollTo() }
+    ) { setScreen(VALIDATED) }
+
+    @Test
+    fun theLimitsAtTwoHundredPercent() = render(
+        "limits_320_font200_dark",
+        beforeCapture = { composeRule.onNodeWithText("Ring timeout").performScrollTo() }
+    ) { setScreen(VALIDATED, dark = true, fontScale = 2f, width = 320.dp) }
+
+    @Test
+    fun theWarningsAfterScrolling() = render(
+        "warnings_411_light",
+        beforeCapture = { composeRule.onNodeWithText("agent may not know", substring = true).performScrollTo() }
+    ) { setScreen(VALIDATED) }
+
+    @Test
+    fun theWarningsAtTwoHundredPercent() = render(
+        "warnings_320_font200_dark",
+        beforeCapture = { composeRule.onNodeWithText("agent may not know", substring = true).performScrollTo() }
+    ) { setScreen(VALIDATED, dark = true, fontScale = 2f, width = 320.dp) }
 
     @Test
     fun theConfirmation() = render("confirmation_411_light") {
@@ -166,6 +191,51 @@ class ComposerScreenshotTest {
         composeRule.onNodeWithText("Check the number").assertExists()
         composeRule.onAllNodesWithText("Emergency numbers can't be called by the agent.").onFirst().assertExists()
         composeRule.onNodeWithText("Fix the number").assertExists()
+        // The daemon's own diagnostic stays reachable behind Details.
+        composeRule.onNodeWithText("Show details").performScrollTo().performClick()
+        composeRule
+            .onNodeWithText("emergency numbers cannot be called by the agent")
+            .assertExists()
+    }
+
+    @Test
+    fun anOversizedGoalNamesTheGoalAndKeepsItsLimit() {
+        setScreen(
+            VALIDATED.copy(
+                valid = false,
+                errors = listOf(localIssue("goal", "String should have at most 8000 characters"))
+            )
+        )
+        // The merged text field repeats its own supporting text, so match the first occurrence.
+        composeRule
+            .onAllNodesWithText("The goal is longer than the 8,000-character limit.")
+            .onFirst()
+            .assertExists()
+        composeRule.onNodeWithText("Fix the goal").assertExists()
+        composeRule.onNodeWithText("Check the goal").assertExists()
+        composeRule.onNodeWithText("Fix the number").assertDoesNotExist()
+        // The 8,000-character limit stays visible beside the field it constrains.
+        val used = NumberFormat.getIntegerInstance().format(VALIDATED.goal.length)
+        composeRule.onAllNodesWithText("$used / 8,000 characters").onFirst().assertExists()
+    }
+
+    @Test
+    fun aRequestFailureAsksForTheBriefNotTheNumber() {
+        setScreen(
+            VALIDATED.copy(
+                valid = false,
+                errors = listOf(
+                    ComposerIssue(
+                        location = "request",
+                        headline = UiText.Literal("the bridge service is not running"),
+                        detail = "link_down"
+                    )
+                )
+            )
+        )
+        // The status pill and the action both read the neutral verdict for a brief nobody checked.
+        composeRule.onAllNodesWithText("Check the brief").onFirst().assertExists()
+        composeRule.onNodeWithText("Fix the number").assertDoesNotExist()
     }
 
     @Test

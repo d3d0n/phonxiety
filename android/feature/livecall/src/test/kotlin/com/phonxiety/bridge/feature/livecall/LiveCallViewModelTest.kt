@@ -203,7 +203,7 @@ class LiveCallViewModelTest {
     }
 
     @Test
-    fun pauseResumeSummariseDtmfAndMarksReachTheDaemon() = runTest(dispatcher) {
+    fun pauseResumeSummarizeDtmfAndMarksReachTheDaemon() = runTest(dispatcher) {
         val api = FakeDaemonApi()
         api.callSnapshot = ApiOutcome.Ok(200, snapshot())
         api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(endedEvent(1))))

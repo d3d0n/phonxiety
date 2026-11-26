@@ -23,6 +23,9 @@ import kotlinx.coroutines.launch
 internal const val COMPOSER_DEFAULT_MAX_DURATION = 900
 internal const val COMPOSER_DEFAULT_RING_TIMEOUT = 60
 
+/** The daemon's goal length limit (`src/phonxiety/models.py`), kept visible beside the field. */
+internal const val COMPOSER_GOAL_LIMIT = 8_000
+
 /**
  * One validation failure in the shape the screen draws: [headline] is local copy for a problem the
  * app knows, or the daemon's own sentence when it is not; [detail] keeps the verbatim diagnostic
@@ -36,7 +39,7 @@ data class ComposerIssue(
 
 /**
  * The phone-originated call: a number, a brief, the limits, live validation from the daemon, then
- * one confirmation that names exactly what will be dialled.
+ * one confirmation that names exactly what will be dialed.
  */
 data class ComposerUiState(
     val destination: String = "",
@@ -74,9 +77,13 @@ data class ComposerUiState(
 
     val ready: Boolean get() = valid == true && errors.isEmpty() && !placing
 
-    val destinationError: UiText? get() = issueFor("destination")?.headline
+    val destinationIssue: ComposerIssue? get() = issueFor("destination")
 
-    val goalError: UiText? get() = issueFor("goal")?.headline
+    val goalIssue: ComposerIssue? get() = issueFor("goal")
+
+    val destinationError: UiText? get() = destinationIssue?.headline
+
+    val goalError: UiText? get() = goalIssue?.headline
 
     /** The first field error, in reading order, for the action's supporting text. */
     val firstFieldError: UiText? get() = listOfNotNull(destinationError, goalError).firstOrNull()
@@ -89,22 +96,34 @@ data class ComposerUiState(
 }
 
 /**
- * A daemon validation message as the screen can draw it. Problems the app knows by location get
- * local copy in the product's voice; anything else stays verbatim, because inventing a sentence for
- * a diagnostic nobody predicted is how a screen starts lying.
+ * A daemon validation message as the screen can draw it. Only a reason the app recognizes is
+ * translated; anything else stays verbatim, because inventing a sentence for a diagnostic nobody
+ * predicted is how a screen starts lying. [ComposerIssue.detail] keeps the daemon's own words for
+ * the details disclosure whenever the app did translate.
  */
 internal fun localIssue(location: String, message: String): ComposerIssue {
+    val reason = message.lowercase()
     val headline = when {
-        location.startsWith("destination") && message.contains("emergency", ignoreCase = true) ->
+        location.startsWith("destination") && reason.contains("emergency") ->
             UiText.Res(R.string.composer_error_destination_emergency)
 
-        location.startsWith("destination") -> UiText.Res(R.string.composer_error_destination)
+        location.startsWith("destination") && reason.contains("match pattern") ->
+            UiText.Res(R.string.composer_error_destination)
 
-        location.startsWith("goal") -> UiText.Res(R.string.composer_error_goal)
+        location.startsWith("goal") && reason.contains("at least 1 character") ->
+            UiText.Res(R.string.composer_error_goal)
+
+        // The only length the goal can fail on: the daemon's 8,000-character field limit.
+        location.startsWith("goal") && reason.contains("at most $COMPOSER_GOAL_LIMIT") ->
+            UiText.Res(R.string.composer_error_goal_too_long)
 
         else -> UiText.Literal(message)
     }
-    return ComposerIssue(location = location, headline = headline, detail = message)
+    return ComposerIssue(
+        location = location,
+        headline = headline,
+        detail = message.takeIf { headline != UiText.Literal(message) }
+    )
 }
 
 @HiltViewModel

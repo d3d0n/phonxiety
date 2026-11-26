@@ -1,6 +1,7 @@
 package com.phonxiety.bridge.feature.livecall
 
 import android.content.res.Resources
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -27,6 +28,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -59,9 +62,12 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -82,6 +88,7 @@ import com.phonxiety.bridge.designsystem.component.StatTile
 import com.phonxiety.bridge.designsystem.component.StatusPill
 import com.phonxiety.bridge.designsystem.component.StatusTone
 import com.phonxiety.bridge.designsystem.formatElapsedTime
+import com.phonxiety.bridge.designsystem.formatPhoneNumber
 import com.phonxiety.bridge.model.CallMark
 import com.phonxiety.bridge.model.PartialTurn
 import com.phonxiety.bridge.model.TranscriptTurn
@@ -208,7 +215,7 @@ private fun LiveCallBody(
     val transcript = @Composable { modifier: Modifier ->
         TranscriptCard(state = state, modifier = modifier)
     }
-    val controls = @Composable { modifier: Modifier ->
+    val controls = @Composable { modifier: Modifier, showError: Boolean ->
         ControlsColumn(
             state = state,
             onInstructionChange = onInstructionChange,
@@ -218,9 +225,13 @@ private fun LiveCallBody(
             onDtmf = onDtmf,
             onMark = onMark,
             onReload = onReload,
+            showError = showError,
             modifier = modifier
         )
     }
+    // A compact screen opens with the audio card, the instruction and the marks folded away: the
+    // transcript is what a person is reading, and the fold is one 48 dp row, not a second viewport.
+    var controlsOpen by rememberSaveable { mutableStateOf(false) }
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val wide = maxWidth >= 720.dp
         val controlsMaxHeight = maxHeight * 0.46f
@@ -245,25 +256,93 @@ private fun LiveCallBody(
                                 .width(380.dp)
                                 .fillMaxHeight()
                         ) {
-                            controls(Modifier.fillMaxSize())
+                            controls(Modifier.fillMaxSize(), true)
                         }
                     }
                 } else {
+                    // Only a running call folds its controls away: once it has ended the result is
+                    // the reason the screen is open, so it stays on screen without a tap.
+                    val folded = !state.ended
                     Column(modifier = Modifier.fillMaxSize()) {
+                        // A failure (a refused hang-up, a dropped instruction) is never behind the
+                        // fold: it explains why the pinned action did not do what it promised.
+                        state.error?.let { message ->
+                            LiveCallError(
+                                message = message,
+                                code = state.errorCode,
+                                onReload = onReload,
+                                modifier = Modifier.padding(bottom = 8.dp)
+                            )
+                        }
                         Box(modifier = Modifier.weight(1f).fillMaxWidth()) { transcript(Modifier.fillMaxSize()) }
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(max = controlsMaxHeight)
-                                .padding(bottom = 8.dp)
-                        ) {
-                            controls(Modifier.fillMaxSize())
+                        if (controlsOpen || !folded) {
+                            // A running call's expanded controls share the remaining height with
+                            // the transcript: at 200 % text a fixed cut clips its jump control.
+                            // Once the call has ended the result takes its usual bounded box.
+                            val controlsHeight = if (folded) {
+                                Modifier.weight(1f)
+                            } else {
+                                Modifier.heightIn(max = controlsMaxHeight)
+                            }
+                            Box(
+                                modifier = controlsHeight
+                                    .fillMaxWidth()
+                                    .padding(top = 8.dp)
+                            ) {
+                                controls(Modifier.fillMaxSize(), false)
+                            }
+                        }
+                        if (folded) {
+                            ControlsDisclosure(
+                                open = controlsOpen,
+                                onToggle = { controlsOpen = !controlsOpen }
+                            )
                         }
                     }
                 }
             }
             // Pinned in both orientations: ending the call must never need a scroll.
             PinnedActionRow(state = state, onHangUp = onHangUp, onOpenDetail = onOpenDetail)
+        }
+    }
+}
+
+/**
+ * The compact layout's second half, behind one row. Collapsed, the transcript keeps the viewport it
+ * needs at 200 % text; expanded, the controls scroll inside a bounded box of their own.
+ */
+@Composable
+private fun ControlsDisclosure(open: Boolean, onToggle: () -> Unit) {
+    val action = stringResource(
+        if (open) R.string.live_call_controls_hide else R.string.live_call_controls_show
+    )
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp),
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceContainerLow
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp)
+                .clickable(role = Role.Button, onClick = onToggle)
+                .semantics { stateDescription = action }
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = stringResource(R.string.live_call_controls_title),
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                imageVector = if (open) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(24.dp)
+            )
         }
     }
 }
@@ -325,7 +404,7 @@ private fun LiveCallHeader(state: LiveCallUiState, onBack: () -> Unit, nowEpochM
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = state.destination?.let(::formatDestination)
+                text = state.destination?.let(::formatPhoneNumber)
                     ?: stringResource(R.string.live_call_fallback_title),
                 style = MaterialTheme.typography.titleLarge,
                 maxLines = 2,
@@ -384,6 +463,10 @@ private fun ReconnectingBanner(onReload: () -> Unit) {
     }
 }
 
+/**
+ * The transcript is the screen: its heading is the first row of the same scroll, so at 200 % text it
+ * moves out of the way instead of eating the only readable viewport.
+ */
 @Composable
 private fun TranscriptCard(
     state: LiveCallUiState,
@@ -394,41 +477,40 @@ private fun TranscriptCard(
         shape = MaterialTheme.shapes.large,
         color = MaterialTheme.colorScheme.surfaceContainerLow
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 16.dp, end = 12.dp, top = 12.dp, bottom = 6.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                Text(
-                    text = stringResource(R.string.live_call_transcript_title),
-                    style = MaterialTheme.typography.titleMedium
-                )
-                Text(
-                    text = transcriptSubtitle(state),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                // While the link is down the screen may not claim the agent is listening.
-                if (!state.ended && !state.reconnecting) {
-                    StatusPill(
-                        label = stringResource(
-                            if (state.muted) {
-                                R.string.live_call_agent_paused
-                            } else {
-                                R.string.live_call_agent_listening
-                            }
-                        ),
-                        tone = if (state.muted) StatusTone.WARNING else StatusTone.POSITIVE
-                    )
-                }
-            }
-            if (state.turns.isEmpty() && state.partials.isEmpty()) {
-                LoadingState(message = stringResource(R.string.live_call_transcript_starts))
-            } else {
-                TranscriptList(state = state, modifier = Modifier.weight(1f))
-            }
+        TranscriptList(state = state, modifier = Modifier.fillMaxSize())
+    }
+}
+
+@Composable
+private fun TranscriptHeading(state: LiveCallUiState) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 2.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        Text(
+            text = stringResource(R.string.live_call_transcript_title),
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.semantics { heading() }
+        )
+        Text(
+            text = transcriptSubtitle(state),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        // While the link is down the screen may not claim the agent is listening.
+        if (!state.ended && !state.reconnecting) {
+            StatusPill(
+                label = stringResource(
+                    if (state.muted) {
+                        R.string.live_call_agent_paused
+                    } else {
+                        R.string.live_call_agent_listening
+                    }
+                ),
+                tone = if (state.muted) StatusTone.WARNING else StatusTone.POSITIVE
+            )
         }
     }
 }
@@ -455,7 +537,8 @@ private fun transcriptSubtitle(state: LiveCallUiState): String = when {
 
 /**
  * Newest turn at the bottom. Following is a property of the scroll position: as soon as the user
- * scrolls up the list stops moving, and the jump pill brings it back to live.
+ * scrolls up the list stops moving, and the jump pill brings it back to live. The heading is item
+ * zero of this same list, so the transcript text owns every pixel the screen can spare.
  */
 @Composable
 private fun TranscriptList(state: LiveCallUiState, modifier: Modifier) {
@@ -465,8 +548,10 @@ private fun TranscriptList(state: LiveCallUiState, modifier: Modifier) {
         derivedStateOf { !listState.canScrollForward || listState.layoutInfo.visibleItemsInfo.isEmpty() }
     }
     val itemCount = state.turns.size + state.partials.size
+    // Index zero is the heading; the last transcript item therefore sits at index [itemCount].
+    val lastIndex = itemCount
     LaunchedEffect(itemCount, following) {
-        if (itemCount > 0 && following) listState.scrollToItem(itemCount - 1)
+        if (itemCount > 0 && following) listState.scrollToItem(lastIndex)
     }
     // The jump control sits under the list, never over a line the reader is trying to read.
     Column(modifier = modifier.fillMaxWidth()) {
@@ -475,12 +560,15 @@ private fun TranscriptList(state: LiveCallUiState, modifier: Modifier) {
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth(),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            item { TranscriptHeading(state) }
             items(state.turns.size) { index -> TranscriptRow(state.turns[index]) }
             items(state.partials.size) { index -> PartialRow(state.partials[index]) }
-            if (!state.ended) {
+            if (itemCount == 0) {
+                item { LoadingState(message = stringResource(R.string.live_call_transcript_starts)) }
+            } else if (!state.ended) {
                 item {
                     Text(
                         text = stringResource(R.string.live_call_waiting_next_turn),
@@ -493,8 +581,10 @@ private fun TranscriptList(state: LiveCallUiState, modifier: Modifier) {
         }
         if (!following) {
             TextButton(
-                onClick = { scope.launch { listState.animateScrollToItem((itemCount - 1).coerceAtLeast(0)) } },
-                modifier = Modifier.align(Alignment.CenterHorizontally)
+                onClick = { scope.launch { listState.animateScrollToItem(lastIndex) } },
+                modifier = Modifier
+                    .align(Alignment.CenterHorizontally)
+                    .heightIn(min = 48.dp)
             ) {
                 Text(stringResource(R.string.live_call_jump_to_live))
             }
@@ -554,6 +644,24 @@ private fun PartialRow(partial: PartialTurn) {
     }
 }
 
+/** The call's own failure, with the daemon's code behind Details and the one retry beside it. */
+@Composable
+private fun LiveCallError(
+    message: com.phonxiety.bridge.designsystem.UiText,
+    code: String?,
+    onReload: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    ErrorCard(
+        title = stringResource(R.string.live_call_action_failed_title),
+        message = message.asString(),
+        output = code,
+        actionLabel = stringResource(R.string.live_call_retry),
+        onAction = onReload,
+        modifier = modifier
+    )
+}
+
 @Composable
 private fun ControlsColumn(
     state: LiveCallUiState,
@@ -564,20 +672,17 @@ private fun ControlsColumn(
     onDtmf: (String) -> Unit,
     onMark: (String) -> Unit,
     onReload: () -> Unit,
-    modifier: Modifier
+    modifier: Modifier,
+    showError: Boolean = true
 ) {
     Column(
         modifier = modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        state.error?.let { message ->
-            ErrorCard(
-                title = stringResource(R.string.live_call_action_failed_title),
-                message = message.asString(),
-                output = state.errorCode,
-                actionLabel = stringResource(R.string.live_call_retry),
-                onAction = onReload
-            )
+        if (showError) {
+            state.error?.let { message ->
+                LiveCallError(message = message, code = state.errorCode, onReload = onReload)
+            }
         }
         LevelCard(state)
         if (!state.ended) {
@@ -782,6 +887,7 @@ private fun ResultBlock(state: LiveCallUiState) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun MarksCard(state: LiveCallUiState, onMark: (String) -> Unit) {
     SectionCard(
@@ -792,18 +898,28 @@ private fun MarksCard(state: LiveCallUiState, onMark: (String) -> Unit) {
             pluralStringResource(R.plurals.live_call_marks_count, state.marks.size, state.marks.size)
         }
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Three chips stop fitting one row long before 200 % text; they wrap instead of clipping,
+        // and each keeps the 48 dp touch target the accessibility gate asks for.
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
             MARK_KINDS.forEach { kind ->
                 FilterChip(
                     selected = state.marks.any { it.mark == kind },
                     onClick = { onMark(kind) },
                     label = { Text(humanizeToken(kind)) },
-                    enabled = !state.busy && !state.hangingUp
+                    enabled = !state.busy && !state.hangingUp,
+                    modifier = Modifier.heightIn(min = 48.dp)
                 )
             }
         }
         if (state.marks.isNotEmpty()) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
                 state.marks.forEach { mark: CallMark ->
                     StatusPill(
                         label = humanizeToken(mark.mark),
@@ -1004,7 +1120,7 @@ internal fun statusLabel(state: LiveCallUiState, resources: Resources): String =
 internal fun phaseLabel(state: LiveCallUiState, resources: Resources): String = when (state.phase) {
     "preparing" -> resources.getString(R.string.live_call_phase_preparing)
 
-    "dialing" -> resources.getString(R.string.live_call_phase_dialling)
+    "dialing" -> resources.getString(R.string.live_call_phase_dialing)
 
     "active" -> resources.getString(R.string.live_call_phase_live)
 
@@ -1012,7 +1128,7 @@ internal fun phaseLabel(state: LiveCallUiState, resources: Resources): String = 
 
     "ended" -> resources.getString(R.string.live_call_phase_ended)
 
-    "cancelled" -> resources.getString(R.string.live_call_phase_cancelled)
+    "cancelled" -> resources.getString(R.string.live_call_phase_canceled)
 
     "failed" -> resources.getString(R.string.live_call_phase_failed)
 

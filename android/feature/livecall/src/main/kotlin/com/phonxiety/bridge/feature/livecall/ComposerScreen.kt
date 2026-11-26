@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -35,10 +36,14 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextFieldColors
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
@@ -65,6 +70,8 @@ import com.phonxiety.bridge.designsystem.component.ScreenScaffold
 import com.phonxiety.bridge.designsystem.component.SectionCard
 import com.phonxiety.bridge.designsystem.component.StatusPill
 import com.phonxiety.bridge.designsystem.component.StatusTone
+import com.phonxiety.bridge.designsystem.formatPhoneNumber
+import java.text.NumberFormat
 
 /** Where a composer can be opened from: fresh, or prefilled by "call again". */
 data class ComposerIntent(
@@ -110,7 +117,7 @@ fun ComposerRoute(
 
 /**
  * The brief. Validation is the daemon's, shown as it arrives; the review step repeats every field
- * that will be dialled, because the number and the goal are the two things a wrong tap costs.
+ * that will be dialed, because the number and the goal are the two things a wrong tap costs.
  */
 @Composable
 fun ComposerScreen(
@@ -183,7 +190,7 @@ fun ComposerScreen(
                         label = when {
                             state.placing -> stringResource(R.string.composer_action_placing)
                             state.validating -> stringResource(R.string.composer_action_checking)
-                            state.valid == false -> stringResource(R.string.composer_action_fix_number)
+                            state.valid == false -> correctionLabel(state)
                             state.valid == true -> stringResource(R.string.composer_action_review)
                             else -> stringResource(R.string.composer_action_finish)
                         },
@@ -208,12 +215,80 @@ fun ComposerScreen(
 /** Above this scale two labels no longer fit side by side in a sheet. */
 private const val STACK_ACTIONS_AT_FONT_SCALE = 1.5f
 
+/**
+ * The action names the field that is actually wrong: editing the number cannot fix an oversized
+ * goal, and a request that never reached the daemon is nobody's field.
+ */
+@Composable
+private fun correctionLabel(state: ComposerUiState): String = stringResource(
+    when {
+        state.destinationIssue != null -> R.string.composer_action_fix_number
+        state.goalIssue != null -> R.string.composer_action_fix_goal
+        else -> R.string.composer_status_check_brief
+    }
+)
+
 /** The border carries the field's edge; onSurfaceVariant keeps it far above the 3:1 floor. */
 @Composable
 internal fun fieldColors(): TextFieldColors = OutlinedTextFieldDefaults.colors(
     unfocusedBorderColor = MaterialTheme.colorScheme.onSurfaceVariant,
     focusedBorderColor = MaterialTheme.colorScheme.primary
 )
+
+/**
+ * A field's failure in the product's words, with the daemon's own sentence behind Details: the
+ * local line says what to change; the raw diagnostic is what makes a bug report actionable.
+ */
+@Composable
+private fun FieldError(issue: ComposerIssue) {
+    val shown = issue.headline.asString()
+    val raw = issue.detail?.takeIf { it.isNotBlank() && it != shown }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(shown)
+        if (raw != null) {
+            var open by rememberSaveable(raw) { mutableStateOf(false) }
+            TextButton(
+                onClick = { open = !open },
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Text(
+                    stringResource(
+                        if (open) {
+                            com.phonxiety.bridge.designsystem.R.string.designsystem_hide_details
+                        } else {
+                            com.phonxiety.bridge.designsystem.R.string.designsystem_show_details
+                        }
+                    )
+                )
+            }
+            if (open) {
+                Text(
+                    text = raw,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+        }
+    }
+}
+
+/** The daemon's field limit stays on screen; going over it turns the count into the error color. */
+@Composable
+private fun GoalLength(used: Int) {
+    val numbers = NumberFormat.getIntegerInstance()
+    Text(
+        text = stringResource(
+            R.string.composer_goal_counter,
+            numbers.format(used),
+            numbers.format(COMPOSER_GOAL_LIMIT)
+        ),
+        color = if (used > COMPOSER_GOAL_LIMIT) {
+            MaterialTheme.colorScheme.error
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        }
+    )
+}
 
 @Composable
 private fun WhoCard(state: ComposerUiState, onDestinationChange: (String) -> Unit) {
@@ -257,8 +332,8 @@ private fun WhoCard(state: ComposerUiState, onDestinationChange: (String) -> Uni
             placeholder = { Text(stringResource(R.string.composer_number_placeholder)) },
             minLines = 1,
             maxLines = 2,
-            isError = state.destinationError != null,
-            supportingText = state.destinationError?.let { message -> { Text(message.asString()) } },
+            isError = state.destinationIssue != null,
+            supportingText = state.destinationIssue?.let { issue -> { FieldError(issue) } },
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Phone,
                 imeAction = ImeAction.Next
@@ -288,8 +363,13 @@ private fun WhyCard(
             placeholder = { Text(stringResource(R.string.composer_goal_placeholder)) },
             minLines = 3,
             maxLines = 6,
-            isError = state.goalError != null,
-            supportingText = state.goalError?.let { message -> { Text(message.asString()) } },
+            isError = state.goalIssue != null,
+            supportingText = {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    state.goalIssue?.let { issue -> FieldError(issue) }
+                    GoalLength(state.goal.length)
+                }
+            },
             colors = fieldColors(),
             shape = MaterialTheme.shapes.medium
         )
@@ -455,12 +535,13 @@ private fun LimitSlider(
 ) {
     val shorter = pluralStringResource(R.plurals.composer_shorter, step, step)
     val longer = pluralStringResource(R.plurals.composer_longer, step, step)
-    Column(modifier = Modifier.fillMaxWidth()) {
+    // At 200 % text a label beside three stepper cells wraps mid-word; the label takes its own line.
+    val stacked = LocalDensity.current.fontScale >= STACK_ACTIONS_AT_FONT_SCALE
+    val stepper: @Composable () -> Unit = {
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.End
         ) {
-            Text(text = label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
             IconButton(
                 onClick = { onChange(value - step) },
                 enabled = value - step >= range.first,
@@ -481,6 +562,20 @@ private fun LimitSlider(
                 modifier = Modifier.semantics { contentDescription = longer }
             ) {
                 Text(text = "+", style = MaterialTheme.typography.titleLarge)
+            }
+        }
+    }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        if (stacked) {
+            Text(text = label, style = MaterialTheme.typography.bodyMedium)
+            stepper()
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(text = label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                stepper()
             }
         }
         Slider(
@@ -504,7 +599,7 @@ private fun ConfirmSheet(
     onDismiss: () -> Unit
 ) {
     val request = state.request
-    val destination = formatDestination(request.destination)
+    val destination = formatPhoneNumber(request.destination)
     val title = stringResource(R.string.composer_confirm_title)
     Box(modifier = Modifier.fillMaxSize()) {
         // A scrim is a touch shortcut, not a control: it stays nameless for TalkBack because the

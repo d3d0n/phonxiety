@@ -43,6 +43,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.phonxiety.bridge.data.bitrateKbps
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
 import com.phonxiety.bridge.designsystem.component.EmptyState
 import com.phonxiety.bridge.designsystem.component.ErrorCard
@@ -58,6 +59,7 @@ import com.phonxiety.bridge.designsystem.component.StatusPill
 import com.phonxiety.bridge.designsystem.component.StatusTone
 import com.phonxiety.bridge.designsystem.formatDuration
 import com.phonxiety.bridge.designsystem.formatElapsedTime
+import com.phonxiety.bridge.designsystem.formatPhoneNumber
 import com.phonxiety.bridge.model.AudioState
 import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.model.CallPhase
@@ -176,7 +178,14 @@ fun DashboardScreen(
                         onOpenDoctor = onOpenDoctor,
                         onOpenUpdates = onOpenUpdates
                     )
-                    LinkCard(state.bridge.link, now, onRunLinkTest)
+                    LinkCard(
+                        link = state.bridge.link,
+                        nowEpochMs = now,
+                        onRunLinkTest = onRunLinkTest,
+                        // The header wears the phase while a call runs, so this card carries the
+                        // measured path instead; the two never show the same pill twice.
+                        showPath = state.bridge.call.isLive()
+                    )
                     AudioCard(state.bridge.audio)
                     DeviceCard(state.bridge.device, state.simOperator)
                     PermissionCard(state.bridge.device.missingPermissions, onOpenSetup)
@@ -311,7 +320,7 @@ private fun CallCard(call: CallState?, nowEpochMs: Long, onOpenLiveCall: (String
             TileRow {
                 StatTile(
                     label = stringResource(R.string.dashboard_destination),
-                    value = call.destinationMasked,
+                    value = formatPhoneNumber(call.destinationMasked),
                     mono = true
                 )
                 StatTile(
@@ -398,10 +407,22 @@ private fun CallState?.isLive(): Boolean = this != null && phase != CallPhase.EN
 private fun CallState?.takeIfLive(): CallState? = takeIf { it.isLive() }
 
 @Composable
-private fun LinkCard(link: LinkState, nowEpochMs: Long, onRunLinkTest: () -> Unit) {
+private fun LinkCard(
+    link: LinkState,
+    nowEpochMs: Long,
+    onRunLinkTest: () -> Unit,
+    showPath: Boolean
+) {
+    val pathPill: (@Composable androidx.compose.foundation.layout.RowScope.() -> Unit)? =
+        if (showPath && link is LinkState.Up) {
+            { LinkPathPill(link.path.toDesignPath()) }
+        } else {
+            null
+        }
     SectionCard(
         title = stringResource(R.string.dashboard_link_title),
-        subtitle = stringResource(R.string.dashboard_link_subtitle)
+        subtitle = stringResource(R.string.dashboard_link_subtitle),
+        status = pathPill
     ) {
         when (link) {
             is LinkState.Up -> {
@@ -494,9 +515,9 @@ private fun AudioCard(audio: AudioState) {
         TileRow {
             StatTile(
                 label = stringResource(R.string.dashboard_bitrate),
-                value = audio.bitrate?.toString() ?: MISSING_VALUE,
+                value = bitrateKbps(audio.bitrate)?.toString() ?: MISSING_VALUE,
                 mono = true,
-                unit = audio.bitrate?.let { UNIT_KILOBITS }
+                unit = if (audio.bitrate != null) UNIT_KILOBITS else null
             )
             StatTile(
                 label = stringResource(R.string.dashboard_frames_out),
@@ -723,7 +744,7 @@ internal fun PathKind.toDesignPath(): LinkPath = when (this) {
 @Composable
 internal fun phaseLabel(phase: CallPhase): String = stringResource(
     when (phase) {
-        CallPhase.DIALING -> R.string.dashboard_phase_dialling
+        CallPhase.DIALING -> R.string.dashboard_phase_dialing
         CallPhase.ACTIVE -> R.string.dashboard_phase_live
         CallPhase.ENDING -> R.string.dashboard_phase_ending
         CallPhase.ENDED -> R.string.dashboard_phase_ended
@@ -890,7 +911,8 @@ object DashboardSamples {
         ),
         audio = AudioState(
             codec = "opus",
-            bitrate = 32,
+            // The engine publishes bits per second; the tile converts to kbit/s.
+            bitrate = 32_000,
             rxLevelDbfs = -21f,
             txLevelDbfs = -18f,
             framesOut = 4_120,

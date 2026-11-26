@@ -10,7 +10,7 @@
     <string name="dashboard_status_connecting">Connecting</string>
     <string name="dashboard_status_offline">Offline</string>
 
-    <string name="dashboard_phase_dialling">Dialling</string>
+    <string name="dashboard_phase_dialing">Dialing</string>
     <string name="dashboard_phase_live">Live</string>
     <string name="dashboard_phase_ending">Ending</string>
     <string name="dashboard_phase_ended">Ended</string>
@@ -56,7 +56,7 @@
     <string name="dashboard_bitrate">Bitrate</string>
     <string name="dashboard_frames_out">Frames out</string>
     <string name="dashboard_playback_drops">Playback drops</string>
-    <string name="dashboard_playback_drops_caption">Playback audio this phone discarded on this call</string>
+    <string name="dashboard_playback_drops_caption">Playback audio this phone discarded on the current audio stream</string>
     <string name="dashboard_microphone">Microphone</string>
     <string name="dashboard_far_end">Far end</string>
 

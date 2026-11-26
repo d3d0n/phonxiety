@@ -24,7 +24,7 @@ import org.junit.Before
 import org.junit.Test
 
 /**
- * The composer's two promises: validation is the daemon's and it is debounced, and what is dialled
+ * The composer's two promises: validation is the daemon's and it is debounced, and what is dialed
  * is exactly what the confirmation listed.
  */
 @OptIn(ExperimentalCoroutinesApi::class)

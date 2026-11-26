@@ -24,11 +24,11 @@
     <string name="live_call_audio_codec">%1$s audio</string>
 
     <string name="live_call_phase_preparing">Preparing</string>
-    <string name="live_call_phase_dialling">Dialling</string>
+    <string name="live_call_phase_dialing">Dialing</string>
     <string name="live_call_phase_live">Live</string>
     <string name="live_call_phase_ending">Ending</string>
     <string name="live_call_phase_ended">Ended</string>
-    <string name="live_call_phase_cancelled">Cancelled</string>
+    <string name="live_call_phase_canceled">Canceled</string>
     <string name="live_call_phase_failed">Failed</string>
     <string name="live_call_phase_unknown">Unknown</string>
     <string name="live_call_phase_reconnecting">Reconnecting</string>
@@ -62,7 +62,7 @@
     <string name="live_call_codec">Codec</string>
     <string name="live_call_bitrate">Bitrate</string>
     <string name="live_call_playback_drops">Playback drops</string>
-    <string name="live_call_playback_drops_caption">Playback audio this phone discarded on this call</string>
+    <string name="live_call_playback_drops_caption">Playback audio this phone discarded on the current audio stream</string>
     <string name="live_call_microphone">Microphone</string>
 
     <string name="live_call_instruction_title">Tell the agent</string>
@@ -74,7 +74,7 @@
 
     <string name="live_call_pause_agent">Pause agent</string>
     <string name="live_call_resume_agent">Resume agent</string>
-    <string name="live_call_summarise">Summarise now</string>
+    <string name="live_call_summarise">Summarize now</string>
     <string name="live_call_summarising">Asking for the summary…</string>
     <string name="live_call_summarising_progress">Asking the daemon for the summary</string>
 
@@ -92,6 +92,10 @@
     <string name="live_call_keypad_subtitle">Digits go to the far end\'s menu through the daemon.</string>
     <string name="live_call_keypad_show">Show keypad</string>
     <string name="live_call_keypad_hide">Hide keypad</string>
+
+    <string name="live_call_controls_title">Audio and controls</string>
+    <string name="live_call_controls_show">Show controls</string>
+    <string name="live_call_controls_hide">Hide controls</string>
 
     <string name="live_call_hang_up">Hang up</string>
     <string name="live_call_hanging_up">Ending the call…</string>
@@ -124,7 +128,7 @@
     <string name="composer_constraints_placeholder">Do not pay a deposit; ask for a window seat if possible</string>
 
     <string name="composer_fields_title">What to bring back</string>
-    <string name="composer_fields_subtitle">Each field becomes a labelled answer in the result</string>
+    <string name="composer_fields_subtitle">Each field becomes a labeled answer in the result</string>
     <string name="composer_fields_empty">No fields yet: the summary will be free text.</string>
     <string name="composer_field_label">Field</string>
     <string name="composer_field_placeholder">Reservation time</string>
@@ -161,11 +165,14 @@
     <string name="composer_error_destination_emergency">Emergency numbers can\'t be called by the agent.</string>
     <string name="composer_error_destination">The daemon can\'t call this number.</string>
     <string name="composer_error_goal">The daemon needs a goal it can act on.</string>
+    <string name="composer_error_goal_too_long">The goal is longer than the 8,000-character limit.</string>
+    <string name="composer_goal_counter">%1$s / %2$s characters</string>
     <string name="composer_error_request">The daemon did not accept the brief.</string>
 
     <string name="composer_action_placing">Placing the call…</string>
     <string name="composer_action_checking">Checking the brief…</string>
     <string name="composer_action_fix_number">Fix the number</string>
+    <string name="composer_action_fix_goal">Fix the goal</string>
     <string name="composer_action_review">Review and place</string>
     <string name="composer_action_finish">Finish the brief</string>
 

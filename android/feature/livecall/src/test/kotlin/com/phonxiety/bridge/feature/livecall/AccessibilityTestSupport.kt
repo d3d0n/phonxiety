@@ -14,7 +14,7 @@ import org.hamcrest.TypeSafeMatcher
 /**
  * WCAG 1.4.3 exempts the text of an inactive control from the contrast minimum, and the
  * Accessibility Test Framework misreads the label of a disabled Button whose text is centred: it
- * samples the container as the text colour. This is the same suppression the designsystem's shared
+ * samples the container as the text color. This is the same suppression the designsystem's shared
  * gate applies, kept in step with it.
  */
 private object DisabledTextContrast : TypeSafeMatcher<AccessibilityViewCheckResult>() {

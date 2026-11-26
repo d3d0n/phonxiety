@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -44,8 +45,8 @@ import org.robolectric.annotation.GraphicsMode
 
 /**
  * The dashboard across the states that must never look alike, on the decision-10 matrix: 411 dp at
- * 100 %, 320 dp at 200 %, light, dark, and one dynamic-colour case (Robolectric's wallpaper palette
- * is fixed, so those colours are deterministic). Every capture runs the accessibility gate first.
+ * 100 %, 320 dp at 200 %, light, dark, and one dynamic-color case (Robolectric's wallpaper palette
+ * is fixed, so those colors are deterministic). Every capture runs the accessibility gate first.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -111,7 +112,7 @@ class DashboardScreenshotTest {
     fun widePhoneInDark() = render("411_dark") { setScreen(dark = true) }
 
     @Test
-    fun widePhoneInDynamicColour() = render("411_dynamic") { setScreen(dynamicColor = true) }
+    fun widePhoneInDynamicColor() = render("411_dynamic") { setScreen(dynamicColor = true) }
 
     @Test
     fun smallScreenAtTwoHundredPercentInLight() = render("320_font200_light") { setScreen(fontScale = 2f, width = 320.dp) }
@@ -193,11 +194,35 @@ class DashboardScreenshotTest {
     }
 
     @Test
-    fun playbackDropsAreMillisecondsOfAudio() {
+    fun playbackDropsAreMillisecondsOfTheCurrentStream() {
         setScreen(bridge = DashboardSamples.relayInCall)
         // 43 200 samples at 48 kHz is 900 ms of discarded playback audio.
         composeRule.onNode(hasText("900", substring = true)).assertExists()
-        composeRule.onNodeWithText("Playback audio this phone discarded on this call").assertExists()
+        composeRule
+            .onNodeWithText("Playback audio this phone discarded on the current audio stream")
+            .assertExists()
+    }
+
+    @Test
+    fun bitrateIsConvertedToKilobits() {
+        // The engine publishes bits per second; the tile reads 32 kbit/s, never 32000 kHz.
+        setScreen(bridge = DashboardSamples.direct)
+        composeRule.onNodeWithText("32\u00A0kbit/s").assertExists()
+        composeRule.onNodeWithText("32000", substring = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun theLinkCardKeepsTheMeasuredPathWhileTheHeaderShowsThePhase() {
+        setScreen(bridge = DashboardSamples.relayInCall)
+        // The header wears the phase, so the path is this card's, once.
+        composeRule.onNodeWithText("Live").assertExists()
+        composeRule.onAllNodesWithText("Relay").assertCountEquals(1)
+    }
+
+    @Test
+    fun anIdleDashboardNamesThePathOnceInTheHeader() {
+        setScreen()
+        composeRule.onAllNodesWithText("Direct").assertCountEquals(1)
     }
 
     @Test
@@ -233,7 +258,7 @@ class DashboardScreenshotTest {
     }
 
     @Test
-    fun unpairingAsksFirstAndCancellingChangesNothing() {
+    fun unpairingAsksFirstAndCancelingChangesNothing() {
         var unpairs = 0
         setScreen(onUnpair = { unpairs++ })
         openUnpairDialog()

@@ -6,10 +6,15 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -18,14 +23,14 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
-import androidx.compose.ui.test.performTouchInput
-import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
+import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.AudioState
 import com.phonxiety.bridge.model.CallMark
 import com.phonxiety.bridge.model.PartialTurn
@@ -42,7 +47,7 @@ import org.robolectric.annotation.GraphicsMode
 
 /**
  * The live call on the decision-10 matrix: 411 dp at 100 %, 320 dp at 200 %, light, dark and one
- * dynamic-colour case, plus the controls after a scroll and the hang-up confirmation. Every capture
+ * dynamic-color case, plus the controls after a scroll and the hang-up confirmation. Every capture
  * runs the accessibility gate first.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -120,13 +125,21 @@ class LiveCallScreenshotTest {
     @Test
     fun theControlsAfterScrolling() = render(
         "controls_lower_411_light",
-        beforeCapture = { scrollControls() }
+        beforeCapture = {
+            openControls()
+            scrollControls()
+        }
     ) { setScreen() }
 
     @Test
     fun theControlsAtTwoHundredPercent() = render(
         "controls_lower_320_font200_dark",
-        beforeCapture = { scrollControls() }
+        beforeCapture = {
+            openControls()
+            // The marks sit under the transcript at 200 %: one lower control, read at that scale.
+            composeRule.onNodeWithText("Follow up").performScrollTo()
+            composeRule.waitForIdle()
+        }
     ) { setScreen(dark = true, fontScale = 2f, width = 320.dp) }
 
     @Test
@@ -136,6 +149,16 @@ class LiveCallScreenshotTest {
 
     @Test
     fun theEndedCallWithItsResult() = render("ended_411_light") { setScreen(state = LiveCallSamples.ended) }
+
+    @Test
+    fun anEndedCallNeverFoldsItsResultAway() {
+        setScreen(state = LiveCallSamples.ended)
+        // The result is why the screen is open once the call is over: no disclosure stands over it.
+        composeRule.onNodeWithText("Audio and controls").assertDoesNotExist()
+        composeRule
+            .onNodeWithText("Table for two confirmed for Thursday at 21:00 under Rasulov.", substring = true)
+            .assertExists()
+    }
 
     @Test
     fun aPausedAgentWithADraft() = render("paused_411_light") {
@@ -156,7 +179,10 @@ class LiveCallScreenshotTest {
     @Test
     fun anAbsentStreamHasNoDropsFootnote() {
         setScreen(state = LiveCallSamples.live.copy(audio = AudioState()))
-        composeRule.onNodeWithText("Playback audio this phone discarded on this call").assertDoesNotExist()
+        openControls()
+        composeRule
+            .onNodeWithText("Playback audio this phone discarded on the current audio stream")
+            .assertDoesNotExist()
         composeRule.onNodeWithText("Playback drops").assertExists()
     }
 
@@ -183,6 +209,7 @@ class LiveCallScreenshotTest {
     @Test
     fun theInstructionFieldExplainsWhySendIsOff() {
         setScreen(state = LiveCallSamples.live.copy(instruction = ""))
+        openControls()
         composeRule.onNodeWithText("Type an instruction, then send.").assertExists()
     }
 
@@ -205,19 +232,95 @@ class LiveCallScreenshotTest {
     fun sendingTheInstructionCallsTheAgent() {
         var sends = 0
         setScreen(state = LiveCallSamples.live.copy(instruction = "ask for Thursday"), onSendInstruction = { sends++ })
-        composeRule.onNodeWithContentDescription("Send instruction").performClick()
+        openControls()
+        composeRule.onNodeWithContentDescription("Send instruction").performScrollTo().performClick()
         assertEquals(1, sends)
     }
 
-    private fun scrollControls() {
-        // The bottom half holds the scrolling control column on a phone.
-        composeRule.onNodeWithTag(SCREEN_TAG).performTouchInput {
-            swipeUp(startY = height * 0.9f, endY = height * 0.55f)
-        }
-        composeRule.onNodeWithTag(SCREEN_TAG).performTouchInput {
-            swipeUp(startY = height * 0.9f, endY = height * 0.55f)
-        }
+    /**
+     * The compact layout's own promise: with the secondary controls folded away, a real turn stays on screen at
+     * 320 dp and 200 % text, and the controls it hides are one row away.
+     */
+    @Test
+    fun theTranscriptKeepsAReadableViewportAtTwoHundredPercent() {
+        setScreen(fontScale = 2f, width = 320.dp)
+        composeRule.onNodeWithText("Let me check the…", substring = true).assertIsDisplayed()
+        // Folded, the audio card is not composed at all.
+        composeRule.onNodeWithText("Playback drops").assertDoesNotExist()
+        composeRule.onNodeWithText("Audio and controls").assertIsDisplayed()
+        openControls()
+        composeRule.onNodeWithText("Playback drops").assertExists()
+        composeRule.onNodeWithText("Audio and controls").assertIsDisplayed()
+    }
+
+    @Test
+    fun theControlsDisclosureSaysWhichWayItGoes() {
+        setScreen()
+        composeRule.onNodeWithText("Audio and controls").assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Show controls")
+        )
+        openControls()
+        composeRule.onNodeWithText("Audio and controls").assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Hide controls")
+        )
+    }
+
+    private fun openControls() {
+        composeRule.onNodeWithText("Audio and controls").performClick()
         composeRule.waitForIdle()
+    }
+
+    /** The controls' own scroll container: reach its last card, not a screen-height swipe. */
+    private fun scrollControls() {
+        composeRule.onNodeWithText("Show keypad").performScrollTo()
+        composeRule.waitForIdle()
+    }
+
+    /**
+     * A hang-up the daemon refuses leaves the call running: its failure may never be folded away
+     * behind the same disclosure that holds the retry.
+     */
+    @Test
+    fun aFailedHangUpStaysVisibleWhileControlsAreFolded() {
+        val state = mutableStateOf(LiveCallSamples.live)
+        composeRule.setContent {
+            PhonxietyTheme(dynamicColor = false) {
+                Box(
+                    modifier = Modifier
+                        .testTag(SCREEN_TAG)
+                        .width(411.dp)
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.background)
+                ) {
+                    LiveCallScreen(
+                        state = state.value,
+                        onBack = {},
+                        onInstructionChange = {},
+                        onSendInstruction = {},
+                        onTogglePause = {},
+                        onSummarize = {},
+                        onDtmf = {},
+                        onMark = {},
+                        onHangUp = {
+                            state.value = state.value.copy(
+                                hangingUp = false,
+                                error = UiText.Literal("the bridge service is not running"),
+                                errorCode = "link_down"
+                            )
+                        },
+                        onReload = {},
+                        onOpenDetail = {},
+                        nowEpochMs = NOW
+                    )
+                }
+            }
+        }
+        composeRule.onNodeWithText("Hang up").performSemanticsAction(SemanticsActions.OnClick)
+        composeRule.onAllNodesWithText("Hang up").onLast().performSemanticsAction(SemanticsActions.OnClick)
+        composeRule.waitForIdle()
+        // Folded controls by default, and the failure is still on screen.
+        composeRule.onNodeWithText("the bridge service is not running").assertIsDisplayed()
+        composeRule.onNodeWithText("Audio and controls").assertIsDisplayed()
     }
 
     private companion object {
