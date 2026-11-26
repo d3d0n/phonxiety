@@ -5,6 +5,7 @@ import contextlib
 import json
 import tempfile
 import unittest
+import warnings
 import wave
 from array import array
 from pathlib import Path
@@ -20,7 +21,7 @@ from phonxiety.controller import (
     CallController,
 )
 from phonxiety.device import DeviceError
-from phonxiety.models import CallRequest, CallState
+from phonxiety.models import CallLimits, CallRequest, CallState
 from phonxiety.store import CallStore
 
 
@@ -765,6 +766,12 @@ class DialRefusalCase(_ControllerCase):
     def _dial_attempts(self) -> int:
         return sum(1 for command, _, _ in self.device.commands if command == "dial")
 
+    @staticmethod
+    def _ring_in(seconds: float) -> CallRequest:
+        """A ring deadline below the model's minimum; the controller rings out the limit it is given."""
+        limits = CallLimits.model_construct(ring_timeout_s=seconds, max_duration_s=600)
+        return request().model_copy(update={"limits": limits})
+
 
 class DialRefusalTests(DialRefusalCase):
     """A phone that refuses a dial before placing it must not cost the user the call."""
@@ -814,6 +821,75 @@ class DialRefusalTests(DialRefusalCase):
         result = await self.controller.wait_call_result(call["call_id"], wait_s=2)
         self.assertEqual((result["state"], result["call_outcome"]), ("unknown", "unknown"))
         self.assertEqual(self._dial_attempts(), 1)
+
+    async def test_a_retry_that_times_out_stays_unknown_and_is_reconciled(self) -> None:
+        # The retry went out and its answer never came back: the phone may be ringing
+        # someone, so the call is unknown and reconciled, never failed with "not started".
+        base = self.device.command
+        dials = {"count": 0}
+        reconciled = asyncio.Event()
+
+        async def command(name: str, call_id: str | None = None, **payload: Any) -> dict[str, Any]:
+            if name == "dial":
+                dials["count"] += 1
+                self.device.commands.append((name, call_id, payload))
+                if dials["count"] == 1:
+                    raise DeviceError("link_down")  # refused, placing nothing; the link stays up
+                raise DeviceError("device_command_timeout: dial")
+            if name == "hangup" and not reconciled.is_set():
+                self.device.commands.append((name, call_id, payload))
+                reconciled.set()  # the phone cannot confirm yet: the outcome stays unknown
+                raise DeviceError("link_down")
+            return await base(name, call_id, **payload)
+
+        self.device.command = command
+        call = await self.controller.place_call(request())
+        result = await self.controller.wait_call_result(call["call_id"], wait_s=2)
+        self.assertEqual(
+            (result["state"], result["call_outcome"], result["error"]),
+            ("unknown", "unknown", "device_command_timeout: dial"),
+        )
+        await asyncio.wait_for(reconciled.wait(), 2)  # the daemon asked the phone to drop the line
+        self.assertEqual(dials["count"], 2)
+
+    async def test_a_hangup_during_the_reconnect_wait_prevents_the_redial(self) -> None:
+        self._refuse_dials(1)
+        call = await self.controller.place_call(request())
+        await asyncio.wait_for(self.device.arrived_waiting.wait(), 1)  # the daemon waits for the link
+        await self.controller.hangup_call(call["call_id"])
+        self.device.arrived.set()  # the phone comes back after the user cancelled
+        result = await self.controller.wait_call_result(call["call_id"], wait_s=2)
+        self.assertEqual(self._dial_attempts(), 1)  # the cancelled call was never dialed again
+        self.assertEqual(result["state"], "ended")
+        self.assertNotEqual(result["call_outcome"], "answered")
+
+
+class DialRingDeadlineTests(DialRefusalCase):
+    """The ring deadline of a refused dial must not end the call while the retry is pending."""
+
+    controller_options = {"dial_retry_wait": 1.5}
+
+    async def test_the_ring_deadline_does_not_end_a_recovering_call(self) -> None:
+        with warnings.catch_warnings():
+            # The deadline is deliberately below the model minimum, which validation would
+            # never store: the controller rings out whatever limit the call carries.
+            warnings.simplefilter("ignore", UserWarning)
+            await self._recovering_call_outlives_its_first_ring_deadline()
+
+    async def _recovering_call_outlives_its_first_ring_deadline(self) -> None:
+        self._refuse_dials(1)
+        call = await self.controller.place_call(self._ring_in(0.2))
+        await asyncio.wait_for(self.device.arrived_waiting.wait(), 1)
+        await asyncio.sleep(0.4)  # the first deadline passed while the daemon still waits for the link
+        self.assertEqual((self.store.state(call["call_id"]), self._dial_attempts()), (CallState.DIALING, 1))
+
+        self.device.arrived.set()
+        await asyncio.wait_for(self.device.dialled.wait(), 2)  # the retry was placed after the wait
+        self.assertEqual(self._dial_attempts(), 2)
+
+        # The retry carries its own deadline: left unanswered, the line is rung out again.
+        result = await self.controller.wait_call_result(call["call_id"], wait_s=2)
+        self.assertEqual((result["state"], result["call_outcome"]), ("ended", "no_answer"))
 
 
 class DialRetryBoundTests(DialRefusalCase):

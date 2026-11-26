@@ -401,7 +401,9 @@ class CallController:
         nothing was placed is retried, and only once.  An ambiguous end of the
         link — a command timeout, or the link dropping after the command went
         out — is never retried: the phone may already be ringing someone, and a
-        second dial would call twice.
+        second dial would call twice.  The ring deadline of the refused dial is
+        held through the wait and restarted with the retry, and a call cancelled
+        during the wait is never dialed again.
         """
         # A link drop before the phone accepts this dial is part of the dial, not
         # the call's end; the device event must not finalize the call under it.
@@ -413,14 +415,50 @@ class CallController:
                 if str(exc) not in DIAL_REFUSALS or call.finalizing or self._closing:
                     raise
                 log.info("call %s: phone refused the dial (%s); waiting for its link", call.call_id, exc)
+                # A refused dial placed nothing, so its ring deadline is held here; the
+                # retry starts a fresh one when it goes out.
+                self._cancel(call.ring_task)
+                call.ring_task = None
                 try:
                     await self._await_dial_link(call)
-                    await self.device.command("dial", call.call_id, **payload)
-                except DeviceError as retry_exc:
-                    raise _DialRefused(str(retry_exc)) from retry_exc
+                except DeviceError as wait_exc:
+                    # The wait sent no second command, so the refusal still proves nothing was placed.
+                    raise _DialRefused(str(wait_exc)) from wait_exc
+                if not await self._redial(call, payload):
+                    return
             log.info("call %s: dial accepted by the phone", call.call_id)
         finally:
             call.awaiting_link = False
+
+    async def _redial(self, call: _Call, payload: dict[str, Any]) -> bool:
+        """Send the one retry a refusal earned, unless the call stopped being dialed meanwhile.
+
+        The check and the command are serialized with `hangup_call` through the
+        controller lock, so a hangup during the wait is never overtaken: either the call
+        is already ending and nothing is placed, or the hangup ends the line the retry
+        just asked the phone to open.  False leaves the call to the cancellation that
+        owns it.
+        """
+        async with self._lock:
+            state = self.store.state(call.call_id)
+            if (
+                self._closing
+                or not self._owned(call)
+                or call.finalizing
+                or state not in (CallState.DIALING, CallState.PREPARING)
+            ):
+                log.info("call %s: retry skipped, the call is %s", call.call_id, state.value)
+                return False
+            call.ring_task = self._spawn(self._ring_timeout(call), f"ring:{call.call_id}")
+            try:
+                await self.device.command("dial", call.call_id, **payload)
+            except DeviceError as exc:
+                # This command went out. A refusal code proves the phone placed nothing;
+                # anything else may have rung the far end, so the outcome stays unknown.
+                if str(exc) in DIAL_REFUSALS:
+                    raise _DialRefused(str(exc)) from exc
+                raise
+        return True
 
     async def _await_dial_link(self, call: _Call) -> None:
         """Wait, bounded, for the link a refused dial needs, then let the caller retry once."""
