@@ -16,6 +16,24 @@ enum class RuntimePermission(val androidName: String) {
 /** What the wizard is trying to do while it is in [WizardState.Installing]. */
 enum class InstallOperation { INSTALL, UPDATE, ROLLBACK, PREPARE_METAMODULE }
 
+/** Why a probe could not answer; the screen turns each reason into its own sentence. */
+enum class IndeterminateReason {
+    /** `su` did not answer inside the shell timeout. */
+    SHELL_TIMED_OUT,
+
+    /** Root works, but no supported root manager is installed or enabled. */
+    NO_PROVIDER,
+
+    /** The module folder under /data/adb exists but could not be read. */
+    MODULE_UNREADABLE,
+
+    /** The overlay capability probe did not answer, so the metamodule step is unknown. */
+    OVERLAY_PROBE_FAILED,
+
+    /** Reading the phone threw before any probe answered. */
+    PROBE_FAILED
+}
+
 /** Why the wizard stopped on Doctor; each reason names the fix. */
 enum class DoctorReason {
     VERIFY_FAILED,
@@ -192,8 +210,15 @@ sealed interface WizardState {
         val detail: String? = null
     ) : WizardState
 
-    /** A probe could not answer; the captured output is shown instead of a guess. */
-    data class Indeterminate(val message: String, val output: String? = null) : WizardState
+    /**
+     * A probe could not answer. The reason is structured so the screen can say what happened in
+     * plain words; [detail] and [output] are the device's own diagnostic, shown only under Details.
+     */
+    data class Indeterminate(
+        val reason: IndeterminateReason,
+        val detail: String? = null,
+        val output: String? = null
+    ) : WizardState
 
     /** More than one root provider is present: installing would be a guess, so it is refused. */
     data class Conflict(val providers: List<DetectedProvider>) : WizardState
@@ -302,8 +327,8 @@ object ModuleController {
 
             detection.su == SuStatus.TIMED_OUT -> Transition(
                 WizardState.Indeterminate(
-                    "su did not answer within the ${RootShell.DEFAULT_TIMEOUT_MS / 1000} s budget",
-                    tail(detection.suOutput)
+                    IndeterminateReason.SHELL_TIMED_OUT,
+                    output = tail(detection.suOutput)
                 )
             )
 
@@ -315,8 +340,8 @@ object ModuleController {
 
             provider == null -> Transition(
                 WizardState.Indeterminate(
-                    "root is granted but no supported root provider was found",
-                    tail(detection.suOutput)
+                    IndeterminateReason.NO_PROVIDER,
+                    output = tail(detection.suOutput)
                 )
             )
 
@@ -346,7 +371,7 @@ object ModuleController {
 
     private fun route(provider: DetectedProvider, snapshot: ProbeSnapshot): Transition = when (val module = snapshot.module) {
         ModuleState.Unknown -> Transition(
-            WizardState.Indeterminate("the module directory under /data/adb could not be read")
+            WizardState.Indeterminate(IndeterminateReason.MODULE_UNREADABLE)
         )
 
         ModuleState.Absent -> when {
@@ -355,9 +380,8 @@ object ModuleController {
             // answer may be different on the next probe, so this state only asks for a recheck.
             snapshot.overlayProbeError != null -> Transition(
                 WizardState.Indeterminate(
-                    "the overlay capability probe did not answer, so the wizard cannot tell whether a " +
-                        "metamodule has to be installed first",
-                    tail(snapshot.overlayProbeError)
+                    IndeterminateReason.OVERLAY_PROBE_FAILED,
+                    output = tail(snapshot.overlayProbeError)
                 )
             )
 

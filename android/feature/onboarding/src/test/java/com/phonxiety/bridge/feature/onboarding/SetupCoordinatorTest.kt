@@ -315,21 +315,21 @@ class SetupCoordinatorTest {
     }
 
     @Test
-    fun aCancelledRequestReportsNothingAndLetsTheNextTapRun() = runTest {
+    fun aCanceledRequestReportsNothingAndLetsTheNextTapRun() = runTest {
         backend.detection = RootDetection(SuStatus.GRANTED, listOf(MAGISK))
         backend.module = ModuleState.Absent
         coordinator.start()
         coordinator.dispatch(WizardEvent.InstallRequested)
 
-        val cancelled = launch { coordinator.requestReboot() }
+        val canceled = launch { coordinator.requestReboot() }
         runCurrent()
-        cancelled.cancel()
-        cancelled.join()
+        canceled.cancel()
+        canceled.join()
 
         advanceTimeBy(20_001)
         runCurrent()
         assertNull(
-            "a cancelled request has no window left to report on",
+            "a canceled request has no window left to report on",
             (coordinator.wizard.value as WizardState.RebootPending).failure
         )
 

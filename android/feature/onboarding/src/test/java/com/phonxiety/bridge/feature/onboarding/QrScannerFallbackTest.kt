@@ -134,10 +134,10 @@ class QrScannerFallbackTest {
     }
 
     @Test
-    fun aCancelledScanIsNotAFailure() = runTest {
-        val scanner = FakeScanner(listOf(PlayScan.Cancelled))
+    fun aCanceledScanIsNotAFailure() = runTest {
+        val scanner = FakeScanner(listOf(PlayScan.Canceled))
 
-        assertEquals(PlayScan.Cancelled, scanWithPlayServices(context) { scanner })
+        assertEquals(PlayScan.Canceled, scanWithPlayServices(context) { scanner })
         assertEquals(0, scanner.installs)
     }
 

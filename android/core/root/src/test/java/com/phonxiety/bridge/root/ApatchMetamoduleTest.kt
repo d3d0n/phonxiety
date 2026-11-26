@@ -108,9 +108,10 @@ class ApatchMetamoduleTest {
 
             val state = wizardState(capabilities)
             assertTrue("$label must block the install, got $state", state is WizardState.Indeterminate)
-            assertTrue(
+            assertEquals(
                 "$label must explain itself",
-                (state as WizardState.Indeterminate).message.contains("did not answer")
+                IndeterminateReason.OVERLAY_PROBE_FAILED,
+                (state as WizardState.Indeterminate).reason
             )
 
             // Retryable: Recheck runs the probe again instead of leaving the wizard stuck.

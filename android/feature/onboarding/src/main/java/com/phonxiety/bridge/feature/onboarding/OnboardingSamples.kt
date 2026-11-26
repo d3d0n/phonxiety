@@ -2,6 +2,7 @@ package com.phonxiety.bridge.feature.onboarding
 
 import com.phonxiety.bridge.root.DetectedProvider
 import com.phonxiety.bridge.root.DoctorReason
+import com.phonxiety.bridge.root.IndeterminateReason
 import com.phonxiety.bridge.root.InstallOperation
 import com.phonxiety.bridge.root.ModuleState
 import com.phonxiety.bridge.root.ProviderResult
@@ -82,6 +83,20 @@ object OnboardingSamples {
             module = ModuleState.Absent,
             result = installFailure
         ),
+        "install_failed_metamodule" to WizardState.InstallFailed(
+            provider = kernelSu,
+            operation = InstallOperation.PREPARE_METAMODULE,
+            module = ModuleState.Absent,
+            result = ProviderResult.Failure(
+                output = "meta-overlayfs: HTTP 404 from the release URL",
+                exitCode = 3
+            )
+        ),
+        "ready_to_update" to WizardState.ReadyToInstall(
+            provider = magisk,
+            module = ModuleState.Enabled("0.2.0", 2),
+            update = true
+        ),
         "reboot_pending" to WizardState.RebootPending(magisk, RebootReason.MODULE_INSTALL),
         "reboot_failed" to WizardState.RebootPending(
             provider = magisk,
@@ -115,7 +130,7 @@ object OnboardingSamples {
             module = ModuleState.Enabled("0.3.0", 3)
         ),
         "indeterminate" to WizardState.Indeterminate(
-            message = "su did not answer within the 20 s budget",
+            reason = IndeterminateReason.SHELL_TIMED_OUT,
             output = "su: timeout after 20000 ms"
         ),
         "conflict" to WizardState.Conflict(listOf(magisk, kernelSu))

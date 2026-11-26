@@ -44,7 +44,7 @@ class RootDetectedUiTest {
     fun aPendingKernelSuGrantNamesItsOwnSuperuserSteps() {
         show(OnboardingUiState(wizard = WizardState.RootDenied(OnboardingSamples.kernelSuDenied)))
 
-        composeRule.onNodeWithText("KernelSU: Open KernelSU → Superuser", substring = true).assertExists()
+        composeRule.onNodeWithText("KernelSU: Open KernelSU, tap Superuser", substring = true).assertExists()
         composeRule.onNodeWithText("force-close the manager", substring = true).assertExists()
     }
 
@@ -52,7 +52,7 @@ class RootDetectedUiTest {
     fun aPendingApatchGrantNamesItsOwnSuperuserSteps() {
         show(OnboardingUiState(wizard = WizardState.RootDenied(OnboardingSamples.apatchDenied)))
 
-        composeRule.onNodeWithText("APatch: Open APatch → Superuser", substring = true).assertExists()
+        composeRule.onNodeWithText("APatch: Open APatch, tap Superuser", substring = true).assertExists()
     }
 
     @Test
@@ -86,8 +86,8 @@ class RootDetectedUiTest {
 
         show(state)
 
-        composeRule
-            .onNodeWithText("Magisk leftovers, inactive: /data/adb/magisk, Magisk app")
-            .assertExists()
+        composeRule.onNodeWithText("Leftovers from Magisk").assertExists()
+        composeRule.onNodeWithText("/data/adb/magisk").assertExists()
+        composeRule.onNodeWithText("The Magisk app is installed.").assertExists()
     }
 }

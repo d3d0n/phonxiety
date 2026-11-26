@@ -5,7 +5,9 @@ import com.phonxiety.bridge.data.ApiResult
 import com.phonxiety.bridge.data.AppApi
 import com.phonxiety.bridge.data.PairResult
 import com.phonxiety.bridge.data.PairingRepository
+import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.LinkState
+import com.phonxiety.bridge.root.IndeterminateReason
 import com.phonxiety.bridge.root.ModuleController
 import com.phonxiety.bridge.root.ModuleState
 import com.phonxiety.bridge.root.Overlay
@@ -46,7 +48,7 @@ sealed interface SetupHostRequest {
 
     data class PairingRejected(val reason: String) : SetupHostRequest
 
-    data class Message(val text: String) : SetupHostRequest
+    data class Message(val text: UiText) : SetupHostRequest
 
     /** The wizard is Ready and the service has been started. */
     data object Finished : SetupHostRequest
@@ -149,7 +151,7 @@ class SetupCoordinator(
                     }
                 when (result) {
                     PairResult.Paired -> {
-                        host(SetupHostRequest.Message("Paired with the computer"))
+                        host(SetupHostRequest.Message(UiText.Res(R.string.onboarding_pair_paired_message)))
                         if (_wizard.value is WizardState.NeedsPairing) {
                             handle(WizardEvent.PairingCompleted)
                         }
@@ -190,7 +192,7 @@ class SetupCoordinator(
                 handle(WizardEvent.RebootNotConfirmed)
             }
         } finally {
-            // Cancelled before the window elapsed: the request is over and reports nothing, but the
+            // Canceled before the window elapsed: the request is over and reports nothing, but the
             // next tap must be able to start a fresh attempt.
             withContext(NonCancellable) {
                 mutex.withLock { if (attempt == rebootAttempt) rebootInFlight = false }
@@ -252,7 +254,7 @@ class SetupCoordinator(
 
             WizardEffect.StartPairing -> {
                 // One automatic scanner per visit to "Unpaired". A probe round trip, a resume or a
-                // recomposition must not reopen it (and reopening after a Cancelled scan would be
+                // recomposition must not reopen it (and reopening after a Canceled scan would be
                 // endless); the explicit Scan button bypasses this and always works. A request that
                 // arrives after the wizard advanced is dropped instead of covering the next step.
                 if (_wizard.value is WizardState.NeedsPairing && !autoPairingLaunched) {
@@ -272,7 +274,11 @@ class SetupCoordinator(
             is WizardEffect.Reboot -> {
                 val provider = detection?.provider
                 if (provider == null) {
-                    host(SetupHostRequest.Message("no root provider was found; reboot from the power menu"))
+                    host(
+                        SetupHostRequest.Message(
+                            UiText.Res(R.string.onboarding_reboot_no_manager_message)
+                        )
+                    )
                 } else {
                     val result = runCatching { backend.reboot(provider, effect.reason) }
                         .getOrElse { ProviderResult.Failure(it.message ?: "the reboot request threw", 1) }
@@ -288,7 +294,8 @@ class SetupCoordinator(
             gatherSnapshot()
         } catch (error: Throwable) {
             _wizard.value = WizardState.Indeterminate(
-                message = error.message ?: "the device could not be read",
+                reason = IndeterminateReason.PROBE_FAILED,
+                detail = error.message,
                 output = error.stackTraceToString().lineSequence().take(20).joinToString("\n")
             )
             return
@@ -394,12 +401,15 @@ class SetupCoordinator(
         handle(event)
     }
 
+    /**
+     * The measurement, in the units a person reads: a median and a loss percentage. A missing
+     * figure stays "—" instead of a fabricated zero, and the units are joined by a no-break space.
+     */
     private fun describeLinkTest(record: JsonObject?): String {
         if (record == null) return "the daemon returned no link-test record"
-        val verdict = record["verdict"]?.jsonPrimitive?.contentOrNull ?: "unknown"
         val p50 = record["p50"]?.jsonPrimitive?.contentOrNull ?: "—"
         val loss = record["loss"]?.jsonPrimitive?.contentOrNull ?: "—"
-        return "verdict $verdict · p50 $p50 ms · loss $loss"
+        return "$p50\u00A0ms median · $loss% loss"
     }
 
     private companion object {
