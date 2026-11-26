@@ -1,0 +1,16 @@
+Capabilities follow a permission change without a manual relink, Magisk 31.1, Pixel 6a (Android 17), release-signed app 0603a4c, daemon 547ea37, 2026-11-26
+
+What the daemon reported (`phonxiety status --json`, sampled every second; /tmp/phx_caps_check.py):
+
+     0.2 s  before: connected, calling ready (call_control and framework_audio)
+     0.3 s  adb: pm revoke com.phonxiety.bridge android.permission.RECORD_AUDIO
+            (Android stops the app's process when a runtime permission is revoked)
+     4.0 s  connected again on a new link, calling unavailable: framework_audio false
+    19.4 s  adb: pm grant com.phonxiety.bridge android.permission.RECORD_AUDIO
+            (a grant does not stop the process; the old link stays up)
+    32.7 s  the app dropped its link itself: its 10 s capability watch saw the change
+    33.9 s  connected on a new link, calling ready, framework_audio true
+
+=> calling ready again 14.5 s after the grant, with nobody touching the phone or the computer.
+   Before `5bef5f1` the daemon kept "calling unavailable" until the link was re-established for
+   some other reason, because capabilities travelled only in the first hello.
