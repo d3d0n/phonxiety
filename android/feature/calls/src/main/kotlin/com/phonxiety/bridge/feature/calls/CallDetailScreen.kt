@@ -48,6 +48,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.phonxiety.bridge.data.Speaker
+import com.phonxiety.bridge.data.speakerOf
 import com.phonxiety.bridge.designsystem.component.EmptyState
 import com.phonxiety.bridge.designsystem.component.ErrorCard
 import com.phonxiety.bridge.designsystem.component.KeyValueRow
@@ -462,10 +464,15 @@ private fun TranscriptCard(state: CallDetailUiState, onLoadMore: () -> Unit) {
 
 @Composable
 private fun DetailTurn(turn: TranscriptTurn) {
-    val agent = turn.role == "agent"
+    val speaker = speakerOf(turn.role)
+    val agent = speaker == Speaker.AGENT
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
-            text = if (agent) "Agent" else "Far end",
+            text = when (speaker) {
+                Speaker.AGENT -> "Agent"
+                Speaker.FAR_END -> "Far end"
+                Speaker.OTHER -> turn.role ?: "—"
+            },
             style = MaterialTheme.typography.labelSmall,
             color = if (agent) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant
         )

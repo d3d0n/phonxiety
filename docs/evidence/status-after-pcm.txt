@@ -1,0 +1,8 @@
+daemon    ready
+phone     connected  bluejay via iroh:ae2cfd3d7d (direct [2001:db8::1]:52396, 63 ms)
+calling   ready  pcm audio
+path      iroh  direct [2001:db8::1]:52396, 63 ms
+iroh      direct
+call      none
+endpoint  864b90b7…cc62
+address   port 18763  certificate 3e7303fee927e3b3
