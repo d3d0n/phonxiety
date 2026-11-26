@@ -77,6 +77,106 @@ class EngineStateStoreTest {
     }
 
     @Test
+    fun theConnectTimeIsRecordedOnceAtTheAnswer() {
+        val store = EngineStateStore()
+        store.callStarted("c1", "+******1234", 2_000)
+        assertNull("dialing has no connect time yet", store.state.value.call?.connectedAtEpochMs)
+
+        store.callPhase(CallPhase.DIALING)
+        assertNull(store.state.value.call?.connectedAtEpochMs)
+
+        // Telecom's own connect time is the base the system's call chip uses.
+        store.callPhase(CallPhase.ACTIVE, connectTimeMillis = 1_500)
+        assertEquals(1_500L, store.state.value.call?.connectedAtEpochMs)
+
+        // A later ACTIVE with another Telecom value keeps the first stamp for this call.
+        store.callPhase(CallPhase.ACTIVE, connectTimeMillis = 9_000)
+        assertEquals(1_500L, store.state.value.call?.connectedAtEpochMs)
+
+        store.callPhase(CallPhase.ENDING)
+        assertEquals("the stamp survives the phases after the answer", 1_500L, store.state.value.call?.connectedAtEpochMs)
+    }
+
+    @Test
+    fun theConnectTimeFallsBackToTheEnginesClock() {
+        val store = EngineStateStore()
+        store.callStarted("c1", "+******1234", 2_000)
+
+        val before = System.currentTimeMillis()
+        store.callPhase(CallPhase.ACTIVE)
+        val after = System.currentTimeMillis()
+
+        val stamp = store.state.value.call?.connectedAtEpochMs
+        assertTrue("the engine's clock stamps the answer", stamp != null && stamp in before..after)
+    }
+
+    @Test
+    fun aMissingTelecomConnectTimeFallsBackToTheEnginesClock() {
+        // Telecom reports 0 before the line is up, and the engine may not see a details value.
+        for (telecom in listOf<Long?>(null, 0L, -1L)) {
+            val store = EngineStateStore()
+            store.callStarted("c1", "+******1234", 2_000)
+            val before = System.currentTimeMillis()
+            store.callPhase(CallPhase.ACTIVE, connectTimeMillis = telecom)
+            val after = System.currentTimeMillis()
+            val stamp = store.state.value.call?.connectedAtEpochMs
+            assertTrue("$telecom falls back to the clock", stamp != null && stamp in before..after)
+        }
+    }
+
+    @Test
+    fun aDuplicateDialKeepsTheCallsAnswerAndPlacement() {
+        val store = EngineStateStore()
+        store.callStarted("c1", "+******1234", 2_000)
+        store.callPhase(CallPhase.ACTIVE, connectTimeMillis = 1_500)
+
+        // The host asks for the same call again: the store shows it, and this is not a new dial.
+        store.callStarted("c1", "+******1234", 9_000)
+        val replayed = store.state.value.call!!
+        assertEquals("the same call never steps back to dialing", CallPhase.ACTIVE, replayed.phase)
+        assertEquals("the ring is not restarted", 2_000L, replayed.startedAtEpochMs)
+        assertEquals("the answer keeps its stamp", 1_500L, replayed.connectedAtEpochMs)
+
+        store.callPhaseReplayed(CallPhase.ACTIVE)
+        assertEquals("the replay adds no answer of its own", 1_500L, store.state.value.call?.connectedAtEpochMs)
+
+        // A different call is a different dial: everything starts over.
+        store.callStarted("c2", "+******5678", 9_000)
+        assertEquals(9_000L, store.state.value.call?.startedAtEpochMs)
+        assertNull(store.state.value.call?.connectedAtEpochMs)
+    }
+
+    @Test
+    fun aRecoveredCallNeverStampsAnAnswerTheEngineDidNotSee() {
+        val store = EngineStateStore()
+        // A restart replays the intent it owns: the placement is the durable one, the phase comes
+        // from the ledger, and the engine's clock at recovery is not an answer.
+        store.callStarted("c1", "+******1234", 2_000)
+        store.callPhaseReplayed(CallPhase.ACTIVE)
+
+        assertEquals(CallPhase.ACTIVE, store.state.value.call?.phase)
+        assertNull("recovery must not invent a connect time", store.state.value.call?.connectedAtEpochMs)
+
+        // Telecom surfaces the live call and its own connect time is the first real one.
+        store.callPhase(CallPhase.ACTIVE, connectTimeMillis = 1_500)
+        assertEquals(1_500L, store.state.value.call?.connectedAtEpochMs)
+    }
+
+    @Test
+    fun aRecoveredCallTakesTelecomsConnectTimeAndKeepsIt() {
+        val store = EngineStateStore()
+        store.callStarted("c1", "+******1234", 2_000)
+        // The live call was already there at recovery, so Telecom's timestamp is available.
+        store.callPhaseReplayed(CallPhase.ACTIVE, connectTimeMillis = 1_500)
+        assertEquals(1_500L, store.state.value.call?.connectedAtEpochMs)
+
+        // Adoption repeats the phase with the same answer: the first stamp stands.
+        store.callPhaseReplayed(CallPhase.ACTIVE, connectTimeMillis = 1_500)
+        store.callPhase(CallPhase.ACTIVE, connectTimeMillis = 9_000)
+        assertEquals(1_500L, store.state.value.call?.connectedAtEpochMs)
+    }
+
+    @Test
     fun endedCallStaysVisibleUntilTheNextCall() = runTest {
         val store = EngineStateStore()
         store.state.test {

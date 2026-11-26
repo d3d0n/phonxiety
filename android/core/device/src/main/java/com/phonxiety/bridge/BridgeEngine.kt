@@ -297,10 +297,12 @@ class BridgeEngine(
     // exactly the long-lived case the detector cannot express.
     @SuppressLint("MissingPermission", "WakelockTimeout")
     fun start() {
+        // Read before the lock: Telecom's call list is an IPC, and the recovery below runs under it.
+        val liveCalls = BridgeRuntime.currentCalls()
         synchronized(lock) {
             if (running) return
             running = true
-            restoreLedgerLocked()
+            restoreLedgerLocked(liveCalls)
         }
         stateStore.linkConnecting(linkKind)
         runCatching { wakeLock?.acquire() }
@@ -1009,8 +1011,10 @@ class BridgeEngine(
         }
         val duplicate = duplicateState
         if (duplicate != null) {
+            // The same call asked for twice is not a new dial: the store keeps the placement and the
+            // answer it recorded, and the replay never stamps one of its own.
             stateStore.callStarted(callId, maskDestination(destination), System.currentTimeMillis())
-            stateStore.callPhase(callPhaseOf(duplicate))
+            stateStore.callPhaseReplayed(callPhaseOf(duplicate))
             if (duplicate == "failed") {
                 replyError(id, "dial_failed_previous")
             } else {
@@ -1949,7 +1953,7 @@ class BridgeEngine(
     // Durable recovery
     // ------------------------------------------------------------------
 
-    private fun restoreLedgerLocked() {
+    private fun restoreLedgerLocked(liveCalls: List<Call>) {
         val snapshot = ledger.current()
         recent.clear()
         for (entry in snapshot.recent) {
@@ -2019,8 +2023,20 @@ class BridgeEngine(
         restored.reportedState = pending.state
         owned = restored
         BridgeLog.i(TAG, "recovered bridge call intent from durable state")
-        stateStore.callStarted(pending.callId, maskDestination(pending.destination), System.currentTimeMillis())
-        stateStore.callPhase(callPhaseOf(pending.state))
+        // The placement is the durable one, and the phase is only replayed: the engine did not see
+        // this call answer, so the restore's own clock may not stamp one. Telecom's connect time is
+        // the one fact about that answer, and it exists only once the live Call does.
+        stateStore.callStarted(pending.callId, maskDestination(pending.destination), pending.createdWall)
+        stateStore.callPhaseReplayed(callPhaseOf(pending.state), connectTimeMillis = telecomConnectTime(restored, liveCalls))
+    }
+
+    /** Telecom's own connect time for the live call [restored] adopts, when it exists and reports one. */
+    private fun telecomConnectTime(restored: OwnedCall, calls: List<Call>): Long? {
+        for (call in calls) {
+            if (!matchesPending(restored, call)) continue
+            return detailsOf(call)?.connectTimeMillis?.takeIf { it > 0 }
+        }
+        return null
     }
 
     private fun adoptExistingCalls() {
@@ -2268,24 +2284,36 @@ class BridgeEngine(
 
     private fun reportState(call: OwnedCall, state: String, cause: DisconnectCause?) {
         val causeKey = cause?.let { "${it.code}|${it.label}|${it.reason}" }
+        // Telecom's connect time is the base the system's call chip uses; the store records it
+        // once, so the live screen can count the conversation whenever it opens.
+        val connectTimeMillis = call.call?.let(::detailsOf)?.connectTimeMillis?.takeIf { it > 0 }
+        var repeat = false
         synchronized(lock) {
             if (call.finished && state != "ended") return
             call.state = state
             if (call.reportedState == state) {
-                if (state != "ended") return
-                if (causeKey == null) return
-                if (call.reportedCauseKey == causeKey) return
-            }
-            call.reportedState = state
-            call.reportedCauseKey = causeKey
-            try {
-                ledger.markState(call.callId, state)
-            } catch (e: CallLedgerException) {
-                BridgeLog.e(TAG, "call state not durable: ${e.message}")
+                if (state != "ended") {
+                    // The wire already has this phase, but the store may still lack the answer:
+                    // a call restored from the ledger is adopted here, and this is the first
+                    // moment Telecom's own connect time exists. The store keeps a stamp it has,
+                    // so replaying costs nothing.
+                    repeat = true
+                } else {
+                    if (causeKey == null) return
+                    if (call.reportedCauseKey == causeKey) return
+                }
+            } else {
+                call.reportedState = state
+                call.reportedCauseKey = causeKey
+                try {
+                    ledger.markState(call.callId, state)
+                } catch (e: CallLedgerException) {
+                    BridgeLog.e(TAG, "call state not durable: ${e.message}")
+                }
             }
         }
-        send(DeviceOutbound.CallState(call.callId, state, cause))
-        stateStore.callPhase(callPhaseOf(state))
+        if (!repeat) send(DeviceOutbound.CallState(call.callId, state, cause))
+        stateStore.callPhase(callPhaseOf(state), connectTimeMillis = connectTimeMillis)
     }
 
     private fun replyOk(id: String, data: JsonObject? = null) {
