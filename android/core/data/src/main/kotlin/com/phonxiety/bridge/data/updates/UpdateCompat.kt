@@ -134,8 +134,7 @@ object UpdateCompat {
     }
 
     /** Grants the release allowlists and this installation does not hold. */
-    private fun missingGrants(module: ModuleRelease, installed: InstalledVersions): List<String> =
-        (module.permissions.toSet() - installed.grantedPrivilegedPermissions).sorted()
+    private fun missingGrants(module: ModuleRelease, installed: InstalledVersions): List<String> = (module.permissions.toSet() - installed.grantedPrivilegedPermissions).sorted()
 
     private fun appRow(
         apk: ApkRelease,

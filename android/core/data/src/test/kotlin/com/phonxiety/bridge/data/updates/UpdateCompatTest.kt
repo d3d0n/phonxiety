@@ -6,8 +6,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class UpdateCompatTest {
-    private val CAPTURE: String = "android.permission.CAPTURE_AUDIO_OUTPUT"
-    private val START_FROM_BACKGROUND: String = "android.permission.START_FOREGROUND_SERVICES_FROM_BACKGROUND"
+    private val capturePermission: String = "android.permission.CAPTURE_AUDIO_OUTPUT"
+    private val startFromBackground: String = "android.permission.START_FOREGROUND_SERVICES_FROM_BACKGROUND"
 
     @Test
     fun `everything current is compatible with no action`() {
@@ -63,10 +63,10 @@ class UpdateCompatTest {
     @Test
     fun `a release that adds a privileged grant needs both steps`() {
         val verdict = UpdateCompat.evaluate(
-            manifest(modulePermissions = listOf(CAPTURE, START_FROM_BACKGROUND)),
+            manifest(modulePermissions = listOf(capturePermission, startFromBackground)),
             installed(
                 appVersionCode = 3,
-                granted = setOf(CAPTURE),
+                granted = setOf(capturePermission),
                 moduleVersionCode = 3
             )
         )
@@ -79,7 +79,7 @@ class UpdateCompatTest {
         assertEquals(UpdateStatus.UPDATE_AVAILABLE, verdict.module.status)
         assertTrue(
             verdict.module.notes.contains(
-                CompatibilityNote.NewPrivilegedGrants(listOf(START_FROM_BACKGROUND))
+                CompatibilityNote.NewPrivilegedGrants(listOf(startFromBackground))
             )
         )
         assertTrue(verdict.module.requiresReboot)
@@ -112,7 +112,7 @@ class UpdateCompatTest {
         assertTrue(verdict.module.requiresReboot)
         assertFalse(verdict.module.needsAppFirst)
         assertTrue(
-            verdict.module.notes.contains(CompatibilityNote.NewPrivilegedGrants(listOf(CAPTURE)))
+            verdict.module.notes.contains(CompatibilityNote.NewPrivilegedGrants(listOf(capturePermission)))
         )
         assertTrue(verdict.hasUpdate)
     }
