@@ -1,0 +1,59 @@
+name: Daemon
+
+# pytest for the daemon that runs on the computer: src/, tests/ and the app API
+# contracts in contracts/, which the Android suite reads as well, so a change to
+# a contract runs both workflows.
+#
+# One job on macOS, the platform the daemon runs on.  Python and uv come from
+# mise.toml: the same pins and the same UV_PYTHON as a local `mise run test`;
+# the Android toolchain in mise.toml is not installed here.  `uv sync --locked`
+# fails when uv.lock no longer matches pyproject.toml.
+on:
+  push:
+    branches: [main, "feat/**"]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "contracts/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "mise.toml"
+      - ".github/workflows/daemon.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "contracts/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "mise.toml"
+      - ".github/workflows/daemon.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: daemon-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: macos-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: jdx/mise-action@v3
+        with:
+          install: true
+          install_args: python uv
+          cache: true
+          cache_key_prefix: mise-daemon
+
+      - name: Install locked dependencies
+        run: mise exec -- uv sync --locked
+
+      - name: pytest
+        run: mise run test
