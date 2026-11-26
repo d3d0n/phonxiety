@@ -273,13 +273,18 @@ internal class LinkSupervisor(
         if (!keep) task.cancel()
     }
 
+    /**
+     * Retires the attempt under the lock: an open that arrives after this sees
+     * no slot and is refused, so the report below is the attempt's only fate.
+     * Notification and cancellation run outside the lock, in that order.
+     */
     private fun expireAttempt(owner: DeviceLink) {
-        synchronized(lock) {
+        val notify = synchronized(lock) {
             if (!running || linkUp || link !== owner) return
-            attemptTask = null
+            retireCurrentLocked()
         }
-        BridgeLog.w(TAG, "link attempt deadline expired")
-        handleDown(owner, "connect_timeout")
+        if (!notify) return
+        notifyDown("connect_timeout")
         runCatching { owner.cancel() }
     }
 
@@ -287,6 +292,19 @@ internal class LinkSupervisor(
     private fun clearAttemptDeadlineLocked() {
         attemptTask?.cancel()
         attemptTask = null
+    }
+
+    /**
+     * Caller holds [lock] and the attempt is current: hands the slot back.
+     * Clearing the deadline here is what keeps an open racing the deadline from
+     * being torn down as `connect_timeout`.
+     */
+    private fun retireCurrentLocked(): Boolean {
+        link = null
+        linkUp = false
+        lastHostActivity = 0L
+        clearAttemptDeadlineLocked()
+        return running
     }
 
     /** Binds one transport attempt to its own callbacks. */
@@ -302,12 +320,11 @@ internal class LinkSupervisor(
 
     private fun handleOpen(owner: DeviceLink) {
         val accepted = synchronized(lock) {
-            if (!running || (link != null && link !== owner)) {
-                // A link that lost the race, or arrived after close: never live.
-                runCatching { owner.cancel() }
+            if (!running || link !== owner) {
+                // A late open after the deadline retired the attempt, or one
+                // that lost the race: never live, never delivered as opened.
                 false
             } else {
-                link = owner
                 linkUp = true
                 opens++
                 reconnectScheduled = false
@@ -317,7 +334,12 @@ internal class LinkSupervisor(
                 true
             }
         }
-        if (!accepted) return
+        if (!accepted) {
+            // Outside the lock: closing the refused transport must not run
+            // under the supervisor state.
+            runCatching { owner.cancel() }
+            return
+        }
         // A hello that throws is this attempt's failure, not the end of the
         // supervisor: report down and let the backoff re-dial.
         val hello = try {
@@ -326,7 +348,12 @@ internal class LinkSupervisor(
             BridgeLog.w(TAG, "link hello failed: ${t.javaClass.simpleName}")
             false
         }
-        if (!hello) handleDown(owner, "hello_failed")
+        if (!hello) {
+            // The failed transport is cancelled too: nothing abandoned here may
+            // keep readers, writers or subscriptions alive beside the reconnect.
+            handleDown(owner, "hello_failed")
+            runCatching { owner.cancel() }
+        }
     }
 
     private fun handleText(owner: DeviceLink, text: String) {
@@ -347,18 +374,18 @@ internal class LinkSupervisor(
 
     private fun handleDown(owner: DeviceLink, reason: String) {
         val notify = synchronized(lock) {
-            if (link === owner) {
-                link = null
-            } else if (link != null) {
-                // A replaced link reporting down: the live link is unaffected.
-                return
-            }
-            linkUp = false
-            lastHostActivity = 0L
-            clearAttemptDeadlineLocked()
-            running
+            // Only the current attempt may report down.  A retired attempt that
+            // surfaces late (e.g. after its deadline) is no longer the link, and
+            // a replaced one must not disturb its successor.
+            if (link !== owner) return
+            retireCurrentLocked()
         }
         if (!notify) return
+        notifyDown(reason)
+    }
+
+    /** The slot is already given up: tell the engine and arm the backoff. */
+    private fun notifyDown(reason: String) {
         BridgeLog.w(TAG, "device link down: $reason")
         callbacks.onLinkDown(reason)
         scheduleReconnect()

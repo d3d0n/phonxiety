@@ -91,6 +91,109 @@ class IrohBootNetworkTest {
     }
 
     @Test
+    fun aLinkRegisteredDuringPublicationBlocksTheBootRecycle() {
+        val recycler = Recycler()
+        val boot = IrohBootNetwork(recycler::recycle)
+        var asked = 0
+
+        boot.bound(11, hadInternet = false)
+        // connect() registers its veto before publishing the link as open: the
+        // dial may already own a call when the capability event arrives.
+        val release = boot.attach(11) {
+            asked++
+            false
+        }
+
+        boot.internetAvailable()
+
+        assertEquals(1, asked)
+        assertEquals(emptyList<Long>(), recycler.generations)
+
+        // Refused, not dropped: the generation stays armed and the next event
+        // asks the link again instead of bypassing it.
+        boot.internetAvailable()
+        assertEquals(2, asked)
+        assertEquals(emptyList<Long>(), recycler.generations)
+
+        release()
+    }
+
+    @Test
+    fun aNoOwnerRecycleIsNotOvertakenByADialThatLandsWithIt() {
+        val recycler = Recycler()
+        var asked = 0
+        lateinit var boot: IrohBootNetwork
+        var lateRelease: (() -> Unit)? = null
+
+        boot = IrohBootNetwork { generation ->
+            // The dial attaches at the instant the no-owner decision is taken.
+            lateRelease = boot.attach(generation) {
+                asked++
+                true
+            }
+            recycler.generations += generation
+            true
+        }
+
+        boot.bound(12, hadInternet = false)
+        boot.internetAvailable()
+        assertEquals(listOf(12L), recycler.generations)
+
+        // The registration is refused: no link is asked about a generation that
+        // is already being replaced, and nothing else is recycled.
+        boot.internetAvailable()
+        assertEquals(0, asked)
+        assertEquals(listOf(12L), recycler.generations)
+        lateRelease?.invoke()
+    }
+
+    @Test
+    fun anInternetEventDuringTheBindIsRecycledOnceTheEndpointIsPublished() {
+        val recycler = Recycler()
+        val boot = IrohBootNetwork(recycler::recycle)
+
+        boot.beginBind()
+        // INTERNET appears while the native bind runs, before any generation exists.
+        boot.internetAvailable()
+        assertEquals(emptyList<Long>(), recycler.generations)
+
+        boot.bound(13, hadInternet = false)
+        assertEquals(listOf(13L), recycler.generations)
+
+        // The held transition is spent: the same network's later events do nothing.
+        boot.internetAvailable()
+        assertEquals(listOf(13L), recycler.generations)
+    }
+
+    @Test
+    fun aBindThatFoundInternetRecyclesNothingFromTheHeldEvent() {
+        val recycler = Recycler()
+        val boot = IrohBootNetwork(recycler::recycle)
+
+        boot.beginBind()
+        boot.internetAvailable()
+        boot.bound(14, hadInternet = true)
+
+        boot.internetAvailable()
+
+        assertEquals(emptyList<Long>(), recycler.generations)
+    }
+
+    @Test
+    fun aHeldEventIsDroppedWhenTheBindFails() {
+        val recycler = Recycler()
+        val boot = IrohBootNetwork(recycler::recycle)
+
+        boot.beginBind()
+        boot.internetAvailable()
+        boot.bindFailed()
+
+        // A later, unrelated bind must not inherit the failed bind's transition.
+        boot.bound(15, hadInternet = false)
+        assertEquals(emptyList<Long>(), recycler.generations)
+    }
+
+    @Test
     fun aLiveLinkThatAdmitsTheRecycleIsNotDoubleRecycled() {
         val recycler = Recycler()
         val boot = IrohBootNetwork(recycler::recycle)

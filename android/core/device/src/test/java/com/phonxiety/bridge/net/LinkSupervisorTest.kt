@@ -156,10 +156,12 @@ class LinkSupervisorTest {
         calls.helloQueued = false
         val supervisor = supervisor()
         supervisor.start()
-        factory.last().open()
+        val failed = factory.last()
+        failed.open()
 
         assertEquals(listOf("hello_failed"), calls.downs)
         assertFalse(supervisor.isUp())
+        assertEquals(1, failed.cancelling)
         assertEquals(listOf(1_000L), scheduler.reconnectDelays)
     }
 
@@ -230,14 +232,61 @@ class LinkSupervisorTest {
     }
 
     @Test
+    fun anOpenRacingTheAttemptDeadlineIsNeverTornDownByIt() {
+        val supervisor = supervisor()
+        supervisor.start()
+        val attempt = factory.last()
+
+        // The deadline task is already dispatched when the transport opens: the
+        // open runs first, on the same thread, exactly as two racing threads see it.
+        scheduler.beforeAction = { attempt.open() }
+        scheduler.advance(LinkSupervisor.ATTEMPT_TIMEOUT_MS)
+
+        assertTrue(supervisor.isUp())
+        assertEquals(listOf(Unit), calls.opened)
+        assertEquals(emptyList<String>(), calls.downs)
+        assertEquals(0, attempt.cancelling)
+        assertEquals(0, scheduler.pendingCount)
+    }
+
+    @Test
+    fun aLateOpenAfterTheDeadlineCannotResurrectTheLink() {
+        val supervisor = supervisor()
+        supervisor.start()
+        val attempt = factory.last()
+
+        scheduler.advance(LinkSupervisor.ATTEMPT_TIMEOUT_MS)
+        assertEquals(listOf("connect_timeout"), calls.downs)
+        assertEquals(1, attempt.cancelling)
+        assertFalse(supervisor.isUp())
+
+        // The retired attempt opens late: refused and closed, never delivered.
+        attempt.open()
+        assertEquals(2, attempt.cancelling)
+        assertEquals(0, calls.opened.size)
+        assertFalse(supervisor.isUp())
+        assertEquals(listOf("connect_timeout"), calls.downs)
+
+        // The successor dials normally; the late open did not take its slot.
+        scheduler.advance(1_000)
+        assertEquals(2, factory.created.size)
+        factory.last().open()
+        assertTrue(supervisor.isUp())
+        assertEquals(0, factory.last().cancelling)
+    }
+
+    @Test
     fun aThrowingHelloReportsTheLinkDownAndReconnects() {
         calls.helloThrows = true
         val supervisor = supervisor()
         supervisor.start()
-        factory.last().open()
+        val failed = factory.last()
+        failed.open()
 
         assertEquals(listOf("hello_failed"), calls.downs)
         assertFalse(supervisor.isUp())
+        // The failed transport is cancelled, not left running beside the re-dial.
+        assertEquals(1, failed.cancelling)
         // The attempt deadline is gone: only the reconnect is pending.
         assertEquals(listOf(1_000L), scheduler.reconnectDelays)
         assertEquals(1, scheduler.pendingCount)
@@ -305,6 +354,12 @@ class LinkSupervisorTest {
 
         val scheduledDelays = mutableListOf<Long>()
 
+        /**
+         * Runs just before the next scheduled action, on the same thread: a test
+         * uses it to deliver a callback at the instant a task was dispatched.
+         */
+        var beforeAction: (() -> Unit)? = null
+
         /** Reconnect delays, without the per-attempt deadline. */
         val reconnectDelays: List<Long>
             get() = scheduledDelays.filter { it != LinkSupervisor.ATTEMPT_TIMEOUT_MS }
@@ -314,7 +369,12 @@ class LinkSupervisorTest {
 
         override fun after(delayMs: Long, task: () -> Unit): LinkTask {
             scheduledDelays += delayMs
-            val scheduled = Task(clock.now + delayMs, order++, task)
+            val scheduled = Task(clock.now + delayMs, order++) {
+                val hook = beforeAction
+                beforeAction = null
+                hook?.invoke()
+                task()
+            }
             pending += scheduled
             return LinkTask { pending.remove(scheduled) }
         }
