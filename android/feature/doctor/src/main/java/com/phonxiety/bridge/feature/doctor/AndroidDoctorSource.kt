@@ -64,7 +64,9 @@ class AndroidDoctorSource(context: Context) : DoctorSource {
                 ?: ModuleState.Unknown
         }
         val overlay = current?.let { rootProvider ->
-            runCatching { rootProvider.capabilities().systemOverlay }.getOrNull()
+            // An unanswered probe leaves the capability provisional: reporting it as
+            // METAMODULE_MISSING would blame a metamodule the provider may not even need.
+            runCatching { rootProvider.capabilities() }.getOrNull()?.takeIf { it.overlayProbeError == null }?.systemOverlay
         }
         DoctorSnapshot(
             root = detection,

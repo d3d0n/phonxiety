@@ -291,7 +291,7 @@ object DoctorEvaluator {
                 else ->
                     "the APK runs from $path; the module's overlay is not mounted" +
                         if (snapshot.overlay == Overlay.METAMODULE_MISSING) {
-                            " (KernelSU needs a metamodule to mount system/)"
+                            " (the provider needs a metamodule to mount system/)"
                         } else {
                             ""
                         }

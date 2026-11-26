@@ -125,7 +125,24 @@ class DoctorEvaluatorTest {
         )
         val overlay = TestData.row(rows, DoctorEvaluator.ID_OVERLAY)
         assertEquals(DoctorSeverity.FAIL, overlay.severity)
-        assertTrue(overlay.evidence.contains("KernelSU needs a metamodule"))
+        assertTrue(overlay.evidence.contains("the provider needs a metamodule"))
+    }
+
+    @Test
+    fun anOverlayThatIsNotMountedDoesNotBlameAMetamoduleOnABuiltInProvider() {
+        // Magisk and an older apd overlay system/ themselves: a metamodule is not their fix.
+        val rows = TestData.rows(
+            snapshot = TestData.snapshot(
+                overlay = Overlay.BUILT_IN,
+                facts = TestData.facts(
+                    apkPath = "/data/app/~~8Kd0/base.apk",
+                    system = false
+                )
+            )
+        )
+        val overlay = TestData.row(rows, DoctorEvaluator.ID_OVERLAY)
+        assertEquals(DoctorSeverity.FAIL, overlay.severity)
+        assertFalse(overlay.evidence.contains("metamodule"))
     }
 
     @Test

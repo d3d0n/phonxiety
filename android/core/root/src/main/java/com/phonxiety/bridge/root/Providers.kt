@@ -88,20 +88,25 @@ suspend fun readModuleState(environment: RootEnvironment, moduleId: String): Mod
     return ModuleState.Enabled(prop?.version, prop?.versionCode ?: 0)
 }
 
-/** The id of an installed metamodule, or null. Only KernelSU and KernelSU-Next need one. */
-suspend fun findMetamodule(environment: RootEnvironment): String? {
-    val modules = environment.listDir(RootCommand.MODULES_DIR) ?: return null
+/**
+ * The id of an installed metamodule in [dir], or null. Only the providers whose `system/` is mounted
+ * by a metamodule need one: KernelSU, KernelSU-Next, and an `apd` from the metamodule era.
+ */
+suspend fun findMetamodule(environment: RootEnvironment, dir: String = RootCommand.MODULES_DIR): String? {
+    val modules = environment.listDir(dir) ?: return null
     for (moduleId in modules) {
-        val prop = readModuleProp(environment, "${RootCommand.MODULES_DIR}/$moduleId") ?: continue
+        val prop = readModuleProp(environment, "$dir/$moduleId") ?: continue
         if (prop.metamodule) return moduleId
     }
     return null
 }
 
 /**
- * The marker `ksud` leaves in `/data/adb/modules/<id>` while a module is staged for the next boot
- * (`userspace/ksud/src/module.rs`: `ensure_file_exists(modules/<id>/update)`; the boot handler
- * renames `modules_update/<id>` over `modules/<id>` and drops the marker).
+ * The marker in `/data/adb/modules/<id>` that says an install staged for the next boot. `ksud`
+ * writes it for KernelSU and KernelSU-Next (`userspace/ksud/src/module.rs`:
+ * `ensure_file_exists(modules/<id>/update)`); APatch writes it from `apd/assets/installer.sh:406`
+ * in boot mode. The boot handler renames `modules_update/<id>` over `modules/<id>`, and that
+ * rename replaces the tree the marker was in.
  */
 internal const val MODULE_UPDATE_MARKER: String = "update"
 
@@ -112,6 +117,73 @@ internal const val MODULE_UPDATE_MARKER: String = "update"
 suspend fun metamoduleIsPending(environment: RootEnvironment, moduleId: String): Boolean {
     val entries = environment.listDir("${RootCommand.MODULES_DIR}/$moduleId") ?: return false
     return MODULE_UPDATE_MARKER in entries
+}
+
+/** What a provider that delegates `system/` mounting to a metamodule reports. */
+internal data class MetamoduleCapability(
+    val overlay: Overlay,
+    /** The install finished and waits for the boot that activates it. */
+    val pending: Boolean = false,
+    /** The install stopped before its completion evidence; it has to run again, not be rebooted into. */
+    val interrupted: Boolean = false
+)
+
+/**
+ * KernelSU/Next: an active metamodule mounts `system/`, and `ksud` marks a staged one with the
+ * `update` file in `/data/adb/modules/<id>` (`userspace/ksud/src/metamodule.rs`).
+ */
+internal suspend fun kernelSuMetamoduleCapability(environment: RootEnvironment): MetamoduleCapability {
+    val metamodule = findMetamodule(environment)
+    val pending = metamodule != null && metamoduleIsPending(environment, metamodule)
+    return MetamoduleCapability(
+        overlay = if (metamodule != null && !pending) Overlay.METAMODULE_PRESENT else Overlay.METAMODULE_MISSING,
+        pending = pending
+    )
+}
+
+/**
+ * APatch: `apd` extracts the whole module into `/data/adb/modules_update/<id>` and only renames it
+ * over `/data/adb/modules/<id>` at boot (`apd/src/module.rs` `_install_module`,
+ * `apd/src/event.rs` `handle_updated_modules`); its `update` flag is one file for the whole install,
+ * `/data/adb/ap/update` (`apd/src/module.rs` `mark_update`), not the per-module marker `ksud` writes.
+ * `apd module install` also creates `/data/adb/metamodule` right away, pointing at the still empty
+ * `modules/<id>` (`apd/src/module.rs` `ensure_symlink`), so the symlink alone proves nothing.
+ */
+internal suspend fun apatchMetamoduleCapability(environment: RootEnvironment): MetamoduleCapability {
+    val staged = findMetamodule(environment, RootCommand.MODULES_UPDATE_DIR)
+    if (staged != null) {
+        // The staged copy is never the whole story: see [apatchInstallCompleted].
+        val completed = apatchInstallCompleted(environment, staged)
+        return MetamoduleCapability(
+            overlay = Overlay.METAMODULE_MISSING,
+            pending = completed,
+            interrupted = !completed
+        )
+    }
+    val active = findMetamodule(environment)
+    return MetamoduleCapability(
+        overlay = if (active != null) Overlay.METAMODULE_PRESENT else Overlay.METAMODULE_MISSING
+    )
+}
+
+/**
+ * APatch 11282's install completion, read from what the installer left behind. `apd module install`
+ * first unpacks the zip into `modules_update/<id>` (`apd/src/module.rs` `_install_module`:
+ * `archive.extract(&_module_update_dir)`) and then runs `apd/assets/installer.sh`, whose boot-mode
+ * block near the end writes the evidence:
+ * `mktouch $NVBASE/modules/$MODID/update` and `cp -af $MODPATH/module.prop
+ * $NVBASE/modules/$MODID/module.prop` (tag 11282, `apd/assets/installer.sh:405-410`). Both writes
+ * come after extraction and the customize script, so a run killed in between leaves a staged
+ * directory that looks installed but is not. The next boot promotes whatever `modules_update/<id>`
+ * holds (`apd/src/event.rs`: `handle_updated_modules` renames it over `modules/<id>`, then the
+ * staged tree is removed), and `handle_updated_modules` deletes the previous `modules/<id>` first,
+ * so the marker cannot survive a boot: both files together mean the installer finished.
+ */
+internal suspend fun apatchInstallCompleted(environment: RootEnvironment, moduleId: String): Boolean {
+    val staged = environment.listDir("${RootCommand.MODULES_UPDATE_DIR}/$moduleId") ?: return false
+    if ("module.prop" !in staged) return false
+    val installed = environment.listDir("${RootCommand.MODULES_DIR}/$moduleId") ?: return false
+    return MODULE_UPDATE_MARKER in installed && "module.prop" in installed
 }
 
 internal suspend fun readModuleProp(environment: RootEnvironment, dir: String): ModuleProp? = environment.readFile("$dir/module.prop")?.let(::parseModuleProp)
@@ -133,6 +205,27 @@ internal val APATCH_COEXISTENCE_WARNING: String =
 
 /** Last-resort denial detection: `su` policy and provider daemons both phrase it this way. */
 private val DENIAL = Regex("(?i)(permission denied|not allowed|operation not permitted|denied)")
+
+/**
+ * The capability probe's answer. Only a process that ran to completion speaks: `grep` exits 0 for a
+ * match and 1 for none, while 2 (the binary could not be read), 127 (no `grep`), a failed launch and
+ * a timeout all mean the question was never answered.
+ */
+internal enum class MetamoduleProbe { SUPPORTED, UNSUPPORTED, INDETERMINATE }
+
+internal fun ShellOutput.metamoduleProbe(): MetamoduleProbe = when {
+    launchFailed || timedOut -> MetamoduleProbe.INDETERMINATE
+    exitCode == 0 -> MetamoduleProbe.SUPPORTED
+    exitCode == 1 -> MetamoduleProbe.UNSUPPORTED
+    else -> MetamoduleProbe.INDETERMINATE
+}
+
+/** Why an indeterminate probe did not answer, worded for the wizard instead of a bare "failed". */
+internal fun ShellOutput.probeFailure(): String = when {
+    launchFailed -> "the probe did not start (exit $exitCode)" + combined.takeIf { it.isNotEmpty() }?.let { ": $it" }.orEmpty()
+    timedOut -> "the probe did not answer within ${timeoutMs / 1000} s"
+    else -> "the probe exited $exitCode" + combined.takeIf { it.isNotEmpty() }?.let { ": $it" }.orEmpty()
+}
 
 internal fun ShellOutput.toProviderResult(): ProviderResult = when {
     launchFailed -> ProviderResult.Failure(combined.ifEmpty { "su is not available" }, exitCode)
@@ -247,14 +340,9 @@ class KernelSuProvider(
     private val rebooter: SystemRebooter? = null
 ) : RootProvider {
     override suspend fun capabilities(): RootCapabilities {
-        val metamodule = findMetamodule(environment)
-        val pending = metamodule != null && metamoduleIsPending(environment, metamodule)
+        val metamodule = kernelSuMetamoduleCapability(environment)
         return RootCapabilities(
-            systemOverlay = if (metamodule != null && !pending) {
-                Overlay.METAMODULE_PRESENT
-            } else {
-                Overlay.METAMODULE_MISSING
-            },
+            systemOverlay = metamodule.overlay,
             hotInstall = true,
             updateJson = true,
             webUi = true,
@@ -267,7 +355,7 @@ class KernelSuProvider(
             ),
             managerPackage = detected.managerPackage ?: defaultManagerPackage(detected.id),
             coexistenceWarning = COEXISTENCE_WARNING,
-            metamodulePending = pending
+            metamodulePending = metamodule.pending
         )
     }
 
@@ -321,8 +409,10 @@ class KernelSuProvider(
 // ---------------------------------------------------------------------------------------------
 
 /**
- * APatch: `/data/adb/ap`, `apd`, OverlayFS mounting built in, arm64 kernels only, and no documented
- * `updateJson` support — the app's own updater stays authoritative there.
+ * APatch: `/data/adb/ap`, `apd`, arm64 kernels only, and no documented `updateJson` support — the
+ * app's own updater stays authoritative there. `apd` 11282 (KernelPatch 0.13.9) delegates `system/`
+ * mounting to a metamodule (`apd/src/metamodule.rs` `exec_mount_script`), so `systemOverlay` reports
+ * the metamodule states there and `BUILT_IN` only on an older `apd` whose overlay is its own.
  */
 class ApatchProvider(
     override val detected: DetectedProvider,
@@ -330,21 +420,39 @@ class ApatchProvider(
     private val environment: RootEnvironment,
     private val rebooter: SystemRebooter? = null
 ) : RootProvider {
-    override suspend fun capabilities(): RootCapabilities = RootCapabilities(
-        systemOverlay = Overlay.BUILT_IN,
-        hotInstall = false,
-        updateJson = false,
-        webUi = true,
-        actionButton = true,
-        bootStages = setOf(
-            BootStage.POST_FS_DATA,
-            BootStage.POST_MOUNT,
-            BootStage.SERVICE,
-            BootStage.BOOT_COMPLETED
-        ),
-        managerPackage = detected.managerPackage ?: MANAGER_PACKAGE,
-        coexistenceWarning = APATCH_COEXISTENCE_WARNING
-    )
+    override suspend fun capabilities(): RootCapabilities {
+        val probe = shell.exec(RootCommand.apdSupportsMetamodules())
+        // The binary's own literal, not a version table: see [RootCommand.apdSupportsMetamodules].
+        val support = probe.metamoduleProbe()
+        // An apd without the literal overlays `system/` itself, and an unanswered probe is no fact.
+        val metamodule = if (support == MetamoduleProbe.SUPPORTED) apatchMetamoduleCapability(environment) else null
+        return RootCapabilities(
+            systemOverlay = when {
+                metamodule != null -> metamodule.overlay
+
+                // Never BUILT_IN on an unanswered probe: that would skip the metamodule step on an
+                // apd that needs one, which is the silent unmounted install this probe exists for.
+                support == MetamoduleProbe.INDETERMINATE -> Overlay.METAMODULE_MISSING
+
+                else -> Overlay.BUILT_IN
+            },
+            hotInstall = false,
+            updateJson = false,
+            webUi = true,
+            actionButton = true,
+            bootStages = setOf(
+                BootStage.POST_FS_DATA,
+                BootStage.POST_MOUNT,
+                BootStage.SERVICE,
+                BootStage.BOOT_COMPLETED
+            ),
+            managerPackage = detected.managerPackage ?: MANAGER_PACKAGE,
+            coexistenceWarning = APATCH_COEXISTENCE_WARNING,
+            metamodulePending = metamodule?.pending == true,
+            metamoduleInterrupted = metamodule?.interrupted == true,
+            overlayProbeError = if (support == MetamoduleProbe.INDETERMINATE) probe.probeFailure() else null
+        )
+    }
 
     override suspend fun installModule(zip: File): ProviderResult {
         val staged = stageModuleZip(shell, zip)

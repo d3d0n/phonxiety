@@ -62,6 +62,12 @@ class DoctorPolicyTest {
     }
 
     @Test
+    fun theOverlayFixNamesAMetamoduleOnlyForProvidersThatNeedOne() {
+        val effect = requireNotNull(DoctorPolicy.planFor(DoctorItemKind.OVERLAY)).effect
+        assertTrue(effect.contains("A provider that mounts system/ through a metamodule"))
+    }
+
+    @Test
     fun everyPlanExplainsEffectAndRollback() {
         DoctorItemKind.entries.mapNotNull(DoctorPolicy::planFor).forEach { plan ->
             assertTrue("${plan.fix} has no effect text", plan.effect.isNotBlank())
