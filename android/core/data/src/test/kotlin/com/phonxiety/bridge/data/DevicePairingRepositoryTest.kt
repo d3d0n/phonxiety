@@ -38,10 +38,14 @@ class DevicePairingRepositoryTest {
         certSha256 = null
     )
 
-    /** The repository over the real storage, counting how often it is read. */
+    /**
+     * The repository over the real storage, counting how often it is read. A read counts only once
+     * the file has been loaded, so a test that waits for a count never races the read it waits for.
+     */
     private fun countingRepository(reads: AtomicInteger) = DevicePairingRepository(context) {
+        val stored = BridgeConfigLoader.loadOrNull(context) != null
         reads.incrementAndGet()
-        BridgeConfigLoader.loadOrNull(context) != null
+        stored
     }
 
     /**
