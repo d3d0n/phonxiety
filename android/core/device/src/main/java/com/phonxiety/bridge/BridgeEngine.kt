@@ -2268,6 +2268,9 @@ class BridgeEngine(
 
     private fun reportState(call: OwnedCall, state: String, cause: DisconnectCause?) {
         val causeKey = cause?.let { "${it.code}|${it.label}|${it.reason}" }
+        // Telecom's connect time is the base the system's call chip uses; the store records it
+        // once, so the live screen can count the conversation whenever it opens.
+        val connectTimeMillis = call.call?.let(::detailsOf)?.connectTimeMillis?.takeIf { it > 0 }
         synchronized(lock) {
             if (call.finished && state != "ended") return
             call.state = state
@@ -2285,7 +2288,7 @@ class BridgeEngine(
             }
         }
         send(DeviceOutbound.CallState(call.callId, state, cause))
-        stateStore.callPhase(callPhaseOf(state))
+        stateStore.callPhase(callPhaseOf(state), connectTimeMillis = connectTimeMillis)
     }
 
     private fun replyOk(id: String, data: JsonObject? = null) {
