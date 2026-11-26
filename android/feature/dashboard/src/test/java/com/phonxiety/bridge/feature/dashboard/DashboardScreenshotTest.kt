@@ -192,7 +192,9 @@ class DashboardScreenshotTest {
     @Test
     fun theWholeEndpointAfterTheDisclosureIsOpened() {
         setScreen()
-        composeRule.onNodeWithText("Show full ID").performScrollTo().performClick()
+        // A semantics click starts no ripple, so the capture does not depend on animation timing.
+        composeRule.onNodeWithText("Show full ID").performScrollTo()
+            .performSemanticsAction(SemanticsActions.OnClick)
         composeRule.waitForIdle()
         // A key that fills several lines must still be one legible block.
         composeRule.onNodeWithTag(SCREEN_TAG).assertAccessible()

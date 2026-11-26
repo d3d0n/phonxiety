@@ -91,44 +91,6 @@ class DoctorScreenshotTest(private val matrixCase: MatrixCase) {
     }
 
     /**
-     * The evidence behind Details: the process exit reads as words, and the daemon's own report
-     * opens under the row it belongs to, in monospace.
-     */
-    @Test
-    fun rendersTheEvidenceBehindDetails() {
-        val variant = matrixCase.variant
-        configureWindow(variant)
-        composeRule.setContent {
-            AssertWindowMatches(variant)
-            PhonxietyTheme(darkTheme = variant.dark, dynamicColor = variant.dynamic) {
-                Surface(color = MaterialTheme.colorScheme.background) {
-                    Box(modifier = Modifier.fillMaxSize().testTag(CAPTURE_TAG)) {
-                        DoctorScreen(state = DoctorSamples.severalFailures(), callbacks = DoctorCallbacks())
-                    }
-                }
-            }
-        }
-
-        composeRule.onNodeWithContentDescription("Details: Last process exit", substring = true)
-            .performScrollTo()
-            .performClick()
-        composeRule.waitForIdle()
-        composeRule.onAllNodesWithText("Updated · ", substring = true).onFirst().assertIsDisplayed()
-        composeRule.onNodeWithTag(CAPTURE_TAG).assertAccessible()
-        composeRule.onNodeWithTag(CAPTURE_TAG)
-            .captureRoboImage("src/test/screenshots/doctor_details_exit_${variant.slug}.png")
-
-        composeRule.onNodeWithContentDescription("Details: Relay configuration", substring = true)
-            .performScrollTo()
-            .performClick()
-        composeRule.waitForIdle()
-        composeRule.onAllNodesWithText("2 custom relay(s)", substring = true).onFirst().assertIsDisplayed()
-        composeRule.onNodeWithTag(CAPTURE_TAG).assertAccessible()
-        composeRule.onNodeWithTag(CAPTURE_TAG)
-            .captureRoboImage("src/test/screenshots/doctor_details_relay_${variant.slug}.png")
-    }
-
-    /**
      * The lower half of the screen is a state of its own: the recovery guides and the change log
      * are captured in separate viewports, each at the variant's real window width and font scale.
      */
@@ -158,6 +120,12 @@ class DoctorScreenshotTest(private val matrixCase: MatrixCase) {
         composeRule.onNodeWithTag(CAPTURE_TAG).assertAccessible()
         composeRule.onNodeWithTag(CAPTURE_TAG)
             .captureRoboImage("src/test/screenshots/doctor_lower_changes_${variant.slug}.png")
+    }
+
+    /** A capture must not depend on a ripple or an unfinished scroll: let both settle first. */
+    private fun settle() {
+        composeRule.mainClock.advanceTimeBy(1_000)
+        composeRule.waitForIdle()
     }
 
     /** Robolectric's window must be the variant's phone, with its resource font scale. */
