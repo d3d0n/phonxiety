@@ -1,12 +1,40 @@
 name: Android
 
-# Two tiers share the same path filters:
-#   build — every pull request, every push to main and workflow_dispatch: iroh
-#           bindings, release APK, unit tests, lint, Roborazzi screenshot
-#           verification and the module zip.
-#   quick — every push to feat/**: iroh bindings, debug APK and unit tests
-#           with the screenshot captures skipped (-PskipScreenshots); no
-#           release build, lint, Roborazzi verify or module zip.
+# Job graph and caching policy.
+#
+# One workflow, two tiers, the same path filters and the same setup:
+#
+#   full (pull request, push to main, workflow_dispatch) — three jobs that run
+#   in parallel, so the wall time is the slowest job, not their sum:
+#       release — :app:assembleRelease, R8 mapping and the APK + module zip;
+#       test    — testDebugUnitTest verifyRoborazziDebug and the test reports;
+#       lint    — lint and the lint reports.
+#   quick (push to feat/**) — debug APK and unit tests with -PskipScreenshots,
+#   which leaves the screenshot captures out by JUnit category; no release
+#   build, lint, Roborazzi verification or module zip.
+#
+# Every job starts with ./.github/actions/android-setup, which installs the
+# Android SDK packages, the Rust/Java/Gradle toolchain from mise.toml and
+# restores three caches:
+#
+#   android-sdk-…  NDK, platform, build-tools, platform-tools, licenses.
+#                  Explicit restore/save: sdkmanager only fetches the packages
+#                  the cache did not provide.
+#   iroh-…         the iroh-ffi checkout, its cargo target dir, cargo-ndk and
+#                  the generated .so + Kotlin.  The task's own stamp
+#                  (.tools/iroh-build/.iroh-android.stamp) skips the ~6 minute
+#                  cross-compile when the restored tree is current.
+#   Gradle         gradle/actions/setup-gradle: dependencies, wrapper and the
+#                  local build cache.  Default policy: only main writes, every
+#                  branch and PR reads, one entry per job, saved by its post
+#                  step even when the build fails.
+#
+# The two explicit caches are written with actions/cache/save guarded by
+# `if: always()`, right after the step that produces them.  A job that fails
+# later - a red test, a lint error - still leaves them cached; the old
+# actions/cache steps saved only on a fully successful job, which is why no run
+# ever stored anything and every run paid for the NDK download and the iroh
+# cross-compile again.
 on:
   push:
     branches: [main, "feat/**"]
@@ -15,12 +43,14 @@ on:
       - "mise-tasks/phone/**"
       - "mise.toml"
       - ".github/workflows/android.yml"
+      - ".github/actions/**"
   pull_request:
     paths:
       - "android/**"
       - "mise-tasks/phone/**"
       - "mise.toml"
       - ".github/workflows/android.yml"
+      - ".github/actions/**"
   workflow_dispatch:
 
 concurrency:
@@ -28,8 +58,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Full tier: pull requests, main and manual runs.
-  build:
+  # Full tier: pull requests, main and manual runs.  Release APK, R8 mapping
+  # and the Magisk module zip.  Assembles only; the tests and lint run in their
+  # own jobs against the same caches.
+  release:
     if: github.event_name != 'push' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -38,65 +70,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
-
-      # Installs cmdline-tools + platform-tools into ANDROID_SDK_ROOT.  The
-      # action's default package list still names "tools", which the SDK
-      # repository no longer has, so the list is given explicitly.
-      - uses: android-actions/setup-android@v3
-        with:
-          packages: platform-tools
-          log-accepted-android-sdk-licenses: false
-
-      - uses: actions/cache@v4
-        with:
-          path: |
-            .tools/iroh-ffi
-            .tools/iroh-build
-            .tools/cargo
-            .tools/android-sdk/ndk
-          key: iroh-${{ runner.os }}-${{ hashFiles('mise-tasks/phone/iroh', 'mise.toml') }}
-          restore-keys: |
-            iroh-${{ runner.os }}-
-
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.kts', 'android/gradle/libs.versions.toml', 'android/gradle/wrapper/gradle-wrapper.properties') }}
-          restore-keys: |
-            gradle-${{ runner.os }}-
-
-      # Java 17, Gradle 9.6.0 and the Rust toolchain (with the Android target)
-      # all come from mise.toml, the same pins the local build uses.
-      - uses: jdx/mise-action@v3
-        with:
-          install: true
-          cache: true
-
-      # Put the SDK where mise.toml points ANDROID_HOME, using the cmdline-tools
-      # that setup-android already installed.  platform 37.1 is what Compose
-      # 1.13 wants; the NDK is installed up front so the iroh build is cached
-      # work rather than a download.
-      - name: Prepare Android SDK
-        run: |
-          set -euo pipefail
-          SDK_DIR="$GITHUB_WORKSPACE/.tools/android-sdk"
-          mkdir -p "$SDK_DIR/cmdline-tools"
-          ln -sfn "$ANDROID_SDK_ROOT/cmdline-tools/latest" "$SDK_DIR/cmdline-tools/latest"
-          # `yes` dies of a broken pipe when sdkmanager stops reading, and pipefail
-          # would report that instead of sdkmanager's own status.
-          { yes || true; } | "$SDK_DIR/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK_DIR" \
-            "platforms;android-37.1" "build-tools;37.0.0" "platform-tools" "ndk;29.0.14206865" \
-            > "$RUNNER_TEMP/sdkmanager.log" || { tail -n 40 "$RUNNER_TEMP/sdkmanager.log"; exit 1; }
-          # The Android Gradle plugin refuses two different SDK paths; from here on
-          # ANDROID_SDK_ROOT names the same SDK that mise.toml's ANDROID_HOME does.
-          echo "ANDROID_SDK_ROOT=$SDK_DIR" >> "$GITHUB_ENV"
-
-      # Same steps as `mise run phone:iroh`: cross-compiles libiroh_ffi.so and
-      # regenerates the uniffi Kotlin bindings into :core:device.
-      - name: Build iroh bindings
-        run: mise run phone:iroh
+      - uses: ./.github/actions/android-setup
 
       # Materialises the release key from repository secrets when they exist.
       # Only names appear here; a missing secret leaves the build on the debug
@@ -123,17 +97,10 @@ jobs:
             echo "PHONXIETY_REQUIRE_SIGNING=1"
           } >> "$GITHUB_ENV"
 
-      # Screenshot verification, unit tests, lint and the minified release APK.
-      # The Roborazzi tasks are selected by name so every module that renders a
-      # screen compares against its committed images, not just the design system.
-      - name: Build, test and lint
+      - name: Assemble release APK
         working-directory: android
         run: |
-          mise exec -- ./gradlew --no-daemon --console=plain \
-            :app:assembleRelease \
-            testDebugUnitTest \
-            lint \
-            verifyRoborazziDebug
+          mise exec -- ./gradlew --no-daemon --console=plain :app:assembleRelease
 
       # R8 maps every obfuscated name back to its source; without it an on-device
       # crash report is unreadable.
@@ -145,7 +112,7 @@ jobs:
           path: android/app/build/outputs/mapping/release/mapping.txt
           if-no-files-found: warn
 
-      # Builds the release APK again (incrementally) and packages the module zip.
+      # Re-runs assembleRelease (up to date) and packages the module zip.
       - name: Package module zip
         run: mise run phone:build
 
@@ -158,21 +125,68 @@ jobs:
             dist/phonxiety-bridge-*.zip
           if-no-files-found: error
 
-      - name: Upload reports
+  # Unit tests plus Roborazzi screenshot verification.  The Roborazzi tasks are
+  # selected by name so every module that renders a screen compares against its
+  # committed images, not just the design system.
+  test:
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/android-setup
+
+      - name: Unit tests and Roborazzi verification
+        working-directory: android
+        run: |
+          mise exec -- ./gradlew --no-daemon --console=plain \
+            testDebugUnitTest \
+            verifyRoborazziDebug
+
+      - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: phonxiety-android-reports
+          name: phonxiety-android-test-reports
           path: |
-            android/**/build/reports/lint-results*.html
             android/**/build/reports/tests/**
             android/**/build/test-results/**
           if-no-files-found: ignore
 
+  # Static analysis only; lint needs the compiled sources, not the APK.
+  lint:
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/android-setup
+
+      - name: Lint
+        working-directory: android
+        run: mise exec -- ./gradlew --no-daemon --console=plain lint
+
+      - name: Upload lint reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phonxiety-android-lint-reports
+          path: |
+            android/**/build/reports/lint-results*.html
+            android/**/build/reports/lint-results*.txt
+          if-no-files-found: ignore
+
   # Quick tier: pushes to feat/** only.  The app still compiles against the
-  # iroh bindings, so the SDK preparation and the bindings build are repeated;
-  # only the debug variant and the unit tests run, with -PskipScreenshots
-  # leaving the Roborazzi-capturing classes out of the test run.
+  # iroh bindings, so the setup is the same composite action and the same
+  # caches; only the debug variant and the unit tests run, with
+  # -PskipScreenshots leaving the Roborazzi-capturing classes out of the test
+  # run.  Everything else in those classes still runs.
   quick:
     if: github.event_name == 'push' && github.ref != 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -182,54 +196,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+      - uses: ./.github/actions/android-setup
 
-      - uses: android-actions/setup-android@v3
-        with:
-          packages: platform-tools
-          log-accepted-android-sdk-licenses: false
-
-      - uses: actions/cache@v4
-        with:
-          path: |
-            .tools/iroh-ffi
-            .tools/iroh-build
-            .tools/cargo
-            .tools/android-sdk/ndk
-          key: iroh-${{ runner.os }}-${{ hashFiles('mise-tasks/phone/iroh', 'mise.toml') }}
-          restore-keys: |
-            iroh-${{ runner.os }}-
-
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.kts', 'android/gradle/libs.versions.toml', 'android/gradle/wrapper/gradle-wrapper.properties') }}
-          restore-keys: |
-            gradle-${{ runner.os }}-
-
-      - uses: jdx/mise-action@v3
-        with:
-          install: true
-          cache: true
-
-      - name: Prepare Android SDK
-        run: |
-          set -euo pipefail
-          SDK_DIR="$GITHUB_WORKSPACE/.tools/android-sdk"
-          mkdir -p "$SDK_DIR/cmdline-tools"
-          ln -sfn "$ANDROID_SDK_ROOT/cmdline-tools/latest" "$SDK_DIR/cmdline-tools/latest"
-          { yes || true; } | "$SDK_DIR/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK_DIR" \
-            "platforms;android-37.1" "build-tools;37.0.0" "platform-tools" "ndk;29.0.14206865" \
-            > "$RUNNER_TEMP/sdkmanager.log" || { tail -n 40 "$RUNNER_TEMP/sdkmanager.log"; exit 1; }
-          echo "ANDROID_SDK_ROOT=$SDK_DIR" >> "$GITHUB_ENV"
-
-      - name: Build iroh bindings
-        run: mise run phone:iroh
-
-      # Debug APK and unit tests only: the Screenshot-category captures are
-      # excluded by -PskipScreenshots, so neither Roborazzi nor lint runs here.
-      # Every other test in those classes still runs.
       - name: Debug build and unit tests
         working-directory: android
         run: |
@@ -238,11 +206,11 @@ jobs:
             testDebugUnitTest \
             -PskipScreenshots
 
-      - name: Upload reports
+      - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: phonxiety-android-reports
+          name: phonxiety-android-test-reports
           path: |
             android/**/build/reports/tests/**
             android/**/build/test-results/**

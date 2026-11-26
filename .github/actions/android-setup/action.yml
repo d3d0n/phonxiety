@@ -1,0 +1,147 @@
+name: Android setup
+description: >-
+  Everything a phonxiety Android job needs before Gradle: the Android SDK
+  packages under .tools/android-sdk, the prebuilt iroh bindings and the Gradle
+  user home, all restored from caches that are written even when the job
+  fails later.
+
+# Call after actions/checkout; this action reads the workspace (.tools/,
+# android/core/device/src, .github/actions/android-setup/action.yml) and needs
+# GITHUB_WORKSPACE to contain the repository.
+runs:
+  using: composite
+  steps:
+    # Installs cmdline-tools + platform-tools into ANDROID_SDK_ROOT.  The
+    # action's default package list still names "tools", which the SDK
+    # repository no longer has, so the list is given explicitly.
+    - uses: android-actions/setup-android@v3
+      with:
+        packages: platform-tools
+        log-accepted-android-sdk-licenses: false
+
+    # The NDK (~1 GB), the platform and build-tools are downloads that never
+    # change between runs, and every job needs the NDK before the iroh task's
+    # up-to-date check.  They live under the workspace so they cache as plain
+    # directories.  The key hashes this action file because the package list
+    # and the versions below are the only inputs.
+    - name: Restore Android SDK packages
+      id: sdk-restore
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          .tools/android-sdk/build-tools
+          .tools/android-sdk/licenses
+          .tools/android-sdk/ndk
+          .tools/android-sdk/platform-tools
+          .tools/android-sdk/platforms
+        key: android-sdk-${{ runner.os }}-${{ hashFiles('.github/actions/android-setup/action.yml') }}
+        restore-keys: |
+          android-sdk-${{ runner.os }}-
+
+    # Put the SDK where mise.toml points ANDROID_HOME, using the cmdline-tools
+    # that setup-android already installed.  Only the packages the cache did
+    # not provide are fetched, so a cache hit skips sdkmanager entirely.
+    - name: Prepare Android SDK
+      id: sdk
+      shell: bash
+      run: |
+        set -euo pipefail
+        SDK_DIR="$GITHUB_WORKSPACE/.tools/android-sdk"
+        mkdir -p "$SDK_DIR/cmdline-tools"
+        ln -sfn "$ANDROID_SDK_ROOT/cmdline-tools/latest" "$SDK_DIR/cmdline-tools/latest"
+
+        missing=()
+        for entry in \
+          "platforms;android-37.1:platforms/android-37.1" \
+          "build-tools;37.0.0:build-tools/37.0.0" \
+          "platform-tools:platform-tools" \
+          "ndk;29.0.14206865:ndk/29.0.14206865/toolchains/llvm/prebuilt"
+        do
+          package="${entry%%:*}"
+          directory="${entry#*:}"
+          [ -d "$SDK_DIR/$directory" ] || missing+=("$package")
+        done
+
+        if [ "${#missing[@]}" -gt 0 ]; then
+          echo "Installing: ${missing[*]}"
+          # `yes` dies of a broken pipe when sdkmanager stops reading, and
+          # pipefail would report that instead of sdkmanager's own status.
+          { yes || true; } | "$SDK_DIR/cmdline-tools/latest/bin/sdkmanager" \
+            --sdk_root="$SDK_DIR" "${missing[@]}" \
+            > "$RUNNER_TEMP/sdkmanager.log" 2>&1 || { tail -n 40 "$RUNNER_TEMP/sdkmanager.log"; exit 1; }
+        else
+          echo "All Android SDK packages came from the cache."
+        fi
+
+        # The Android Gradle plugin refuses two different SDK paths; from here
+        # on ANDROID_SDK_ROOT names the same SDK that mise.toml's ANDROID_HOME
+        # does.
+        echo "ANDROID_SDK_ROOT=$SDK_DIR" >> "$GITHUB_ENV"
+
+    - name: Save Android SDK packages
+      if: always() && steps.sdk.outcome == 'success' && steps.sdk-restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          .tools/android-sdk/build-tools
+          .tools/android-sdk/licenses
+          .tools/android-sdk/ndk
+          .tools/android-sdk/platform-tools
+          .tools/android-sdk/platforms
+        key: android-sdk-${{ runner.os }}-${{ hashFiles('.github/actions/android-setup/action.yml') }}
+
+    # Java 17, Gradle 9.6.0 and the Rust toolchain (with the Android target)
+    # all come from mise.toml, the same pins the local build uses.
+    - uses: jdx/mise-action@v3
+      with:
+        install: true
+        cache: true
+
+    # `mise run phone:iroh` is incremental: .tools/iroh-build holds the cargo
+    # target directory and a stamp naming the iroh tag, NDK, cargo-ndk, rustc
+    # and the hash of the task script, and it exits at once when the stamp,
+    # android/core/device/src/main/jniLibs/arm64-v8a/libiroh_ffi.so and the
+    # generated Kotlin are all current.  Caching the whole set - sources,
+    # target dir, cargo-ndk, and the two generated trees, which are gitignored
+    # and live outside .tools/ - makes the ~6 minute cross-compile a no-op.
+    - name: Restore iroh bindings
+      id: iroh-restore
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          .tools/iroh-ffi
+          .tools/iroh-build
+          .tools/cargo
+          android/core/device/src/main/jniLibs
+          android/core/device/src/iroh/kotlin
+        key: iroh-${{ runner.os }}-${{ hashFiles('mise-tasks/phone/iroh', 'mise.toml') }}
+        restore-keys: |
+          iroh-${{ runner.os }}-
+
+    # Same steps as `mise run phone:iroh`: cross-compiles libiroh_ffi.so and
+    # regenerates the uniffi Kotlin bindings into :core:device.  With the cache
+    # above this prints "bindings are up to date" and returns in seconds; the
+    # stamp makes that decision, so a restored-but-stale tree rebuilds itself.
+    - name: Build iroh bindings
+      id: iroh-build
+      shell: bash
+      run: mise run phone:iroh
+
+    - name: Save iroh bindings
+      if: always() && steps.iroh-build.outcome == 'success' && steps.iroh-restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          .tools/iroh-ffi
+          .tools/iroh-build
+          .tools/cargo
+          android/core/device/src/main/jniLibs
+          android/core/device/src/iroh/kotlin
+        key: iroh-${{ runner.os }}-${{ hashFiles('mise-tasks/phone/iroh', 'mise.toml') }}
+
+    # Caches the Gradle user home - downloaded dependencies, wrapper
+    # distributions and the local build cache that org.gradle.caching=true
+    # fills - and writes it back in its post step even when a Gradle build in
+    # the job fails.  Default policy: only main writes, every branch and PR
+    # reads, and each job keeps its own entry.
+    - uses: gradle/actions/setup-gradle@v4
