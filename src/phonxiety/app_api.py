@@ -45,7 +45,7 @@ from . import __version__
 from .audio.opus import CODECS, MAX_OPUS_BITRATE, MIN_OPUS_BITRATE
 from .auth import default_auth_path
 from .device import PROTOCOL_VERSION, PROTOCOL_VERSIONS, DeviceError
-from .models import CallLimits, CallRequest, TERMINAL_STATES
+from .models import CallLimits, CallRequest, TERMINAL_STATES, TestAudioOptions
 from .net.framing import frame
 from .net.tailnet import addresses_for, path_kind, tailscale_addresses
 from .settings import (
@@ -539,6 +539,8 @@ class AppApi:
                 "marks": True,
                 "hangup": True,
                 "test_call": True,
+                # The daemon starts and stops Lab test-call probes itself when asked.
+                "test_call_probes": True,
                 "loopback": self._supports("loopback_start"),
                 "tone": self._supports("tone_start"),
             },
@@ -698,18 +700,29 @@ class AppApi:
         link = self._link_info() or {}
         rtt = await self._ping()
         connected = bool(getattr(device, "connected", False))
+        path = self._path_kind()
         answers: list[dict[str, Any]] = []
         for name in candidates[:5]:
             if name == "iroh":
                 available = bool(link.get("iroh_available"))
-                answers.append({
-                    "name": "iroh",
-                    "available": available,
-                    "reachable": bool(available and connected),
-                    "rtt_ms": rtt,
-                    "detail": "the phone link arrives at the daemon's iroh endpoint"
-                    if available else "the iroh endpoint is not bound on this daemon",
-                })
+                if not available:
+                    answers.append({
+                        "name": "iroh",
+                        "available": False,
+                        "reachable": False,
+                        "rtt_ms": None,
+                        "detail": "the iroh endpoint is not bound on this daemon",
+                    })
+                elif connected and path == "iroh":
+                    answers.append({
+                        "name": "iroh",
+                        "available": True,
+                        "reachable": True,
+                        "rtt_ms": rtt,
+                        "detail": "the phone link arrives at the daemon's iroh endpoint",
+                    })
+                else:
+                    answers.append(self._unmeasured("iroh", path))
             elif name == "lan":
                 addresses = (await asyncio.to_thread(addresses_for, self.settings.device_port))["lan"]
                 answers.append(await self._lan_candidate(addresses, link.get("certificate"), rtt, connected))
@@ -719,6 +732,19 @@ class AppApi:
                 answers.append({"name": name, "available": False, "reachable": False, "rtt_ms": None,
                                 "reason": "unknown_candidate"})
         return 200, {"candidates": answers, "checked_at": _iso(time.time())}
+
+    @staticmethod
+    def _unmeasured(name: str, path: str) -> dict[str, Any]:
+        """A candidate the daemon cannot vouch for: this link runs over another path."""
+        linked = "No link is up" if path == "none" else f"This phone is linked over {path}"
+        return {
+            "name": name,
+            "available": True,
+            "reachable": False,
+            "rtt_ms": None,
+            "reason": "not_measured",
+            "detail": f"{linked}; {name} was not measured.",
+        }
 
     async def _lan_candidate(
         self, addresses: list[str], certificate: str | None, rtt: float | None, connected: bool,
@@ -766,7 +792,9 @@ class AppApi:
             return {"name": "tailscale", "available": False, "reachable": False, "rtt_ms": None,
                     "reason": "not_connected"}
         reachable = connected and self._path_kind() == "tailscale"
-        return {"name": "tailscale", "available": True, "reachable": reachable, "rtt_ms": rtt,
+        if not reachable:
+            return {**self._unmeasured("tailscale", self._path_kind()), "addresses": addresses}
+        return {"name": "tailscale", "available": True, "reachable": True, "rtt_ms": rtt,
                 "addresses": addresses,
                 "detail": "pair by this address with `phonxiety pair --tailscale`"}
 
@@ -840,6 +868,27 @@ class AppApi:
         "heard clearly, wait for the answer and thank the person."
     )
     TEST_CONSTRAINTS = "Keep the call under a minute and end it yourself once the question is answered."
+    # With automatic probes the daemon owns the ending: the call must stay up while the
+    # probes run, so the agent is told not to hang up on its own.
+    TEST_CONSTRAINTS_PROBES = (
+        "Keep the call under a minute. The daemon starts its audio probes with the call and "
+        "hangs up when they finish; do not end the call yourself."
+    )
+
+    def _test_audio(self, body: dict[str, Any]) -> TestAudioOptions | None:
+        """The optional Lab probes in a test-call body, or None when the request has none."""
+        raw = {"loopback": body.get("loopback", False), "tone": body.get("tone")}
+        if raw["tone"] is None and not raw["loopback"]:
+            return None
+        try:
+            options = TestAudioOptions.model_validate(raw)
+        except ValidationError as exc:
+            raise ApiError(400, "invalid_argument", _validation_message(exc)) from None
+        if options.loopback and not self._supports("loopback_start"):
+            raise ApiError(409, "unsupported_by_phone", "this phone build does not offer audio loopback")
+        if options.tone is not None and not self._supports("tone_start"):
+            raise ApiError(409, "unsupported_by_phone", "this phone build does not offer a test tone")
+        return options
 
     async def _test_call(self, query: dict[str, Any], body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         destination = self._string(body, "destination", limit=32)
@@ -850,6 +899,7 @@ class AppApi:
             raise ApiError(400, "invalid_argument", "max_duration_s must be an integer") from None
         if not 10 <= max_duration <= 60:
             raise ApiError(400, "invalid_argument", "max_duration_s must be between 10 and 60")
+        options = self._test_audio(body)
         # Never retried: a fresh request id each time, so a repeated tap dials again only
         # when the user taps again.
         request = CallRequest(
@@ -857,12 +907,12 @@ class AppApi:
             destination=destination,
             goal=self.TEST_GOAL,
             context=self.TEST_CONTEXT,
-            constraints=self.TEST_CONSTRAINTS,
+            constraints=self.TEST_CONSTRAINTS if options is None else self.TEST_CONSTRAINTS_PROBES,
             limits=CallLimits(max_duration_s=max_duration, ring_timeout_s=30),
             result_fields=["heard"],
             phone_account=body.get("phone_account"),
         )
-        snapshot = await self.controller.place_call(request)
+        snapshot = await self.controller.place_call(request, test_audio=options)
         await self._notify_local()
         return 200, {**snapshot, "profile": "test"}
 

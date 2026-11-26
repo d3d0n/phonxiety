@@ -33,6 +33,33 @@ class CallLimits(BaseModel):
     ring_timeout_s: int = Field(default=60, ge=5, le=180)
 
 
+class TestToneOptions(BaseModel):
+    """The tone a Lab test call plays into the line, with its own stop time."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    hz: int = Field(default=1000, ge=100, le=4000)
+    dbfs: float = Field(default=-20, ge=-60, le=0)
+    # The daemon stops the tone itself after this many seconds, so the call can hold for it.
+    seconds: float = Field(ge=1, le=10)
+
+
+class TestAudioOptions(BaseModel):
+    """Optional automatic probes for a Lab test call, started with the audio."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    loopback: bool = False
+    tone: TestToneOptions | None = None
+
+    @field_validator("loopback", mode="before")
+    @classmethod
+    def _strict_bool(cls, value: object) -> bool:
+        if not isinstance(value, bool):
+            raise ValueError("loopback must be true or false")
+        return value
+
+
 class CallRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 

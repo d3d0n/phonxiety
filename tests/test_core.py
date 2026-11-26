@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import tempfile
+import time
 import unittest
 import wave
 from array import array
@@ -20,7 +21,13 @@ from phonxiety.controller import (
     CallController,
 )
 from phonxiety.device import DeviceError
-from phonxiety.models import CallLimits, CallRequest, CallState
+from phonxiety.models import (
+    CallLimits,
+    CallRequest,
+    CallState,
+    TestAudioOptions as ProbeOptions,
+    TestToneOptions as ProbeTone,
+)
 from phonxiety.store import CallStore
 
 
@@ -581,6 +588,45 @@ class ControllerTests(_ControllerCase):
         self.assertEqual(reviews, 0)
         await self.controller.hangup_call(call_id)
         await self.controller.wait_call_result(call_id, wait_s=1)
+
+
+class TestCallProbeTests(_ControllerCase):
+    async def _answer(self, options: TestAudioOptions) -> str:
+        call = await self.controller.place_call(request(), test_audio=options)
+        await asyncio.wait_for(self.device.dialled.wait(), 1)
+        await self.controller.on_device_event({"type": "call_state", "call_id": call["call_id"], "state": "active"})
+        return call["call_id"]
+
+    async def test_agent_finish_waits_until_the_probes_have_run(self) -> None:
+        with mock.patch.object(controller_module, "LOOPBACK_PROBE_S", 1.0):
+            call_id = await self._answer(ProbeOptions(loopback=True))
+        voice = self.voices[-1]
+        self.assertIn("loopback_start", [command for command, _, _ in self.device.commands])
+        self.device.allow_drain.set()
+        finishing = asyncio.create_task(voice.callbacks.delegation("d1", "END_CALL"))
+        await self._settle()
+        # The agent ends its task at once, but the call stays up while the probe runs.
+        self.assertEqual(self.store.state(call_id), CallState.ACTIVE)
+        self.assertFalse(self.device.disconnect_requested.is_set())
+        began = time.monotonic()
+        await asyncio.wait_for(finishing, 5)
+        self.assertGreaterEqual(time.monotonic() - began, 0.8)
+        result = await self.controller.wait_call_result(call_id, wait_s=5)
+        self.assertEqual(result["state"], "ended")
+        self.assertTrue(self.device.disconnect_requested.is_set())
+        self.assertEqual([command for command, _, _ in self.device.commands].count("loopback_stop"), 1)
+
+    async def test_the_app_can_still_end_a_call_during_the_hold(self) -> None:
+        call_id = await self._answer(ProbeOptions(loopback=True, tone=ProbeTone(seconds=10)))
+        names = [command for command, _, _ in self.device.commands]
+        self.assertIn("loopback_start", names)
+        self.assertIn("tone_start", names)
+        await self.controller.hangup_call(call_id)
+        result = await self.controller.wait_call_result(call_id, wait_s=5)
+        self.assertEqual(result["state"], "ended")
+        names = [command for command, _, _ in self.device.commands]
+        self.assertEqual(names.count("loopback_stop"), 1)
+        self.assertEqual(names.count("tone_stop"), 1)
 
 
 class QuietLineTests(_ControllerCase):
