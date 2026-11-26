@@ -78,6 +78,13 @@ internal class LinkSupervisor(
         const val RECONNECT_MAX_MS = 8_000L
 
         /**
+         * One attempt that neither opens nor reports down is over after this:
+         * a boot-time dial with no usable network must not hold the slot for
+         * the process lifetime.
+         */
+        const val ATTEMPT_TIMEOUT_MS = 20_000L
+
+        /**
          * 500 ms of 48 kHz mono PCM16: above this backlog a live capture frame
          * is dropped instead of turning a network stall into growing latency.
          */
@@ -92,6 +99,7 @@ internal class LinkSupervisor(
     private var reconnectScheduled = false
     private var reconnectDelayMs = RECONNECT_BASE_MS
     private var reconnectTask: LinkTask? = null
+    private var attemptTask: LinkTask? = null
     private var lastHostActivity = 0L
     private var opens = 0
 
@@ -121,6 +129,7 @@ internal class LinkSupervisor(
             lastHostActivity = 0L
             current = link
             link = null
+            clearAttemptDeadlineLocked()
             reconnectTask?.cancel()
             reconnectTask = null
             reconnectScheduled = false
@@ -204,7 +213,15 @@ internal class LinkSupervisor(
         synchronized(lock) {
             if (!running || link != null) return
         }
-        val attempt = factory.create()
+        val attempt = try {
+            factory.create()
+        } catch (t: Throwable) {
+            // Building one attempt — a candidate plan or a probe — is itself an
+            // attempt: a throw moves to the next dial instead of ending here.
+            BridgeLog.w(TAG, "link attempt creation failed: ${t.javaClass.simpleName}")
+            scheduleReconnect()
+            return
+        }
         val installed = synchronized(lock) {
             when {
                 !running -> false
@@ -221,8 +238,73 @@ internal class LinkSupervisor(
             runCatching { attempt.cancel() }
             return
         }
-        // Not under the lock: a link may call onOpen before start() returns.
-        attempt.start(Listener(attempt))
+        try {
+            // Not under the lock: a link may call onOpen before start() returns.
+            attempt.start(Listener(attempt))
+        } catch (t: Throwable) {
+            BridgeLog.w(TAG, "link attempt start failed: ${t.javaClass.simpleName}")
+            handleDown(attempt, "connect_failed")
+            runCatching { attempt.cancel() }
+            return
+        }
+        armAttemptDeadline(attempt)
+    }
+
+    /**
+     * Arms the one deadline for [owner]: an attempt that neither opens nor
+     * reports down inside [ATTEMPT_TIMEOUT_MS] is dropped as `connect_timeout`
+     * so the backoff re-dials.  A link that opened in the meantime keeps no
+     * deadline at all.
+     */
+    private fun armAttemptDeadline(owner: DeviceLink) {
+        val task = try {
+            scheduler.after(ATTEMPT_TIMEOUT_MS) { expireAttempt(owner) }
+        } catch (_: RejectedExecutionException) {
+            return
+        }
+        val keep = synchronized(lock) {
+            if (running && link === owner && !linkUp) {
+                attemptTask = task
+                true
+            } else {
+                false
+            }
+        }
+        if (!keep) task.cancel()
+    }
+
+    /**
+     * Retires the attempt under the lock: an open that arrives after this sees
+     * no slot and is refused, so the report below is the attempt's only fate.
+     * Notification and cancellation run outside the lock, in that order.
+     */
+    private fun expireAttempt(owner: DeviceLink) {
+        val notify = synchronized(lock) {
+            if (!running || linkUp || link !== owner) return
+            retireCurrentLocked()
+        }
+        if (!notify) return
+        notifyDown("connect_timeout")
+        runCatching { owner.cancel() }
+    }
+
+    /** Caller holds [lock]. */
+    private fun clearAttemptDeadlineLocked() {
+        attemptTask?.cancel()
+        attemptTask = null
+    }
+
+    /**
+     * Caller holds [lock] and the attempt is current: hands the slot back.
+     * Clearing the deadline here is what keeps an open racing the deadline from
+     * being torn down as `connect_timeout`.
+     */
+    private fun retireCurrentLocked(): Boolean {
+        link = null
+        linkUp = false
+        lastHostActivity = 0L
+        clearAttemptDeadlineLocked()
+        return running
     }
 
     /** Binds one transport attempt to its own callbacks. */
@@ -238,22 +320,40 @@ internal class LinkSupervisor(
 
     private fun handleOpen(owner: DeviceLink) {
         val accepted = synchronized(lock) {
-            if (!running || (link != null && link !== owner)) {
-                // A link that lost the race, or arrived after close: never live.
-                runCatching { owner.cancel() }
+            if (!running || link !== owner) {
+                // A late open after the deadline retired the attempt, or one
+                // that lost the race: never live, never delivered as opened.
                 false
             } else {
-                link = owner
                 linkUp = true
                 opens++
                 reconnectScheduled = false
                 reconnectDelayMs = RECONNECT_BASE_MS
                 lastHostActivity = clock()
+                clearAttemptDeadlineLocked()
                 true
             }
         }
-        if (!accepted) return
-        if (!callbacks.onLinkOpened()) handleDown(owner, "hello_failed")
+        if (!accepted) {
+            // Outside the lock: closing the refused transport must not run
+            // under the supervisor state.
+            runCatching { owner.cancel() }
+            return
+        }
+        // A hello that throws is this attempt's failure, not the end of the
+        // supervisor: report down and let the backoff re-dial.
+        val hello = try {
+            callbacks.onLinkOpened()
+        } catch (t: Throwable) {
+            BridgeLog.w(TAG, "link hello failed: ${t.javaClass.simpleName}")
+            false
+        }
+        if (!hello) {
+            // The failed transport is cancelled too: nothing abandoned here may
+            // keep readers, writers or subscriptions alive beside the reconnect.
+            handleDown(owner, "hello_failed")
+            runCatching { owner.cancel() }
+        }
     }
 
     private fun handleText(owner: DeviceLink, text: String) {
@@ -274,17 +374,18 @@ internal class LinkSupervisor(
 
     private fun handleDown(owner: DeviceLink, reason: String) {
         val notify = synchronized(lock) {
-            if (link === owner) {
-                link = null
-            } else if (link != null) {
-                // A replaced link reporting down: the live link is unaffected.
-                return
-            }
-            linkUp = false
-            lastHostActivity = 0L
-            running
+            // Only the current attempt may report down.  A retired attempt that
+            // surfaces late (e.g. after its deadline) is no longer the link, and
+            // a replaced one must not disturb its successor.
+            if (link !== owner) return
+            retireCurrentLocked()
         }
         if (!notify) return
+        notifyDown(reason)
+    }
+
+    /** The slot is already given up: tell the engine and arm the backoff. */
+    private fun notifyDown(reason: String) {
         BridgeLog.w(TAG, "device link down: $reason")
         callbacks.onLinkDown(reason)
         scheduleReconnect()

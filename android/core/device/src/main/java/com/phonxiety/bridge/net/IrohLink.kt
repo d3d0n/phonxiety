@@ -71,7 +71,7 @@ object IrohSupport {
     private const val TAG = "PhonxietyBridge"
     private const val SECRET_KEY_FILE = "iroh-secret.key"
     private const val SECRET_KEY_BYTES = 32
-    private const val NETWORK_WAIT_MS = 30_000L
+    private const val NETWORK_WAIT_MS = 8_000L
 
     /** ALPN of the device protocol, per the iroh link contract. */
     val ALPN: ByteArray = "phonxiety/device/2".toByteArray(Charsets.UTF_8)
@@ -123,8 +123,9 @@ object IrohSupport {
 
     /**
      * An endpoint bound before Android has an internet-capable network never
-     * recovers a direct path, so wait for one first.  Gives up after 30 s and
-     * binds anyway.
+     * recovers a direct path, so wait for one first.  Gives up after
+     * [NETWORK_WAIT_MS] and binds anyway: the supervisor's attempt deadline and
+     * backoff own the rest.
      */
     private suspend fun awaitNetwork(context: Context) {
         val manager = context.getSystemService(ConnectivityManager::class.java) ?: return
@@ -607,7 +608,7 @@ private class IrohLink(
             val auth = Framing.encode(Framing.KIND_TEXT, authMessage())
                 ?: return fail(listener, "connect_failed")
             controlSend.writeAll(auth)
-            if (cancelled.get()) {
+            if (cancelled.get() || downOnce.get()) {
                 runCatching { link.close(0, "cancelled".toByteArray()) }
                 return
             }
@@ -617,6 +618,12 @@ private class IrohLink(
             val audioSend = link.openUni()
             runCatching { controlSend.setPriority(CONTROL_PRIORITY) }
             runCatching { audioSend.setPriority(AUDIO_PRIORITY) }
+            if (cancelled.get() || downOnce.get()) {
+                // An endpoint recycle or a reader ended the attempt while it
+                // was opening: never publish it as live.
+                runCatching { link.close(0, "closed".toByteArray(Charsets.UTF_8)) }
+                return
+            }
             listener.onLinkOpened()
             scope.launch { readLoop(control.recv(), Framing.KIND_TEXT, listener) }
             scope.launch { audioReadLoop(link, listener) }
