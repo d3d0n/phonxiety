@@ -7,9 +7,9 @@ import com.phonxiety.bridge.model.CallPhase
 import com.phonxiety.bridge.model.CallState
 
 /**
- * The policy that brings Phonxiety's live screen back over Telecom's in-call UI, twice at most for a
- * call placed from the composer, each time once: over the initial cover after the placement, and
- * over the cover Telecom raises when the call is answered.
+ * The policy that brings Phonxiety's live screen back over Telecom's in-call UI after a call placed
+ * from the composer: once over the initial cover after the placement, and once over the cover
+ * Telecom raises when the call is answered.
  *
  * Telecom's in-call screen is an activity drawn above every app, so placing a call from this phone
  * covers the live call, and answering it covers the live screen again when the call goes ACTIVE.
@@ -25,13 +25,17 @@ import com.phonxiety.bridge.model.CallState
  *   reply: the daemon answers the composer only after Telecom has already drawn its screen, so the
  *   call is marked as this phone's a moment after the stop. A resumed screen, a deliberate leave, an
  *   exhausted wait for the reply and a hangup all close that opportunity, so a placement reply that
- *   lands late cannot pull the live screen over somebody else's call.
+ *   lands late cannot pull the live screen over somebody else's call. A return that lands on a call
+ *   that is already ACTIVE retires the answer permit as well: the answered screen was behind it.
  * - the answer permit opens at the stop that follows the answer, and only for the call this phone
- *   placed, and only if the live screen was seen since then — by the initial return or by the
- *   activity resuming over the placed call. It waits for the call to report ACTIVE (the daemon is a
- *   link round-trip behind Telecom's own transition), then spends itself once. A resumed screen, a
- *   deliberate leave, an ending call and the deadline all close it, and [LiveCallFront.armAnswerCover]
- *   refuses for the rest of the call: a later cover (a hold, a reopened dialer) stays with Telecom.
+ *   placed, only if the live screen was seen since then — by the initial return or by the activity
+ *   resuming over the placed call — and only while Telecom shows no other call: a screen another
+ *   call raised is neither replaced nor allowed to spend this permit. The wait looks for ACTIVE (the
+ *   daemon is a link round-trip behind Telecom's own transition) for 400 ms plus twelve retries,
+ *   then closes, leaving the permit for this call's own next cover. A resume over an already
+ *   ACTIVE call retires it, and a spent permit never opens again, so a later cover (a hold, a
+ *   reopened dialer) stays with Telecom. A wait that is open when the activity is recreated for a
+ *   configuration change is adopted by the next instance with the deadline it opened with.
  *
  * Every return is issued only while the placed call is [CallPhase.DIALING] or [CallPhase.ACTIVE],
  * with the screen on.
@@ -40,6 +44,7 @@ class CallFrontReturn(
     private val handler: Handler,
     private val call: () -> CallState?,
     private val screenInteractive: () -> Boolean,
+    private val anotherCall: () -> Boolean,
     private val openFront: () -> Unit,
     private val clock: () -> Long = { SystemClock.elapsedRealtime() }
 ) {
@@ -67,7 +72,13 @@ class CallFrontReturn(
         // The screen is seen again without a return: the cover either opportunity waited for is over.
         LiveCallFront.closeOpportunity()
         LiveCallFront.closeAnswerCover()
-        screenWasShown = LiveCallFront.placedCallId() != null
+        val placed = LiveCallFront.placedCallId()
+        screenWasShown = placed != null
+        if (placed != null && isAnswered(placed)) {
+            // The live screen came forward over an answered call, so Telecom's answered screen is
+            // already behind it: the next cover is a hold or a reopened dialer, not the answer.
+            LiveCallFront.retireAnswerCover(placed)
+        }
     }
 
     /** Home and Recents; the system in-call screen appearing is not a user leave. */
@@ -79,11 +90,16 @@ class CallFrontReturn(
         LiveCallFront.closeAnswerCover()
     }
 
-    fun onDestroy() {
+    /**
+     * The activity is going away. [recreating] is true for a configuration change: a wait already
+     * open for the placed call is handed to the next instance, which adopts it in [onStart] with the
+     * deadline it opened with. A finishing activity has no successor, so it closes that wait.
+     */
+    fun onDestroy(recreating: Boolean) {
         abandonWait()
-        // A destroyed activity cannot return, and a replacement closes the opportunities on resume.
+        // A destroyed activity cannot return, and the initial cover is over either way.
         LiveCallFront.closeOpportunity()
-        LiveCallFront.closeAnswerCover()
+        if (!recreating) LiveCallFront.closeAnswerCover()
     }
 
     /** The record of a call that already ended cannot return, so it is dropped here. */
@@ -92,7 +108,9 @@ class CallFrontReturn(
         val current = call()
         if (current != null && current.callId == placed && !recoverable(current)) {
             LiveCallFront.forget(placed)
+            return
         }
+        adoptAnswerWait()
     }
 
     /**
@@ -101,11 +119,17 @@ class CallFrontReturn(
      */
     fun onStop(canReturn: Boolean) {
         abandonWait()
-        if (!canReturn) return
+        if (!canReturn) {
+            // This stop may not start the activity, but a wait opened earlier for this call is
+            // still this call's to return over; it keeps its own deadline.
+            adoptAnswerWait()
+            return
+        }
         val now = clock()
         if (LiveCallFront.awaitsCover(now)) {
             // Only a stop inside the initial cover opportunity arms the placement wait. Covers by a
             // call this phone did not place, and covers after the reply timed out, fall through.
+            if (anotherCall()) return
             stage = Stage.INITIAL
             attemptsLeft = RETURN_ATTEMPTS
             handler.postDelayed(tick, RETURN_DELAY_MS)
@@ -114,7 +138,27 @@ class CallFrontReturn(
         // The answer raises Telecom's screen again over the live screen. The opportunity opens at
         // this stop so the return stays inside the window where this activity may start itself; the
         // wait then covers the daemon reporting the answer a link round-trip later.
-        if (!armAnswerCover(now)) return
+        if (anotherCall()) {
+            // Telecom is showing another call above this one: that screen is not the answer's, so it
+            // is left in front and this call's permit is not spent on it.
+            LiveCallFront.closeAnswerCover()
+            return
+        }
+        val armed = armAnswerCover(now)
+        if (!armed && !LiveCallFront.answerCoverPending(now)) return
+        stage = Stage.ANSWER
+        attemptsLeft = ANSWER_ATTEMPTS
+        handler.postDelayed(tick, RETURN_DELAY_MS)
+    }
+
+    /**
+     * Takes over a wait that is already open for the placed call — one opened before a configuration
+     * change, or one this instance adopted and stopped for. The deadline is the one the wait opened
+     * with: [LiveCallFront] refuses a wait that ran out, so adopting never mints a fresh permit.
+     */
+    private fun adoptAnswerWait() {
+        if (stage == Stage.ANSWER) return
+        if (!LiveCallFront.answerCoverPending(clock())) return
         stage = Stage.ANSWER
         attemptsLeft = ANSWER_ATTEMPTS
         handler.postDelayed(tick, RETURN_DELAY_MS)
@@ -173,10 +217,21 @@ class CallFrontReturn(
         if (!LiveCallFront.claimReturn(pending, now)) return
         screenWasShown = true
         openFront()
+        if (current.phase == CallPhase.ACTIVE) {
+            // The answered call was already behind this cover, so the answer permit has nothing
+            // left to wait for: a later cover is a hold or a reopened dialer.
+            LiveCallFront.retireAnswerCover(pending)
+        }
     }
 
     private fun answerAttempt() {
         if (userLeft) {
+            LiveCallFront.closeAnswerCover()
+            return
+        }
+        if (anotherCall()) {
+            // Another call came in over this one: its screen is not ours to replace, and this
+            // call's own answer cover may still come later.
             LiveCallFront.closeAnswerCover()
             return
         }
@@ -237,6 +292,11 @@ class CallFrontReturn(
         handler.removeCallbacks(tick)
     }
 
+    private fun isAnswered(callId: String): Boolean {
+        val current = call() ?: return false
+        return current.callId == callId && current.phase == CallPhase.ACTIVE
+    }
+
     private fun recoverable(state: CallState): Boolean = state.phase == CallPhase.DIALING ||
         state.phase == CallPhase.ACTIVE
 
@@ -250,7 +310,7 @@ class CallFrontReturn(
         const val RETURN_RETRY_MS = 300L
         const val RETURN_ATTEMPTS = 10
 
-        /** 400 ms plus eleven retries: ~3.7 s, inside [LiveCallFront.ANSWER_TTL_MS]. */
+        /** 400 ms plus twelve retries: 4 s, inside [LiveCallFront.ANSWER_TTL_MS]. */
         const val ANSWER_ATTEMPTS = 12
     }
 }

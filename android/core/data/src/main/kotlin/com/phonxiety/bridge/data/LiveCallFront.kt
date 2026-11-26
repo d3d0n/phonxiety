@@ -23,10 +23,13 @@ import androidx.annotation.VisibleForTesting
  *   later cover of any other screen (an incoming call above an owned one included) finds nothing
  *   to spend.
  * - the *answer* cover: Telecom's in-call UI raises itself again when the call goes ACTIVE, over the
- *   live screen the initial return had put in front. [armAnswerCover] opens that opportunity once
- *   per call, and [claimAnswerReturn] spends it once. [closeAnswerCover] ends it when the screen
- *   comes back, the user walks away, or the wait expires; [armAnswerCover] then refuses for the rest
- *   of the call, so a later cover (a hold, a reopened dialer) is left to Telecom's own screen.
+ *   live screen the initial return had put in front. [armAnswerCover] opens one wait per cover and
+ *   [claimAnswerReturn] spends it at most once per call. [closeAnswerCover] ends a wait the screen
+ *   came back from, the user walked away from, or the deadline ran out on; nothing was spent then,
+ *   so this call's own next cover may open the wait again. [retireAnswerCover] is for the answer
+ *   that is already on the live screen — the call was ACTIVE when the initial return landed or when
+ *   the screen came forward — and it ends the permit for good, so a later cover (a hold, a reopened
+ *   dialer) is left to Telecom's own screen.
  *
  * Each opportunity has its own deadline, so a placement or an answer that never covered anything
  * cannot stay armed indefinitely.
@@ -49,17 +52,11 @@ object LiveCallFront {
     /** Monotonic time the opportunity opened; read only while [opportunityOpen]. */
     private var opportunityOpenedAt = 0L
 
-    /** The answer cover of [placedCallId] has not been spent yet. */
-    private var answerAvailable = false
+    /** Where the answer cover of [placedCallId] stands. */
+    private var answer = Answer.CLOSED
 
-    /** The answer cover may still be pulled back; expired by [ANSWER_TTL_MS]. */
-    private var answerOpen = false
-
-    /** Monotonic time the answer cover opened; read only while [answerOpen]. */
+    /** Monotonic time the answer cover opened; read only while [answer] is [Answer.OPEN]. */
     private var answerOpenedAt = 0L
-
-    /** This call's answer cover was already opened or declined; it cannot be opened again. */
-    private var answerDecided = false
 
     /** The composer is about to ask the daemon to place a call from this phone. */
     fun expectPlacement(nowElapsed: Long = SystemClock.elapsedRealtime()) {
@@ -68,7 +65,6 @@ object LiveCallFront {
             returnAvailable = false
             opportunityOpen = true
             opportunityOpenedAt = nowElapsed
-            resetAnswer()
         }
     }
 
@@ -78,7 +74,6 @@ object LiveCallFront {
             placementInFlight = false
             returnAvailable = false
             opportunityOpen = false
-            resetAnswer()
         }
     }
 
@@ -86,12 +81,13 @@ object LiveCallFront {
     fun remember(callId: String, nowElapsed: Long = SystemClock.elapsedRealtime()) {
         if (callId.isBlank()) return
         synchronized(lock) {
+            // Only a different call inherits nothing: the answer permit belongs to the call being
+            // remembered here, and remembering the same call again keeps its decision.
+            if (placedCallId != callId) resetAnswer()
             placedCallId = callId
             placementInFlight = false
             // A reply that arrives after the cover opportunity closed must not open it again.
             returnAvailable = stillOpen(nowElapsed)
-            // The answer permit belongs to the call being remembered here, never to a previous one.
-            resetAnswer()
         }
     }
 
@@ -123,16 +119,16 @@ object LiveCallFront {
     }
 
     /**
-     * Opens the answer-cover return for the placed call, at most once per call. False when no call
-     * was placed from this phone, when the answer cover was already opened or declined for this
-     * call, and when the call's record is gone. A second cover of the same call is left to Telecom.
+     * Opens the answer-cover wait for the placed call. False when no call was placed from this
+     * phone, while a wait for this call is already running (it keeps its own deadline), and once
+     * this call's answer was seen or returned. A wait closed by a resume, a leave, a wait for
+     * another call's screen or the deadline does not close the permit: this call's own next cover
+     * opens a new wait through here.
      */
     fun armAnswerCover(nowElapsed: Long = SystemClock.elapsedRealtime()): Boolean = synchronized(lock) {
-        val armed = placedCallId != null && !answerDecided
+        val armed = placedCallId != null && answer == Answer.CLOSED
         if (armed) {
-            answerDecided = true
-            answerAvailable = true
-            answerOpen = true
+            answer = Answer.OPEN
             answerOpenedAt = nowElapsed
         }
         armed
@@ -140,31 +136,42 @@ object LiveCallFront {
 
     /** True while the answer cover of the placed call may still be pulled back, before it is spent. */
     fun answerCoverPending(nowElapsed: Long = SystemClock.elapsedRealtime()): Boolean = synchronized(lock) {
-        answerOpen && answerAvailable && answerStillOpen(nowElapsed)
+        answer == Answer.OPEN && answerStillOpen(nowElapsed)
     }
 
     /**
      * Spends the answer-cover return for [callId]. False for a second cover of the same call (a
-     * hold, a reopened dialer), for any other call, once the call ended, and after the answer
-     * opportunity closed. The permit never opens again for this call.
+     * hold, a reopened dialer), for any other call, once the call ended, and after the wait closed.
+     * The permit never opens again for this call.
      */
     fun claimAnswerReturn(callId: String, nowElapsed: Long = SystemClock.elapsedRealtime()): Boolean = synchronized(lock) {
-        val claimed = answerOpen && answerAvailable && placedCallId == callId && answerStillOpen(nowElapsed)
-        if (claimed) {
-            answerAvailable = false
-            answerOpen = false
-        }
+        val claimed = answer == Answer.OPEN && placedCallId == callId && answerStillOpen(nowElapsed)
+        if (claimed) answer = Answer.DONE
         claimed
     }
 
     /**
-     * The answer cover is over: the screen came back, the user walked away, the wait for the call
-     * to go ACTIVE timed out, or the call is ending. This call gets no second attempt.
+     * The answer cover is over without a return: the screen came back, the user walked away, the
+     * wait ran out, or the screen in front turned out to be another call's. Nothing was spent, so a
+     * later cover of this call may open the wait again.
      */
     fun closeAnswerCover() {
         synchronized(lock) {
-            answerAvailable = false
-            answerOpen = false
+            if (answer == Answer.OPEN) answer = Answer.CLOSED
+        }
+    }
+
+    /**
+     * The answer of this call is already on the live screen, or was returned over: [callId]'s
+     * permit is over for good, and a later cover (a hold, a reopened dialer) stays with Telecom's
+     * own screen.
+     */
+    fun retireAnswerCover(callId: String) {
+        synchronized(lock) {
+            if (placedCallId == callId) {
+                answer = Answer.DONE
+                answerOpenedAt = 0L
+            }
         }
     }
 
@@ -200,11 +207,15 @@ object LiveCallFront {
     private fun answerStillOpen(nowElapsed: Long): Boolean = nowElapsed - answerOpenedAt <= ANSWER_TTL_MS
 
     private fun resetAnswer() {
-        answerAvailable = false
-        answerOpen = false
+        answer = Answer.CLOSED
         answerOpenedAt = 0L
-        answerDecided = false
     }
+
+    /**
+     * [CLOSED] is a permit this call's next cover may open, [OPEN] is a running wait, and [DONE] is
+     * an answer that was already returned over or already seen on the live screen.
+     */
+    private enum class Answer { CLOSED, OPEN, DONE }
 
     @VisibleForTesting
     fun resetForTest() {

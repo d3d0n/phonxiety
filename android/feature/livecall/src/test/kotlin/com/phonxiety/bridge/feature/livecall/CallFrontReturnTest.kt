@@ -30,6 +30,7 @@ import org.robolectric.shadows.ShadowLooper
 class CallFrontReturnTest {
     private var call: CallState? = null
     private var interactive = true
+    private var another = false
     private var returns = 0
     private var now = 1_000L
 
@@ -38,6 +39,7 @@ class CallFrontReturnTest {
         LiveCallFront.resetForTest()
         call = null
         interactive = true
+        another = false
         returns = 0
         now = 1_000L
     }
@@ -51,6 +53,7 @@ class CallFrontReturnTest {
         handler = Handler(Looper.getMainLooper()),
         call = { call },
         screenInteractive = { interactive },
+        anotherCall = { another },
         openFront = { returns++ },
         clock = { now }
     )
@@ -204,6 +207,26 @@ class CallFrontReturnTest {
     }
 
     @Test
+    fun secondStopDuringActiveDoesNotReturn() {
+        val front = controller()
+        placed("c1")
+        call = dialing("c1")
+        front.onStop(canReturn = true)
+        idle(400)
+        assertEquals(1, returns)
+
+        // The call connects while the live screen is in front: the answered screen is behind it, and
+        // a cover after it — a hold, a reopened dialer — is not the answer.
+        call = active("c1")
+        front.onResume()
+        front.onStop(canReturn = true)
+        idle(4000)
+
+        assertEquals(1, returns)
+        assertNull(LiveCallFront.pendingCallId(now))
+    }
+
+    @Test
     fun leavingAgainDuringActiveDoesNotReturn() {
         val front = controller()
         placed("c1")
@@ -238,6 +261,168 @@ class CallFrontReturnTest {
         idle(4000)
 
         assertEquals(1, returns)
+    }
+
+    @Test
+    fun aCoverFromAnotherCallDoesNotOpenTheAnswerWait() {
+        val front = controller()
+        placed("c1")
+        call = dialing("c1")
+        front.onStop(canReturn = true)
+        idle(400)
+        assertEquals(1, returns)
+        front.onResume()
+
+        // An incoming call is answered over ours, so the screen in front belongs to that call while
+        // the daemon keeps publishing the call this phone placed.
+        another = true
+        call = active("c1")
+        front.onStop(canReturn = true)
+        idle(1_000)
+        assertEquals("another call's screen is in front", 1, returns)
+
+        // That call ends and our own answer cover comes up; the permit was still there.
+        another = false
+        front.onStop(canReturn = true)
+        idle(400)
+        assertEquals(2, returns)
+        assertFalse(LiveCallFront.answerCoverPending(now))
+    }
+
+    @Test
+    fun aCoverFromAnotherCallDuringTheAnswerWaitIsNotReplaced() {
+        val front = controller()
+        placed("c1")
+        call = dialing("c1")
+        front.onStop(canReturn = true)
+        idle(400)
+        front.onResume()
+
+        // The answer cover is up while the daemon still reports the call as ringing.
+        call = dialing("c1")
+        front.onStop(canReturn = true)
+        idle(400)
+        assertEquals(1, returns)
+
+        // An incoming call arrives and is answered over ours before the daemon reports the answer.
+        another = true
+        call = active("c1")
+        idle(1_000)
+        assertEquals("another call came in over ours", 1, returns)
+
+        // The incoming call ends; our own answer cover comes up and is ours to replace.
+        another = false
+        front.onStop(canReturn = true)
+        idle(400)
+        assertEquals(2, returns)
+    }
+
+    @Test
+    fun anAnsweredCallUnderTheInitialReturnIsNotReturnedOverAgain() {
+        val front = controller()
+        placed("c1")
+
+        // The far end answers before the placement wait lands, so the initial return already puts
+        // the live screen over the answered call.
+        call = active("c1")
+        front.onStop(canReturn = true)
+        idle(400)
+        assertEquals(1, returns)
+
+        // That return retired the permit itself: the answered screen was already behind it.
+        assertFalse(LiveCallFront.armAnswerCover(now))
+
+        // A hold raises Telecom's screen again: nothing is left to wait for.
+        front.onResume()
+        front.onStop(canReturn = true)
+        idle(4_000)
+        assertEquals(1, returns)
+    }
+
+    @Test
+    fun anAnswerWaitSurvivesRecreationWithItsOriginalDeadline() {
+        val first = controller()
+        placed("c1")
+        call = dialing("c1")
+        first.onStop(canReturn = true)
+        idle(400)
+        assertEquals(1, returns)
+        first.onResume()
+
+        // The answer cover is up while the daemon still reports the call as ringing.
+        call = dialing("c1")
+        first.onStop(canReturn = true)
+        idle(400)
+        assertEquals(1, returns)
+
+        // A configuration change recreates the activity behind the same cover.
+        first.onDestroy(recreating = true)
+        val recreated = controller()
+        recreated.onStart()
+        recreated.onStop(canReturn = false)
+
+        call = active("c1")
+        idle(500)
+        assertEquals("the wait the first instance opened is still ours", 2, returns)
+
+        // Spent once: a later cover stays with Telecom.
+        recreated.onResume()
+        recreated.onStop(canReturn = true)
+        idle(4_000)
+        assertEquals(2, returns)
+    }
+
+    @Test
+    fun aRecreatedAnswerWaitKeepsTheDeadlineItOpenedWith() {
+        val first = controller()
+        placed("c1")
+        call = dialing("c1")
+        first.onStop(canReturn = true)
+        idle(400)
+        assertEquals(1, returns)
+        first.onResume()
+
+        // The wait opens at this stop and the daemon is slow to report the answer.
+        call = dialing("c1")
+        first.onStop(canReturn = true)
+        idle(400)
+        assertEquals(1, returns)
+
+        // The activity is recreated, and while no instance holds the wait its deadline runs out.
+        first.onDestroy(recreating = true)
+        now += LiveCallFront.ANSWER_TTL_MS
+
+        // Adopting the old wait cannot mint a fresh window: the answer is past its deadline.
+        val recreated = controller()
+        recreated.onStart()
+        call = active("c1")
+        idle(1_000)
+        assertEquals(1, returns)
+    }
+
+    @Test
+    fun aRejectedSecondPlacementKeepsTheSpentAnswerPermit() {
+        val front = controller()
+        placed("c1")
+        call = dialing("c1")
+        front.onStop(canReturn = true)
+        idle(400)
+        front.onResume()
+        call = active("c1")
+        front.onStop(canReturn = true)
+        idle(400)
+        assertEquals(2, returns)
+        front.onResume()
+
+        // The lab starts another placement while the call is up and the daemon rejects it.
+        LiveCallFront.expectPlacement(now)
+        call = active("c1")
+        LiveCallFront.cancelPlacement()
+
+        // A hold raises Telecom's screen again; the spent answer permit must stay spent.
+        front.onStop(canReturn = true)
+        idle(4_000)
+        assertEquals(2, returns)
     }
 
     @Test

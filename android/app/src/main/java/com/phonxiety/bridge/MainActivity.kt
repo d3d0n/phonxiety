@@ -37,6 +37,7 @@ class MainActivity : ComponentActivity() {
         handler = handler,
         call = { BridgeRuntime.state.value.call },
         screenInteractive = { getSystemService(PowerManager::class.java)?.isInteractive != false },
+        anotherCall = { TelecomCalls.anotherCallVisible() },
         openFront = ::bringToFront
     )
 
@@ -82,7 +83,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        callFront.onDestroy()
+        callFront.onDestroy(recreating = isChangingConfigurations)
         super.onDestroy()
     }
 
