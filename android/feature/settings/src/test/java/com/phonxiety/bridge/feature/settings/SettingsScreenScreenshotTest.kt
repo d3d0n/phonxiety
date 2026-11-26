@@ -16,6 +16,10 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
+import java.util.Locale
+import java.util.TimeZone
+import org.junit.After
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -32,8 +36,24 @@ import org.robolectric.annotation.GraphicsMode
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "w411dp-h2600dp-xxhdpi")
 class SettingsScreenScreenshotTest(private val matrixCase: SettingsMatrixCase) {
+    private val originalTimeZone: TimeZone = TimeZone.getDefault()
+    private val originalLocale: Locale = Locale.getDefault()
+
     @get:Rule
     val composeRule = createComposeRule()
+
+    /** The screens print clock times; a screenshot must not depend on the machine's zone. */
+    @Before
+    fun pinClock() {
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
+        Locale.setDefault(Locale.US)
+    }
+
+    @After
+    fun restoreClock() {
+        TimeZone.setDefault(originalTimeZone)
+        Locale.setDefault(originalLocale)
+    }
 
     @Test
     fun rendersOneMatrixState() {
