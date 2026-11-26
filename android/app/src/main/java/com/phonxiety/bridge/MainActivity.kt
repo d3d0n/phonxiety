@@ -29,6 +29,10 @@ class MainActivity : ComponentActivity() {
     private var signal by mutableStateOf<AppSignal?>(null)
     private val handler = Handler(Looper.getMainLooper())
 
+    /** The screen request the last intent carried; the navigation host consumes it once. */
+    internal val pendingSignal: AppSignal?
+        get() = signal
+
     private val callFront = CallFrontReturn(
         handler = handler,
         call = { BridgeRuntime.state.value.call },
@@ -102,26 +106,16 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * `phonxiety://pair?...` goes to the wizard (which validates it through the pairing repository);
-     * `phonxiety.route=doctor` opens the Doctor entry. The intent data is cleared so a configuration
-     * change cannot replay it.
+     * Every entry point asks for a screen through [signalFor]: a pairing link for the wizard, and
+     * the notification routes for the dashboard, the live call, the Doctor and the setup wizard.
+     * The intent is cleared so a configuration change cannot replay it.
      */
     private fun handleIntent(intent: Intent?) {
         if (intent == null) return
-        val data = intent.data
-        when {
-            intent.action == Intent.ACTION_VIEW &&
-                data?.scheme == PAIR_SCHEME &&
-                data.host == PAIR_HOST -> {
-                signal = AppSignal.Pair(data.toString())
-                intent.data = null
-            }
-
-            intent.getStringExtra(EXTRA_ROUTE) == ROUTE_DOCTOR -> {
-                signal = AppSignal.Doctor
-                intent.removeExtra(EXTRA_ROUTE)
-            }
-        }
+        signal = signalFor(intent) ?: return
+        intent.data = null
+        intent.removeExtra(Notifications.EXTRA_ROUTE)
+        intent.removeExtra(Notifications.EXTRA_CALL_ID)
     }
 
     companion object {
@@ -129,7 +123,30 @@ class MainActivity : ComponentActivity() {
         private const val PAIR_SCHEME = "phonxiety"
         private const val PAIR_HOST = "pair"
 
-        const val EXTRA_ROUTE = "phonxiety.route"
-        const val ROUTE_DOCTOR = "doctor"
+        /**
+         * What [intent] asks the app to do, for a cold start and for [onNewIntent] alike. A call
+         * route without an ID cannot open a call, so it falls back to the dashboard.
+         */
+        fun signalFor(intent: Intent): AppSignal? {
+            val data = intent.data
+            if (intent.action == Intent.ACTION_VIEW && data?.scheme == PAIR_SCHEME && data.host == PAIR_HOST) {
+                return AppSignal.Pair(data.toString())
+            }
+            return when (intent.getStringExtra(Notifications.EXTRA_ROUTE)) {
+                Notifications.ROUTE_CALL ->
+                    intent.getStringExtra(Notifications.EXTRA_CALL_ID)
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { AppSignal.LiveCall(it) }
+                        ?: AppSignal.Dashboard
+
+                Notifications.ROUTE_SETUP -> AppSignal.Setup
+
+                Notifications.ROUTE_DASHBOARD -> AppSignal.Dashboard
+
+                Notifications.ROUTE_DOCTOR -> AppSignal.Doctor
+
+                else -> null
+            }
+        }
     }
 }

@@ -1,9 +1,6 @@
 package com.phonxiety.bridge
 
-import android.app.Notification
-import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -15,7 +12,9 @@ import com.phonxiety.bridge.feature.onboarding.setupProgressStore
  * After the reboot the wizard asked for, setup is only half applied until someone opens the app:
  * the first launch re-probes the module, the overlay and the privileged grants. A boot receiver
  * cannot start an activity, so it posts the reminder that takes the user there. It stays silent
- * when setup already finished or no install was in flight.
+ * when setup already finished, when no install was in flight, or when notifications are refused.
+ *
+ * The reminder has its own ID and its own channel: it must never replace the device-link card.
  */
 class SetupResumeReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -31,33 +30,14 @@ class SetupResumeReceiver : BroadcastReceiver() {
             return
         }
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
-        manager.createNotificationChannel(
-            NotificationChannel(
-                CHANNEL_ID,
-                "Setup",
-                NotificationManager.IMPORTANCE_DEFAULT
-            ).apply {
-                description = "Finish installing the Phonxiety module after a reboot"
-            }
+        Notifications.ensureChannels(context)
+        manager.notify(
+            Notifications.SETUP_ID,
+            Notifications.setup(
+                context,
+                context.getString(R.string.notification_setup_title),
+                context.getString(R.string.notification_setup_text)
+            )
         )
-        val open = PendingIntent.getActivity(
-            context,
-            0,
-            Intent(context, MainActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val notification = Notification.Builder(context, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
-            .setContentTitle("Finish setting up Phonxiety")
-            .setContentText("The module was installed; open the app to verify it and pair with your computer.")
-            .setContentIntent(open)
-            .setAutoCancel(true)
-            .build()
-        manager.notify(NOTIFICATION_ID, notification)
-    }
-
-    private companion object {
-        const val CHANNEL_ID = "setup"
-        const val NOTIFICATION_ID = 0x5048
     }
 }

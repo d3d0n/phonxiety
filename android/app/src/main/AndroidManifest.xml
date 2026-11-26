@@ -69,6 +69,14 @@
             </intent-filter>
         </receiver>
 
+        <!--
+            The Hang up button on the live-call card. The notification builds an explicit intent for
+            this class, so it stays unexported and needs no filter: nothing else can invoke it.
+        -->
+        <receiver
+            android:name=".NotificationActions"
+            android:exported="false" />
+
         <!-- Recordings and transcripts are shared from the app cache, never from app storage. -->
         <provider
             android:name="androidx.core.content.FileProvider"
