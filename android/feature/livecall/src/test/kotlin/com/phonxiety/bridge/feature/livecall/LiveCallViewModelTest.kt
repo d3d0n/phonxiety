@@ -344,6 +344,52 @@ class LiveCallViewModelTest {
         )
     }
 
+    @Test
+    fun thePhoneAdvancesAStaleSnapshotAndALaterEventCannotRollItBack() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        // The snapshot answers after Telecom already dialed, and still says "preparing".
+        api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "preparing"))
+        val bridge = FakeBridgeState()
+        val viewModel = LiveCallViewModel(api, bridge)
+        viewModel.bind(CALL_ID)
+        runCurrent()
+        assertEquals("preparing", viewModel.state.value.state)
+
+        bridge.emit(BridgeState(call = CallState(CALL_ID, "+998 ·· 67", CallPhase.ACTIVE, 1_000)))
+        runCurrent()
+        assertEquals("the phone's connection advances the stale record", "active", viewModel.state.value.phase)
+        assertEquals("the record's own word is still what arrived", "preparing", viewModel.state.value.state)
+
+        // A delayed event page repeats the same stale phase; it cannot undo the connection.
+        api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(stateEvent(1, "preparing"))))
+        runCurrent()
+        assertEquals("active", viewModel.state.value.phase)
+
+        // The daemon's terminal state is the call's end, whatever the phone last knew.
+        api.events += ApiOutcome.Ok(200, page(revision = 2, events = listOf(endedEvent(2))))
+        advanceUntilIdle()
+        assertEquals("ended", viewModel.state.value.phase)
+    }
+
+    @Test
+    fun anUnconfirmedEndKeepsTheRecordsReasonForTheScreen() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        api.callSnapshot = ApiOutcome.Ok(
+            200,
+            snapshot(state = "unknown").copy(error = "hangup_unconfirmed: the phone did not answer")
+        )
+
+        val viewModel = viewModel(api)
+        viewModel.bind(CALL_ID)
+        advanceUntilIdle()
+
+        val state = viewModel.state.value
+        assertTrue(state.ended)
+        assertEquals("unknown", state.phase)
+        // The reason is projected, not dropped: the screen cannot explain the loss without it.
+        assertEquals("hangup_unconfirmed: the phone did not answer", state.statusUnknownError)
+    }
+
     private fun viewModel(api: FakeDaemonApi): LiveCallViewModel = LiveCallViewModel(api, FakeBridgeState())
 
     private companion object {
