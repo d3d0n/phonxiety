@@ -1015,6 +1015,9 @@ class CallController:
         self.store.begin_ending(call.call_id)
         call.finish_requested_at = time.monotonic()
         call.farewell_pending = farewell_pending
+        # From here finish_requested_at and farewell_pending decide whether answers are spoken;
+        # a hold's own flag would outlive a reopened call and silence its next answer.
+        call.held_without_farewell = False
         # Without a pending farewell the last completed assistant turn already was the goodbye.
         call.finish_turn_base = call.assistant_turns if farewell_pending else call.assistant_turns - 1
         call.finish_speech_seen = not farewell_pending

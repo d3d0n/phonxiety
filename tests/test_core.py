@@ -752,6 +752,7 @@ class TestCallProbeTests(_ControllerCase):
         result = await self.controller.wait_call_result(call_id, wait_s=5)
         self.assertEqual(result["state"], "ended")
         self.assertTrue(self.device.disconnect_requested.is_set())
+        self.assertFalse(call.held_without_farewell, "the started finish owns silence; the hold's flag is gone")
 
 
 class QuietLineTests(_ControllerCase):
