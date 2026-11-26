@@ -14,4 +14,6 @@ Record: state ended, call_outcome answered, task_outcome succeeded, far end pers
 link carried 1359 frames to the phone and 1491 back, no error. After the call the Lab showed
 "Answered" under Test call result.
 
-Not confirmed: what the far end heard of the loopback and the tone.
+Heard at the far end: asked whether it heard the agent without distortion, the person answered
+"there are plenty of distortions"; asked afterwards, they confirmed that this was their own voice
+looped back and the tone playing over the agent. Both probes reached the far end.
