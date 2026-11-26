@@ -720,6 +720,39 @@ class TestCallProbeTests(_ControllerCase):
         result = await self.controller.wait_call_result(call_id, wait_s=2)
         self.assertEqual(result["state"], "ended")
 
+    async def test_a_held_finish_without_farewell_gets_no_spoken_answer(self) -> None:
+        with mock.patch.object(controller_module, "LOOPBACK_PROBE_S", 2.0):
+            call_id = await self._answer(ProbeOptions(loopback=True))
+        voice = self.voices[-1]
+        self.device.allow_drain.set()
+        call = self.controller._calls[call_id]
+        delegated = asyncio.Event()
+
+        async def run(prompt: str, tools: dict) -> str:
+            await tools["finish_call"]({
+                "outcome": "succeeded", "summary": "Line confirmed",
+                "fields": {}, "farewell_pending": False,
+            })
+            delegated.set()
+            return "Done. Say nothing more."
+
+        self.tasks.run_handler = run
+        await voice.callbacks.delegation("d1", "finish")
+        await asyncio.wait_for(delegated.wait(), 1)
+        # Let the delegation task reach its answer.
+        for _ in range(5):
+            await asyncio.sleep(0)
+        self.assertTrue(call.held_without_farewell)
+        self.assertFalse(
+            any(text.startswith("FINAL_RESULT") for text, _ in voice.contexts),
+            "a finish without a farewell must not hand the voice anything to say",
+        )
+        # The hold survives and ends the call once the probe window has passed.
+        self.assertEqual(self.store.state(call_id), CallState.ACTIVE)
+        result = await self.controller.wait_call_result(call_id, wait_s=5)
+        self.assertEqual(result["state"], "ended")
+        self.assertTrue(self.device.disconnect_requested.is_set())
+
 
 class QuietLineTests(_ControllerCase):
     review_quiet = 0.05

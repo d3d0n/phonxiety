@@ -111,6 +111,9 @@ class _Call:
     # The task that ends the call once the probe deadline passes; cancelled when the
     # hold is withdrawn, on hang-up and in finalization.
     finish_hold_task: asyncio.Task[Any] | None = None
+    # A held finish that will end without a farewell: like a started one, it silences
+    # any further spoken answer (see _run_delegation).
+    held_without_farewell: bool = False
     loopback_on: bool = False
     tone_on: bool = False
     tone_stop_task: asyncio.Task[Any] | None = None
@@ -653,6 +656,7 @@ class CallController:
         if task is None or task.done():
             return
         self._cancel(task)
+        call.held_without_farewell = False
         if not call.finalizing and self.store.state(call.call_id) != CallState.ENDING:
             call.finish_armed = False
 
@@ -1002,6 +1006,7 @@ class CallController:
                 return
             await self._begin_finish(call, farewell_pending)
             return
+        call.held_without_farewell = not farewell_pending
         call.finish_hold_task = self._spawn(
             self._hold_finish(call, farewell_pending, deadline), f"finish-hold:{call.call_id}",
         )
@@ -1059,8 +1064,10 @@ class CallController:
             self._check_work(call, generation)
             log.info("call %s: delegation %s answered (%d chars)", call.call_id, delegation_id, len(text))
             call.last_activity = time.monotonic()
-            # A finish without a pending farewell disconnects now; a spoken answer would be cut off.
-            if call.voice and (call.finish_requested_at is None or call.farewell_pending):
+            # A finish without a pending farewell disconnects now (or once the Lab probes have run);
+            # a spoken answer would be cut off, and speech would withdraw a held finish.
+            silent_finish = (call.finish_requested_at is not None and not call.farewell_pending) or call.held_without_farewell
+            if call.voice and not silent_finish:
                 await call.voice.append_context(f"FINAL_RESULT: {text}", delegation_id=delegation_id)
         except asyncio.CancelledError:
             log.info("call %s: delegation %s cancelled", call.call_id, delegation_id)
