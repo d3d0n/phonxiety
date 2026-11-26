@@ -427,12 +427,12 @@ class LiveCallViewModelTest {
     }
 
     /**
-     * The header counts the conversation, not the ring: the phone's own ACTIVE is the connect time,
-     * and once stamped the running count keeps it even after the record's `connected_at` arrives
-     * from another clock. The ended header is the record's connected duration.
+     * The count starts at the bridge's connect stamp: the engine records it once at the answer, so
+     * a record `connected_at` from another clock cannot move the running number mid-call. The ended
+     * header is the record's connected duration.
      */
     @Test
-    fun theTimerKeepsTheConnectThePhoneSaw() = runTest(dispatcher) {
+    fun theTimerKeepsTheBridgesConnect() = runTest(dispatcher) {
         val api = FakeDaemonApi()
         val placedAt = (System.currentTimeMillis() - 600_000) / 1_000.0
         api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "preparing", createdAt = placedAt, connectedAt = null))
@@ -447,18 +447,20 @@ class LiveCallViewModelTest {
             viewModel.state.value.callSecondsElapsed!! >= 599
         )
 
-        // The phone reports the line active before the record's connect time arrives.
-        bridge.emit(BridgeState(call = CallState(CALL_ID, "+998 ·· 67", CallPhase.ACTIVE, 1_000)))
+        // The bridge reports the line active with the answer time the engine recorded.
+        val bridgeConnect = System.currentTimeMillis() - 5_000
+        bridge.emit(
+            BridgeState(call = CallState(CALL_ID, "+998 ·· 67", CallPhase.ACTIVE, 1_000, bridgeConnect))
+        )
         runCurrent()
-        val phoneStamp = viewModel.state.value.phoneConnectedAtMs
-        assertNotNull("the phone's own ACTIVE becomes the connect time", phoneStamp)
+        assertEquals("the bridge's stamp starts the running count", bridgeConnect, viewModel.state.value.timerStartMs)
         assertTrue(
-            "the header counts the conversation from that moment",
-            viewModel.state.value.callSecondsElapsed!! < 5
+            "the header counts the conversation from the answer",
+            viewModel.state.value.callSecondsElapsed!! in 4..6
         )
 
         // The record's connected_at arrives a minute old, from another clock. The running count
-        // stays on the phone's stamp, so the number never jumps mid-call.
+        // stays on the bridge's stamp, so the number never jumps mid-call.
         val connectedAt = (System.currentTimeMillis() - 60_000) / 1_000.0
         api.callSnapshot = ApiOutcome.Ok(
             200,
@@ -467,10 +469,10 @@ class LiveCallViewModelTest {
         viewModel.reload()
         runCurrent()
         assertEquals((connectedAt * 1_000).toLong(), viewModel.state.value.connectedAtMs)
-        assertEquals("the phone's stamp still starts the running count", phoneStamp, viewModel.state.value.timerStartMs)
+        assertEquals("the bridge's stamp still starts the running count", bridgeConnect, viewModel.state.value.timerStartMs)
         assertTrue(
             "the record's older connect time does not move the running number",
-            viewModel.state.value.callSecondsElapsed!! < 5
+            viewModel.state.value.callSecondsElapsed!! < 10
         )
 
         // The end keeps the record's connected duration on the header.
@@ -484,6 +486,46 @@ class LiveCallViewModelTest {
             ended.callSecondsElapsed
         )
         assertEquals("the ended header starts at the record's connect time", ended.connectedAtMs, ended.timerStartMs)
+    }
+
+    /**
+     * A screen opened on a call that connected a minute ago counts the conversation from the
+     * answer, not from the moment it opened: the engine already recorded the connect on the bridge
+     * call, and the first state the screen sees reads about a minute.
+     */
+    @Test
+    fun aScreenOpenedMidCallCountsFromTheBridgeConnect() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        val connectedAtMs = System.currentTimeMillis() - 60_000
+        api.callSnapshot = ApiOutcome.Ok(
+            200,
+            snapshot(
+                state = "active",
+                createdAt = (connectedAtMs - 20_000) / 1_000.0,
+                connectedAt = connectedAtMs / 1_000.0
+            )
+        )
+        val bridge = FakeBridgeState()
+        // The call was already active when this screen appeared: the bridge's first value has the
+        // connect stamp the engine recorded at the answer, minute-old ring included.
+        bridge.emit(
+            BridgeState(call = CallState(CALL_ID, "+998 ·· 67", CallPhase.ACTIVE, connectedAtMs - 80_000, connectedAtMs))
+        )
+
+        val viewModel = LiveCallViewModel(api, bridge)
+        viewModel.bind(CALL_ID)
+        runCurrent()
+
+        val state = viewModel.state.value
+        assertEquals("the bridge's connect stamp starts the count", connectedAtMs, state.timerStartMs)
+        assertTrue(
+            "the first state already reads about a minute, not 00:00",
+            state.callSecondsElapsed!! in 59..61
+        )
+
+        // Close the poll so the test's virtual clock has nothing left to spin on.
+        api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(endedEvent(1))))
+        advanceUntilIdle()
     }
 
     private fun viewModel(api: FakeDaemonApi): LiveCallViewModel = LiveCallViewModel(api, FakeBridgeState())

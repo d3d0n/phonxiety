@@ -60,10 +60,11 @@ data class LiveCallUiState(
     /** The record's own connect time; null until a snapshot or event carries `connected_at`. */
     val connectedAtMs: Long? = null,
     /**
-     * The moment this screen saw the phone report its call active. Once stamped, the running header
-     * counts from it for the rest of the call, so the number never moves between two clocks.
+     * The bridge's own connect time for this call, when it is the one on screen. The engine records
+     * it once at the answer, so a screen opened mid-call counts the conversation from the connect
+     * rather than from the moment it opened, and nothing here has to guess.
      */
-    val phoneConnectedAtMs: Long? = null,
+    val bridgeConnectedAtMs: Long? = null,
     val createdAtMs: Long? = null,
     /** When the call stopped, so the timer stops with it. */
     val endedAtMs: Long? = null,
@@ -97,15 +98,15 @@ data class LiveCallUiState(
      * Where the header's count starts. Before the line is up it counts from placement, ring
      * included; the connection then restarts it at zero, because the count is the conversation,
      * the way the system's call chip begins at the answer. That reset is intentional: the ring the
-     * chip never showed is not added back. Once the phone has stamped its own connect, the running
-     * count stays on that stamp for the rest of the call, so a later record `connected_at` cannot
-     * move it between clocks; the record's time starts the count only when there is no phone stamp,
-     * as when the screen opens mid-call. An ended call's header is the record's connected duration.
+     * chip never showed is not added back. A running call counts from the bridge's own connect
+     * stamp, which the engine records once at the answer: that time is the same however late the
+     * screen opens, and the record's `connected_at` from another clock is only the fallback. An
+     * ended call's header is the record's connected duration.
      */
     val timerStartMs: Long?
         get() = when {
-            ended -> connectedAtMs ?: phoneConnectedAtMs ?: createdAtMs
-            else -> phoneConnectedAtMs ?: connectedAtMs ?: createdAtMs
+            ended -> connectedAtMs ?: createdAtMs
+            else -> bridgeConnectedAtMs ?: connectedAtMs ?: createdAtMs
         }
 
     val callSecondsElapsed: Long?
@@ -281,24 +282,20 @@ class LiveCallViewModel @Inject constructor(
      * The phone is the only writer of its own phase and audio: the engine has them the moment
      * Telecom dials, while the daemon's snapshot arrives over the link. Audio levels and the
      * codec/bitrate therefore always come from the bridge; the phase is a fallback for the daemon's
-     * state, which stays authoritative once it arrives.
+     * state, which stays authoritative once it arrives. The connect time comes from the bridge too,
+     * recorded by the engine at the answer for the matching call.
      */
     private fun collectBridge() {
         audioJob?.cancel()
         audioJob = viewModelScope.launch {
             bridgeState.state.collect { bridge ->
                 val bound = boundCallId
-                val localPhase = bridge.call?.takeIf { bound != null && it.callId == bound }?.phase
-                // The phone's own ACTIVE is this screen's one sighting of the line connecting. The
-                // first sighting is kept and starts the running count; the record's `connected_at`
-                // is a fallback only when the screen has no phone stamp of its own.
-                val phoneActiveAtMs = System.currentTimeMillis()
-                    .takeIf { localPhase == CallPhase.ACTIVE }
+                val call = bridge.call?.takeIf { bound != null && it.callId == bound }
                 _state.update {
                     it.copy(
                         audio = bridge.audio,
-                        localPhase = localPhase,
-                        phoneConnectedAtMs = it.phoneConnectedAtMs ?: phoneActiveAtMs
+                        localPhase = call?.phase,
+                        bridgeConnectedAtMs = call?.connectedAtEpochMs
                     )
                 }
             }

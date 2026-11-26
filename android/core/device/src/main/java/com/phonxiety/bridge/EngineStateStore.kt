@@ -135,10 +135,23 @@ class EngineStateStore {
         }
     }
 
-    fun callPhase(phase: CallPhase) {
+    /**
+     * Moves the call to [phase], recording its connect time on the first [CallPhase.ACTIVE].
+     * Telecom's own [connectTimeMillis] is preferred when it is positive, because the system's
+     * call chip counts from it; otherwise the engine's clock at this transition is used. The stamp
+     * belongs to the call and is never replaced by a later ACTIVE, so a screen opened mid-call
+     * counts from the answer rather than from the moment it opened.
+     */
+    fun callPhase(phase: CallPhase, connectTimeMillis: Long? = null) {
         mutable.update { current ->
             val call = current.call ?: return@update current
-            current.copy(call = call.copy(phase = phase))
+            val connectedAt = when {
+                call.connectedAtEpochMs != null -> call.connectedAtEpochMs
+                phase != CallPhase.ACTIVE -> null
+                connectTimeMillis != null && connectTimeMillis > 0 -> connectTimeMillis
+                else -> System.currentTimeMillis()
+            }
+            current.copy(call = call.copy(phase = phase, connectedAtEpochMs = connectedAt))
         }
     }
 

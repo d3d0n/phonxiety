@@ -77,6 +77,54 @@ class EngineStateStoreTest {
     }
 
     @Test
+    fun theConnectTimeIsRecordedOnceAtTheAnswer() {
+        val store = EngineStateStore()
+        store.callStarted("c1", "+******1234", 2_000)
+        assertNull("dialing has no connect time yet", store.state.value.call?.connectedAtEpochMs)
+
+        store.callPhase(CallPhase.DIALING)
+        assertNull(store.state.value.call?.connectedAtEpochMs)
+
+        // Telecom's own connect time is the base the system's call chip uses.
+        store.callPhase(CallPhase.ACTIVE, connectTimeMillis = 1_500)
+        assertEquals(1_500L, store.state.value.call?.connectedAtEpochMs)
+
+        // A later ACTIVE with another Telecom value keeps the first stamp for this call.
+        store.callPhase(CallPhase.ACTIVE, connectTimeMillis = 9_000)
+        assertEquals(1_500L, store.state.value.call?.connectedAtEpochMs)
+
+        store.callPhase(CallPhase.ENDING)
+        assertEquals("the stamp survives the phases after the answer", 1_500L, store.state.value.call?.connectedAtEpochMs)
+    }
+
+    @Test
+    fun theConnectTimeFallsBackToTheEnginesClock() {
+        val store = EngineStateStore()
+        store.callStarted("c1", "+******1234", 2_000)
+
+        val before = System.currentTimeMillis()
+        store.callPhase(CallPhase.ACTIVE)
+        val after = System.currentTimeMillis()
+
+        val stamp = store.state.value.call?.connectedAtEpochMs
+        assertTrue("the engine's clock stamps the answer", stamp != null && stamp in before..after)
+    }
+
+    @Test
+    fun aMissingTelecomConnectTimeFallsBackToTheEnginesClock() {
+        // Telecom reports 0 before the line is up, and the engine may not see a details value.
+        for (telecom in listOf<Long?>(null, 0L, -1L)) {
+            val store = EngineStateStore()
+            store.callStarted("c1", "+******1234", 2_000)
+            val before = System.currentTimeMillis()
+            store.callPhase(CallPhase.ACTIVE, connectTimeMillis = telecom)
+            val after = System.currentTimeMillis()
+            val stamp = store.state.value.call?.connectedAtEpochMs
+            assertTrue("$telecom falls back to the clock", stamp != null && stamp in before..after)
+        }
+    }
+
+    @Test
     fun endedCallStaysVisibleUntilTheNextCall() = runTest {
         val store = EngineStateStore()
         store.state.test {

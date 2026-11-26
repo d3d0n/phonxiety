@@ -42,43 +42,43 @@ class LiveCallTruthTest {
         val dialing = preparing.copy(localPhase = CallPhase.DIALING)
         assertEquals("00:10", formatTimer(dialing, created + 10_000))
 
-        // The phone reports the line up 20 s after placement. The count restarts at the connection,
-        // not at the ring the system's call chip never counted.
-        val phoneSawActiveAt = created + 20_000
+        // The bridge reports the line up 20 s after placement. The count restarts at the
+        // connection, not at the ring the system's call chip never counted.
+        val connectedAt = created + 20_000
         val active = dialing.copy(
             state = "active",
             localPhase = CallPhase.ACTIVE,
-            phoneConnectedAtMs = phoneSawActiveAt
+            bridgeConnectedAtMs = connectedAt
         )
-        assertEquals("00:00", formatTimer(active, phoneSawActiveAt))
-        assertEquals("00:04", formatTimer(active, phoneSawActiveAt + 4_000))
+        assertEquals("00:00", formatTimer(active, connectedAt))
+        assertEquals("00:04", formatTimer(active, connectedAt + 4_000))
     }
 
     /**
-     * Once the phone has stamped its own connect, the running count keeps that stamp. A record
+     * Once the bridge has recorded its connect, the running count keeps that stamp. A record
      * `connected_at` from another clock cannot move the number mid-call; the ended header is the
      * record's connected duration.
      */
     @Test
-    fun theTimerKeepsThePhonesConnectOnceStamped() {
-        val phoneSawActiveAt = 1_764_000_020_000L
+    fun theTimerKeepsTheBridgesConnectOnceRecorded() {
+        val connectedAt = 1_764_000_020_000L
         val active = live.copy(
             state = "active",
-            phoneConnectedAtMs = phoneSawActiveAt,
-            connectedAtMs = phoneSawActiveAt - 7_000
+            bridgeConnectedAtMs = connectedAt,
+            connectedAtMs = connectedAt - 7_000
         )
-        assertEquals("00:05", formatTimer(active, phoneSawActiveAt + 5_000))
+        assertEquals("00:05", formatTimer(active, connectedAt + 5_000))
 
-        val endedAt = phoneSawActiveAt + 16_000
+        val endedAt = connectedAt + 16_000
         val ended = active.copy(state = "ended", ended = true, endedAtMs = endedAt)
         assertEquals("00:23", formatTimer(ended, endedAt + 60_000))
     }
 
-    /** A screen opened mid-call has no phone stamp, so the record's connect time starts the count. */
+    /** Without a bridge stamp, as before this build, the record's connect time starts the count. */
     @Test
-    fun theRecordStartsTheCountWhenTheScreenOpensMidCall() {
+    fun theRecordStartsTheCountWhenTheBridgeHasNoStamp() {
         val connectedAt = 1_764_000_005_000L
-        val midCall = live.copy(state = "active", phoneConnectedAtMs = null, connectedAtMs = connectedAt)
+        val midCall = live.copy(state = "active", bridgeConnectedAtMs = null, connectedAtMs = connectedAt)
         assertEquals("00:34", formatTimer(midCall, connectedAt + 34_000))
     }
 
