@@ -488,10 +488,13 @@ private fun ModuleAction(
                 label = version?.let { stringResource(R.string.updates_install_module, it) }
                     ?: stringResource(R.string.updates_install_module_generic),
                 onClick = onInstall,
-                enabled = !callActive,
+                // The payload is the running APK: installing before the app update would rebuild
+                // the old module with the old allowlist and send the phone into a reboot for it.
+                enabled = !callActive && !row.needsAppFirst,
                 emphasis = ActionEmphasis.TONAL,
                 supportingText = when {
                     callActive -> stringResource(R.string.updates_blocked_call_module)
+                    row.needsAppFirst -> stringResource(R.string.updates_install_module_after_app)
                     row.requiresReboot -> stringResource(R.string.updates_install_module_support_reboot)
                     else -> stringResource(R.string.updates_install_module_support)
                 }

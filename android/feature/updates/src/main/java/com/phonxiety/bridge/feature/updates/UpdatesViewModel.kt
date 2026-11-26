@@ -168,9 +168,15 @@ class UpdatesViewModel @Inject constructor(
         viewModelScope.launch { service.installApp(manifest) }
     }
 
+    /**
+     * The module zip is rebuilt from the running APK. Before this phone runs the release's app the
+     * rebuild would put the previous allowlist back, so the action waits for the app row.
+     */
     fun installModule() {
         if (callActive.value) return
-        val manifest = check.value?.manifest ?: return
+        val checked = check.value ?: return
+        if (checked.verdict?.module?.needsAppFirst == true) return
+        val manifest = checked.manifest ?: return
         viewModelScope.launch { service.installModule(manifest) }
     }
 

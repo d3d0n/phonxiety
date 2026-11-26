@@ -28,7 +28,8 @@ object UpdatesSamples {
         "android.permission.MODIFY_PHONE_STATE",
         "android.permission.CONTROL_INCALL_EXPERIENCE",
         "android.permission.INSTALL_SELF_UPDATES",
-        "android.permission.REBOOT"
+        "android.permission.REBOOT",
+        "android.permission.START_FOREGROUND_SERVICES_FROM_BACKGROUND"
     )
 
     val manifest = UpdateManifest(
@@ -164,11 +165,23 @@ object UpdatesSamples {
     fun moduleDisabled(): UpdatesUiState = UpdatesUiState(
         check = check(
             installed(
-                appVersionCode = 3,
-                appVersion = "0.3.0",
+                appVersionCode = 4,
+                appVersion = "0.4.0",
                 moduleVersionCode = 3,
                 moduleVersion = "0.3.0",
                 moduleDisabled = true
+            )
+        )
+    )
+
+    /**
+     * The release's app already runs, the installed module has the same version code and still
+     * lacks the new grant: the module row offers the install, not "Up to date".
+     */
+    fun moduleGrantMissing(): UpdatesUiState = UpdatesUiState(
+        check = check(
+            installed(
+                granted = ALL_PERMISSIONS - "android.permission.START_FOREGROUND_SERVICES_FROM_BACKGROUND"
             )
         )
     )

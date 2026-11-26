@@ -36,6 +36,8 @@ internal fun CompatibilityNote.text(): UiText = when (this) {
     is CompatibilityNote.NewPrivilegedGrants ->
         UiText.Plural(R.plurals.updates_note_privileged, permissions.size)
 
+    CompatibilityNote.ModuleInstallFollows -> UiText.Res(R.string.updates_note_module_follows)
+
     is CompatibilityNote.NeedsNewerDaemon ->
         UiText.Res(R.string.updates_note_daemon_old, listOf(minVersion))
 

@@ -4,6 +4,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -229,7 +230,7 @@ class UpdatesScreenBehaviourTest {
     fun newPermissionsAreCountedAndTheirIdentifiersStayBehindDetails() {
         render(UpdatesSamples.modulePermissions())
 
-        composeRule.onNodeWithText("2 new privileged permissions in this release. Reboot to apply them.")
+        composeRule.onNodeWithText("3 new privileged permissions in this release. Reboot to apply them.")
             .performScrollTo()
             .assertIsDisplayed()
         composeRule.onNodeWithText("android.permission.CONTROL_INCALL_EXPERIENCE").assertDoesNotExist()
@@ -238,6 +239,35 @@ class UpdatesScreenBehaviourTest {
 
         composeRule.onNodeWithText("Control in-call experience").assertIsDisplayed()
         composeRule.onNodeWithText("android.permission.CONTROL_INCALL_EXPERIENCE").assertIsDisplayed()
+    }
+
+    @Test
+    fun theModuleInstallWaitsForTheAppUpdateThatCarriesIt() {
+        var moduleInstalls = 0
+        render(UpdatesSamples.modulePermissions(), Callbacks(installModule = { moduleInstalls++ }))
+
+        composeRule.onNodeWithText(
+            "This app update is step 1. Step 2 installs the module from it, then the phone reboots."
+        ).performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Install module 0.4.0").performScrollTo().assertIsNotEnabled()
+        composeRule.onNodeWithText("Install the app update first.").assertIsDisplayed()
+        composeRule.onNodeWithText("Install module 0.4.0").performClick()
+
+        assertEquals(0, moduleInstalls)
+    }
+
+    @Test
+    fun aMissingGrantOnTheSameModuleVersionIsAnInstallNotUpToDate() {
+        render(UpdatesSamples.moduleGrantMissing())
+
+        composeRule.onAllNodesWithText("Update available").assertCountEquals(1)
+        composeRule.onNodeWithText("Install module 0.4.0").performScrollTo().assertIsEnabled()
+        composeRule.onNodeWithText("1 new privileged permission in this release. Reboot to apply it.")
+            .performScrollTo()
+            .assertIsDisplayed()
+
+        composeRule.onNodeWithText("Show details").performScrollTo().performClick()
+        composeRule.onNodeWithText("Start after boot").assertIsDisplayed()
     }
 
     @Test

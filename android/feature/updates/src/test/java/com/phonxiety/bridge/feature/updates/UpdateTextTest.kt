@@ -60,6 +60,14 @@ class UpdateTextTest {
     }
 
     @Test
+    fun `an app row whose module step follows says so`() {
+        assertEquals(
+            UiText.Res(R.string.updates_note_module_follows),
+            CompatibilityNote.ModuleInstallFollows.text()
+        )
+    }
+
+    @Test
     fun `the daemon protocol note joins the versions it accepts`() {
         assertEquals(
             UiText.Res(R.string.updates_note_daemon_protocol, listOf("2, 3", 4)),
