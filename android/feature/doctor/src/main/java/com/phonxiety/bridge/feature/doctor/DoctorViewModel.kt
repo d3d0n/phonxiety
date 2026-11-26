@@ -19,6 +19,8 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -61,27 +63,19 @@ constructor(
     private var daemon: DaemonProbe? = null
     private var appliedLink: LinkState? = null
     private var appliedCallActive = false
+    private var appliedPaired: Boolean? = null
     private var hasResumed = false
     private val loadMutex = Mutex()
+    private val publishMutex = Mutex()
 
     init {
         viewModelScope.launch(io) { load(auto = true) }
         viewModelScope.launch {
-            bridgeState.state.collect { bridge ->
-                val last = snapshot ?: return@collect
-                val callActive = bridge.call?.phase?.let { it != CallPhase.ENDED } == true
-                if (bridge.link == appliedLink && callActive == appliedCallActive) return@collect
-                appliedLink = bridge.link
-                appliedCallActive = callActive
-                val rows = DoctorEvaluator.evaluate(
-                    snapshot = last,
-                    bridge = bridge,
-                    paired = pairing.paired.value,
-                    daemon = daemon ?: DaemonProbe.Unreachable("pending", "the daemon has not answered yet"),
-                    callActive = callActive
-                )
-                _state.update { it.copy(rows = rows, callActive = callActive) }
-            }
+            // The link is not the only input that moves on its own: the pairing cache is refreshed
+            // on IO, so it can catch up after the link's final transition. Both trigger a pass.
+            combine(bridgeState.state, pairing.paired) { bridge, cached -> bridge to cached }
+                .distinctUntilChanged()
+                .collect { publishFromCache() }
         }
     }
 
@@ -305,7 +299,8 @@ constructor(
 
         snapshot = read
         daemon = probe
-        var rows = DoctorEvaluator.evaluate(read, bridge, paired, probe, callActive)
+        val rows = DoctorEvaluator.evaluate(read, bridge, paired, probe, callActive)
+        var published = read
 
         if (auto) {
             val automatic = DoctorPolicy.automaticFixes(rows, callActive)
@@ -323,16 +318,36 @@ constructor(
                 probe = probeDaemon()
                 snapshot = fresh
                 daemon = probe
-                rows = DoctorEvaluator.evaluate(fresh, bridge, paired, probe, callActive)
+                published = fresh
             }
         }
 
+        publish(published)
+    }
+
+    /**
+     * Publishes a finished read under the same lock the link and pairing collector uses, re-sampling
+     * both inputs inside it: a link or a pairing that moved while the daemon probe ran is reflected
+     * in these rows, and the collector cannot lose that change to a stale overwrite afterwards.
+     */
+    private suspend fun publish(read: DoctorSnapshot): Unit = publishMutex.withLock {
+        val bridge = bridgeState.state.value
+        val paired = pairing.paired.value
+        val callActive = bridge.call?.phase?.let { it != CallPhase.ENDED } == true
+        val probe = daemon ?: DaemonProbe.Unreachable("pending", "the daemon has not answered yet")
         appliedLink = bridge.link
         appliedCallActive = callActive
+        appliedPaired = paired
         _state.update {
             it.copy(
                 checking = false,
-                rows = rows,
+                rows = DoctorEvaluator.evaluate(
+                    snapshot = read,
+                    bridge = bridge,
+                    paired = paired,
+                    daemon = probe,
+                    callActive = callActive
+                ),
                 daemonFixes = daemonFixes(probe),
                 provider = read.root.provider?.id,
                 callActive = callActive,
@@ -340,6 +355,29 @@ constructor(
                 changeLog = changeLog.entries()
             )
         }
+    }
+
+    /** Re-evaluates from the cached read when the link or the pairing cache moves between passes. */
+    private suspend fun publishFromCache(): Unit = publishMutex.withLock {
+        val read = snapshot ?: return@withLock
+        val bridge = bridgeState.state.value
+        val paired = pairing.paired.value
+        val callActive = bridge.call?.phase?.let { it != CallPhase.ENDED } == true
+        if (bridge.link == appliedLink && callActive == appliedCallActive && paired == appliedPaired) {
+            return@withLock
+        }
+        appliedLink = bridge.link
+        appliedCallActive = callActive
+        appliedPaired = paired
+        val probe = daemon ?: DaemonProbe.Unreachable("pending", "the daemon has not answered yet")
+        val rows = DoctorEvaluator.evaluate(
+            snapshot = read,
+            bridge = bridge,
+            paired = paired,
+            daemon = probe,
+            callActive = callActive
+        )
+        _state.update { it.copy(rows = rows, callActive = callActive) }
     }
 
     private suspend fun probeDaemon(): DaemonProbe {

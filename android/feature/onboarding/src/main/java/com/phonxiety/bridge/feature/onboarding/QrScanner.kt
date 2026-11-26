@@ -7,9 +7,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
 import com.google.android.gms.common.moduleinstall.InstallStatusListener
 import com.google.android.gms.common.moduleinstall.ModuleInstall
+import com.google.android.gms.common.moduleinstall.ModuleInstallClient
 import com.google.android.gms.common.moduleinstall.ModuleInstallRequest
 import com.google.android.gms.common.moduleinstall.ModuleInstallStatusUpdate
-import com.google.android.gms.tasks.Task
 import com.google.mlkit.common.MlKitException
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanner
@@ -101,48 +101,85 @@ private suspend fun startScan(scanner: GmsBarcodeScanner): PlayScan = suspendCan
 }
 
 /**
- * Asks Play services for the code scanner module and waits for the download. False means the phone
- * cannot get it this way (no Play services, refused, no network, or longer than the budget).
+ * Asks Play services for the code scanner module and waits for the download inside one budget. False
+ * means the phone cannot get it this way (no Play services, refused, no network, or longer than
+ * [MODULE_INSTALL_TIMEOUT_MS]). No separate availability check runs first: an already installed
+ * module answers on the install response itself, so nothing can stall outside the budget.
  */
 private suspend fun installScannerModule(context: Context, scanner: GmsBarcodeScanner): Boolean {
-    val client = ModuleInstall.getClient(context)
-    val available = client.areModulesAvailable(scanner).awaitOrNull()
-    if (available?.areModulesAvailable() == true) return true
-    return withTimeoutOrNull(MODULE_INSTALL_TIMEOUT_MS) {
-        suspendCancellableCoroutine { continuation ->
-            val listener = InstallStatusListener { update ->
-                when (update.installState) {
-                    ModuleInstallStatusUpdate.InstallState.STATE_COMPLETED ->
-                        if (continuation.isActive) continuation.resume(true)
-
-                    ModuleInstallStatusUpdate.InstallState.STATE_FAILED,
-                    ModuleInstallStatusUpdate.InstallState.STATE_CANCELED ->
-                        if (continuation.isActive) continuation.resume(false)
-
-                    else -> Unit
-                }
-            }
-            val request = ModuleInstallRequest.newBuilder()
-                .addApi(scanner)
-                .setListener(listener)
-                .build()
-            client.installModules(request)
-                .addOnSuccessListener { response ->
-                    if (response.areModulesAlreadyInstalled() && continuation.isActive) continuation.resume(true)
-                }
-                .addOnFailureListener {
-                    if (continuation.isActive) continuation.resume(false)
-                }
-            continuation.invokeOnCancellation { client.unregisterListener(listener) }
-        }
-    } ?: false
+    val client = runCatching { ModuleInstall.getClient(context) }.getOrNull() ?: return false
+    return awaitModuleDownload(MODULE_INSTALL_TIMEOUT_MS, PlayServicesModuleDownload(client, scanner))
 }
 
-/** One Play services call; a failed or cancelled task answers null instead of throwing. */
-private suspend fun <T> Task<T>.awaitOrNull(): T? = suspendCancellableCoroutine { continuation ->
-    addOnSuccessListener { value -> if (continuation.isActive) continuation.resume(value) }
-    addOnFailureListener { if (continuation.isActive) continuation.resume(null) }
-    addOnCanceledListener { if (continuation.isActive) continuation.resume(null) }
+/**
+ * One module download as the scanner needs it: [start] registers a status listener and reports the
+ * outcome at most once, [stop] releases it. Production wraps `ModuleInstallClient`; a test supplies
+ * both halves without Play services.
+ */
+internal interface ModuleDownload {
+    fun start(onResult: (Boolean) -> Unit)
+
+    fun stop()
+}
+
+private class PlayServicesModuleDownload(
+    private val client: ModuleInstallClient,
+    private val scanner: GmsBarcodeScanner
+) : ModuleDownload {
+    private var listener: InstallStatusListener? = null
+
+    override fun start(onResult: (Boolean) -> Unit) {
+        val registered = InstallStatusListener { update ->
+            when (update.installState) {
+                ModuleInstallStatusUpdate.InstallState.STATE_COMPLETED -> onResult(true)
+
+                ModuleInstallStatusUpdate.InstallState.STATE_FAILED,
+                ModuleInstallStatusUpdate.InstallState.STATE_CANCELED -> onResult(false)
+
+                else -> Unit
+            }
+        }
+        listener = registered
+        client.installModules(
+            ModuleInstallRequest.newBuilder()
+                .addApi(scanner)
+                .setListener(registered)
+                .build()
+        )
+            .addOnSuccessListener { response -> if (response.areModulesAlreadyInstalled()) onResult(true) }
+            .addOnFailureListener { onResult(false) }
+    }
+
+    override fun stop() {
+        listener?.let { client.unregisterListener(it) }
+        listener = null
+    }
+}
+
+/**
+ * Waits for the module download inside [budgetMs]. The status listener is released in `finally`, so
+ * a download that completes, fails, times out or is cancelled all unregister it.
+ */
+internal suspend fun awaitModuleDownload(budgetMs: Long, download: ModuleDownload): Boolean {
+    val installed = withTimeoutOrNull(budgetMs) {
+        try {
+            suspendCancellableCoroutine { continuation ->
+                // Every Play services callback may fire more than once; only the first moves the wait.
+                val report: (Boolean) -> Unit = { ok ->
+                    if (continuation.isActive) continuation.resume(ok)
+                }
+                try {
+                    download.start(report)
+                } catch (error: Exception) {
+                    // A Play services binding failure is an unavailable module, not a broken scan.
+                    report(false)
+                }
+            }
+        } finally {
+            download.stop()
+        }
+    }
+    return installed ?: false
 }
 
 /** The module is a few hundred kilobytes; a download slower than this is not worth blocking on. */
