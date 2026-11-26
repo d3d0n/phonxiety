@@ -5,7 +5,6 @@ import contextlib
 import json
 import tempfile
 import unittest
-import warnings
 import wave
 from array import array
 from pathlib import Path
@@ -867,29 +866,140 @@ class DialRefusalTests(DialRefusalCase):
 class DialRingDeadlineTests(DialRefusalCase):
     """The ring deadline of a refused dial must not end the call while the retry is pending."""
 
-    controller_options = {"dial_retry_wait": 1.5}
+    controller_options = {"dial_retry_wait": 5.0}
+    ring_seconds = 1
 
     async def test_the_ring_deadline_does_not_end_a_recovering_call(self) -> None:
-        with warnings.catch_warnings():
-            # The deadline is deliberately below the model minimum, which validation would
-            # never store: the controller rings out whatever limit the call carries.
-            warnings.simplefilter("ignore", UserWarning)
-            await self._recovering_call_outlives_its_first_ring_deadline()
+        # Both ring deadlines and the reconnect wait are separate gates: no scheduling
+        # order depends on a wall-clock sleep.
+        original_sleep = asyncio.sleep
+        first_release, fresh_release = asyncio.Event(), asyncio.Event()
+        first_entered, fresh_entered = asyncio.Event(), asyncio.Event()
+        ring_tasks: list[asyncio.Task[Any]] = []
 
-    async def _recovering_call_outlives_its_first_ring_deadline(self) -> None:
+        async def gated_sleep(delay: float, *args: Any, **kwargs: Any) -> Any:
+            if delay != self.ring_seconds:
+                return await original_sleep(delay, *args, **kwargs)
+            task = asyncio.current_task()
+            assert task is not None
+            ring_tasks.append(task)
+            if len(ring_tasks) == 1:
+                first_entered.set()
+                await first_release.wait()
+            else:
+                fresh_entered.set()
+                await fresh_release.wait()
+
+        base = self.device.command
+        refused = {"done": False}
+
+        async def command(name: str, call_id: str | None = None, **payload: Any) -> dict[str, Any]:
+            if name == "dial" and not refused["done"]:
+                refused["done"] = True
+                await first_entered.wait()  # the deadline is pending when the phone refuses
+                self.device.commands.append((name, call_id, payload))
+                self.device.connected = False
+                raise DeviceError("link_down")
+            return await base(name, call_id, **payload)
+
+        with mock.patch.object(controller_module.asyncio, "sleep", gated_sleep):
+            self.device.command = command
+            call = await self.controller.place_call(self._ring_in(self.ring_seconds))
+            await asyncio.wait_for(self.device.arrived_waiting.wait(), 1)  # waiting for the link
+            await asyncio.wait_for(first_entered.wait(), 1)  # the refused dial's deadline is pending
+
+            first_release.set()  # release the deadline the refusal cancelled
+            with contextlib.suppress(asyncio.CancelledError):
+                await ring_tasks[0]
+            self.assertTrue(ring_tasks[0].cancelled())
+            self.assertEqual(
+                (self.store.state(call["call_id"]), self._dial_attempts()), (CallState.DIALING, 1)
+            )  # the old deadline ended nothing and the reconnect wait did not advance
+
+            self.device.arrived.set()  # the phone comes back; the retry is sent
+            await asyncio.wait_for(self.device.dialled.wait(), 2)
+            await asyncio.wait_for(fresh_entered.wait(), 1)  # the retry carries its own deadline
+            self.assertEqual(self._dial_attempts(), 2)
+
+            fresh_release.set()  # the unanswered retry rings out
+            result = await self.controller.wait_call_result(call["call_id"], wait_s=2)
+            self.assertEqual((result["state"], result["call_outcome"]), ("ended", "no_answer"))
+
+
+class DialHangupInFlightTests(DialRefusalCase):
+    """A hangup must not wait for a retry dial the phone has not answered yet."""
+
+    controller_options = {"dial_retry_wait": 2.0}
+
+    async def test_a_hangup_while_the_retry_is_in_flight_returns_and_ends_the_call(self) -> None:
         self._refuse_dials(1)
-        call = await self.controller.place_call(self._ring_in(0.2))
+        call = await self.controller.place_call(request())
         await asyncio.wait_for(self.device.arrived_waiting.wait(), 1)
-        await asyncio.sleep(0.4)  # the first deadline passed while the daemon still waits for the link
-        self.assertEqual((self.store.state(call["call_id"]), self._dial_attempts()), (CallState.DIALING, 1))
 
+        base = self.device.command
+        dial_gate = asyncio.Event()
+        dial_entered = asyncio.Event()
+
+        async def command(name: str, call_id: str | None = None, **payload: Any) -> dict[str, Any]:
+            if name == "dial":
+                dial_entered.set()
+                await dial_gate.wait()
+            return await base(name, call_id, **payload)
+
+        self.device.command = command
         self.device.arrived.set()
-        await asyncio.wait_for(self.device.dialled.wait(), 2)  # the retry was placed after the wait
-        self.assertEqual(self._dial_attempts(), 2)
+        try:
+            await asyncio.wait_for(dial_entered.wait(), 2)  # the retry is out and unanswered
+            async with asyncio.timeout(5):  # the hangup does not wait for the dial's acknowledgement
+                await self.controller.hangup_call(call["call_id"])
+            result = await self.controller.wait_call_result(call["call_id"], wait_s=2)
+            self.assertEqual(result["state"], "ended")
+        finally:
+            dial_gate.set()  # let an in-flight retry unwind even when the assertion failed
 
-        # The retry carries its own deadline: left unanswered, the line is rung out again.
-        result = await self.controller.wait_call_result(call["call_id"], wait_s=2)
-        self.assertEqual((result["state"], result["call_outcome"]), ("ended", "no_answer"))
+
+class DialHangupRaceTests(DialRefusalCase):
+    """The phone can refuse a hangup before it has accepted the retry dial."""
+
+    controller_options = {"dial_retry_wait": 2.0}
+
+    async def test_a_not_owned_hangup_does_not_leave_the_retried_call_up(self) -> None:
+        self._refuse_dials(1)
+        base = self.device.command
+        dial_gate = asyncio.Event()
+        dial_entered = asyncio.Event()
+        refused = asyncio.Event()
+        hangups = {"count": 0}
+
+        async def command(name: str, call_id: str | None = None, **payload: Any) -> dict[str, Any]:
+            if name == "dial":
+                dial_entered.set()
+                await dial_gate.wait()
+            elif name == "hangup":
+                hangups["count"] += 1
+                if not dial_gate.is_set():
+                    self.device.commands.append((name, call_id, payload))
+                    refused.set()
+                    raise DeviceError("not_owned")  # the phone has not taken the retry dial yet
+            return await base(name, call_id, **payload)
+
+        call = await self.controller.place_call(request())
+        await asyncio.wait_for(self.device.arrived_waiting.wait(), 1)
+        # Only the retry is gated: the first dial is the refused one.
+        self.device.command = command
+        self.device.arrived.set()
+        try:
+            await asyncio.wait_for(dial_entered.wait(), 2)  # the retry is in flight
+            async with asyncio.timeout(5):  # the hangup does not wait for the dial's acknowledgement
+                await self.controller.hangup_call(call["call_id"])
+            await asyncio.wait_for(refused.wait(), 2)  # the phone refused before the retry was accepted
+            dial_gate.set()  # the phone takes the retry after refusing the hangup
+
+            result = await self.controller.wait_call_result(call["call_id"], wait_s=2)
+            self.assertEqual(result["state"], "ended")
+            self.assertGreaterEqual(hangups["count"], 2)  # the line the retry opened was dropped too
+        finally:
+            dial_gate.set()
 
 
 class DialRetryBoundTests(DialRefusalCase):
