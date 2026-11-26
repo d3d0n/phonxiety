@@ -6,7 +6,7 @@ fresh-context review, one integrator). This file lists only what is specific to 
 ## Integrator-only resources
 
 The Pixel (adb, root providers, reboots, flashing), the daemon process (`phonxiety start|stop`),
-live calls, and the integration branch `feat/mobile-client`.
+live calls, and the integration branch `main`.
 
 ## Hotspots (one owner per wave)
 
