@@ -1,0 +1,21 @@
+Magisk offers and installs the module update from the public release, Magisk 31.1, Pixel 6a (Android 17), 2026-11-27
+
+Before: module and app 0.4.0 (versionCode 4), installed with `mise run phone:install`; the
+packaged module.prop names updateJson=https://github.com/d3d0n/phonxiety/releases/latest/download/update.json
+
+Release v0.4.1 (signed tag on the release commit), public and latest, assets update.json,
+phonxiety-bridge-0.4.1.zip, phonxiety-bridge-0.4.1.apk and CHANGELOG.md. The latest/download URLs
+returned 200 with the same SHA-256 as the local dist/ files.
+
+00:30  Magisk -> Modules: the Phonxiety card "0.4.0 by phonxiety" shows Update
+       (magisk-update-offer.png)
+00:31  Update: "Install Phonxiety 0.4.1(5)" with the release's CHANGELOG.md rendered
+       (magisk-update-changelog.png)
+       Install: Magisk downloaded the zip from the release and flashed it, "Installation - Done!"
+       (magisk-update-installed.png)
+00:35  Reboot from Magisk
+00:35:42  sys.boot_completed
+00:35:47  `phonxiety status`: phone connected (+5 s), without pairing again
+after:    module.prop version=0.4.1 versionCode=5; the app runs 0.4.1 from
+          /system/priv-app/phonxiety-bridge; Updates: App, Module and Daemon "Up to date",
+          Compatibility "Compatible" (updates-after-manager-update.png)
