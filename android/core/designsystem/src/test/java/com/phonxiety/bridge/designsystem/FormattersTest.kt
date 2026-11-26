@@ -10,6 +10,7 @@ import com.phonxiety.bridge.designsystem.component.formatDbfs
 import com.phonxiety.bridge.designsystem.component.formatMeasure
 import java.util.Locale
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -67,21 +68,44 @@ class FormattersTest {
         composeRule.onNodeWithText("2\u00A0h\u00A005\u00A0min").assertTextEquals("2\u00A0h\u00A005\u00A0min")
     }
 
+    /** The plain formatter with this test's own words, so each assert reads one line. */
+    private fun result(raw: String, boolean: Boolean? = null, missing: Boolean = false): ResultText = resultText(
+        raw = raw,
+        boolean = boolean,
+        missing = missing,
+        yes = "Yes",
+        no = "No",
+        notReported = "Not reported"
+    )
+
     @Test
     fun aResultValueReadsAsWordsOrAsANumber() {
         // A boolean answers a question in words; it is not the serialized "true".
-        assertEquals(ResultText("Yes", mono = false), resultText("true", boolean = true, yes = "Yes", no = "No"))
-        assertEquals(ResultText("No", mono = false), resultText("false", boolean = false, yes = "Yes", no = "No"))
+        assertEquals(ResultText("Yes", mono = false), result("true", boolean = true))
+        assertEquals(ResultText("No", mono = false), result("false", boolean = false))
         // A sentence stays prose even when the daemon typed it as a string of digits and words.
-        assertEquals(
-            ResultText("Table for two at 21:00", mono = false),
-            resultText("Table for two at 21:00", boolean = null, yes = "Yes", no = "No")
-        )
+        assertEquals(ResultText("Table for two at 21:00", mono = false), result("Table for two at 21:00"))
         // Measurements, times and codes keep tabular figures.
-        assertEquals(ResultText("21:00", mono = true), resultText("21:00", boolean = null, yes = "Yes", no = "No"))
-        assertEquals(ResultText("2", mono = true), resultText("2", boolean = null, yes = "Yes", no = "No"))
+        assertEquals(ResultText("21:00", mono = true), result("21:00"))
+        assertEquals(ResultText("2", mono = true), result("2"))
         // A one-word answer is an answer, not a code.
-        assertEquals(ResultText("requested", mono = false), resultText("requested", boolean = null, yes = "Yes", no = "No"))
+        assertEquals(ResultText("requested", mono = false), result("requested"))
+    }
+
+    @Test
+    fun anUnreportedResultFieldReadsAsProse() {
+        // The daemon's JSON null is no answer at all: the card says so in words, never "null".
+        val unreported = result(raw = "null", missing = true)
+        assertEquals(ResultText("Not reported", mono = false), unreported)
+        assertFalse("an unreported field is never tabular monospace", unreported.mono)
+        // The flag wins over a boolean: a null is not a "No".
+        assertEquals(ResultText("Not reported", mono = false), result(raw = "null", boolean = false, missing = true))
+    }
+
+    @Test
+    fun anEmptyAnswerKeepsItsOwnRow() {
+        // An empty string is a reported, deliberately blank answer: it is not the missing case.
+        assertEquals(ResultText("", mono = false), result(""))
     }
 
     @Test

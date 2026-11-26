@@ -100,6 +100,7 @@ import com.phonxiety.bridge.model.PartialTurn
 import com.phonxiety.bridge.model.TranscriptTurn
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
@@ -975,7 +976,8 @@ private fun ResultBlock(state: LiveCallUiState) {
             // value keeps tabular monospace.
             val display = resultText(
                 raw = (value as? JsonPrimitive)?.contentOrNull ?: value.toString(),
-                boolean = (value as? JsonPrimitive)?.booleanOrNull
+                boolean = (value as? JsonPrimitive)?.booleanOrNull,
+                missing = value is JsonNull
             )
             KeyValueRow(label = humanizeToken(key), value = display.text, mono = display.mono)
         }

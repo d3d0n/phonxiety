@@ -45,6 +45,7 @@ import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.TranscriptTurn
 import java.util.Locale
 import java.util.TimeZone
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.After
@@ -280,6 +281,24 @@ class CallDetailScreenshotTest {
             composeRule.waitForIdle()
         }
     ) { setScreen(longFieldCall(), dark = true, fontScale = 2f, width = 320.dp) }
+
+    @Test
+    fun anUnreportedResultFieldSaysSo() = render(
+        "result_missing_411_light",
+        beforeCapture = {
+            scrollToNode("Salary expectation")
+            composeRule.waitForIdle()
+        }
+    ) { setScreen(longFieldCall()) }
+
+    @Test
+    fun anUnreportedResultFieldIsWordsAndNotTheWordNull() {
+        setScreen(longFieldCall())
+        scrollToNode("Salary expectation")
+        // The daemon's JSON null reads as the card's own words, in the row it belongs to.
+        composeRule.onNodeWithText("Not reported").assertExists()
+        composeRule.onNodeWithText("null").assertDoesNotExist()
+    }
 
     @Test
     fun aBooleanResultReadsAsAWordAndASentenceStaysProse() {
@@ -590,14 +609,15 @@ class CallDetailScreenshotTest {
             audio = CallAudioUiState(downloading = true)
         )
 
-        /** A result whose answers are a sentence, a boolean and a time. */
+        /** A result whose answers are a sentence, a boolean, a time, and one field left unreported. */
         fun longFieldCall(): CallDetailUiState = finished().copy(
             snapshot = detailSnapshot(
                 fields = JsonObject(
                     mapOf(
                         "menu_options_heard" to JsonPrimitive(LONG_RESULT_ANSWER),
                         "menu_reacted" to JsonPrimitive(true),
-                        "reservation_time" to JsonPrimitive("21:00")
+                        "reservation_time" to JsonPrimitive("21:00"),
+                        "salary_expectation" to JsonNull
                     )
                 )
             )
