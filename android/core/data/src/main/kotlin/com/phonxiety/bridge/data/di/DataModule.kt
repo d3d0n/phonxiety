@@ -14,6 +14,7 @@ import com.phonxiety.bridge.data.updates.AndroidModuleArchiveBuilder
 import com.phonxiety.bridge.data.updates.AndroidModuleInstallGateway
 import com.phonxiety.bridge.data.updates.AndroidMountedSystemApk
 import com.phonxiety.bridge.data.updates.AndroidRollbackRoot
+import com.phonxiety.bridge.data.updates.AndroidRootAccess
 import com.phonxiety.bridge.data.updates.AndroidUpdateInventory
 import com.phonxiety.bridge.data.updates.ApkInstallGateway
 import com.phonxiety.bridge.data.updates.ApkVerifier
@@ -33,6 +34,8 @@ import com.phonxiety.bridge.data.updates.ReleaseDownloaderImpl
 import com.phonxiety.bridge.data.updates.RollbackJournalStore
 import com.phonxiety.bridge.data.updates.RollbackRootSteps
 import com.phonxiety.bridge.data.updates.RootApkInstaller
+import com.phonxiety.bridge.data.updates.RootModuleInstaller
+import com.phonxiety.bridge.data.updates.RootModuleState
 import com.phonxiety.bridge.data.updates.RootRollbackStore
 import com.phonxiety.bridge.data.updates.UpdateArtifactSource
 import com.phonxiety.bridge.data.updates.UpdateInventory
@@ -114,6 +117,14 @@ abstract class DataModule {
     @Binds
     @Singleton
     abstract fun rollbackRootSteps(impl: AndroidRollbackRoot): RollbackRootSteps
+
+    @Binds
+    @Singleton
+    abstract fun rootModuleInstaller(impl: AndroidRootAccess): RootModuleInstaller
+
+    @Binds
+    @Singleton
+    abstract fun rootModuleState(impl: AndroidRootAccess): RootModuleState
 
     @Binds
     @Singleton

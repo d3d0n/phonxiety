@@ -37,6 +37,7 @@ class UpdatesScreenshotTest {
                         onRollback = {},
                         onConfirmRollback = {},
                         onDismissRollback = {},
+                        onDismissRollbackRecovery = {},
                         onDismiss = {}
                     )
                 }
@@ -87,4 +88,12 @@ class UpdatesScreenshotTest {
     @Test
     @Config(sdk = [35], qualifiers = "w411dp-h1400dp-xxhdpi")
     fun rollbackStarted() = capture("rollback_started", UpdatesSamples.rollbackStarted())
+
+    @Test
+    @Config(sdk = [35], qualifiers = "w411dp-h1400dp-xxhdpi")
+    fun rollbackAppOnlyFailedOffline() = capture("rollback_app_failed", UpdatesSamples.rollbackAppOnlyFailedOffline())
+
+    @Test
+    @Config(sdk = [35], qualifiers = "w411dp-h1400dp-xxhdpi")
+    fun rollbackAppOnlyRunningOffline() = capture("rollback_app_running", UpdatesSamples.rollbackAppOnlyRunningOffline())
 }

@@ -95,20 +95,54 @@ class RootCommand private constructor(
 
         /** `cp -f <source> /data/adb/phonxiety/<name>.tmp`, published by [renameRollbackFile]. */
         fun copyIntoRollbackDirectory(sourcePath: String, name: String): RootCommand = RootCommand(
-            listOf("cp", "-f", absolutePath(sourcePath, "source"), "$ROLLBACK_DIR/${safeName(name, "rollback file")}.tmp")
+            listOf("cp", "-f", absolutePath(sourcePath, "source"), "$ROLLBACK_DIR/${rollbackFileName(name)}.tmp")
         )
 
-        /** `mv -f <name>.tmp <name>`: the atomic publish of a rollback file. */
+        /** `mv -f <name>.tmp <name>`: the atomic publish of the pointer, the journal or the script. */
         fun renameRollbackFile(name: String): RootCommand {
-            val file = safeName(name, "rollback file")
+            val file = rollbackFileName(name)
             return RootCommand(listOf("mv", "-f", "$ROLLBACK_DIR/$file.tmp", "$ROLLBACK_DIR/$file"))
         }
 
-        /** `cat /data/adb/phonxiety/<name>`: the journal and the archive's metadata. */
-        fun readRollbackFile(name: String): RootCommand = RootCommand(listOf("cat", "$ROLLBACK_DIR/${safeName(name, "rollback file")}"))
+        /** `cat /data/adb/phonxiety/<name>`: the pointer, the journal and the script's own log. */
+        fun readRollbackFile(name: String): RootCommand = RootCommand(listOf("cat", "$ROLLBACK_DIR/${rollbackFileName(name)}"))
 
         /** `rm -f /data/adb/phonxiety/<name>`. */
-        fun removeRollbackFile(name: String): RootCommand = RootCommand(listOf("rm", "-f", "$ROLLBACK_DIR/${safeName(name, "rollback file")}"))
+        fun removeRollbackFile(name: String): RootCommand = RootCommand(listOf("rm", "-f", "$ROLLBACK_DIR/${rollbackFileName(name)}"))
+
+        /** `mkdir -p /data/adb/phonxiety/<generation>`: one complete archive generation. */
+        fun createRollbackGeneration(generation: String): RootCommand = RootCommand(listOf("mkdir", "-p", rollbackGenerationPath(generation)))
+
+        /** `/data/adb/phonxiety/<generation>/<name>`, the path root copies from and hashes. */
+        fun rollbackGenerationFilePath(generation: String, name: String): String = "${rollbackGenerationPath(generation)}/${rollbackFileName(name)}"
+
+        /** `cp -f <source> /data/adb/phonxiety/<generation>/<name>.tmp`, published by the rename below. */
+        fun copyIntoRollbackGeneration(sourcePath: String, generation: String, name: String): RootCommand = RootCommand(
+            listOf(
+                "cp",
+                "-f",
+                absolutePath(sourcePath, "source"),
+                "${rollbackGenerationFilePath(generation, name)}.tmp"
+            )
+        )
+
+        /** `mv -f <generation>/<name>.tmp <generation>/<name>`: the atomic publish inside a generation. */
+        fun renameInRollbackGeneration(generation: String, name: String): RootCommand {
+            val path = rollbackGenerationFilePath(generation, name)
+            return RootCommand(listOf("mv", "-f", "$path.tmp", path))
+        }
+
+        /** `cat /data/adb/phonxiety/<generation>/<name>`: the archive's metadata. */
+        fun readRollbackGenerationFile(generation: String, name: String): RootCommand = RootCommand(listOf("cat", rollbackGenerationFilePath(generation, name)))
+
+        /**
+         * `sha256sum /data/adb/phonxiety/<generation>/<name>`: the digest of the exact bytes root
+         * would copy into staging, so the archive is verified where the app cannot read it.
+         */
+        fun hashRollbackGenerationFile(generation: String, name: String): RootCommand = RootCommand(listOf("sha256sum", rollbackGenerationFilePath(generation, name)))
+
+        /** `rm -rf /data/adb/phonxiety/<generation>`: a generation the pointer no longer names. */
+        fun removeRollbackGeneration(generation: String): RootCommand = RootCommand(listOf("rm", "-rf", rollbackGenerationPath(generation)))
 
         /**
          * The detached rollback script: `nohup sh … >log 2>&1 &`. `pm uninstall-system-updates`
@@ -139,8 +173,25 @@ class RootCommand private constructor(
         const val ROLLBACK_SCRIPT: String = "rollback.sh"
         const val ROLLBACK_LOG: String = "rollback.log"
 
+        /** The one file that names the current archive generation; moving it is the publish. */
+        const val ROLLBACK_POINTER: String = "current"
+        const val ROLLBACK_GENERATION_PREFIX: String = "g-"
+
+        /** A generation is `g-<sha256>`: its name is the digest of the archive it holds. */
+        val ROLLBACK_GENERATION: Regex = Regex("$ROLLBACK_GENERATION_PREFIX[0-9a-f]{64}")
+
+        /** `g-<sha256>` for [sha256], or null when it is not a well-formed digest. */
+        fun rollbackGenerationName(sha256: String): String? = (ROLLBACK_GENERATION_PREFIX + sha256.trim().lowercase()).takeIf { ROLLBACK_GENERATION.matches(it) }
+
         private val SAFE_NAME = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
         private val SAFE_ABSOLUTE_PATH = Regex("/[A-Za-z0-9._/-]{1,255}")
+
+        private fun rollbackFileName(name: String): String = safeName(name, "rollback file")
+
+        private fun rollbackGenerationPath(generation: String): String {
+            require(ROLLBACK_GENERATION.matches(generation)) { "generation is not a safe name: $generation" }
+            return "$ROLLBACK_DIR/$generation"
+        }
 
         private fun absolutePath(value: String, what: String): String {
             require(SAFE_ABSOLUTE_PATH.matches(value) && !value.contains("..")) {

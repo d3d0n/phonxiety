@@ -31,7 +31,14 @@ data class UpdatesUiState(
     val rollbackRecovery: RollbackRecovery? = null,
     /** Set while the confirm dialog is up; the combined rollback never runs without it. */
     val rollbackConfirmation: RollbackPlan.WithPreviousModule? = null,
-    val moduleRollback: RollbackState = RollbackState.Idle
+    val moduleRollback: RollbackState = RollbackState.Idle,
+    /**
+     * An app-only rollback's own install: progress and failure for the rollback section, which
+     * reads the phone and therefore shows it with the device link down too.
+     */
+    val rollbackAppInstall: AppInstallState = AppInstallState.Idle,
+    /** The pending/completed block was dismissed for this visit; the journal is untouched. */
+    val rollbackRecoveryDismissed: Boolean = false
 )
 
 @HiltViewModel
@@ -41,6 +48,10 @@ class UpdatesViewModel @Inject constructor(
     private val checking = MutableStateFlow(false)
     private val check = MutableStateFlow<UpdateCheck?>(null)
     private val confirmation = MutableStateFlow<RollbackPlan.WithPreviousModule?>(null)
+    private val recoveryDismissed = MutableStateFlow(false)
+
+    /** True while the app-install flow on screen is a rollback, not an update install. */
+    private val appRollback = MutableStateFlow(false)
 
     /** The service's flows paired once, so the state combine below stays within typed overloads. */
     private data class ServiceState(
@@ -49,6 +60,14 @@ class UpdatesViewModel @Inject constructor(
         val rollbackPlan: RollbackPlan?,
         val rollbackRecovery: RollbackRecovery?,
         val moduleRollback: RollbackState
+    )
+
+    /** The screen's own state: the check, the confirm dialog, and the two dismissals. */
+    private data class LocalState(
+        val loading: Boolean,
+        val confirmation: RollbackPlan.WithPreviousModule?,
+        val recoveryDismissed: Boolean,
+        val appRollback: Boolean
     )
 
     private val services = combine(
@@ -61,21 +80,26 @@ class UpdatesViewModel @Inject constructor(
         ServiceState(app, module, plan, recovery, rollback)
     }
 
+    private val local = combine(checking, confirmation, recoveryDismissed, appRollback) { loading, confirming, dismissed, rollbackApp ->
+        LocalState(loading, confirming, dismissed, rollbackApp)
+    }
+
     val state: StateFlow<UpdatesUiState> = combine(
         services,
         check,
-        checking,
-        confirmation
-    ) { current, checked, loading, confirming ->
+        local
+    ) { current, checked, localState ->
         UpdatesUiState(
-            loading = loading,
+            loading = localState.loading,
             check = checked,
             appInstall = current.appInstall,
             moduleInstall = current.moduleInstall,
             rollbackPlan = current.rollbackPlan,
             rollbackRecovery = current.rollbackRecovery,
-            rollbackConfirmation = confirming?.takeIf { current.rollbackPlan is RollbackPlan.WithPreviousModule },
-            moduleRollback = current.moduleRollback
+            rollbackConfirmation = localState.confirmation?.takeIf { current.rollbackPlan is RollbackPlan.WithPreviousModule },
+            moduleRollback = current.moduleRollback,
+            rollbackAppInstall = current.appInstall.takeIf { localState.appRollback } ?: AppInstallState.Idle,
+            rollbackRecoveryDismissed = localState.recoveryDismissed
         )
     }.stateIn(
         scope = viewModelScope,
@@ -96,6 +120,7 @@ class UpdatesViewModel @Inject constructor(
 
     fun refresh() {
         if (checking.value) return
+        recoveryDismissed.value = false
         viewModelScope.launch {
             checking.value = true
             check.value = service.check()
@@ -105,6 +130,7 @@ class UpdatesViewModel @Inject constructor(
 
     fun installApp() {
         val manifest = check.value?.manifest ?: return
+        appRollback.value = false
         viewModelScope.launch { service.installApp(manifest) }
     }
 
@@ -115,14 +141,21 @@ class UpdatesViewModel @Inject constructor(
 
     /**
      * The combined rollback removes this app's own update and reboots the phone, so it asks first;
-     * an app-only rollback is a single reinstall and runs right away.
+     * an app-only rollback is a single reinstall and runs right away. A rollback a previous attempt
+     * left pending is never asked for again: retrying finishes what the journal recorded.
      */
     fun rollback() {
+        if (state.value.rollbackRecovery is RollbackRecovery.Pending) {
+            appRollback.value = false
+            viewModelScope.launch { service.rollbackApp() }
+            return
+        }
         val plan = state.value.rollbackPlan
         if (plan is RollbackPlan.WithPreviousModule) {
             confirmation.value = plan
             return
         }
+        appRollback.value = plan is RollbackPlan.AppOnly
         viewModelScope.launch { service.rollbackApp() }
     }
 
@@ -135,8 +168,15 @@ class UpdatesViewModel @Inject constructor(
         confirmation.value = null
     }
 
+    /** Hides the unfinished-rollback block until the next check; the root journal stays. */
+    fun dismissRollbackRecovery() {
+        recoveryDismissed.value = true
+    }
+
     fun dismiss() {
         confirmation.value = null
+        recoveryDismissed.value = false
+        appRollback.value = false
         service.dismiss()
         refresh()
     }

@@ -112,7 +112,46 @@ class RollbackScriptTest {
         assertFalse(rebootMarker.isFile)
     }
 
+    @Test
+    fun `a removal that cannot be recorded stops before the reboot`() {
+        afterPaths(systemApk, status = 0)
+        writeJournal()
+        // The journal's directory refuses the temporary file, so `record` cannot publish the step.
+        val sealedDirectory = temporary.root.apply { setWritable(false) }
+        val exit = try {
+            run(uninstallOutput = "Success", uninstallStatus = 1)
+        } finally {
+            sealedDirectory.setWritable(true)
+        }
+
+        assertEquals(1, exit)
+        assertEquals(step(), "module_staged")
+        assertFalse(rebootMarker.isFile)
+    }
+
+    @Test
+    fun `an already absent update that cannot be recorded also stops before the reboot`() {
+        statePaths(systemApk, status = 0)
+        writeJournal()
+        val sealedDirectory = temporary.root.apply { setWritable(false) }
+        val exit = try {
+            run(uninstallOutput = "Success", uninstallStatus = 1)
+        } finally {
+            sealedDirectory.setWritable(true)
+        }
+
+        assertEquals(1, exit)
+        assertEquals(step(), "module_staged")
+        assertFalse(rebootMarker.isFile)
+    }
+
     private fun runScript(uninstallOutput: String, uninstallStatus: Int): Int {
+        writeJournal()
+        return run(uninstallOutput, uninstallStatus)
+    }
+
+    private fun writeJournal() {
+        File(temporary.root, RollbackFiles.SCRIPT).writeText(RollbackScript.TEXT)
         File(temporary.root, "rollback.json").writeText(
             RollbackJournalCodec.write(
                 RollbackJournal(
@@ -129,7 +168,11 @@ class RollbackScriptTest {
                 )
             )
         )
-        val script = File(temporary.root, "rollback.sh").apply { writeText(RollbackScript.TEXT) }
+    }
+
+    private fun run(uninstallOutput: String, uninstallStatus: Int): Int {
+        val script = File(temporary.root, "rollback.sh")
+        if (!script.isFile) script.writeText(RollbackScript.TEXT)
         val builder = ProcessBuilder("/bin/sh", script.absolutePath).redirectErrorStream(true)
         builder.environment().apply {
             put("PATH", "${bin.absolutePath}:/usr/bin:/bin:/usr/sbin:/sbin")

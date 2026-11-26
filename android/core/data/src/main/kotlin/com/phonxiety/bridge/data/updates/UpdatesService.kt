@@ -93,7 +93,7 @@ class DefaultUpdatesService @Inject constructor(
     private val archives: ModuleArchivePublisher,
     private val journalStore: RollbackJournalStore,
     private val rollbackRoot: RollbackRootSteps,
-    private val rootAccess: AndroidRootAccess
+    private val rootState: RootModuleState
 ) : UpdatesService {
     private val appContext = context.applicationContext
     private val pendingDirectory = File(appContext.filesDir, PENDING_DIRECTORY)
@@ -172,6 +172,12 @@ class DefaultUpdatesService @Inject constructor(
     override suspend fun rollbackApp() {
         action.withLock {
             if (_appInstall.value.busy || _moduleInstall.value.busy || _moduleRollback.value.busy) return
+            // A journal a previous attempt left behind owns the next step: finish the rollback it
+            // recorded by its own target, before any fresh plan. Recomputing a plan here would read
+            // a data app that is newer than the staged module and choose an app-only install, and
+            // the kept APK may be gone with the app's data.
+            val journal = journalStore.readJournal()
+            if (journal != null && finishJournal(journal)) return
             val plan = RollbackPlanner.plan(rollbackFacts())
             _rollbackPlan.value = plan
             when (plan) {
@@ -181,12 +187,11 @@ class DefaultUpdatesService @Inject constructor(
                 }
 
                 is RollbackPlan.WithPreviousModule -> {
+                    // A pending journal never reaches this branch: finishJournal above owns it.
                     val result = ModuleRollbackCoordinator(
                         archives = archives,
                         root = rollbackRoot,
                         app = runningApp(),
-                        // A pending journal means that archive is already staged; retry only the hand-off.
-                        stagedArchiveSha256 = journalStore.readJournal()?.targets?.moduleSha256,
                         onState = { _moduleRollback.value = it }
                     ).rollback(plan.previousVersionCode)
                     // A started rollback is completed by the detached script and the next boot; a
@@ -202,11 +207,38 @@ class DefaultUpdatesService @Inject constructor(
                             RollbackBlocker.SYSTEM_VERSION_UNKNOWN -> RollbackFailure.SYSTEM_VERSION_UNKNOWN
                             RollbackBlocker.STORAGE_UNREADABLE -> RollbackFailure.STORAGE_UNREADABLE
                             RollbackBlocker.STALE_ARCHIVE -> RollbackFailure.STALE_ARCHIVE
+                            RollbackBlocker.ARCHIVE_MISMATCH -> RollbackFailure.ARCHIVE_MISMATCH
                         }
                     )
                 }
             }
         }
+    }
+
+    /**
+     * Continues the rollback [journal] recorded: the module is staged again only when the phone is
+     * not already running that module, then the detached script repeats the removal by the journal's
+     * own target. Returns false when the journal was already complete and a fresh plan applies.
+     */
+    private suspend fun finishJournal(journal: RollbackJournal): Boolean {
+        val recovery = verifyJournal(journal)
+        if (recovery is RollbackRecovery.Completed) {
+            journalStore.removeJournal()
+            _rollbackRecovery.value = recovery
+            return false
+        }
+        val stagedSha256 = journal.targets.moduleSha256.takeIf {
+            mountedModuleVersionCode() == journal.targets.moduleVersionCode
+        }
+        val result = ModuleRollbackCoordinator(
+            archives = archives,
+            root = rollbackRoot,
+            app = runningApp(),
+            stagedArchiveSha256 = stagedSha256,
+            onState = { _moduleRollback.value = it }
+        ).rollback(expectedPreviousVersionCode = journal.targets.moduleVersionCode)
+        if (result !is RollbackState.Started) refreshRollback()
+        return true
     }
 
     override fun dismiss() {
@@ -219,17 +251,22 @@ class DefaultUpdatesService @Inject constructor(
     private suspend fun refreshRollback() {
         _rollbackPlan.value = RollbackPlanner.plan(rollbackFacts())
         val journal = journalStore.readJournal()
-        val recovery = journal?.let {
-            RollbackVerification.verify(
-                journal = it,
-                selectedApkPath = appContext.applicationInfo.sourceDir,
-                runningVersionCode = installedVersionCode(),
-                mountedModuleVersionCode = mountedModuleVersionCode()
-            )
+        // Once the script records a result — or the journal is gone because the rollback completed —
+        // "Started" is stale: the recovery block below owns the screen and offers retry or dismiss.
+        if (_moduleRollback.value is RollbackState.Started && journal?.step != RollbackJournalStep.MODULE_STAGED) {
+            _moduleRollback.value = RollbackState.Idle
         }
+        val recovery = journal?.let { verifyJournal(it) }
         if (recovery is RollbackRecovery.Completed) journalStore.removeJournal()
         _rollbackRecovery.value = recovery
     }
+
+    private suspend fun verifyJournal(journal: RollbackJournal): RollbackRecovery = RollbackVerification.verify(
+        journal = journal,
+        selectedApkPath = appContext.applicationInfo.sourceDir,
+        runningVersionCode = installedVersionCode(),
+        mountedModuleVersionCode = mountedModuleVersionCode()
+    )
 
     private suspend fun rollbackFacts(): RollbackFacts = RollbackFacts(
         keptApkExists = keeper.keptApk() != null,
@@ -251,7 +288,7 @@ class DefaultUpdatesService @Inject constructor(
     }
 
     /** The module actually mounted on the system image; a staged one has not been applied yet. */
-    private suspend fun mountedModuleVersionCode(): Long? = when (val state = runCatching { rootAccess.moduleState() }.getOrNull()) {
+    private suspend fun mountedModuleVersionCode(): Long? = when (val state = runCatching { rootState.moduleState() }.getOrNull()) {
         is ModuleState.Enabled -> state.versionCode.toLong()
         is ModuleState.Disabled -> state.versionCode.toLong()
         else -> null

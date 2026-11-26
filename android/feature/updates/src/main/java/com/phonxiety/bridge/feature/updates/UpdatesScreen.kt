@@ -69,6 +69,7 @@ fun UpdatesRoute(
         onRollback = viewModel::rollback,
         onConfirmRollback = viewModel::confirmRollback,
         onDismissRollback = viewModel::dismissRollbackConfirmation,
+        onDismissRollbackRecovery = viewModel::dismissRollbackRecovery,
         onDismiss = viewModel::dismiss,
         modifier = modifier
     )
@@ -89,6 +90,7 @@ fun UpdatesScreen(
     onRollback: () -> Unit,
     onConfirmRollback: () -> Unit,
     onDismissRollback: () -> Unit,
+    onDismissRollbackRecovery: () -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -155,10 +157,12 @@ fun UpdatesScreen(
             RollbackSection(
                 plan = state.rollbackPlan,
                 recovery = state.rollbackRecovery,
+                recoveryDismissed = state.rollbackRecoveryDismissed,
                 rollback = state.moduleRollback,
-                appBusy = state.appInstall.busy,
+                appInstall = state.rollbackAppInstall,
                 onRollback = onRollback,
-                onDismiss = onDismiss
+                onDismiss = onDismiss,
+                onDismissRecovery = onDismissRollbackRecovery
             )
         }
         state.rollbackConfirmation?.let { confirmation ->
@@ -406,28 +410,43 @@ private fun DaemonCard(row: UpdateRowState) {
 /**
  * The Rollback card: what the phone can go back to, any unfinished rollback from a previous boot,
  * and the one action the plan allows. A plan that cannot work is explained instead of offered.
+ *
+ * It reads the phone, so it renders — an app-only rollback's progress and failure included — even
+ * while the device link is down and the manifest is missing.
  */
 @Composable
 private fun RollbackSection(
     plan: RollbackPlan?,
     recovery: RollbackRecovery?,
+    recoveryDismissed: Boolean,
     rollback: RollbackState,
-    appBusy: Boolean,
+    appInstall: AppInstallState,
     onRollback: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onDismissRecovery: () -> Unit
 ) {
-    val nothingToOffer = recovery == null &&
+    val shownRecovery = recovery?.takeUnless { recoveryDismissed }
+    val pending = shownRecovery as? RollbackRecovery.Pending
+    val nothingToOffer = shownRecovery == null && appInstall is AppInstallState.Idle &&
         (plan == null || (plan is RollbackPlan.Unavailable && plan.blocker == RollbackBlocker.NO_KEPT_APK))
     if (nothingToOffer) return
 
     SectionCard(title = "Rollback", subtitle = rollbackSubtitle(plan)) {
         // While the detached script owns the removal, the journal's module_staged step is expected.
-        if (rollback !is RollbackState.Started) recovery?.let { RecoveryBlock(it) }
-        plan?.let { PlanExplanation(it) }
+        if (rollback !is RollbackState.Started) {
+            shownRecovery?.let {
+                RecoveryBlock(recovery = it, onRetry = onRollback, onDismiss = onDismissRecovery)
+            }
+        }
+        // A recorded rollback owns the next step: retrying finishes it, so a fresh plan — which may
+        // now say "nothing is kept" after an app-data clear — is neither explained nor offered.
+        if (pending == null) {
+            plan?.let { PlanExplanation(it) }
+        }
         ActionState(
-            plan = plan,
+            plan = plan.takeIf { pending == null },
             rollback = rollback,
-            appBusy = appBusy,
+            appInstall = appInstall,
             onRollback = onRollback,
             onDismiss = onDismiss
         )
@@ -466,58 +485,91 @@ private fun PlanExplanation(plan: RollbackPlan) {
 private fun ActionState(
     plan: RollbackPlan?,
     rollback: RollbackState,
-    appBusy: Boolean,
+    appInstall: AppInstallState,
     onRollback: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    if (appBusy) return
-    when (rollback) {
-        RollbackState.Idle -> when (plan) {
-            is RollbackPlan.AppOnly -> TextButton(onClick = onRollback) { Text("Reinstall the previous app") }
+    when {
+        appInstall is AppInstallState.Failed -> ErrorCard(
+            title = appInstall.code.title(),
+            message = appInstall.detail ?: appInstall.code.message(),
+            actionLabel = "Dismiss",
+            onAction = onDismiss
+        )
 
-            is RollbackPlan.WithPreviousModule -> PrimaryActionButton(
-                label = "Roll back to ${plan.previousVersionName ?: "the previous module"}",
-                onClick = onRollback,
-                supportingText = "One step that ends with a reboot. The phone asks before starting it."
-            )
-
-            is RollbackPlan.Unavailable, null -> Unit
-        }
-
-        RollbackState.StagingModule -> PrimaryActionButton(
-            label = "Staging the previous module…",
+        appInstall.busy -> PrimaryActionButton(
+            label = "Reinstalling the previous app…",
             onClick = {},
             busy = true
         )
 
-        RollbackState.StartingRemoval -> PrimaryActionButton(
-            label = "Starting the removal…",
-            onClick = {},
-            busy = true
-        )
-
-        is RollbackState.Started -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            StatusPill("Rollback started", StatusTone.WARNING)
+        appInstall is AppInstallState.Installed -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            StatusPill("Rolled back", StatusTone.POSITIVE)
             Text(
-                text = "Module ${rollback.versionName ?: "of the previous version"} is staged. The app update is " +
-                    "removed in the background and the phone reboots once that is verified. If the phone does " +
-                    "not reboot, open Updates again to see what the script recorded.",
+                text = "The phone runs ${appInstall.versionName ?: "the previous app"} again.",
                 style = MaterialTheme.typography.bodyMedium
             )
         }
 
-        is RollbackState.Failed -> ErrorCard(
-            title = rollback.code.title(),
-            message = rollback.message(),
-            output = rollback.detail,
-            actionLabel = "Dismiss",
-            onAction = onDismiss
-        )
+        else -> when (rollback) {
+            RollbackState.Idle -> when (plan) {
+                is RollbackPlan.AppOnly -> TextButton(onClick = onRollback) { Text("Reinstall the previous app") }
+
+                is RollbackPlan.WithPreviousModule -> PrimaryActionButton(
+                    label = "Roll back to ${plan.previousVersionName ?: "the previous module"}",
+                    onClick = onRollback,
+                    supportingText = "One step that ends with a reboot. The phone asks before starting it."
+                )
+
+                is RollbackPlan.Unavailable, null -> Unit
+            }
+
+            RollbackState.Preparing -> PrimaryActionButton(
+                label = "Writing the rollback files…",
+                onClick = {},
+                busy = true
+            )
+
+            RollbackState.StagingModule -> PrimaryActionButton(
+                label = "Staging the previous module…",
+                onClick = {},
+                busy = true
+            )
+
+            RollbackState.StartingRemoval -> PrimaryActionButton(
+                label = "Starting the removal…",
+                onClick = {},
+                busy = true
+            )
+
+            is RollbackState.Started -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                StatusPill("Rollback started", StatusTone.WARNING)
+                Text(
+                    text = "Module ${rollback.versionName ?: "of the previous version"} is staged. The app update is " +
+                        "removed in the background and the phone reboots once that is verified. If the phone does " +
+                        "not reboot, open Updates again to see what the script recorded.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                TextButton(onClick = onDismiss) { Text("Dismiss") }
+            }
+
+            is RollbackState.Failed -> ErrorCard(
+                title = rollback.code.title(),
+                message = rollback.message(),
+                output = rollback.detail,
+                actionLabel = "Dismiss",
+                onAction = onDismiss
+            )
+        }
     }
 }
 
 @Composable
-private fun RecoveryBlock(recovery: RollbackRecovery) {
+private fun RecoveryBlock(
+    recovery: RollbackRecovery,
+    onRetry: () -> Unit,
+    onDismiss: () -> Unit
+) {
     when (recovery) {
         is RollbackRecovery.Completed -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             StatusPill("Rolled back", StatusTone.POSITIVE)
@@ -532,11 +584,15 @@ private fun RecoveryBlock(recovery: RollbackRecovery) {
             StatusPill("Rollback unfinished", StatusTone.WARNING)
             Text(text = recovery.sentence(), style = MaterialTheme.typography.bodyMedium)
             Text(
-                text = "Retry the rollback below before rebooting: the previous module is staged, and a reboot " +
-                    "now can leave the older module next to the newer app.",
+                text = "Finishing it repeats the removal this rollback recorded, by the version it targets. A " +
+                    "reboot before that can leave the older module next to the newer app.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error
             )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onRetry) { Text("Finish the rollback") }
+                TextButton(onClick = onDismiss) { Text("Dismiss") }
+            }
         }
     }
 }
@@ -611,6 +667,10 @@ private fun RollbackBlocker.explanation(plan: RollbackPlan.Unavailable): String 
         RollbackBlocker.STALE_ARCHIVE ->
             "The kept module archive is not older than the system image's copy ($system), so reinstalling it " +
                 "would roll nothing back. Nothing is offered."
+
+        RollbackBlocker.ARCHIVE_MISMATCH ->
+            "The kept module archive does not hash to the value recorded with it, so its bytes are not the " +
+                "previous module. Nothing is offered; install the module update again to keep a fresh copy."
     }
 }
 
@@ -705,6 +765,7 @@ internal fun RollbackFailure.title(): String = when (this) {
     RollbackFailure.STORAGE_UNREADABLE -> "The rollback archive cannot be read"
     RollbackFailure.STALE_ARCHIVE -> "The kept module is not older"
     RollbackFailure.ARCHIVE_MISMATCH -> "The kept module changed since the check"
+    RollbackFailure.PREPARATION_FAILED -> "The rollback files could not be written"
     RollbackFailure.MODULE_STAGE_FAILED -> "The previous module was not staged"
     RollbackFailure.REMOVAL_NOT_STARTED -> "The removal script did not start"
 }
@@ -731,6 +792,10 @@ internal fun RollbackState.Failed.message(): String = when (code) {
     RollbackFailure.ARCHIVE_MISMATCH ->
         "The published archive is not the one this check planned for. Nothing on the phone changed; check again " +
             "before rolling back."
+
+    RollbackFailure.PREPARATION_FAILED ->
+        "The script and the journal could not be written on this phone, so nothing was staged and nothing on the " +
+            "phone changed. Free space in the app's storage, then try again."
 
     RollbackFailure.MODULE_STAGE_FAILED ->
         "The module installer refused the previous zip, so nothing on the phone changed."

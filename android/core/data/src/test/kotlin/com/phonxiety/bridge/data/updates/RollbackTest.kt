@@ -73,6 +73,12 @@ class RollbackTest {
                 archive = RollbackArchiveState.Present(PublishedModuleArchive("0.4.0", 4, "b".repeat(64)))
             )
         )
+        val mismatched = RollbackPlanner.plan(
+            facts(
+                mounted = MountedSystemApkVersion.Present("/system/priv-app/x.apk", "0.4.0", 4),
+                archive = RollbackArchiveState.Mismatch("b".repeat(64), "c".repeat(64))
+            )
+        )
 
         assertEquals(
             RollbackBlocker.SYSTEM_VERSION_UNKNOWN,
@@ -83,6 +89,7 @@ class RollbackTest {
             (unreadableStorage as RollbackPlan.Unavailable).blocker
         )
         assertEquals(RollbackBlocker.STALE_ARCHIVE, (stale as RollbackPlan.Unavailable).blocker)
+        assertEquals(RollbackBlocker.ARCHIVE_MISMATCH, (mismatched as RollbackPlan.Unavailable).blocker)
     }
 
     @Test
@@ -93,7 +100,7 @@ class RollbackTest {
     }
 
     @Test
-    fun `the combined rollback stages the module, then hands the removal off`() = runTest {
+    fun `the combined rollback prepares locally, stages the module, then hands the removal off`() = runTest {
         val publisher = FakePublisher(RollbackArchiveState.Present(archive))
         val root = FakeRoot()
         val states = mutableListOf<RollbackState>()
@@ -102,8 +109,11 @@ class RollbackTest {
             .rollback(expectedPreviousVersionCode = 3)
 
         assertEquals(RollbackState.Started("0.3.0"), result)
-        assertEquals(listOf("stage", "start"), root.calls)
-        assertEquals(listOf(RollbackState.StagingModule, RollbackState.StartingRemoval), states.take(2))
+        assertEquals(listOf("prepare", "stage", "start"), root.calls)
+        assertEquals(
+            listOf(RollbackState.Preparing, RollbackState.StagingModule, RollbackState.StartingRemoval),
+            states.take(3)
+        )
         val journal = root.journal!!
         assertEquals(RollbackJournalStep.MODULE_STAGED, journal.step)
         assertEquals(7L, journal.createdAtMillis)
@@ -124,7 +134,36 @@ class RollbackTest {
         ) {}.rollback(expectedPreviousVersionCode = 3)
 
         assertEquals(RollbackState.Started("0.3.0"), result)
-        assertEquals(listOf("start"), root.calls)
+        assertEquals(listOf("prepare", "start"), root.calls)
+    }
+
+    @Test
+    fun `a file that cannot be written stops before anything is staged`() = runTest {
+        val root = FakeRoot(prepare = RootStepResult(false, "no space left on device"))
+        val result = ModuleRollbackCoordinator(
+            FakePublisher(RollbackArchiveState.Present(archive)),
+            root,
+            running
+        ) {}.rollback(expectedPreviousVersionCode = 3)
+
+        val failure = result as RollbackState.Failed
+        assertEquals(RollbackFailure.PREPARATION_FAILED, failure.code)
+        assertEquals("no space left on device", failure.detail)
+        assertTrue(failure.applied.isEmpty())
+        assertEquals(listOf("prepare"), root.calls)
+    }
+
+    @Test
+    fun `an archive whose bytes do not match its identity is refused before root runs`() = runTest {
+        val root = FakeRoot()
+        val result = ModuleRollbackCoordinator(
+            FakePublisher(RollbackArchiveState.Mismatch(archive.sha256, "b".repeat(64))),
+            root,
+            running
+        ) {}.rollback(expectedPreviousVersionCode = 3)
+
+        assertEquals(RollbackFailure.ARCHIVE_MISMATCH, (result as RollbackState.Failed).code)
+        assertTrue(root.calls.isEmpty())
     }
 
     @Test
@@ -168,7 +207,7 @@ class RollbackTest {
         assertEquals(RollbackFailure.MODULE_STAGE_FAILED, failure.code)
         assertEquals("magisk: refused", failure.detail)
         assertTrue(failure.applied.isEmpty())
-        assertEquals(listOf("stage"), root.calls)
+        assertEquals(listOf("prepare", "stage"), root.calls)
     }
 
     @Test
@@ -302,20 +341,26 @@ class RollbackTest {
     }
 
     private class FakeRoot(
+        private val prepare: RootStepResult = RootStepResult(ok = true),
         private val stage: RootStepResult = RootStepResult(ok = true),
         private val start: RootStepResult = RootStepResult(ok = true)
     ) : RollbackRootSteps {
         val calls = mutableListOf<String>()
         var journal: RollbackJournal? = null
 
+        override suspend fun prepare(journal: RollbackJournal): RootStepResult {
+            calls += "prepare"
+            this.journal = journal
+            return prepare
+        }
+
         override suspend fun stagePreviousModule(archive: PublishedModuleArchive): RootStepResult {
             calls += "stage"
             return stage
         }
 
-        override suspend fun startRemovalScript(journal: RollbackJournal): RootStepResult {
+        override suspend fun startRemovalScript(): RootStepResult {
             calls += "start"
-            this.journal = journal
             return start
         }
     }

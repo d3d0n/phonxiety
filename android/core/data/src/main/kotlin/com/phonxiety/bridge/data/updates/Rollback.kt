@@ -45,7 +45,10 @@ enum class RollbackBlocker {
     SYSTEM_VERSION_UNKNOWN,
 
     /** The published archive is not older than the mounted system APK, so it is not a rollback. */
-    STALE_ARCHIVE
+    STALE_ARCHIVE,
+
+    /** The published archive's bytes are not the ones its own metadata names. */
+    ARCHIVE_MISMATCH
 }
 
 /**
@@ -72,6 +75,9 @@ sealed interface RollbackArchiveState {
     data object Unreadable : RollbackArchiveState
 
     data class Present(val archive: PublishedModuleArchive) : RollbackArchiveState
+
+    /** The archive is there, but its bytes hash to [actualSha256], not [expectedSha256]. */
+    data class Mismatch(val expectedSha256: String, val actualSha256: String) : RollbackArchiveState
 }
 
 /** Everything the plan is decided from: probes fill it, nothing here is guessed. */
@@ -116,6 +122,14 @@ object RollbackPlanner {
 
             RollbackArchiveState.Missing -> RollbackPlan.Unavailable(
                 blocker = RollbackBlocker.NO_PREVIOUS_MODULE,
+                moduleVersion = mounted.versionName,
+                moduleVersionCode = mounted.versionCode,
+                keptVersionName = facts.keptVersionName,
+                keptVersionCode = facts.keptVersionCode
+            )
+
+            is RollbackArchiveState.Mismatch -> RollbackPlan.Unavailable(
+                blocker = RollbackBlocker.ARCHIVE_MISMATCH,
                 moduleVersion = mounted.versionName,
                 moduleVersionCode = mounted.versionCode,
                 keptVersionName = facts.keptVersionName,
@@ -306,13 +320,22 @@ object RollbackVerification {
     }
 }
 
-/** The root actions a combined rollback performs, in order: stage the module, then hand off. */
+/** The root actions a combined rollback performs, in order: prepare, stage, hand off. */
 interface RollbackRootSteps {
-    /** Stages the published previous-module archive through the detected root provider. */
+    /**
+     * Writes the script and the journal into app storage, where a failure is still this process's
+     * to report. It runs before anything is staged, so a full cache changes nothing on the phone.
+     */
+    suspend fun prepare(journal: RollbackJournal): RootStepResult
+
+    /**
+     * Verifies the published archive through root, then stages it through the detected provider.
+     * The archive lives in root-only `/data/adb`, so its existence and digest are root's answers.
+     */
     suspend fun stagePreviousModule(archive: PublishedModuleArchive): RootStepResult
 
-    /** Publishes the journal and the detached script, then starts it. */
-    suspend fun startRemovalScript(journal: RollbackJournal): RootStepResult
+    /** Publishes the prepared journal and script, then starts the script detached. */
+    suspend fun startRemovalScript(): RootStepResult
 }
 
 /** What a combined rollback already applied, so a failure names it instead of hiding it. */
@@ -320,6 +343,9 @@ enum class RollbackStep { MODULE_STAGED, REMOVAL_STARTED }
 
 sealed interface RollbackState {
     data object Idle : RollbackState
+
+    /** Writing the script and the journal locally; nothing on the phone changed yet. */
+    data object Preparing : RollbackState
 
     data object StagingModule : RollbackState
 
@@ -336,7 +362,7 @@ sealed interface RollbackState {
     ) : RollbackState
 
     val busy: Boolean
-        get() = this is StagingModule || this is StartingRemoval
+        get() = this is Preparing || this is StagingModule || this is StartingRemoval
 }
 
 enum class RollbackFailure {
@@ -346,6 +372,9 @@ enum class RollbackFailure {
     STORAGE_UNREADABLE,
     STALE_ARCHIVE,
     ARCHIVE_MISMATCH,
+
+    /** The local script or journal could not be written, so nothing was staged. */
+    PREPARATION_FAILED,
     MODULE_STAGE_FAILED,
     REMOVAL_NOT_STARTED
 }
@@ -373,18 +402,18 @@ class ModuleRollbackCoordinator(
 
             RollbackArchiveState.Unreadable ->
                 return finish(RollbackFailure.NO_PREVIOUS_MODULE, "the rollback directory could not be read")
+
+            is RollbackArchiveState.Mismatch ->
+                return finish(
+                    RollbackFailure.ARCHIVE_MISMATCH,
+                    "the published archive hashes to ${state.actualSha256}, its metadata names ${state.expectedSha256}"
+                )
         }
         if (archive.versionCode != expectedPreviousVersionCode) {
             return finish(
                 RollbackFailure.ARCHIVE_MISMATCH,
                 "the published archive is ${archive.versionCode}, the checked plan expected $expectedPreviousVersionCode"
             )
-        }
-
-        if (archive.sha256 != stagedArchiveSha256) {
-            onState(RollbackState.StagingModule)
-            val staged = root.stagePreviousModule(archive)
-            if (!staged.ok) return finish(RollbackFailure.MODULE_STAGE_FAILED, staged.detail)
         }
 
         val journal = RollbackJournal(
@@ -399,8 +428,20 @@ class ModuleRollbackCoordinator(
                 fromAppVersionCode = app.versionCode
             )
         )
+        // The fallible local writes come first: if the cache is full, nothing on the phone changed
+        // and the coordinator still holds the explanation to show.
+        onState(RollbackState.Preparing)
+        val prepared = root.prepare(journal)
+        if (!prepared.ok) return finish(RollbackFailure.PREPARATION_FAILED, prepared.detail)
+
+        if (archive.sha256 != stagedArchiveSha256) {
+            onState(RollbackState.StagingModule)
+            val staged = root.stagePreviousModule(archive)
+            if (!staged.ok) return finish(RollbackFailure.MODULE_STAGE_FAILED, staged.detail)
+        }
+
         onState(RollbackState.StartingRemoval)
-        val started = root.startRemovalScript(journal)
+        val started = root.startRemovalScript()
         if (!started.ok) {
             return finish(
                 RollbackFailure.REMOVAL_NOT_STARTED,

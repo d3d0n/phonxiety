@@ -111,6 +111,56 @@ class RootCommandTest {
     }
 
     @Test
+    fun rollbackGenerationsAreNamedByTheirDigest() {
+        val sha = "a".repeat(64)
+        val generation = RootCommand.rollbackGenerationName(sha)!!
+        assertEquals("g-$sha", generation)
+        assertEquals(
+            "mkdir -p /data/adb/phonxiety/g-$sha",
+            RootCommand.createRollbackGeneration(generation).script
+        )
+        assertEquals(
+            "cp -f /data/user/0/com.phonxiety.bridge/cache/x.zip /data/adb/phonxiety/g-$sha/module-previous.zip.tmp",
+            RootCommand.copyIntoRollbackGeneration(
+                "/data/user/0/com.phonxiety.bridge/cache/x.zip",
+                generation,
+                "module-previous.zip"
+            ).script
+        )
+        assertEquals(
+            "mv -f /data/adb/phonxiety/g-$sha/module-previous.zip.tmp /data/adb/phonxiety/g-$sha/module-previous.zip",
+            RootCommand.renameInRollbackGeneration(generation, "module-previous.zip").script
+        )
+        assertEquals(
+            "cat /data/adb/phonxiety/g-$sha/module-previous.json",
+            RootCommand.readRollbackGenerationFile(generation, "module-previous.json").script
+        )
+        assertEquals(
+            "sha256sum /data/adb/phonxiety/g-$sha/module-previous.zip",
+            RootCommand.hashRollbackGenerationFile(generation, "module-previous.zip").script
+        )
+        assertEquals(
+            "rm -rf /data/adb/phonxiety/g-$sha",
+            RootCommand.removeRollbackGeneration(generation).script
+        )
+        assertEquals(null, RootCommand.rollbackGenerationName(""))
+        assertEquals(null, RootCommand.rollbackGenerationName("../etc"))
+    }
+
+    @Test
+    fun aGenerationNameTheShellCouldReadCannotEscape() {
+        assertThrows(IllegalArgumentException::class.java) {
+            RootCommand.readRollbackGenerationFile("g-../../etc/hosts; reboot", "module-previous.json")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            RootCommand.removeRollbackGeneration("../../data")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            RootCommand.copyIntoRollbackGeneration("/tmp/a.zip; reboot", RootCommand.rollbackGenerationName("a".repeat(64))!!, "x.zip")
+        }
+    }
+
+    @Test
     fun rejectsShellMetacharactersAndEscapes() {
         assertThrows(IllegalArgumentException::class.java) {
             RootCommand.copy("/tmp/a.zip; rm -rf /", "x.zip")

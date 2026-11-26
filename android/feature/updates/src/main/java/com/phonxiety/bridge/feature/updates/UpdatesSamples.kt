@@ -12,6 +12,7 @@ import com.phonxiety.bridge.data.updates.RollbackPlan
 import com.phonxiety.bridge.data.updates.RollbackRecovery
 import com.phonxiety.bridge.data.updates.RollbackState
 import com.phonxiety.bridge.data.updates.UpdateCheck
+import com.phonxiety.bridge.data.updates.UpdateCheckError
 import com.phonxiety.bridge.data.updates.UpdateCompat
 import com.phonxiety.bridge.data.updates.UpdateManifest
 
@@ -159,5 +160,29 @@ object UpdatesSamples {
 
     fun rollbackStarted(): UpdatesUiState = rollbackWithModule().copy(
         moduleRollback = RollbackState.Started(versionName = "0.3.0")
+    )
+
+    /** The link is down, so no manifest and no app row: the rollback card still carries the failure. */
+    fun rollbackAppOnlyFailedOffline(): UpdatesUiState = UpdatesUiState(
+        check = UpdateCheck(
+            error = UpdateCheckError.LINK_DOWN,
+            detail = "the daemon did not answer",
+            checkedAtEpochMs = 0L
+        ),
+        rollbackPlan = appOnlyRollback(),
+        rollbackAppInstall = AppInstallState.Failed(
+            InstallFailure.ROOT_UNAVAILABLE,
+            "su: permission denied"
+        )
+    )
+
+    fun rollbackAppOnlyRunningOffline(): UpdatesUiState = UpdatesUiState(
+        check = UpdateCheck(
+            error = UpdateCheckError.LINK_DOWN,
+            detail = "the daemon did not answer",
+            checkedAtEpochMs = 0L
+        ),
+        rollbackPlan = appOnlyRollback(),
+        rollbackAppInstall = AppInstallState.Installing(sessionId = null)
     )
 }

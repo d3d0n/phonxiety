@@ -18,6 +18,22 @@ import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/** The module installs the update flow needs: an app-side zip, or one published under `/data/adb`. */
+interface RootModuleInstaller {
+    suspend fun installModule(zip: File): ProviderInstall
+
+    /**
+     * Installs a zip already published under root-owned storage. `/data/adb` is root-only, so this
+     * goes through `su` for both the existence check and the copy; the app never stats that path.
+     */
+    suspend fun installPublishedModule(sourcePath: String): ProviderInstall
+}
+
+/** The installed module the rollback card reads, through the detected provider. */
+fun interface RootModuleState {
+    suspend fun moduleState(): ModuleState?
+}
+
 /**
  * The root side of the update flow, through the public `:core:root` API only: detect the provider,
  * read the module state, install a zip and ask for the reboot.
@@ -28,37 +44,23 @@ import javax.inject.Singleton
 @Singleton
 class AndroidRootAccess @Inject constructor(
     @ApplicationContext private val context: Context
-) {
+) : RootModuleInstaller,
+    RootModuleState {
     private val appContext = context.applicationContext
 
-    suspend fun moduleState(): ModuleState? {
-        val shell = RootShell()
-        val environment = ShellRootEnvironment(shell, AndroidPackageInventory(appContext))
-        val detection = RootDetector(shell, environment).detect()
-        if (detection.su != SuStatus.GRANTED) return null
-        val detected = detection.provider ?: return null
-        return provider(detected, shell, environment).moduleState(MODULE_ID)
+    override suspend fun moduleState(): ModuleState? = when (val found = detect()) {
+        is Detection.Refused -> null
+        is Detection.Ready -> found.provider.moduleState(MODULE_ID)
     }
 
-    suspend fun installModule(zip: File): ProviderInstall {
-        val shell = RootShell()
-        val environment = ShellRootEnvironment(shell, AndroidPackageInventory(appContext))
-        val detection = RootDetector(shell, environment).detect()
-        if (detection.conflict) {
-            return ProviderInstall.Failed(
-                ModuleInstallFailure.PROVIDER_CONFLICT,
-                detection.providers.joinToString { it.id.name }
-            )
-        }
-        val detected = detection.provider
-            ?: return ProviderInstall.Failed(ModuleInstallFailure.ROOT_UNAVAILABLE, "no root provider answered")
-        if (detection.su != SuStatus.GRANTED) {
-            return ProviderInstall.Failed(ModuleInstallFailure.ROOT_UNAVAILABLE, detection.suOutput)
-        }
-        return when (val result = provider(detected, shell, environment).installModule(zip)) {
-            is ProviderResult.Success -> ProviderInstall.Installed
-            else -> ProviderInstall.Failed(ModuleInstallFailure.INSTALL_FAILED, result.tail().joinToString("\n"))
-        }
+    override suspend fun installModule(zip: File): ProviderInstall = when (val found = detect()) {
+        is Detection.Refused -> found.failure
+        is Detection.Ready -> found.provider.installModule(zip).asInstall()
+    }
+
+    override suspend fun installPublishedModule(sourcePath: String): ProviderInstall = when (val found = detect()) {
+        is Detection.Refused -> found.failure
+        is Detection.Ready -> found.provider.installPublishedModule(sourcePath).asInstall()
     }
 
     suspend fun rebootForUpdate(): ProviderInstall {
@@ -73,6 +75,31 @@ class AndroidRootAccess @Inject constructor(
         }
     }
 
+    private suspend fun detect(): Detection {
+        val shell = RootShell()
+        val environment = ShellRootEnvironment(shell, AndroidPackageInventory(appContext))
+        val detection = RootDetector(shell, environment).detect()
+        if (detection.conflict) {
+            return Detection.Refused(
+                ProviderInstall.Failed(
+                    ModuleInstallFailure.PROVIDER_CONFLICT,
+                    detection.providers.joinToString { it.id.name }
+                )
+            )
+        }
+        val detected = detection.provider
+            ?: return Detection.Refused(ProviderInstall.Failed(ModuleInstallFailure.ROOT_UNAVAILABLE, "no root provider answered"))
+        if (detection.su != SuStatus.GRANTED) {
+            return Detection.Refused(ProviderInstall.Failed(ModuleInstallFailure.ROOT_UNAVAILABLE, detection.suOutput))
+        }
+        return Detection.Ready(provider(detected, shell, environment))
+    }
+
+    private fun ProviderResult.asInstall(): ProviderInstall = when (this) {
+        is ProviderResult.Success -> ProviderInstall.Installed
+        else -> ProviderInstall.Failed(ModuleInstallFailure.INSTALL_FAILED, tail().joinToString("\n"))
+    }
+
     private fun provider(
         detected: com.phonxiety.bridge.root.DetectedProvider,
         shell: RootShell,
@@ -83,6 +110,12 @@ class AndroidRootAccess @Inject constructor(
         environment = environment,
         rebooter = PowerManagerRebooter(appContext)
     )
+
+    private sealed interface Detection {
+        data class Ready(val provider: RootProvider) : Detection
+
+        data class Refused(val failure: ProviderInstall.Failed) : Detection
+    }
 
     private companion object {
         val MODULE_ID: String = ModuleController.MODULE_ID

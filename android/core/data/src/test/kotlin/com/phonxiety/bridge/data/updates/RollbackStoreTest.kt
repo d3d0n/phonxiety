@@ -1,6 +1,7 @@
 package com.phonxiety.bridge.data.updates
 
 import com.phonxiety.bridge.root.ProcessRunner
+import com.phonxiety.bridge.root.RootCommand
 import com.phonxiety.bridge.root.RootShell
 import com.phonxiety.bridge.root.ShellOutput
 import java.io.File
@@ -13,58 +14,89 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 
-/** `/data/adb/phonxiety` through a fake `su`: exact commands, atomic publish, honest reads. */
+/** `/data/adb/phonxiety` through a fake `su`: generations, the pointer switch, honest reads. */
 class RollbackStoreTest {
     @get:Rule
     val temporary = TemporaryFolder()
 
     private val archive = PublishedModuleArchive("0.3.0", 3, "a".repeat(64))
+    private val generation = RootCommand.rollbackGenerationName(archive.sha256)!!
 
     @Test
-    fun `publishing goes through the rollback directory and renames atomically`() = runTest {
+    fun `publishing fills one generation, then moves the pointer once`() = runTest {
         val runner = FakeRunner()
         val store = store(runner)
-        val archiveFile = temporary.newFile("module-previous.zip")
-        val metadata = temporary.newFile("module-previous.json").apply { writeText("{}") }
+        val archiveFile = temporary.newFile("module-previous.zip").apply { writeText("zip") }
+        val metadata = temporary.newFile("module-previous.json").apply { writeText(ModuleArchiveMeta.write(archive)) }
+        var pointer: String? = null
+        runner.onCommand = { script ->
+            if (script.startsWith("cp -f") && script.endsWith("/data/adb/phonxiety/current.tmp")) {
+                pointer = File(script.split(' ')[2]).readText()
+            }
+        }
 
         assertTrue(store.publish(archiveFile, metadata))
 
+        val generationPath = "/data/adb/phonxiety/$generation"
         assertEquals(
             listOf(
                 "mkdir -p /data/adb/phonxiety",
-                "cp -f ${archiveFile.path} /data/adb/phonxiety/module-previous.zip.tmp",
-                "mv -f /data/adb/phonxiety/module-previous.zip.tmp /data/adb/phonxiety/module-previous.zip",
-                "cp -f ${metadata.path} /data/adb/phonxiety/module-previous.json.tmp",
-                "mv -f /data/adb/phonxiety/module-previous.json.tmp /data/adb/phonxiety/module-previous.json"
+                "mkdir -p $generationPath",
+                "cp -f ${archiveFile.path} $generationPath/module-previous.zip.tmp",
+                "mv -f $generationPath/module-previous.zip.tmp $generationPath/module-previous.zip",
+                "cp -f ${metadata.path} $generationPath/module-previous.json.tmp",
+                "mv -f $generationPath/module-previous.json.tmp $generationPath/module-previous.json",
+                "cp -f ${File(temporary.root, "workspace/current").path} /data/adb/phonxiety/current.tmp",
+                "mv -f /data/adb/phonxiety/current.tmp /data/adb/phonxiety/current",
+                "ls -1 /data/adb/phonxiety"
             ),
             runner.commands
         )
+        assertEquals("$generation\n", pointer)
+        // Nothing was removed yet: the switch is the last write, never the first.
+        assertTrue(runner.commands.indexOfFirst { it.startsWith("mv -f /data/adb/phonxiety/current.tmp") } > 3)
     }
 
     @Test
-    fun `a refused copy stops the publish and reports failure`() = runTest {
+    fun `a generation the pointer no longer names is cleaned up`() = runTest {
+        val runner = FakeRunner().apply {
+            respond = { script ->
+                if (script == "ls -1 /data/adb/phonxiety") {
+                    ShellOutput(stdout = "g-${"b".repeat(64)}\n$generation\nrollback.json\n")
+                } else {
+                    ShellOutput()
+                }
+            }
+        }
+
+        assertTrue(store(runner).publish(temporary.newFile("a.zip"), metadataFile()))
+
+        assertTrue(runner.commands.contains("rm -rf /data/adb/phonxiety/g-${"b".repeat(64)}"))
+        assertFalse(runner.commands.contains("rm -rf /data/adb/phonxiety/$generation"))
+        assertFalse(runner.commands.any { it.startsWith("rm -rf") && it.endsWith("rollback.json") })
+    }
+
+    @Test
+    fun `a refused copy stops the publish before the pointer moves`() = runTest {
         val runner = FakeRunner().apply {
             respond = { script -> if (script.startsWith("cp -f")) ShellOutput(exitCode = 1) else ShellOutput() }
         }
 
-        assertFalse(store(runner).publish(temporary.newFile("a.zip"), temporary.newFile("b.json")))
+        assertFalse(store(runner).publish(temporary.newFile("a.zip"), metadataFile()))
 
-        assertEquals(2, runner.commands.size)
+        assertFalse(runner.commands.any { it.contains("/data/adb/phonxiety/current") })
     }
 
     @Test
-    fun `the archive is present only when both files are listed and the metadata parses`() = runTest {
+    fun `the archive is present only when root's digest matches the published identity`() = runTest {
         val present = store(
             FakeRunner().apply {
                 respond = { script ->
                     when {
                         script == "ls -1 /data/adb" -> ShellOutput(stdout = "modules\nphonxiety\n")
-
-                        script == "ls -1 /data/adb/phonxiety" ->
-                            ShellOutput(stdout = "module-previous.zip\nmodule-previous.json\n")
-
-                        script.startsWith("cat ") -> ShellOutput(stdout = ModuleArchiveMeta.write(archive))
-
+                        script.endsWith("/current") -> ShellOutput(stdout = "$generation\n")
+                        script.endsWith("module-previous.json") -> ShellOutput(stdout = ModuleArchiveMeta.write(archive))
+                        script.startsWith("sha256sum") -> ShellOutput(stdout = "${archive.sha256}  /data/adb/phonxiety/$generation/module-previous.zip\n")
                         else -> ShellOutput()
                     }
                 }
@@ -72,6 +104,30 @@ class RollbackStoreTest {
         ).read()
 
         assertEquals(RollbackArchiveState.Present(archive), present)
+    }
+
+    @Test
+    fun `bytes that do not hash to the published identity are a mismatch, not an archive`() = runTest {
+        val other = "b".repeat(64)
+        val mismatch = store(
+            FakeRunner().apply {
+                respond = { script ->
+                    when {
+                        script == "ls -1 /data/adb" -> ShellOutput(stdout = "phonxiety\n")
+                        script.endsWith("/current") -> ShellOutput(stdout = "$generation\n")
+                        script.endsWith("module-previous.json") -> ShellOutput(stdout = ModuleArchiveMeta.write(archive))
+                        script.startsWith("sha256sum") -> ShellOutput(stdout = "$other  x\n")
+                        else -> ShellOutput()
+                    }
+                }
+            }
+        ).read()
+
+        assertEquals(RollbackArchiveState.Mismatch(archive.sha256, other), mismatch)
+    }
+
+    @Test
+    fun `an unreadable directory, an absent pointer and a garbled one are told apart`() = runTest {
         assertEquals(
             RollbackArchiveState.Missing,
             store(FakeRunner().apply { respond = { ShellOutput(stdout = "modules\npost-fs-data.d\n") } }).read()
@@ -81,6 +137,7 @@ class RollbackStoreTest {
             RollbackArchiveState.Unreadable,
             store(FakeRunner().apply { respond = { ShellOutput(exitCode = 1) } }).read()
         )
+        // The pointer names something no generation can be built from.
         assertEquals(
             RollbackArchiveState.Unreadable,
             store(
@@ -88,11 +145,22 @@ class RollbackStoreTest {
                     respond = { script ->
                         when {
                             script == "ls -1 /data/adb" -> ShellOutput(stdout = "phonxiety\n")
-
-                            script == "ls -1 /data/adb/phonxiety" ->
-                                ShellOutput(stdout = "module-previous.zip\nmodule-previous.json\n")
-
-                            else -> ShellOutput(stdout = "not a document")
+                            else -> ShellOutput(stdout = "../../etc\n")
+                        }
+                    }
+                }
+            ).read()
+        )
+        // The metadata inside the generation names a different digest than its own directory.
+        assertEquals(
+            RollbackArchiveState.Unreadable,
+            store(
+                FakeRunner().apply {
+                    respond = { script ->
+                        when {
+                            script == "ls -1 /data/adb" -> ShellOutput(stdout = "phonxiety\n")
+                            script.endsWith("/current") -> ShellOutput(stdout = "$generation\n")
+                            else -> ShellOutput(stdout = ModuleArchiveMeta.write(archive.copy(sha256 = "c".repeat(64))))
                         }
                     }
                 }
@@ -113,17 +181,41 @@ class RollbackStoreTest {
     }
 
     @Test
-    fun `starting the removal publishes the script and the journal, then starts it detached`() = runTest {
+    fun `preparation writes the script and the journal into app storage`() = runTest {
+        val runner = FakeRunner()
+
+        val result = store(runner).prepareScript(journal())
+
+        assertTrue(result.ok)
+        val workspace = File(temporary.root, "workspace")
+        assertEquals(RollbackScript.TEXT, File(workspace, RollbackFiles.SCRIPT).readText())
+        assertEquals(journal(), RollbackJournalCodec.parse(File(workspace, RollbackFiles.JOURNAL).readText()))
+        assertTrue(runner.commands.isEmpty())
+    }
+
+    @Test
+    fun `a workspace that cannot be created is an explained failure, never a throw`() = runTest {
+        val blocked = temporary.newFile("blocked")
+
+        val result = RootRollbackStore(RootShell(FakeRunner()), blocked).prepareScript(journal())
+
+        assertFalse(result.ok)
+        assertTrue(result.detail!!.contains(blocked.path))
+    }
+
+    @Test
+    fun `starting publishes the prepared files and then starts the script detached`() = runTest {
         val runner = FakeRunner()
         var publishedJournal: RollbackJournal? = null
         runner.onCommand = { script ->
-            if (script.startsWith("cp -f") && script.contains("/data/adb/phonxiety/rollback.json.tmp")) {
-                val source = File(script.split(' ')[2])
-                publishedJournal = RollbackJournalCodec.parse(source.readText())
+            if (script.startsWith("cp -f") && script.endsWith("/data/adb/phonxiety/rollback.json.tmp")) {
+                publishedJournal = RollbackJournalCodec.parse(File(script.split(' ')[2]).readText())
             }
         }
+        val store = store(runner)
 
-        val result = store(runner).startScript(journal())
+        assertTrue(store.prepareScript(journal()).ok)
+        val result = store.startScript()
 
         assertTrue(result.ok)
         publishedJournal?.let {
@@ -135,6 +227,7 @@ class RollbackStoreTest {
             runner.commands.last()
         )
         assertTrue(runner.commands.contains("mkdir -p /data/adb/phonxiety"))
+        assertFalse(File(File(temporary.root, "workspace"), RollbackFiles.SCRIPT).exists())
     }
 
     @Test
@@ -148,13 +241,29 @@ class RollbackStoreTest {
                 }
             }
         }
+        val store = store(runner)
 
-        val result = store(runner).startScript(journal())
+        assertTrue(store.prepareScript(journal()).ok)
+        val result = store.startScript()
 
         assertFalse(result.ok)
         assertTrue(result.detail!!.contains("script"))
         assertFalse(runner.commands.any { it.startsWith("nohup") })
     }
+
+    @Test
+    fun `nothing is started that was not prepared`() = runTest {
+        val runner = FakeRunner()
+
+        val result = store(runner).startScript()
+
+        assertFalse(result.ok)
+        assertTrue(result.detail!!.contains("prepared"))
+        assertTrue(runner.commands.isEmpty())
+    }
+
+    private fun metadataFile(): File = temporary.newFile("module-previous.json")
+        .apply { writeText(ModuleArchiveMeta.write(archive)) }
 
     private fun store(runner: FakeRunner): RootRollbackStore = RootRollbackStore(RootShell(runner), File(temporary.root, "workspace"))
 
