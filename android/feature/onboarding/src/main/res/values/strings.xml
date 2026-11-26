@@ -96,7 +96,6 @@
     <string name="onboarding_changes_heading">Changes to this phone</string>
     <string name="onboarding_row_module">Module</string>
     <string name="onboarding_row_provider">Root manager</string>
-    <string name="onboarding_row_reboot_access">Reboot access</string>
     <string name="onboarding_grant_audio_capture">Audio capture</string>
     <string name="onboarding_grant_call_state">Call state</string>
     <string name="onboarding_grant_in_call_control">In-call control</string>
@@ -110,7 +109,6 @@
     <string name="onboarding_installing_journal">The install is saved on disk, so a reboot or a restart resumes here.</string>
     <string name="onboarding_downloading_metamodule">Downloading meta-overlayfs</string>
     <string name="onboarding_installing_metamodule">Installing the metamodule</string>
-    <string name="onboarding_download_percent">%1$d%%</string>
     <string name="onboarding_download_size">%1$s of %2$s</string>
     <string name="onboarding_metamodule_checked">The archive is checked against a pinned SHA-256 before it is installed.</string>
 

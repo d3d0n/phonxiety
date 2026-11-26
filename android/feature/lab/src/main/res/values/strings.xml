@@ -148,7 +148,6 @@
     <string name="lab_log_empty">Nothing logged at this level yet</string>
     <string name="lab_log_copied">Log copied</string>
     <string name="lab_log_chooser">Phonxiety phone log</string>
-    <string name="lab_log_share_title">Phonxiety phone log</string>
     <plurals name="lab_log_lines">
         <item quantity="one">%1$d line</item>
         <item quantity="other">%1$d lines</item>
