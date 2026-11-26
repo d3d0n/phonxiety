@@ -264,6 +264,37 @@ class CallDetailScreenshotTest {
     }
 
     @Test
+    fun aLongResultAnswerStacksUnderItsLabel() = render(
+        "result_long_411_light",
+        beforeCapture = {
+            scrollToNode("Menu options heard")
+            composeRule.waitForIdle()
+        }
+    ) { setScreen(longFieldCall()) }
+
+    @Test
+    fun aLongResultAnswerStacksAtTwoHundredPercent() = render(
+        "result_long_320_font200_dark",
+        beforeCapture = {
+            scrollToNode("Menu options heard")
+            composeRule.waitForIdle()
+        }
+    ) { setScreen(longFieldCall(), dark = true, fontScale = 2f, width = 320.dp) }
+
+    @Test
+    fun aBooleanResultReadsAsAWordAndASentenceStaysProse() {
+        setScreen(longFieldCall())
+        scrollToNode("Menu reacted")
+        composeRule.onNodeWithText("Yes").assertExists()
+        composeRule.onNodeWithText("true").assertDoesNotExist()
+        val label = composeRule.onNodeWithText("Menu options heard").getUnclippedBoundsInRoot()
+        val value = composeRule.onNodeWithText(LONG_RESULT_ANSWER).getUnclippedBoundsInRoot()
+        assertTrue("the label keeps a readable width", (label.right - label.left).value > 100f)
+        assertEquals("the value starts at the label's edge", label.left.value, value.left.value, 1f)
+        assertTrue("the value sits under the label", value.top >= label.bottom)
+    }
+
+    @Test
     fun theHeaderShowsTheWholeNumberAndNoDanglingSeparator() {
         setScreen(finished())
         // The header and the brief both show the whole number, and neither is masked.
@@ -559,6 +590,19 @@ class CallDetailScreenshotTest {
             audio = CallAudioUiState(downloading = true)
         )
 
+        /** A result whose answers are a sentence, a boolean and a time. */
+        fun longFieldCall(): CallDetailUiState = finished().copy(
+            snapshot = detailSnapshot(
+                fields = JsonObject(
+                    mapOf(
+                        "menu_options_heard" to JsonPrimitive(LONG_RESULT_ANSWER),
+                        "menu_reacted" to JsonPrimitive(true),
+                        "reservation_time" to JsonPrimitive("21:00")
+                    )
+                )
+            )
+        )
+
         /** The same call once its recording is on this phone, with the playhead where the user left it. */
         fun savedRecording(): CallDetailUiState = finished().copy(
             audio = CallAudioUiState(filePath = "/tmp/call-1.m4a", prepared = true, positionMs = 12_000, durationMs = 180_000)
@@ -567,6 +611,8 @@ class CallDetailScreenshotTest {
         /** The call whose recording is still on the bridge, so the card can only offer a download. */
         fun remoteRecording(): CallDetailUiState = finished().copy(audio = CallAudioUiState())
 
+        const val LONG_RESULT_ANSWER =
+            "Press one for reservations, two for the kitchen, and hold for the manager after six."
         const val REMOTE_SUBTITLE = "Download the recording to play or share it."
         const val DOWNLOADING_SUBTITLE = "Downloading from the bridge…"
         const val SAVED_SUBTITLE = "Saved on this phone."

@@ -10,6 +10,7 @@ import com.phonxiety.bridge.model.CallMark
 import com.phonxiety.bridge.model.CallPhase
 import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.CallState
+import com.phonxiety.bridge.model.DaemonInfo
 import com.phonxiety.bridge.model.MarksResponse
 import com.phonxiety.bridge.model.SummaryResult
 import com.phonxiety.bridge.model.TranscriptTurn
@@ -27,6 +28,8 @@ import kotlinx.serialization.json.JsonObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -342,6 +345,85 @@ class LiveCallViewModelTest {
             listOf("Agent", "Far end"),
             turns.map { speakerLabel(it.role, resources) }
         )
+    }
+
+    @Test
+    fun thePhoneAdvancesAStaleSnapshotAndALaterEventCannotRollItBack() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        // The snapshot answers after Telecom already dialed, and still says "preparing".
+        api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "preparing"))
+        val bridge = FakeBridgeState()
+        val viewModel = LiveCallViewModel(api, bridge)
+        viewModel.bind(CALL_ID)
+        runCurrent()
+        assertEquals("preparing", viewModel.state.value.state)
+
+        bridge.emit(BridgeState(call = CallState(CALL_ID, "+998 ·· 67", CallPhase.ACTIVE, 1_000)))
+        runCurrent()
+        assertEquals("the phone's connection advances the stale record", "active", viewModel.state.value.phase)
+        assertEquals("the record's own word is still what arrived", "preparing", viewModel.state.value.state)
+
+        // A delayed event page repeats the same stale phase; it cannot undo the connection.
+        api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(stateEvent(1, "preparing"))))
+        runCurrent()
+        assertEquals("active", viewModel.state.value.phase)
+
+        // The daemon's terminal state is the call's end, whatever the phone last knew.
+        api.events += ApiOutcome.Ok(200, page(revision = 2, events = listOf(endedEvent(2))))
+        advanceUntilIdle()
+        assertEquals("ended", viewModel.state.value.phase)
+    }
+
+    @Test
+    fun aPhonesEndedPhaseDoesNotEndAStaleRecord() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        api.info = ApiOutcome.Ok(200, DaemonInfo(voiceControls = VoiceControls(hangup = true)))
+        api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "preparing"))
+        val bridge = FakeBridgeState()
+        val viewModel = LiveCallViewModel(api, bridge)
+        viewModel.bind(CALL_ID)
+        runCurrent()
+
+        // The phone hangs up while the record still says preparing: only the daemon records an end.
+        bridge.emit(BridgeState(call = CallState(CALL_ID, "+998 ·· 67", CallPhase.ENDED, 1_000)))
+        runCurrent()
+
+        val state = viewModel.state.value
+        assertEquals("the record's own word still stands", "preparing", state.phase)
+        assertFalse("the phone's hang-up is not a recorded end", state.ended)
+        assertNull("no end time without a recorded end", state.endedAtMs)
+        assertNotNull("the timer still counts the record's running call", state.callSecondsElapsed)
+        assertFalse(state.terminal)
+        // Hang up stays the offered action: ended and its end time travel only with the record.
+        assertTrue("the record still offers hang-up", state.controls.hangup)
+
+        // The daemon's terminal state is the one place the end, its time and the result arrive.
+        api.events += ApiOutcome.Ok(200, page(revision = 2, events = listOf(endedEvent(2))))
+        advanceUntilIdle()
+        val ended = viewModel.state.value
+        assertEquals("ended", ended.phase)
+        assertTrue("the recorded end closes the call", ended.ended)
+        assertTrue(ended.terminal)
+        assertNotNull("the recorded end carries its end time", ended.endedAtMs)
+    }
+
+    @Test
+    fun anUnconfirmedEndKeepsTheRecordsReasonForTheScreen() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        api.callSnapshot = ApiOutcome.Ok(
+            200,
+            snapshot(state = "unknown").copy(error = "hangup_unconfirmed: the phone did not answer")
+        )
+
+        val viewModel = viewModel(api)
+        viewModel.bind(CALL_ID)
+        advanceUntilIdle()
+
+        val state = viewModel.state.value
+        assertTrue(state.ended)
+        assertEquals("unknown", state.phase)
+        // The reason is projected, not dropped: the screen cannot explain the loss without it.
+        assertEquals("hangup_unconfirmed: the phone did not answer", state.statusUnknownError)
     }
 
     private fun viewModel(api: FakeDaemonApi): LiveCallViewModel = LiveCallViewModel(api, FakeBridgeState())

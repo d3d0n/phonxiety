@@ -57,8 +57,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -80,21 +82,26 @@ import com.phonxiety.bridge.designsystem.asString
 import com.phonxiety.bridge.designsystem.component.ActionEmphasis
 import com.phonxiety.bridge.designsystem.component.EmptyState
 import com.phonxiety.bridge.designsystem.component.ErrorCard
+import com.phonxiety.bridge.designsystem.component.KeyValueRow
 import com.phonxiety.bridge.designsystem.component.LevelMeter
 import com.phonxiety.bridge.designsystem.component.LoadingState
 import com.phonxiety.bridge.designsystem.component.PrimaryActionButton
+import com.phonxiety.bridge.designsystem.component.STACK_AT_FONT_SCALE
 import com.phonxiety.bridge.designsystem.component.SectionCard
 import com.phonxiety.bridge.designsystem.component.StatTile
 import com.phonxiety.bridge.designsystem.component.StatusPill
 import com.phonxiety.bridge.designsystem.component.StatusTone
+import com.phonxiety.bridge.designsystem.farEndLabel
 import com.phonxiety.bridge.designsystem.formatElapsedTime
 import com.phonxiety.bridge.designsystem.formatPhoneNumber
+import com.phonxiety.bridge.designsystem.resultText
 import com.phonxiety.bridge.model.CallMark
 import com.phonxiety.bridge.model.PartialTurn
 import com.phonxiety.bridge.model.TranscriptTurn
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 
 /** The playback ring is 48 kHz mono, so one millisecond of downlink audio is 48 samples. */
@@ -213,7 +220,7 @@ private fun LiveCallBody(
     nowEpochMs: Long
 ) {
     val transcript = @Composable { modifier: Modifier ->
-        TranscriptCard(state = state, modifier = modifier)
+        TranscriptCard(state = state, onReload = onReload, modifier = modifier)
     }
     val controls = @Composable { modifier: Modifier, showError: Boolean ->
         ControlsColumn(
@@ -261,8 +268,10 @@ private fun LiveCallBody(
                     }
                 } else {
                     // Only a running call folds its controls away: once it has ended the result is
-                    // the reason the screen is open, so it stays on screen without a tap.
-                    val folded = !state.ended
+                    // the reason the screen is open, so it stays on screen without a tap. A call
+                    // whose end was never confirmed has no result either: its card and transcript
+                    // are the content, and the controls fold like a running call's.
+                    val folded = !state.ended || state.phase == "unknown"
                     Column(modifier = Modifier.fillMaxSize()) {
                         // A failure (a refused hang-up, a dropped instruction) is never behind the
                         // fold: it explains why the pinned action did not do what it promised.
@@ -389,56 +398,112 @@ private fun PinnedActionRow(
 private fun LiveCallHeader(state: LiveCallUiState, onBack: () -> Unit, nowEpochMs: Long) {
     val seconds = elapsedSeconds(state, nowEpochMs)
     val spoken = seconds?.let { spokenDuration(it) }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp),
-        verticalAlignment = Alignment.Top
-    ) {
-        IconButton(onClick = onBack) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = stringResource(com.phonxiety.bridge.designsystem.R.string.designsystem_action_back),
-                modifier = Modifier.size(22.dp)
-            )
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = state.destination?.let(::formatPhoneNumber)
-                    ?: stringResource(R.string.live_call_fallback_title),
-                style = MaterialTheme.typography.titleLarge,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-            if (seconds != null) {
-                Text(
-                    text = formatTimer(state, nowEpochMs),
-                    style = MaterialTheme.typography.titleSmall,
-                    fontFamily = FontFamily.Monospace,
-                    modifier = Modifier.semantics { contentDescription = spoken.orEmpty() }
-                )
-            }
-            val detail = listOfNotNull(
-                state.farEnd?.takeIf { it.isNotBlank() },
-                state.audioCodec?.takeIf { it.isNotBlank() }
-                    ?.let { stringResource(R.string.live_call_audio_codec, humanizeToken(it)) }
-            ).joinToString(" · ")
-            if (detail.isNotEmpty()) {
-                Text(
-                    text = detail,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-        Spacer(Modifier.width(8.dp))
+    val stacked = LocalDensity.current.fontScale >= STACK_AT_FONT_SCALE
+    val pill: @Composable (Modifier) -> Unit = { modifier ->
         StatusPill(
             label = statusLabel(state),
             tone = if (state.reconnecting) StatusTone.WARNING else phaseTone(state),
-            pulse = state.reconnecting || (!state.ended && state.phase == "dialing")
+            pulse = state.reconnecting || (!state.ended && state.phase == "dialing"),
+            modifier = modifier
         )
     }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.Top
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(com.phonxiety.bridge.designsystem.R.string.designsystem_action_back),
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = state.destination?.let(::formatPhoneNumber)
+                        ?: stringResource(R.string.live_call_fallback_title),
+                    style = MaterialTheme.typography.titleLarge,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (seconds != null) {
+                    Text(
+                        text = formatTimer(state, nowEpochMs),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.semantics { contentDescription = spoken.orEmpty() }
+                    )
+                }
+                val detail = listOfNotNull(
+                    state.farEnd?.takeIf { it.isNotBlank() }?.let { farEndLabel(it) },
+                    state.audioCodec?.takeIf { it.isNotBlank() }
+                        ?.let { stringResource(R.string.live_call_audio_codec, humanizeToken(it)) }
+                ).joinToString(" · ")
+                if (detail.isNotEmpty()) {
+                    Text(
+                        text = detail,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            // At 200 % text the pill would squeeze the number to an ellipsis, so it drops under
+            // the header at the app's stacking scale.
+            if (!stacked) {
+                Spacer(Modifier.width(8.dp))
+                pill(Modifier)
+            }
+        }
+        if (stacked) {
+            pill(Modifier.padding(start = 48.dp, top = 4.dp))
+        }
+    }
 }
+
+/**
+ * The call whose end the daemon recorded as unconfirmed. The reason it gives is evidence, so it
+ * sits behind Details in monospace; the card says what is and is not known and offers the one
+ * useful action, reading the record again. Only the daemon's own link-loss reason names a lost
+ * connection: an unacknowledged hang-up leaves the phone connected, so its copy stays neutral.
+ */
+@Composable
+private fun UnknownStatusCard(
+    reason: String?,
+    onReload: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    ErrorCard(
+        title = stringResource(R.string.live_call_status_unknown_title),
+        message = stringResource(
+            if (isLinkLoss(reason)) {
+                R.string.live_call_status_unknown_link_lost
+            } else {
+                R.string.live_call_status_unknown_message
+            }
+        ),
+        output = reason,
+        actionLabel = stringResource(R.string.live_call_status_refresh),
+        onAction = onReload,
+        modifier = modifier
+    )
+}
+
+/** The daemon's own name for a call whose phone link died; see `controller._fail`. */
+internal const val LINK_LOST_ERROR = "device_disconnected"
+
+/** The transcript's scroll container, so tests reach a card that is not in the first viewport. */
+internal const val TRANSCRIPT_LIST_TAG = "live_call_transcript"
+
+/**
+ * Whether the record's error is the daemon's link loss. Any other reason (an unacknowledged
+ * hang-up, a voice failure) says nothing about the connection and must not claim it.
+ */
+internal fun isLinkLoss(reason: String?): Boolean = reason?.trim() == LINK_LOST_ERROR
 
 @Composable
 private fun ReconnectingBanner(onReload: () -> Unit) {
@@ -470,6 +535,7 @@ private fun ReconnectingBanner(onReload: () -> Unit) {
 @Composable
 private fun TranscriptCard(
     state: LiveCallUiState,
+    onReload: () -> Unit,
     modifier: Modifier
 ) {
     Surface(
@@ -477,7 +543,7 @@ private fun TranscriptCard(
         shape = MaterialTheme.shapes.large,
         color = MaterialTheme.colorScheme.surfaceContainerLow
     ) {
-        TranscriptList(state = state, modifier = Modifier.fillMaxSize())
+        TranscriptList(state = state, onReload = onReload, modifier = Modifier.fillMaxSize())
     }
 }
 
@@ -499,8 +565,9 @@ private fun TranscriptHeading(state: LiveCallUiState) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        // While the link is down the screen may not claim the agent is listening.
-        if (!state.ended && !state.reconnecting) {
+        // Listening is a claim about an established call: while the link is down, or before the
+        // phone has connected, the screen says nothing about it.
+        if (state.phase == "active" && !state.reconnecting) {
             StatusPill(
                 label = stringResource(
                     if (state.muted) {
@@ -516,23 +583,33 @@ private fun TranscriptHeading(state: LiveCallUiState) {
 }
 
 @Composable
-private fun transcriptSubtitle(state: LiveCallUiState): String = when {
-    state.ended -> stringResource(
-        R.string.live_call_transcript_ended,
-        pluralStringResource(R.plurals.live_call_turns, state.turns.size, state.turns.size)
+private fun transcriptSubtitle(state: LiveCallUiState): String = transcriptSubtitle(state, LocalResources.current)
+
+/**
+ * What the transcript heading says about the call: an unconfirmed end is named as unconfirmed, never
+ * as an ended call, and a dropped link never claims the agent is live.
+ */
+internal fun transcriptSubtitle(state: LiveCallUiState, resources: Resources): String = when {
+    state.phase == "unknown" -> resources.getString(
+        R.string.live_call_transcript_unconfirmed,
+        resources.getQuantityString(R.plurals.live_call_turns, state.turns.size, state.turns.size)
     )
 
-    // A dropped link may not claim the agent is live; the record's own count is still true.
+    state.ended -> resources.getString(
+        R.string.live_call_transcript_ended,
+        resources.getQuantityString(R.plurals.live_call_turns, state.turns.size, state.turns.size)
+    )
+
     state.reconnecting -> when {
-        state.turns.isEmpty() -> stringResource(R.string.live_call_transcript_waiting)
-        else -> pluralStringResource(R.plurals.live_call_turns, state.turns.size, state.turns.size)
+        state.turns.isEmpty() -> resources.getString(R.string.live_call_transcript_waiting)
+        else -> resources.getQuantityString(R.plurals.live_call_turns, state.turns.size, state.turns.size)
     }
 
-    state.activity == "working" -> stringResource(R.string.live_call_transcript_working)
+    state.activity == "working" -> resources.getString(R.string.live_call_transcript_working)
 
-    state.turns.isEmpty() -> stringResource(R.string.live_call_transcript_waiting)
+    state.turns.isEmpty() -> resources.getString(R.string.live_call_transcript_waiting)
 
-    else -> pluralStringResource(R.plurals.live_call_turns, state.turns.size, state.turns.size)
+    else -> resources.getQuantityString(R.plurals.live_call_turns, state.turns.size, state.turns.size)
 }
 
 /**
@@ -541,16 +618,20 @@ private fun transcriptSubtitle(state: LiveCallUiState): String = when {
  * zero of this same list, so the transcript text owns every pixel the screen can spare.
  */
 @Composable
-private fun TranscriptList(state: LiveCallUiState, modifier: Modifier) {
+private fun TranscriptList(state: LiveCallUiState, onReload: () -> Unit, modifier: Modifier) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val following by remember {
         derivedStateOf { !listState.canScrollForward || listState.layoutInfo.visibleItemsInfo.isEmpty() }
     }
     val itemCount = state.turns.size + state.partials.size
-    // Index zero is the heading; the last transcript item therefore sits at index [itemCount].
-    val lastIndex = itemCount
-    LaunchedEffect(itemCount, following) {
+    // An unconfirmed end is part of the content, not a card above it: the same scroll keeps it,
+    // the transcript and the pinned action reachable at 200 % text.
+    val unknownCard = state.phase == "unknown"
+    val headerCount = if (unknownCard) 2 else 1
+    // The last transcript item is the last item of the list.
+    val lastIndex = headerCount + itemCount - 1
+    LaunchedEffect(itemCount, following, unknownCard) {
         if (itemCount > 0 && following) listState.scrollToItem(lastIndex)
     }
     // The jump control sits under the list, never over a line the reader is trying to read.
@@ -559,11 +640,15 @@ private fun TranscriptList(state: LiveCallUiState, modifier: Modifier) {
             state = listState,
             modifier = Modifier
                 .weight(1f)
-                .fillMaxWidth(),
+                .fillMaxWidth()
+                .testTag(TRANSCRIPT_LIST_TAG),
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             item { TranscriptHeading(state) }
+            if (unknownCard) {
+                item { UnknownStatusCard(reason = state.statusUnknownError, onReload = onReload) }
+            }
             items(state.turns.size) { index -> TranscriptRow(state.turns[index]) }
             items(state.partials.size) { index -> PartialRow(state.partials[index]) }
             if (itemCount == 0) {
@@ -867,22 +952,13 @@ private fun ResultBlock(state: LiveCallUiState) {
             Text(text = state.summary, style = MaterialTheme.typography.bodyLarge)
         }
         fields.entries.forEach { (key, value) ->
-            val raw = (value as? JsonPrimitive)?.contentOrNull ?: value.toString()
-            // A number stays tabular; a sentence stays prose.
-            val numeric = raw.toDoubleOrNull() != null
-            Row(modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    text = humanizeToken(key),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    text = raw,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontFamily = if (numeric) FontFamily.Monospace else FontFamily.Default
-                )
-            }
+            // A boolean answers a question; a sentence is read as a sentence. Only a technical
+            // value keeps tabular monospace.
+            val display = resultText(
+                raw = (value as? JsonPrimitive)?.contentOrNull ?: value.toString(),
+                boolean = (value as? JsonPrimitive)?.booleanOrNull
+            )
+            KeyValueRow(label = humanizeToken(key), value = display.text, mono = display.mono)
         }
     }
 }

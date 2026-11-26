@@ -147,6 +147,21 @@ class DoctorEvaluatorTest {
     }
 
     @Test
+    fun theOverlayRowKeepsTheInstallPathBehindDetails() {
+        val rows = TestData.rows(
+            snapshot = TestData.snapshot(
+                overlay = Overlay.METAMODULE_MISSING,
+                facts = TestData.facts(apkPath = "/data/app/~~8Kd0/base.apk", system = false)
+            )
+        )
+        val overlay = TestData.row(rows, DoctorEvaluator.ID_OVERLAY)
+        // The sentence a person reads down the list says what is wrong, not where the package sits.
+        assertFalse(overlay.summaryText().contains("/data/app"))
+        assertFalse(overlay.summaryText().contains("base.apk"))
+        assertEquals("/data/app/~~8Kd0/base.apk", overlay.detailsText())
+    }
+
+    @Test
     fun anOverlayThatIsNotMountedDoesNotBlameAMetamoduleOnABuiltInProvider() {
         // Magisk and an older apd overlay system/ themselves: a metamodule is not their fix.
         val rows = TestData.rows(

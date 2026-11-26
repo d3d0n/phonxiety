@@ -2,6 +2,7 @@ package com.phonxiety.bridge.designsystem.component
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -23,6 +24,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -156,9 +158,11 @@ fun StatTile(
 }
 
 /**
- * Label/value row with the value right-aligned, tabular in monospace, and at least 96 dp wide so a
- * changing number never shifts the label. At 150 % font scale and above the pair stacks, because a
- * two-column row would split a label or a duration mid-word.
+ * Label/value row. When the label's and the value's own single-line widths plus the gap fit the
+ * row, the value sits right-aligned and at least 96 dp wide, tabular in monospace, so a changing
+ * number never shifts the label. When they do not fit, the pair stacks: label above, value below,
+ * both starting at the same edge, at full width. Measured rather than guessed from a font-scale
+ * breakpoint, because a long answer squeezes a label at any text size.
  */
 @Composable
 fun KeyValueRow(
@@ -171,51 +175,70 @@ fun KeyValueRow(
     val valueStyle = MaterialTheme.typography.bodyMedium.let { style ->
         if (mono) style.copy(fontFamily = FontFamily.Monospace, fontFeatureSettings = "tnum") else style
     }
-    val stacked = LocalDensity.current.fontScale >= STACK_AT_FONT_SCALE
-    if (stacked) {
-        Column(modifier = modifier.fillMaxWidth()) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Text(
-                text = value,
-                style = valueStyle,
-                textAlign = TextAlign.End,
-                maxLines = valueMaxLines,
-                softWrap = valueMaxLines != 1,
-                overflow = TextOverflow.Clip,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 2.dp)
-            )
-        }
-    } else {
-        Row(
-            modifier = modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f)
-            )
-            Text(
-                text = value,
-                style = valueStyle,
-                textAlign = TextAlign.End,
-                maxLines = valueMaxLines,
-                softWrap = valueMaxLines != 1,
-                overflow = TextOverflow.Clip,
-                modifier = Modifier
-                    .padding(start = 16.dp)
-                    .widthIn(min = 96.dp)
-            )
+    val labelStyle = MaterialTheme.typography.bodyMedium
+    val measurer = rememberTextMeasurer()
+    val labelWidth = measurer.measure(text = label, style = labelStyle, softWrap = false).size.width
+    val valueWidth = measurer.measure(text = value, style = valueStyle, softWrap = false).size.width
+    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
+        val gap = with(LocalDensity.current) { KEY_VALUE_GAP.roundToPx() }
+        // The value never renders narrower than its minimum width, so a short value takes that
+        // width in the row; fitting on its own glyphs would pick a row its children cannot hold.
+        val valueFloor = with(LocalDensity.current) { KEY_VALUE_MIN_VALUE_WIDTH.roundToPx() }
+        val room = if (constraints.hasBoundedWidth) constraints.maxWidth else Int.MAX_VALUE
+        if (labelWidth + gap + maxOf(valueWidth, valueFloor) <= room) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = label,
+                    style = labelStyle,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = value,
+                    style = valueStyle,
+                    textAlign = TextAlign.End,
+                    maxLines = valueMaxLines,
+                    softWrap = valueMaxLines != 1,
+                    overflow = TextOverflow.Clip,
+                    modifier = Modifier
+                        .padding(start = KEY_VALUE_GAP)
+                        .widthIn(min = KEY_VALUE_MIN_VALUE_WIDTH)
+                )
+            }
+        } else {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = label,
+                    style = labelStyle,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = value,
+                    style = valueStyle,
+                    textAlign = TextAlign.Start,
+                    maxLines = valueMaxLines,
+                    softWrap = valueMaxLines != 1,
+                    overflow = TextOverflow.Clip,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 2.dp)
+                )
+            }
         }
     }
 }
+
+/** The space between a label and a value that share a row. */
+internal val KEY_VALUE_GAP = 16.dp
+
+/**
+ * A value's own floor, so a changing number in a row does not shift its label. The row fit
+ * measures this floor rather than the value's glyphs: a short value still reserves it.
+ */
+internal val KEY_VALUE_MIN_VALUE_WIDTH = 96.dp
 
 /**
  * Joins a value and its unit the way the writing rules ask. A percent goes through the locale's own

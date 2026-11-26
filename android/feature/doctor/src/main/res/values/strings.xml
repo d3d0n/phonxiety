@@ -106,10 +106,10 @@
 
     <!-- Evidence: overlay and permissions -->
     <string name="doctor_evidence_overlay_no_package_manager">The package manager did not answer.</string>
-    <string name="doctor_evidence_overlay_privapp">Runs from %1$s.</string>
-    <string name="doctor_evidence_overlay_updated">An updated system app runs from %1$s.</string>
-    <string name="doctor_evidence_overlay_not_mounted">The app runs from %1$s; the module\'s overlay is not mounted.</string>
-    <string name="doctor_evidence_overlay_metamodule">The app runs from %1$s; the module\'s overlay is not mounted. The root manager needs a metamodule to mount system/.</string>
+    <string name="doctor_evidence_overlay_privapp">Runs from the system partition.</string>
+    <string name="doctor_evidence_overlay_updated">An updated system app.</string>
+    <string name="doctor_evidence_overlay_not_mounted">The app runs outside the system partition; the module\'s overlay is not mounted.</string>
+    <string name="doctor_evidence_overlay_metamodule">The module\'s overlay is not mounted. The root manager needs a metamodule to mount system/.</string>
     <string name="doctor_evidence_privileged_granted">Granted by the module\'s allowlist.</string>
     <string name="doctor_evidence_privileged_missing">Not granted; the module\'s allowlist does not cover it.</string>
     <string name="doctor_evidence_granted">Granted.</string>

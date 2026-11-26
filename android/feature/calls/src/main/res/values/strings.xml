@@ -38,10 +38,6 @@
     <string name="calls_outcome_canceled">Canceled</string>
     <string name="calls_outcome_failed">Failed</string>
 
-    <string name="calls_far_end_person">Person</string>
-    <string name="calls_far_end_ivr">IVR</string>
-    <string name="calls_far_end_voicemail">Voicemail</string>
-
     <string name="calls_state_preparing">Preparing</string>
     <string name="calls_state_dialing">Dialing</string>
     <string name="calls_state_ringing">Ringing</string>
