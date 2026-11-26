@@ -64,7 +64,8 @@ class RollbackSectionTest {
         render(pendingWithAppOnlyPlan(dismissed = true)) { retries++ }
 
         composeRule.onNodeWithText("Reinstall the previous app").assertDoesNotExist()
-        composeRule.onNodeWithText("The APK replaced by the last update is kept in app files.").assertDoesNotExist()
+        composeRule.onNodeWithText("The APK replaced by the last update is kept in app files.", substring = true)
+            .assertDoesNotExist()
         composeRule.onNodeWithText("Finish the rollback").assertIsDisplayed().performClick()
 
         assertEquals(1, retries)
@@ -76,6 +77,7 @@ class RollbackSectionTest {
 
         composeRule.onNodeWithText("Rollback unfinished").assertIsDisplayed()
         composeRule.onNodeWithText("Reinstall the previous app").assertDoesNotExist()
-        composeRule.onNodeWithText("The APK replaced by the last update is kept in app files.").assertDoesNotExist()
+        composeRule.onNodeWithText("The APK replaced by the last update is kept in app files.", substring = true)
+            .assertDoesNotExist()
     }
 }
