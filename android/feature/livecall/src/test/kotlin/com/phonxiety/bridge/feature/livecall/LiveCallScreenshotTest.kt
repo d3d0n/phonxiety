@@ -202,6 +202,17 @@ class LiveCallScreenshotTest {
         }
     ) { setScreen(state = LiveCallSamples.ended) }
 
+    /** An unconfirmed end is neither live nor recorded: the control just reaches the last turn. */
+    @Test
+    fun anUnconfirmedEndJumpsToItsLatestLine() {
+        // At 200 % the transcript overflows its viewport, so a scroll shows the jump control.
+        setScreen(state = unknownEndedCapture(UNCONFIRMED_REASON), fontScale = 2f, width = 320.dp)
+        scrollTranscriptTo("Call status unknown")
+        composeRule.onNodeWithText("Jump to latest").assertExists()
+        composeRule.onNodeWithText("Jump to live").assertDoesNotExist()
+        composeRule.onNodeWithText("Jump to the end").assertDoesNotExist()
+    }
+
     @Test
     fun anEndedCallNeverFoldsItsResultAway() {
         setScreen(state = LiveCallSamples.ended)

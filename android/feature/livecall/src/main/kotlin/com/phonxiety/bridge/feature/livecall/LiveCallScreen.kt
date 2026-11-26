@@ -588,8 +588,10 @@ private fun transcriptSubtitle(state: LiveCallUiState): String = transcriptSubti
 
 /**
  * What the transcript heading says about the call: an unconfirmed end is named as unconfirmed, never
- * as an ended call, and a dropped link never claims the agent is live. A partial turn is on screen
- * as it is spoken, so it is a first turn in progress rather than a wait for one to begin.
+ * as an ended call, and a dropped link never claims the agent is live. While the link is down the
+ * heading comes before present-tense activity or progress: it shows the turns already recorded, or
+ * waits neutrally, and a retained partial stays on screen without being called in progress. A
+ * partial turn is progress only while connected, when it is on screen as it is spoken.
  */
 internal fun transcriptSubtitle(state: LiveCallUiState, resources: Resources): String = when {
     state.phase == "unknown" -> resources.getString(
@@ -602,8 +604,10 @@ internal fun transcriptSubtitle(state: LiveCallUiState, resources: Resources): S
         resources.getQuantityString(R.plurals.live_call_turns, state.turns.size, state.turns.size)
     )
 
-    state.reconnecting && state.turns.isEmpty() && state.partials.isEmpty() ->
-        resources.getString(R.string.live_call_transcript_waiting)
+    state.reconnecting && state.turns.isNotEmpty() ->
+        resources.getQuantityString(R.plurals.live_call_turns, state.turns.size, state.turns.size)
+
+    state.reconnecting -> resources.getString(R.string.live_call_transcript_waiting)
 
     state.activity == "working" -> resources.getString(R.string.live_call_transcript_working)
 
@@ -688,10 +692,13 @@ private fun TranscriptList(state: LiveCallUiState, onReload: () -> Unit, modifie
         }
         if (!following) {
             // Nothing is live once the end is recorded: the control goes to the last line, not to
-            // a conversation that is over. An unconfirmed end may still be a live line, so it
-            // keeps the live wording rather than claim an end the daemon never confirmed.
-            val over = state.ended && state.phase != "unknown"
-            val label = if (over) R.string.live_call_jump_to_end else R.string.live_call_jump_to_live
+            // a conversation that is over. An unconfirmed end is neither live nor recorded: the
+            // control goes to the newest stored turn and claims neither state.
+            val label = when {
+                !state.ended -> R.string.live_call_jump_to_live
+                state.phase == "unknown" -> R.string.live_call_jump_to_latest
+                else -> R.string.live_call_jump_to_end
+            }
             TextButton(
                 onClick = { scope.launch { listState.animateScrollToItem(lastIndex) } },
                 modifier = Modifier
@@ -1161,7 +1168,7 @@ internal val MARK_KINDS: List<String> = listOf("agreed", "refused", "follow-up")
 internal fun elapsedSeconds(state: LiveCallUiState, nowEpochMs: Long): Long? {
     // Before the line connects the header still counts from placement, so the ring is visible;
     // once it is up the count is the conversation, which is what the system's call chip shows.
-    val start = state.connectedStartMs ?: state.createdAtMs ?: return null
+    val start = state.timerStartMs ?: return null
     val end = (if (state.ended) state.endedAtMs else null) ?: nowEpochMs
     return ((end - start).coerceAtLeast(0)) / 1000
 }

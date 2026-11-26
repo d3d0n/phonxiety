@@ -427,11 +427,12 @@ class LiveCallViewModelTest {
     }
 
     /**
-     * The header counts the conversation, not the ring: the phone's own ACTIVE is the connect time
-     * until the record carries `connected_at`, and the record's time then replaces it.
+     * The header counts the conversation, not the ring: the phone's own ACTIVE is the connect time,
+     * and once stamped the running count keeps it even after the record's `connected_at` arrives
+     * from another clock. The ended header is the record's connected duration.
      */
     @Test
-    fun theTimerCountsFromTheConnectThePhoneSaw() = runTest(dispatcher) {
+    fun theTimerKeepsTheConnectThePhoneSaw() = runTest(dispatcher) {
         val api = FakeDaemonApi()
         val placedAt = (System.currentTimeMillis() - 600_000) / 1_000.0
         api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "preparing", createdAt = placedAt, connectedAt = null))
@@ -449,16 +450,15 @@ class LiveCallViewModelTest {
         // The phone reports the line active before the record's connect time arrives.
         bridge.emit(BridgeState(call = CallState(CALL_ID, "+998 ·· 67", CallPhase.ACTIVE, 1_000)))
         runCurrent()
-        assertNotNull(
-            "the phone's own ACTIVE becomes the connect time",
-            viewModel.state.value.phoneConnectedAtMs
-        )
+        val phoneStamp = viewModel.state.value.phoneConnectedAtMs
+        assertNotNull("the phone's own ACTIVE becomes the connect time", phoneStamp)
         assertTrue(
             "the header counts the conversation from that moment",
             viewModel.state.value.callSecondsElapsed!! < 5
         )
 
-        // The daemon's connected_at replaces it: a minute on the line, not ten minutes of ring.
+        // The record's connected_at arrives a minute old, from another clock. The running count
+        // stays on the phone's stamp, so the number never jumps mid-call.
         val connectedAt = (System.currentTimeMillis() - 60_000) / 1_000.0
         api.callSnapshot = ApiOutcome.Ok(
             200,
@@ -467,18 +467,23 @@ class LiveCallViewModelTest {
         viewModel.reload()
         runCurrent()
         assertEquals((connectedAt * 1_000).toLong(), viewModel.state.value.connectedAtMs)
-        assertEquals(60L, viewModel.state.value.callSecondsElapsed)
+        assertEquals("the phone's stamp still starts the running count", phoneStamp, viewModel.state.value.timerStartMs)
+        assertTrue(
+            "the record's older connect time does not move the running number",
+            viewModel.state.value.callSecondsElapsed!! < 5
+        )
 
-        // The end keeps the connected duration on the header.
+        // The end keeps the record's connected duration on the header.
         api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(endedEvent(1))))
         advanceUntilIdle()
         val ended = viewModel.state.value
         assertTrue(ended.ended)
         assertEquals(
-            "the ended header is the connected duration",
+            "the ended header is the record's connected duration",
             (ended.endedAtMs!! - ended.connectedAtMs!!) / 1_000,
             ended.callSecondsElapsed
         )
+        assertEquals("the ended header starts at the record's connect time", ended.connectedAtMs, ended.timerStartMs)
     }
 
     private fun viewModel(api: FakeDaemonApi): LiveCallViewModel = LiveCallViewModel(api, FakeBridgeState())
