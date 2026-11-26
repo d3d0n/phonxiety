@@ -289,6 +289,60 @@ class SetupCoordinatorTest {
         assertNotNull((coordinator.wizard.value as WizardState.RebootPending).failure)
     }
 
+    @Test
+    fun aSecondTapWhileTheRequestIsPendingIsTheSameRequest() = runTest {
+        backend.detection = RootDetection(SuStatus.GRANTED, listOf(MAGISK))
+        backend.module = ModuleState.Absent
+        coordinator.start()
+        coordinator.dispatch(WizardEvent.InstallRequested)
+
+        val first = launch { coordinator.requestReboot() }
+        runCurrent()
+        val second = launch { coordinator.requestReboot() }
+        runCurrent()
+        second.join()
+
+        assertEquals("the second tap must not ask the provider again", 1, backend.reboots.size)
+
+        advanceTimeBy(20_001)
+        runCurrent()
+        first.join()
+
+        // One request, one window, one report.
+        val pending = coordinator.wizard.value as WizardState.RebootPending
+        assertNotNull(pending.failure)
+        assertEquals(1, backend.reboots.size)
+    }
+
+    @Test
+    fun aCancelledRequestReportsNothingAndLetsTheNextTapRun() = runTest {
+        backend.detection = RootDetection(SuStatus.GRANTED, listOf(MAGISK))
+        backend.module = ModuleState.Absent
+        coordinator.start()
+        coordinator.dispatch(WizardEvent.InstallRequested)
+
+        val cancelled = launch { coordinator.requestReboot() }
+        runCurrent()
+        cancelled.cancel()
+        cancelled.join()
+
+        advanceTimeBy(20_001)
+        runCurrent()
+        assertNull(
+            "a cancelled request has no window left to report on",
+            (coordinator.wizard.value as WizardState.RebootPending).failure
+        )
+
+        val retry = launch { coordinator.requestReboot() }
+        runCurrent()
+        assertEquals("the next tap is a new request", 2, backend.reboots.size)
+
+        advanceTimeBy(20_001)
+        runCurrent()
+        retry.join()
+        assertNotNull((coordinator.wizard.value as WizardState.RebootPending).failure)
+    }
+
     private companion object {
         val MAGISK = DetectedProvider(
             id = RootId.MAGISK,

@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Where the wizard keeps the install journal; the boot receiver reads the same file. */
 fun setupProgressStore(context: Context): ProgressStore = FileProgressStore(File(context.filesDir, PROGRESS_FILE))
@@ -94,16 +95,12 @@ class OnboardingViewModel internal constructor(
             // A pairing can appear without this screen's scanner or paste field: `mise run phone:pair`,
             // the service rewriting its config, or the repository noticing a link change. Reading the
             // cache afresh and dispatching the resume probe is what makes the wizard advance by itself;
-            // the coordinator drops the observation if the wizard already moved on, a local attempt is
-            // still running, or the config is the one a rejected attempt left behind. A cleared
-            // pairing ends that suppression, so the next one counts.
+            // the coordinator drops the observation if the wizard already moved on or a local attempt
+            // is still running.
             pairingRepository.paired.collect { paired ->
-                if (paired) {
-                    pairingRepository.refresh()
-                    coordinator.onPairingObserved()
-                } else {
-                    coordinator.onPairingCleared()
-                }
+                if (!paired) return@collect
+                pairingRepository.refresh()
+                coordinator.onPairingObserved()
             }
         }
     }
@@ -125,7 +122,8 @@ class OnboardingViewModel internal constructor(
                 is WizardState.NeedsPairing, WizardState.Checking, is WizardState.Installing,
                 is WizardState.FirstLinkTest, WizardState.Ready -> Unit
 
-                else -> recheck()
+                // Never "Unpaired" (the line above), so this tap does not answer a resume.
+                else -> recheck(unpairedAtRequest = false)
             }
         }
     }
@@ -134,7 +132,11 @@ class OnboardingViewModel internal constructor(
     fun onSecondary() {
         when (coordinator.wizard.value) {
             is WizardState.NeedsRuntime -> coordinator.requestBatteryExemption()
-            is WizardState.ProviderPrep -> launchRecheck()
+
+            // This action is not offered at "Unpaired" (see the states above), so it is not a
+            // resume of an unanswered pairing.
+            is WizardState.ProviderPrep -> launchRecheck(unpairedAtRequest = false)
+
             else -> Unit
         }
     }
@@ -154,9 +156,11 @@ class OnboardingViewModel internal constructor(
      * system-owned, and re-asking on every resume would nag a user who denied a permission.
      */
     fun onReturnedToForeground() {
-        when (coordinator.wizard.value) {
+        val state = coordinator.wizard.value
+        when (state) {
             is WizardState.RootDenied, is WizardState.ProviderPrep, is WizardState.Indeterminate,
-            is WizardState.Conflict, is WizardState.NeedsPairing -> launchRecheck()
+            is WizardState.Conflict, is WizardState.NeedsPairing ->
+                launchRecheck(unpairedAtRequest = state is WizardState.NeedsPairing)
 
             else -> Unit
         }
@@ -183,18 +187,19 @@ class OnboardingViewModel internal constructor(
         _requests.tryEmit(SetupHostRequest.Finished)
     }
 
-    private fun launchRecheck() {
-        viewModelScope.launch(Dispatchers.IO) { recheck() }
-    }
-
     /**
      * The stored pairing can move while the app runs and the repository serves a cache, so the
-     * probe after a resume re-reads it first — on this dispatcher, never on the caller's thread.
-     * The state is read before that refresh: a refresh can publish a stored pairing, and the
-     * observation it wakes may admit its probe first, in which case this one must stay quiet.
+     * probe after a resume re-reads it first — on the IO dispatcher, never on the caller's thread.
+     * [unpairedAtRequest] is the admission read by the caller, in the same read that chose to
+     * re-probe, and it travels with the request: an observation can advance the wizard before this
+     * coroutine starts, and probing again then would repeat the first link test or emit a second
+     * [SetupHostRequest.Finished].
      */
-    private suspend fun recheck() {
-        val unpairedAtRequest = coordinator.wizard.value is WizardState.NeedsPairing
+    private fun launchRecheck(unpairedAtRequest: Boolean) {
+        viewModelScope.launch { recheck(unpairedAtRequest) }
+    }
+
+    private suspend fun recheck(unpairedAtRequest: Boolean) = withContext(Dispatchers.IO) {
         pairingRepository.refresh()
         coordinator.probeOnResume(unpairedAtRequest)
     }

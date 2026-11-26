@@ -294,54 +294,45 @@ class WizardPairingObservationTest {
     }
 
     @Test
-    fun aClearedPairingEndsTheSuppressionOfARejectedAttemptsConfig() = runTest {
+    fun aRejectedAttemptLeavesNothingForAnObservationToPromote() = runTest {
         coordinator.start()
-        pairing.pairResult = PairResult.Invalid("the ticket expired")
-        pairing.writeEvenWhenRejected = true
-
-        // Rejected, but the store wrote a readable config: its own observation stays ignored.
-        coordinator.pair("phonxiety://pair?token=old")
-        coordinator.onPairingObserved()
         assertEquals(WizardState.NeedsPairing(MAGISK), coordinator.wizard.value)
+        pairing.pairResult = PairResult.Invalid("the ticket expired")
 
-        // The pairing goes away, then a new one arrives by another path.
+        // A rejected attempt rolls its own config back, so the store keeps reading "not paired".
+        coordinator.pair("phonxiety://pair?token=old")
+
+        assertTrue(hosts.any { it == SetupHostRequest.PairingRejected("the ticket expired") })
+        assertEquals(false, pairing.pairedState.value)
+        assertEquals(WizardState.NeedsPairing(MAGISK), coordinator.wizard.value)
+        assertEquals(0, linkTests())
+
+        // The next attempt is the person's own, and it works.
         pairing.pairResult = PairResult.Paired
-        pairing.pairedState.value = false
-        coordinator.onPairingCleared()
-        pairing.pairedState.value = true
-        coordinator.onPairingObserved()
+        coordinator.pair("phonxiety://pair?token=new")
 
         assertEquals(WizardState.Ready, coordinator.wizard.value)
         assertEquals(1, linkTests())
         assertEquals(1, hosts.count { it == SetupHostRequest.Finished })
     }
 
+    /**
+     * The stored pairing can be replaced in place (`mise run phone:pair` writes over the file), and
+     * the cached flag then reads true before and after: no emission marks the replacement, so the
+     * observation a refresh makes is what has to count. It counts on a readable config, not on the
+     * flag changing, so a wizard that lagged the cache still advances.
+     */
     @Test
-    fun aRejectedAttemptIsNotPromotedByTheConfigItWrote() = runTest {
+    fun aRefreshAfterAnInPlaceReplacementAdvances() = runTest {
         coordinator.start()
         assertEquals(WizardState.NeedsPairing(MAGISK), coordinator.wizard.value)
-        pairing.pairResult = PairResult.Invalid("the ticket expired")
-        pairing.writeEvenWhenRejected = true
 
-        coordinator.pair("phonxiety://pair?token=old")
-
-        assertTrue(hosts.any { it == SetupHostRequest.PairingRejected("the ticket expired") })
-        assertTrue(pairing.pairedState.value)
-        assertEquals(WizardState.NeedsPairing(MAGISK), coordinator.wizard.value)
-        val probes = backend.detects
-
+        pairing.pairedState.value = true
         coordinator.onPairingObserved()
-
-        assertEquals(WizardState.NeedsPairing(MAGISK), coordinator.wizard.value)
-        assertEquals(probes, backend.detects)
-        assertEquals(0, linkTests())
-
-        // An explicit attempt still works and cleans the rejection up.
-        pairing.pairResult = PairResult.Paired
-        coordinator.pair("phonxiety://pair?token=new")
 
         assertEquals(WizardState.Ready, coordinator.wizard.value)
         assertEquals(1, linkTests())
+        assertEquals(1, hosts.count { it == SetupHostRequest.Finished })
     }
 
     @Test

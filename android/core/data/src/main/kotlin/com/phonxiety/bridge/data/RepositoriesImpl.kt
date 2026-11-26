@@ -11,6 +11,7 @@ import com.phonxiety.bridge.model.BridgeState
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -44,12 +45,14 @@ class RuntimeBridgeStateRepository @Inject constructor() : BridgeStateRepository
 @Singleton
 class DevicePairingRepository internal constructor(
     private val context: Context,
+    /** The service start that follows the write; a seam for the rollback a failed start needs. */
+    private val startService: (Context) -> Unit = { BridgeService.start(it) },
     private val read: () -> Boolean
 ) : PairingRepository {
     @Inject
     constructor(@ApplicationContext context: Context) : this(
         context,
-        { BridgeConfigLoader.loadOrNull(context) != null }
+        read = { BridgeConfigLoader.loadOrNull(context) != null }
     )
 
     private val state = MutableStateFlow(read())
@@ -86,20 +89,46 @@ class DevicePairingRepository internal constructor(
                 is PairingResult.Invalid -> PairResult.Invalid(parsed.error.code)
 
                 is PairingResult.Valid -> {
+                    // The write is atomic, so a failing write leaves the old config alone. Everything
+                    // after it can still fail (starting the service throws SecurityException when the
+                    // app may not, for one), and a rejected attempt must not leave a readable pairing
+                    // behind: the next refresh would publish it and the wizard would promote a pairing
+                    // the person was told was rejected. So the previous config is kept and put back
+                    // byte for byte, or removed when there was none.
+                    val previous = BridgeConfigLoader.snapshot(context)
                     try {
                         val stored = BridgeConfigLoader.write(context, parsed.config)
-                        BridgeRuntime.rememberPairing(stored.kind)
-                        BridgeService.start(context)
+                        try {
+                            BridgeRuntime.rememberPairing(stored.kind)
+                            startService(context)
+                        } catch (error: Exception) {
+                            rollBackPairing(previous)
+                            throw error
+                        }
                         state.value = true
                         PairResult.Paired
-                    } catch (e: BridgeConfigException) {
-                        PairResult.Invalid(e.code)
-                    } catch (e: SecurityException) {
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: BridgeConfigException) {
+                        PairResult.Invalid(error.code)
+                    } catch (error: Exception) {
                         PairResult.Invalid("pairing_store_failed")
                     }
                 }
             }
         }
+    }
+
+    /**
+     * Undoes a write that did not end in a started service: the stored config goes back to
+     * [previous] (or disappears when there was none), and so does the pairing kind the runtime
+     * mirrors from it. A rejected attempt must leave neither a readable config nor an app that
+     * believes it is paired.
+     */
+    private fun rollBackPairing(previous: ByteArray?) {
+        if (!BridgeConfigLoader.restore(context, previous)) return
+        val stored = BridgeConfigLoader.loadOrNull(context)
+        if (stored == null) BridgeRuntime.forgetPairing() else BridgeRuntime.rememberPairing(stored.kind)
     }
 
     override suspend fun unpair() = withContext(Dispatchers.IO) {

@@ -17,6 +17,7 @@ import com.phonxiety.bridge.root.SuStatus
 import com.phonxiety.bridge.root.WizardEffect
 import com.phonxiety.bridge.root.WizardEvent
 import com.phonxiety.bridge.root.WizardState
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,6 +27,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
@@ -87,16 +89,16 @@ class SetupCoordinator(
      */
     private var localPairingInFlight = false
 
-    /**
-     * The last local attempt was rejected after it left a readable config behind (the store writes
-     * before the service starts). Only that config is ignored: an attempt that wrote nothing never
-     * sets this, and [onPairingCleared] ends the suppression when the pairing goes away, so a later
-     * pairing that arrives by any other path still advances the wizard.
-     */
-    private var localPairingRejected = false
-
     /** The automatic scan is one per visit to "Unpaired", never one per probe or recomposition. */
     private var autoPairingLaunched = false
+
+    /**
+     * Identifies the reboot request whose survival window is open, and whether one is. The window
+     * is a plain delay on the caller's coroutine, so an id is what tells a timer left over from an
+     * earlier attempt not to report on the attempt that is running now.
+     */
+    private var rebootAttempt = 0L
+    private var rebootInFlight = false
 
     /** First entry and every "resume after reboot": re-derive the state from the device. */
     suspend fun start() {
@@ -107,27 +109,19 @@ class SetupCoordinator(
 
     /**
      * A stored pairing appeared while the wizard sat at "Unpaired": `mise run phone:pair`, the
-     * service rewriting its config, or a link change the repository noticed. The admission check
-     * runs under the same lock as every transition, so an observation that lost the race is a
-     * no-op: a probe or first link test already admitted has moved the wizard on, and an unresolved
-     * or rejected local attempt keeps the wizard where it stands.
+     * service rewriting its config, or a link change the repository noticed. Being readable is all
+     * it takes — a rejected attempt leaves no readable config, so the flag is never the leftover of
+     * one — and the admission check runs under the same lock as every transition, so an observation
+     * that lost the race is a no-op: a probe or first link test already admitted has moved the
+     * wizard on, and an unresolved local attempt keeps the wizard where it stands.
      */
     suspend fun onPairingObserved() {
         mutex.withLock {
-            if (localPairingInFlight || localPairingRejected) return@withLock
+            if (localPairingInFlight) return@withLock
             if (_wizard.value !is WizardState.NeedsPairing) return@withLock
             // The probe a resume would run, so the wizard lands on the same next step by itself.
             handle(WizardEvent.RecheckRequested)
         }
-    }
-
-    /**
-     * The stored pairing is gone (an unpair, or a config replaced by one this app did not write).
-     * Whatever a rejected attempt left behind is no longer on the phone, so the next pairing is a
-     * new one and its observation must count.
-     */
-    suspend fun onPairingCleared() {
-        mutex.withLock { localPairingRejected = false }
     }
 
     /**
@@ -148,9 +142,6 @@ class SetupCoordinator(
     suspend fun pair(link: String) {
         mutex.withLock {
             localPairingInFlight = true
-            // Read before the attempt: a stored pairing that appears while it runs is this
-            // attempt's own leftover only if there was none when it started.
-            val storedBefore = pairing.paired.value
             try {
                 val result = runCatching { pairing.pair(link) }
                     .getOrElse { error ->
@@ -158,22 +149,13 @@ class SetupCoordinator(
                     }
                 when (result) {
                     PairResult.Paired -> {
-                        localPairingRejected = false
                         host(SetupHostRequest.Message("Paired with the computer"))
                         if (_wizard.value is WizardState.NeedsPairing) {
                             handle(WizardEvent.PairingCompleted)
                         }
                     }
 
-                    is PairResult.Invalid -> {
-                        // A rejected attempt that still wrote a readable config leaves a pairing
-                        // behind that this app must not promote. Invalid input writes nothing, and
-                        // that must not suppress a pairing that arrives by any other path.
-                        if (_wizard.value is WizardState.NeedsPairing && !storedBefore && pairing.paired.value) {
-                            localPairingRejected = true
-                        }
-                        host(SetupHostRequest.PairingRejected(result.reason))
-                    }
+                    is PairResult.Invalid -> host(SetupHostRequest.PairingRejected(result.reason))
                 }
             } finally {
                 localPairingInFlight = false
@@ -193,15 +175,43 @@ class SetupCoordinator(
 
     /**
      * "Reboot now". A real reboot takes this process down, so still being here after the survival
-     * window means the phone did not restart, whichever way the command exited. The wait runs on
-     * the caller's coroutine, outside the lock: a resume must not queue behind it.
+     * window means the phone did not restart, whichever way the command exited. One request at a
+     * time: a tap while one is pending is the same request, and only the timer that belongs to the
+     * running attempt may report on it. The wait runs on the caller's coroutine, outside the lock:
+     * a resume must not queue behind it.
      */
     suspend fun requestReboot() {
-        dispatch(WizardEvent.RebootRequested)
-        val pending = _wizard.value as? WizardState.RebootPending ?: return
-        if (pending.failure != null) return
-        delay(REBOOT_SURVIVAL_WINDOW_MS)
-        dispatch(WizardEvent.RebootNotConfirmed)
+        val attempt = mutex.withLock { beginReboot() } ?: return
+        try {
+            delay(REBOOT_SURVIVAL_WINDOW_MS)
+            mutex.withLock {
+                if (attempt != rebootAttempt) return@withLock
+                rebootInFlight = false
+                handle(WizardEvent.RebootNotConfirmed)
+            }
+        } finally {
+            // Cancelled before the window elapsed: the request is over and reports nothing, but the
+            // next tap must be able to start a fresh attempt.
+            withContext(NonCancellable) {
+                mutex.withLock { if (attempt == rebootAttempt) rebootInFlight = false }
+            }
+        }
+    }
+
+    /** Called under the lock: admits one request and returns the attempt its timer belongs to. */
+    private suspend fun beginReboot(): Long? {
+        if (rebootInFlight) return null
+        if (_wizard.value !is WizardState.RebootPending) return null
+        rebootInFlight = true
+        val attempt = ++rebootAttempt
+        handle(WizardEvent.RebootRequested)
+        val pending = _wizard.value as? WizardState.RebootPending
+        if (pending == null || pending.failure != null) {
+            // The command itself failed (or the step moved on): there is no window to wait out.
+            rebootInFlight = false
+            return null
+        }
+        return attempt
     }
 
     private fun rebootDetail(result: ProviderResult): String = result.tail(lines = 6)
@@ -217,9 +227,7 @@ class SetupCoordinator(
         val transition = ModuleController.reduce(_wizard.value, event)
         _wizard.value = transition.state
         if (transition.state !is WizardState.NeedsPairing) {
-            // Leaving "Unpaired" ends the visit: a later visit may auto-launch again, and an old
-            // rejection no longer gates a fresh pairing attempt.
-            localPairingRejected = false
+            // Leaving "Unpaired" ends the visit: a later visit may auto-launch again.
             autoPairingLaunched = false
         }
         transition.effects.forEach { perform(it) }

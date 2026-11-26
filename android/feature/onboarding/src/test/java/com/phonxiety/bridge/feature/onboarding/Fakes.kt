@@ -90,12 +90,10 @@ class FakePairing : PairingRepository {
     /** Suspends the attempt until completed, for interleaving an observation with a pairing. */
     var pairGate: CompletableDeferred<Unit>? = null
 
-    /** A rejected attempt that still wrote the config and published it, as the store can. */
-    var writeEvenWhenRejected = false
-
+    /** Only a stored pairing publishes: a rejected attempt leaves nothing readable behind. */
     override suspend fun pair(link: String): PairResult {
         pairGate?.await()
-        if (pairResult is PairResult.Paired || writeEvenWhenRejected) pairedState.value = true
+        if (pairResult is PairResult.Paired) pairedState.value = true
         return pairResult
     }
 
