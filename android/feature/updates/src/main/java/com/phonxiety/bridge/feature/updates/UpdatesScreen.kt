@@ -3,10 +3,8 @@ package com.phonxiety.bridge.feature.updates
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -25,7 +23,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -59,6 +56,7 @@ import com.phonxiety.bridge.designsystem.component.ScreenScaffold
 import com.phonxiety.bridge.designsystem.component.SectionCard
 import com.phonxiety.bridge.designsystem.component.StatusPill
 import com.phonxiety.bridge.designsystem.component.StatusTone
+import com.phonxiety.bridge.designsystem.privilegedTitle
 import java.text.NumberFormat
 
 /** The Updates entry point; the app host only supplies navigation. */
@@ -222,30 +220,6 @@ private fun HeaderStatus(state: UpdatesUiState) {
     }
 }
 
-/**
- * A section card whose status pill moves under the title once the font scale doubles: side by side,
- * the pill leaves the title a few characters per line and the word breaks into single letters.
- */
-@Composable
-private fun StatusSectionCard(
-    title: String,
-    subtitle: String? = null,
-    status: (@Composable RowScope.() -> Unit)? = null,
-    content: @Composable ColumnScope.() -> Unit
-) {
-    val stacked = LocalDensity.current.fontScale >= STACK_STATUS_AT_FONT_SCALE
-    SectionCard(
-        title = title,
-        subtitle = subtitle,
-        status = if (stacked) null else status
-    ) {
-        if (stacked && status != null) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), content = status)
-        }
-        content()
-    }
-}
-
 @Composable
 private fun CheckErrorCard(check: UpdateCheck, onRefresh: () -> Unit) {
     val title = when (check.error) {
@@ -279,7 +253,7 @@ private fun CompatibilityCard(verdict: UpdateVerdict) {
     // A note belongs to the card that carries the fix: a blocked row's notes are shown here once,
     // and its own card does not repeat them.
     val problems = verdict.rows.filter { it.status == UpdateStatus.INCOMPATIBLE }.flatMap { it.notes }
-    StatusSectionCard(
+    SectionCard(
         title = stringResource(R.string.updates_compatibility_title),
         subtitle = stringResource(R.string.updates_compatibility_subtitle),
         status = {
@@ -361,7 +335,7 @@ private fun RowCard(
     action: @Composable () -> Unit,
     extraRows: List<Pair<String, String>> = emptyList()
 ) {
-    StatusSectionCard(
+    SectionCard(
         title = row.target.title(),
         subtitle = row.target.subtitle(),
         status = { StatusPill(row.status.label(), row.status.tone()) }
@@ -570,7 +544,7 @@ private fun InstallFailureCard(
 
 @Composable
 private fun DaemonCard(row: UpdateRowState) {
-    StatusSectionCard(
+    SectionCard(
         title = stringResource(R.string.updates_target_daemon),
         subtitle = stringResource(R.string.updates_target_daemon_subtitle),
         status = { StatusPill(row.status.label(), row.status.tone()) }
@@ -1146,6 +1120,3 @@ internal fun downloadPercent(fraction: Float): String {
     format.maximumFractionDigits = 0
     return format.format(fraction.coerceIn(0f, 1f))
 }
-
-/** Above this font scale a title and its status pill no longer fit on one line. */
-private const val STACK_STATUS_AT_FONT_SCALE = 1.5f

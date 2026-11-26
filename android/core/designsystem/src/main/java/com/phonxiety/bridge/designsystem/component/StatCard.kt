@@ -1,6 +1,7 @@
 package com.phonxiety.bridge.designsystem.component
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -33,8 +34,18 @@ import java.util.Locale
 enum class StatTone { NEUTRAL, POSITIVE, WARNING, NEGATIVE }
 
 /**
+ * The font scale at which a value leaves the title's side and drops under it. Beside a title at
+ * this scale a pill or badge leaves a few characters per line, so Compose breaks the title
+ * mid-word. A project heuristic, named once here: the same rule holds for every card and row in
+ * the app.
+ */
+const val STACK_AT_FONT_SCALE = 1.5f
+
+/**
  * One dashboard card: a heading row that may carry a status pill, an optional subtitle at full
- * width so a long pill cannot squeeze it, and content that is usually a row of [StatTile]s.
+ * width so a long pill cannot squeeze it, and content that is usually a row of [StatTile]s. At
+ * [STACK_AT_FONT_SCALE] and above the title and subtitle take the full width, the status drops
+ * under them, and the status slot is still invoked exactly once.
  */
 @Composable
 fun SectionCard(
@@ -44,6 +55,7 @@ fun SectionCard(
     status: (@Composable RowScope.() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    val stacked = LocalDensity.current.fontScale >= STACK_AT_FONT_SCALE
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
@@ -55,20 +67,20 @@ fun SectionCard(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier
-                            .weight(1f)
-                            .semantics { heading() }
-                    )
-                    if (status != null) {
-                        Spacer(Modifier.width(8.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), content = status)
+                if (stacked) {
+                    CardTitle(title = title, modifier = Modifier.fillMaxWidth())
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(modifier = Modifier.weight(1f)) {
+                            CardTitle(title = title)
+                        }
+                        if (status != null) {
+                            Spacer(Modifier.width(8.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), content = status)
+                        }
                     }
                 }
                 if (subtitle != null) {
@@ -79,9 +91,21 @@ fun SectionCard(
                     )
                 }
             }
+            if (stacked && status != null) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), content = status)
+            }
             content()
         }
     }
+}
+
+@Composable
+private fun CardTitle(title: String, modifier: Modifier = Modifier) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.titleMedium,
+        modifier = modifier.semantics { heading() }
+    )
 }
 
 /**
@@ -192,8 +216,6 @@ fun KeyValueRow(
         }
     }
 }
-
-private const val STACK_AT_FONT_SCALE = 1.5f
 
 /**
  * Joins a value and its unit the way the writing rules ask. A percent goes through the locale's own

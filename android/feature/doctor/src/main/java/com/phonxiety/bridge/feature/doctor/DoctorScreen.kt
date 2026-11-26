@@ -15,9 +15,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -74,6 +72,7 @@ import com.phonxiety.bridge.designsystem.asString
 import com.phonxiety.bridge.designsystem.component.EmptyState
 import com.phonxiety.bridge.designsystem.component.ErrorCard
 import com.phonxiety.bridge.designsystem.component.LoadingState
+import com.phonxiety.bridge.designsystem.component.STACK_AT_FONT_SCALE
 import com.phonxiety.bridge.designsystem.component.ScreenScaffold
 import com.phonxiety.bridge.designsystem.component.SectionCard
 import com.phonxiety.bridge.designsystem.component.StatusPill
@@ -250,33 +249,9 @@ fun DoctorScreen(
     }
 }
 
-/**
- * A card whose status pill drops under the title at large font scales: beside a 200 % title the
- * pill leaves so little width that Compose breaks the title mid-word.
- */
-@Composable
-private fun StatusSectionCard(
-    title: String,
-    subtitle: String? = null,
-    status: (@Composable RowScope.() -> Unit)? = null,
-    content: @Composable ColumnScope.() -> Unit
-) {
-    val stacked = LocalDensity.current.fontScale >= STACK_STATUS_AT_FONT_SCALE
-    SectionCard(
-        title = title,
-        subtitle = subtitle,
-        status = if (stacked) null else status
-    ) {
-        if (stacked && status != null) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), content = status)
-        }
-        content()
-    }
-}
-
 @Composable
 private fun SummaryCard(state: DoctorUiState, callbacks: DoctorCallbacks) {
-    StatusSectionCard(
+    SectionCard(
         title = stringResource(R.string.doctor_card_summary),
         subtitle = summarySubtitle(state),
         status = { OverallPill(state) }
@@ -338,7 +313,7 @@ private fun CheckGroups(state: DoctorUiState, callbacks: DoctorCallbacks) {
 private fun CheckRow(row: DoctorRow, state: DoctorUiState, callbacks: DoctorCallbacks) {
     val selected = state.selected == row.id
     val risk = row.plan?.let { DoctorPolicy.effectiveRisk(it, state.callActive) }
-    val stacked = LocalDensity.current.fontScale >= STACK_STATUS_AT_FONT_SCALE
+    val stacked = LocalDensity.current.fontScale >= STACK_AT_FONT_SCALE
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -495,7 +470,7 @@ private fun SelectedRowCard(state: DoctorUiState, callbacks: DoctorCallbacks) {
     }
     val risk = row.plan?.let { DoctorPolicy.effectiveRisk(it, state.callActive) }
     val checkName = row.title.asString()
-    StatusSectionCard(
+    SectionCard(
         title = checkName,
         status = { SeverityBadge(row.severity) }
     ) {
@@ -956,7 +931,6 @@ private fun summaryLine(state: DoctorUiState): String = when {
     )
 }
 
-private const val STACK_STATUS_AT_FONT_SCALE = 1.5f
 private const val CHANGE_LOG_ROWS = 6
 
 private fun copyToClipboard(context: Context, text: String) {

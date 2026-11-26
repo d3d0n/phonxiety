@@ -60,6 +60,7 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     debugImplementation(libs.androidx.compose.ui.tooling)
 
+    testImplementation(testFixtures(project(":core:designsystem")))
     testImplementation(libs.junit)
     testImplementation(libs.androidx.room.runtime)
     testImplementation(libs.androidx.room.ktx)

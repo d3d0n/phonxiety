@@ -3,6 +3,7 @@ package com.phonxiety.bridge.feature.doctor
 import androidx.annotation.StringRes
 import com.phonxiety.bridge.CrashReports
 import com.phonxiety.bridge.designsystem.UiText
+import com.phonxiety.bridge.designsystem.privilegedTitle
 import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.model.DoctorReport
 import com.phonxiety.bridge.model.LinkKind

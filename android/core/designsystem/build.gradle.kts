@@ -25,6 +25,10 @@ android {
         compose = true
     }
 
+    testFixtures {
+        enable = true
+    }
+
     lint {
         warningsAsErrors = true
         abortOnError = true
@@ -55,4 +59,11 @@ dependencies {
     testImplementation(libs.roborazzi.compose)
     testImplementation(libs.roborazzi.accessibility.check)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
+
+    testFixturesApi(platform(libs.androidx.compose.bom))
+    testFixturesApi(libs.androidx.compose.ui.test.junit4)
+    testFixturesApi(libs.roborazzi.accessibility.check)
+    testFixturesImplementation(libs.roborazzi)
+    testFixturesImplementation(libs.roborazzi.compose)
+    testFixturesImplementation(libs.junit)
 }

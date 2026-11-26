@@ -12,9 +12,8 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.test.core.app.ApplicationProvider
-import com.github.takahirom.roborazzi.ExperimentalRoborazziApi
-import com.github.takahirom.roborazzi.checkRoboAccessibility
 import com.google.android.apps.common.testing.accessibility.framework.integrations.espresso.AccessibilityViewCheckException
+import com.phonxiety.bridge.designsystem.testing.assertAccessible
 import org.junit.Assert.assertThrows
 import org.junit.Before
 import org.junit.Rule
@@ -32,7 +31,6 @@ import org.robolectric.annotation.GraphicsMode
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "w411dp-h891dp-xxhdpi")
-@OptIn(ExperimentalRoborazziApi::class)
 class InaccessibleFixtureTest {
     @get:Rule
     val composeRule = createComposeRule()
@@ -62,7 +60,7 @@ class InaccessibleFixtureTest {
         }
 
         assertThrows(AccessibilityViewCheckException::class.java) {
-            composeRule.onRoot().checkRoboAccessibility(accessibilityGateOptions())
+            composeRule.onRoot().assertAccessible()
         }
     }
 }

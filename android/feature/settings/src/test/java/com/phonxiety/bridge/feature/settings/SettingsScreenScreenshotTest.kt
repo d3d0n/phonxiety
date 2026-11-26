@@ -16,6 +16,8 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
+import com.phonxiety.bridge.designsystem.testing.assertAccessible
+import com.phonxiety.bridge.designsystem.testing.pinAnimationFrame
 import java.util.Locale
 import java.util.TimeZone
 import org.junit.After
@@ -79,6 +81,7 @@ class SettingsScreenScreenshotTest(private val matrixCase: SettingsMatrixCase) {
             }
         }
         composeRule.onNodeWithTag(CAPTURE_TAG).assertAccessible()
+        composeRule.pinAnimationFrame()
         composeRule.onNodeWithTag(CAPTURE_TAG)
             .captureRoboImage("src/test/screenshots/settings_${matrixCase.state.slug}_${matrixCase.variant.slug}.png")
     }
@@ -98,6 +101,7 @@ class SettingsScreenScreenshotTest(private val matrixCase: SettingsMatrixCase) {
         }
         composeRule.onNodeWithText("Revert everything").performScrollTo()
         composeRule.onNodeWithTag(CAPTURE_TAG).assertAccessible()
+        composeRule.pinAnimationFrame()
         composeRule.onNodeWithTag(CAPTURE_TAG)
             .captureRoboImage("src/test/screenshots/settings_lower_sections.png")
     }

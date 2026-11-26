@@ -30,13 +30,19 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
+import com.phonxiety.bridge.designsystem.testing.assertAccessible
+import com.phonxiety.bridge.designsystem.testing.pinAnimationFrame
 import com.phonxiety.bridge.model.AudioState
 import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.model.LinkError
 import com.phonxiety.bridge.model.LinkState
 import com.phonxiety.bridge.model.PathKind
+import java.util.Locale
+import java.util.TimeZone
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -55,6 +61,21 @@ import org.robolectric.annotation.GraphicsMode
 class DashboardScreenshotTest {
     @get:Rule
     val composeRule = createComposeRule()
+
+    private val originalLocale: Locale = Locale.getDefault()
+    private val originalTimeZone: TimeZone = TimeZone.getDefault()
+
+    @Before
+    fun pinLocaleAndTimeZone() {
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
+        Locale.setDefault(Locale.US)
+    }
+
+    @After
+    fun restoreLocaleAndTimeZone() {
+        TimeZone.setDefault(originalTimeZone)
+        Locale.setDefault(originalLocale)
+    }
 
     private fun setScreen(
         bridge: BridgeState = DashboardSamples.direct,
@@ -102,6 +123,7 @@ class DashboardScreenshotTest {
         content()
         beforeCapture()
         composeRule.waitForIdle()
+        composeRule.pinAnimationFrame()
         composeRule.onNodeWithTag(SCREEN_TAG).captureRoboImage("src/test/screenshots/dashboard_$name.png")
         composeRule.onNodeWithTag(SCREEN_TAG).assertAccessible()
     }
@@ -209,6 +231,7 @@ class DashboardScreenshotTest {
         // A key that fills several lines must be on screen, and still be one legible block.
         composeRule.onNodeWithText(DashboardSamples.ENDPOINT_ID).performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag(SCREEN_TAG).assertAccessible()
+        composeRule.pinAnimationFrame()
         composeRule.onNodeWithTag(SCREEN_TAG)
             .captureRoboImage("src/test/screenshots/dashboard_$name.png")
     }
@@ -243,6 +266,7 @@ class DashboardScreenshotTest {
         composeRule.onNodeWithTag(SCREEN_TAG).assertAccessible()
         // The dialog lives in its own window: it is gated and captured on its own root.
         composeRule.onAllNodes(isDialog()).onLast().assertAccessible()
+        composeRule.pinAnimationFrame()
         composeRule.onAllNodes(isDialog()).onLast()
             .captureRoboImage("src/test/screenshots/dashboard_unpair_dialog_411_light.png")
     }
