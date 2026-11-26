@@ -1,0 +1,26 @@
+Calls on the public release v0.4.1 (installed through Magisk's update), Pixel 6a (Android 17), 2026-11-27
+
+All four were placed from the app's New call to the owner's test number; the owner answered.
+The phone reached the daemon through the self-hosted relay during these calls (RTT at audio start:
+1059 ms for the first call, 116-233 ms for the others).
+
+d84e5641  00:46:21 placed, 00:46:28 answered, 16 s, answered, succeeded, LOCAL
+          mid-call: back to Home, whose call card offered "Open live call"; the reopened live screen
+          read 00:14 with the system call chip at 00:14, not a new count from the reopen
+          (live-call-reopened.png)
+13685475  00:48:04 placed, 00:48:10 answered, 17 s, answered, succeeded, LOCAL
+eebc6a77  00:49:23 placed, 00:49:29 answered, 20 s, answered, LOCAL; task incomplete: the far end
+          did not answer the agent's question, and the agent closed the call itself
+
+ef11c3db  link lost on purpose: 6 s after the answer the phone's Wi-Fi and mobile data were
+          switched off for 20 s, then on again
+          00:51:04  daemon: "Phone disconnected", the last ping took 5001 ms; the call record ends
+                    `unknown`, error `device_disconnected`
+          00:51:26  the phone was connected again
+          the live screen: "Unknown" pill, "The call's end was not confirmed · 1 turn", the card
+          "Call status unknown — The connection to the computer was lost. The final call status
+          could not be confirmed." with Show details and Refresh status, the header frozen at 00:11
+          (connect to the loss), and "Open the call record" pinned (live-call-status-unknown.png)
+
+Home's call card read "Duration 00:15" while the system chip read 00:08 during d84e5641: it counted
+from placing the call; fixed for the next release (the card now counts from the bridge's connect).
