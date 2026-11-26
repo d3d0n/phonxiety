@@ -7,9 +7,11 @@
 #   phonxiety-bridge-<version>.zip   the module zip, with updateJson pointing at update.json
 #   update.json                      one document for the app, the root manager and the daemon
 #
-# Does not upload anything. --serve copies the APK and the module zip into <state dir>/updates/ and
+# Does not upload anything. --serve copies the APK and the module zip into <state dir>/updates/, then
 # writes <state dir>/updates/manifest.json (the file behind GET /app/v1/update/manifest) with
 # apk.url "daemon:apk" and module.url "daemon:module"; module.zipUrl stays https for the managers.
+# The artifacts land first and the manifest is replaced in one rename, so a client never sees a
+# manifest that names a missing file and a failed copy leaves the previous manifest in place.
 set -euo pipefail
 
 ROOT="${MISE_PROJECT_ROOT:?run this task through mise: mise run phone:publish}"
@@ -41,8 +43,11 @@ Usage: mise run phone:publish [options]
   --state-dir PATH   Daemon state directory for --serve (default: ~/.local/share/phonxiety).
   --no-build         Reuse the existing release APK and module zip; only write update.json.
 
-Checks before writing anything: the module and APK versions agree, both files exist, their
-SHA-256 values and the APK's signing certificate are computed from the bytes that are published.
+Checks before writing anything: dist/phonxiety-bridge-<module.prop version>.zip exists and is the
+one published (an older zip is never used), the module.prop inside that zip and the APK embedded in
+it match the APK being published, the module and APK versions agree, minSdk is read from the APK,
+and the SHA-256 values and the APK's signing certificate are computed from the bytes that are
+published.
 EOF
 }
 
@@ -81,14 +86,33 @@ MODULE_VERSION_CODE="$(awk -F= '/^versionCode=/{print $2; exit}' "$MAGISK/module
 [ -n "$MODULE_VERSION" ] || die "module.prop has no version"
 [ -n "$MODULE_VERSION_CODE" ] || die "module.prop has no versionCode"
 
-sha256_of() {
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/phonxiety-publish.XXXXXX")"
+SERVE_TMP_APK=""
+SERVE_TMP_ZIP=""
+SERVE_TMP_MANIFEST=""
+cleanup() {
+    rm -rf "$TMP_DIR"
+    for stale in "$SERVE_TMP_APK" "$SERVE_TMP_ZIP" "$SERVE_TMP_MANIFEST"; do
+        [ -z "$stale" ] || rm -f "$stale"
+    done
+}
+trap cleanup EXIT
+
+sha256_stream() {
     if command -v sha256sum >/dev/null 2>&1; then
-        sha256sum "$1" | cut -d' ' -f1
+        sha256sum | cut -d' ' -f1
     elif command -v shasum >/dev/null 2>&1; then
-        shasum -a 256 "$1" | cut -d' ' -f1
+        shasum -a 256 | cut -d' ' -f1
     else
         die "sha256sum or shasum is required"
     fi
+}
+
+sha256_of() { sha256_stream < "$1"; }
+
+# SHA-256 of one member inside the module zip, streamed so the embedded APK is never unpacked.
+zip_member_sha256() {
+    unzip -p "$ZIP" "$1" 2>/dev/null | sha256_stream
 }
 
 find_build_tool() {
@@ -113,33 +137,51 @@ APK="$ANDROID/app/build/outputs/apk/release/app-release.apk"
 [ -n "$APK" ] && [ -f "$APK" ] || die "release APK not found; run without --no-build"
 
 ZIP="$DIST/phonxiety-bridge-${MODULE_VERSION}.zip"
-[ -f "$ZIP" ] || ZIP="$(ls -1t "$DIST"/phonxiety-bridge-*.zip 2>/dev/null | head -n1 || true)"
-[ -n "$ZIP" ] && [ -f "$ZIP" ] || die "module zip not found; run without --no-build"
+[ -f "$ZIP" ] || \
+    die "module zip $ZIP is missing; an older zip is never published, so run without --no-build to package $MODULE_VERSION"
+ZIP_NAME="$(basename "$ZIP")"
+
+command -v unzip >/dev/null 2>&1 || die "unzip is required to read the module zip"
+
+# The zip's own metadata is what the manager reads, so it decides what gets published.
+PACKAGED_PROP="$TMP_DIR/module.prop"
+unzip -p "$ZIP" module.prop > "$PACKAGED_PROP" 2>/dev/null || true
+[ -s "$PACKAGED_PROP" ] || die "the module zip has no module.prop: $ZIP"
+PACKAGED_VERSION="$(awk -F= '/^version=/{print $2; exit}' "$PACKAGED_PROP")"
+PACKAGED_VERSION_CODE="$(awk -F= '/^versionCode=/{print $2; exit}' "$PACKAGED_PROP")"
+PACKAGED_UPDATE_JSON="$(awk -F= '/^updateJson=/{print $2; exit}' "$PACKAGED_PROP")"
+[ -n "$PACKAGED_VERSION" ] || die "the module zip's module.prop has no version: $ZIP"
+[ -n "$PACKAGED_VERSION_CODE" ] || die "the module zip's module.prop has no versionCode: $ZIP"
 
 # The packaged module.prop must advertise the URL the update document lives at, else the manager
 # shows an update the app does not offer.
-if command -v unzip >/dev/null 2>&1; then
-    PACKAGED_UPDATE_JSON="$(unzip -p "$ZIP" module.prop 2>/dev/null | awk -F= '/^updateJson=/{print $2}')"
-    [ "$PACKAGED_UPDATE_JSON" = "$URL_BASE/update.json" ] || \
-        die "the module zip's updateJson is '${PACKAGED_UPDATE_JSON:-absent}', expected $URL_BASE/update.json; rebuild without --no-build"
-fi
+[ "$PACKAGED_UPDATE_JSON" = "$URL_BASE/update.json" ] || \
+    die "the module zip's updateJson is '${PACKAGED_UPDATE_JSON:-absent}', expected $URL_BASE/update.json; rebuild without --no-build"
 
 AAPT2="$(find_build_tool aapt2 || true)"
 [ -n "$AAPT2" ] || die "aapt2 was not found in \$ANDROID_HOME/build-tools"
 
-BADGING="$("$AAPT2" dump badging "$APK" 2>/dev/null | awk 'NR==1')"
+BADGING="$("$AAPT2" dump badging "$APK" 2>/dev/null || true)"
 [ -n "$BADGING" ] || die "aapt2 could not read $APK"
-APK_VERSION_CODE="$(printf '%s' "$BADGING" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p")"
-APK_VERSION_NAME="$(printf '%s' "$BADGING" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")"
-APK_MIN_SDK="$(printf '%s' "$BADGING" | sed -n "s/.*sdkVersion:'\([0-9]*\)'.*/\1/p")"
+# versionCode and versionName sit on the `package:` line while minSdk is on a separate
+# `sdkVersion:` or `minSdkVersion:` line, so the whole dump is parsed, one anchored match each.
+APK_VERSION_CODE="$(printf '%s\n' "$BADGING" | sed -n "s/^package:.*versionCode='\([0-9]*\)'.*/\1/p" | sed -n '1p')"
+APK_VERSION_NAME="$(printf '%s\n' "$BADGING" | sed -n "s/^package:.*versionName='\([^']*\)'.*/\1/p" | sed -n '1p')"
+APK_MIN_SDK="$(printf '%s\n' "$BADGING" | sed -n "s/^sdkVersion:'\([0-9]*\)'.*/\1/p" | sed -n '1p')"
+[ -n "$APK_MIN_SDK" ] || \
+    APK_MIN_SDK="$(printf '%s\n' "$BADGING" | sed -n "s/^minSdkVersion:'\([0-9]*\)'.*/\1/p" | sed -n '1p')"
 [ -n "$APK_VERSION_CODE" ] || die "could not read the APK versionCode"
 [ -n "$APK_VERSION_NAME" ] || die "could not read the APK versionName"
-[ -n "$APK_MIN_SDK" ] || APK_MIN_SDK=34
+[ -n "$APK_MIN_SDK" ] || die "could not read the APK minSdk from aapt2 badging; the update document needs it"
 
 [ "$APK_VERSION_CODE" = "$MODULE_VERSION_CODE" ] || \
     die "module.prop versionCode $MODULE_VERSION_CODE != APK versionCode $APK_VERSION_CODE; bump both"
 [ "$APK_VERSION_NAME" = "$MODULE_VERSION" ] || \
     die "module.prop version $MODULE_VERSION != APK versionName $APK_VERSION_NAME; bump both"
+[ "$PACKAGED_VERSION_CODE" = "$APK_VERSION_CODE" ] || \
+    die "$ZIP_NAME advertises versionCode $PACKAGED_VERSION_CODE but the module zip carries an APK with versionCode $APK_VERSION_CODE; rebuild without --no-build"
+[ "$PACKAGED_VERSION" = "$APK_VERSION_NAME" ] || \
+    die "$ZIP_NAME advertises version $PACKAGED_VERSION but the module zip carries an APK with versionName $APK_VERSION_NAME; rebuild without --no-build"
 
 APKSIGNER="$(find_build_tool apksigner || true)"
 [ -n "$APKSIGNER" ] || die "apksigner was not found in \$ANDROID_HOME/build-tools"
@@ -148,11 +190,16 @@ CERT_SHA256="$("$APKSIGNER" verify --print-certs "$APK" 2>/dev/null | awk '!seen
 
 APK_SHA256="$(sha256_of "$APK")"
 ZIP_SHA256="$(sha256_of "$ZIP")"
+
+# The manager installs the APK from inside the zip, so that copy must be the published one.
+EMBEDDED_APK_SHA256="$(zip_member_sha256 system/priv-app/phonxiety-bridge/phonxiety-bridge.apk)" || \
+    die "$ZIP_NAME has no embedded APK at system/priv-app/phonxiety-bridge/phonxiety-bridge.apk"
+[ "$EMBEDDED_APK_SHA256" = "$APK_SHA256" ] || \
+    die "$ZIP_NAME embeds a system APK with SHA-256 $EMBEDDED_APK_SHA256, not the APK being published ($APK_SHA256); rebuild without --no-build"
+
 APK_SIZE="$(wc -c < "$APK" | tr -d ' ')"
 ZIP_SIZE="$(wc -c < "$ZIP" | tr -d ' ')"
-APK_NAME="$(basename "$APK")"
 APK_NAME="phonxiety-bridge-${APK_VERSION_NAME}.apk"
-ZIP_NAME="$(basename "$ZIP")"
 
 DAEMON_VERSION="${MIN_DAEMON:-$(awk -F'"' '/^__version__ = "/{print $2; exit}' "$ROOT/src/phonxiety/__init__.py")}"
 [ -n "$DAEMON_VERSION" ] || die "could not read the daemon version; pass --min-daemon"
@@ -180,7 +227,6 @@ if [ "$SERVE" = 1 ]; then
     SERVED_OUT="$SERVE_DIR/manifest.json"
 fi
 
-PX_SERVED_OUT="$SERVED_OUT" \
 PX_URL_BASE="$URL_BASE" \
 PX_CHANNEL="$CHANNEL" \
 PX_CHANGELOG="$CHANGELOG" \
@@ -254,17 +300,6 @@ def write(path, document):
 
 
 write(sys.argv[1], document)
-
-served_path = os.environ.get("PX_SERVED_OUT") or ""
-if served_path:
-    # The daemon serves the artifacts itself: the app fetches them over the authenticated link,
-    # while module.zipUrl and the top-level zipUrl stay https for the root managers.
-    served = json.loads(json.dumps(document))
-    served["apk"]["url"] = "daemon:apk"
-    served["apk"]["file"] = os.environ["PX_APK_NAME"]
-    served["module"]["url"] = "daemon:module"
-    served["module"]["file"] = os.environ["PX_ZIP_NAME"]
-    write(served_path, served)
 PY
 
 [ -s "$OUT" ] || die "update.json was not written"
@@ -274,10 +309,41 @@ note "Module:   $ZIP"
 note "Manifest: $OUT"
 
 if [ "$SERVE" = 1 ]; then
-    cp "$PUBLISHED_APK" "$SERVE_DIR/$APK_NAME"
-    cp "$ZIP" "$SERVE_DIR/$ZIP_NAME"
-    [ "$(sha256_of "$SERVE_DIR/$APK_NAME")" = "$APK_SHA256" ] || die "the served APK copy does not match its digest"
-    [ "$(sha256_of "$SERVE_DIR/$ZIP_NAME")" = "$ZIP_SHA256" ] || die "the served module copy does not match its digest"
+    # Artifacts first, each landing through a temporary name in the same directory: the daemon
+    # reads manifest.json on every request, so until the last line it never names a missing file,
+    # and a failure here leaves the previous manifest serving the previous release.
+    SERVE_TMP_APK="$SERVE_DIR/.$APK_NAME.tmp.$$"
+    SERVE_TMP_ZIP="$SERVE_DIR/.$ZIP_NAME.tmp.$$"
+    cp "$PUBLISHED_APK" "$SERVE_TMP_APK"
+    [ "$(sha256_of "$SERVE_TMP_APK")" = "$APK_SHA256" ] || die "the served APK copy does not match its digest; the previous manifest was left in place"
+    cp "$ZIP" "$SERVE_TMP_ZIP"
+    [ "$(sha256_of "$SERVE_TMP_ZIP")" = "$ZIP_SHA256" ] || die "the served module copy does not match its digest; the previous manifest was left in place"
+    mv -f "$SERVE_TMP_APK" "$SERVE_DIR/$APK_NAME"
+    mv -f "$SERVE_TMP_ZIP" "$SERVE_DIR/$ZIP_NAME"
+
+    # The manifest goes last, written to a temporary file in the same directory and renamed into
+    # place, so a concurrent client sees either the previous document or the complete new one.
+    SERVE_TMP_MANIFEST="$SERVE_DIR/.manifest.json.tmp.$$"
+    "$PYTHON" - "$OUT" "$SERVE_TMP_MANIFEST" "$APK_NAME" "$ZIP_NAME" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    document = json.load(stream)
+
+# The daemon serves the artifacts itself: the app fetches them over the authenticated link,
+# while module.zipUrl and the top-level zipUrl stay https for the root managers.
+document["apk"]["url"] = "daemon:apk"
+document["apk"]["file"] = sys.argv[3]
+document["module"]["url"] = "daemon:module"
+document["module"]["file"] = sys.argv[4]
+
+with open(sys.argv[2], "w", encoding="utf-8") as stream:
+    json.dump(document, stream, indent=2, ensure_ascii=False)
+    stream.write("\n")
+PY
+    [ -s "$SERVE_TMP_MANIFEST" ] || die "the daemon manifest was not written; the previous one is still in place"
+    mv -f "$SERVE_TMP_MANIFEST" "$SERVED_OUT"
     note "Daemon:   $SERVED_OUT (GET /app/v1/update/manifest)"
     note "Served:   $SERVE_DIR/$APK_NAME"
     note "          $SERVE_DIR/$ZIP_NAME"
