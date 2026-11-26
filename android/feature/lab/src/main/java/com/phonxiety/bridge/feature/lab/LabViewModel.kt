@@ -403,11 +403,14 @@ class LabViewModel @Inject constructor(
     // -- test call ------------------------------------------------------
 
     fun setTestNumber(number: String) {
-        val clean = PhoneSettings.sanitizeNumber(number)
+        // The draft is what the field shows. A leading `+` survives on its own, so the first
+        // keystroke of an international number is no longer erased; storage and dialling keep
+        // digits with one optional leading `+`.
+        val draft = PhoneSettings.draftNumber(number)
         numberEdited = true
         // The draft is authoritative the moment it changes; the write is a consequence of it.
-        _state.update { it.copy(testCall = it.testCall.copy(number = clean, error = null)) }
-        pendingNumberWrite.value = clean
+        _state.update { it.copy(testCall = it.testCall.copy(number = draft, error = null)) }
+        pendingNumberWrite.value = PhoneSettings.sanitizeNumber(draft)
     }
 
     fun requestTestCall() {
@@ -489,7 +492,7 @@ class LabViewModel @Inject constructor(
      * lab's audio card shows, and the length chosen on the test-call card.
      */
     private fun LabUiState.toRequest(): TestCallRequest = TestCallRequest(
-        destination = testCall.number,
+        destination = PhoneSettings.sanitizeNumber(testCall.number),
         maxDurationSeconds = testCall.maxDurationSeconds,
         loopback = true.takeIf { testCallLoopback },
         tone = if (testCallTone) {

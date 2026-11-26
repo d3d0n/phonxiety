@@ -220,6 +220,38 @@ class LabViewModelTest {
     }
 
     @Test
+    fun `typing a plus before the digits keeps the whole number`() = runTest(testDispatcher) {
+        val store = FakePhonePreferences()
+        prefs = store
+        val vm = viewModel()
+
+        // A lone `+` is what the first key of an international number produces; it stays.
+        vm.setTestNumber("+")
+        assertEquals("+", vm.state.value.testCall.number)
+        assertFalse("a plus alone cannot be dialled", vm.state.value.testCall.numberReady)
+
+        val typed = "+998901234567"
+        for (index in typed.indices) {
+            vm.setTestNumber(typed.substring(0, index + 1))
+            assertEquals("every keystroke stays in the field", typed.substring(0, index + 1), vm.state.value.testCall.number)
+        }
+        assertTrue("the number is dialable", vm.state.value.testCall.numberReady)
+
+        advanceUntilIdle()
+        assertEquals("what is stored keeps the plus and the digits", typed, store.settings.value.testNumber)
+
+        var dialed: String? = null
+        api.testCallHandler = { request ->
+            dialed = request.destination
+            ApiOutcome.Ok(200, CallSnapshot(callId = "test-call", profile = "test"))
+        }
+        vm.requestTestCall()
+        vm.confirmTestCall()
+        advanceUntilIdle()
+        assertEquals(typed, dialed)
+    }
+
+    @Test
     fun `a stored seed that arrives after editing started leaves the draft alone`() = runTest(testDispatcher) {
         val store = GatedPhonePreferences(initial = PhoneSettings(testNumber = "+12025550123"))
         prefs = store
