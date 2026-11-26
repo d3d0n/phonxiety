@@ -165,6 +165,13 @@ class ComposerScreenshotTest {
 
     @Test
     @Category(Screenshot::class)
+    fun theLimitsAtTwoHundredPercentInLight() = render(
+        "limits_320_font200_light",
+        beforeCapture = { composeRule.onNodeWithText("Calls per hour").performScrollTo() }
+    ) { setScreen(VALIDATED, fontScale = 2f, width = 320.dp) }
+
+    @Test
+    @Category(Screenshot::class)
     fun theWarningsAfterScrolling() = render(
         "warnings_411_light",
         beforeCapture = { composeRule.onNodeWithText("agent may not know", substring = true).performScrollTo() }
@@ -172,8 +179,21 @@ class ComposerScreenshotTest {
 
     @Test
     @Category(Screenshot::class)
+    fun theWarningsAtTwoHundredPercentInLight() = render(
+        "warnings_320_font200_light",
+        beforeCapture = { composeRule.onNodeWithText("agent may not know", substring = true).performScrollTo() }
+    ) { setScreen(VALIDATED, fontScale = 2f, width = 320.dp) }
+
+    @Test
+    @Category(Screenshot::class)
     fun theConfirmation() = render("confirmation_411_light") {
         setScreen(VALIDATED.copy(confirming = true))
+    }
+
+    @Test
+    @Category(Screenshot::class)
+    fun theConfirmationAtTwoHundredPercentInLight() = render("confirmation_320_font200_light") {
+        setScreen(VALIDATED.copy(confirming = true), fontScale = 2f, width = 320.dp)
     }
 
     @Test

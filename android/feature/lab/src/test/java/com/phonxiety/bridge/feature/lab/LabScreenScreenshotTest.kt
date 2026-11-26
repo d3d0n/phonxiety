@@ -170,6 +170,16 @@ class LabScreenScreenshotTest {
     ) { setScreen(previewLabState()) }
 
     @Test
+    @Category(Screenshot::class)
+    fun theLowerSectionsAtTwoHundredPercentInLight() = render(
+        "lower_320_font200_light",
+        beforeCapture = {
+            composeRule.onNodeWithText("App log").performScrollTo()
+            composeRule.waitForIdle()
+        }
+    ) { setScreen(previewLabState(), fontScale = 2f, width = 320.dp) }
+
+    @Test
     fun theLabChipsWrapInsteadOfRunningOffTheEdge() {
         setScreen(previewLabState(), fontScale = 2f, width = 320.dp)
         // A chip cut at the screen edge reads as a broken control; every one of them fits.

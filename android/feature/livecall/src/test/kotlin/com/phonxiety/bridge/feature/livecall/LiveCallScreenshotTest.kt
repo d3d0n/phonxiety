@@ -162,6 +162,16 @@ class LiveCallScreenshotTest {
 
     @Test
     @Category(Screenshot::class)
+    fun theControlsAtTwoHundredPercentInLight() = render(
+        "controls_lower_320_font200_light",
+        beforeCapture = {
+            openControls()
+            scrollControls()
+        }
+    ) { setScreen(fontScale = 2f, width = 320.dp) }
+
+    @Test
+    @Category(Screenshot::class)
     fun aDroppedLink() = render("reconnecting_411_light") {
         setScreen(state = LiveCallSamples.live.copy(reconnecting = true, partials = emptyList()))
     }

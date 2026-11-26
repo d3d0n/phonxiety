@@ -210,9 +210,12 @@ class UpdatesDialogScreenshotTest(private val case: UpdatesDialogCase) {
 
         @JvmStatic
         @ParameterizedRobolectricTestRunner.Parameters(name = "{0}")
-        fun cases(): List<Array<Any>> = UpdatesDialogState.entries.map { state ->
-            arrayOf<Any>(UpdatesDialogCase(state, widthDp = 411, dark = false, fontScale = 1f, slug = "411_light"))
-        }
+        fun cases(): List<Array<Any>> = UpdatesDialogState.entries.flatMap { state ->
+            listOf(
+                UpdatesDialogCase(state, widthDp = 411, dark = false, fontScale = 1f, slug = "411_light"),
+                UpdatesDialogCase(state, widthDp = 320, dark = false, fontScale = 2f, slug = "320_font200_light")
+            )
+        }.map { arrayOf<Any>(it) }
     }
 }
 

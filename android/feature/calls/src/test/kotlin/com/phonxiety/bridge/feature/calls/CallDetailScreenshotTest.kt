@@ -191,6 +191,16 @@ class CallDetailScreenshotTest {
     ) { setScreen(finished()) }
 
     @Test
+    @Category(Screenshot::class)
+    fun theLowerSectionsAtTwoHundredPercentInLight() = render(
+        "lower_320_font200_light",
+        beforeCapture = {
+            scrollToNode("Delete this call")
+            composeRule.waitForIdle()
+        }
+    ) { setScreen(finished(), fontScale = 2f, width = 320.dp) }
+
+    @Test
     fun theDeleteConfirmation() {
         setScreen(finished())
         scrollToNode("Delete this call")
@@ -264,6 +274,16 @@ class CallDetailScreenshotTest {
             composeRule.waitForIdle()
         }
     ) { setScreen(longFieldCall()) }
+
+    @Test
+    @Category(Screenshot::class)
+    fun aLongResultAnswerStacksAtTwoHundredPercentInLight() = render(
+        "result_long_320_font200_light",
+        beforeCapture = {
+            scrollToNode("Menu options heard")
+            composeRule.waitForIdle()
+        }
+    ) { setScreen(longFieldCall(), fontScale = 2f, width = 320.dp) }
 
     @Test
     @Category(Screenshot::class)

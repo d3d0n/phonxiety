@@ -170,6 +170,22 @@ class DashboardScreenshotTest {
 
     @Test
     @Category(Screenshot::class)
+    fun theLinkDroppedAtTwoHundredPercentInLight() = render("offline_320_font200_light") {
+        setScreen(
+            bridge = DashboardSamples.offline.copy(
+                lastError = LinkError(
+                    code = "heartbeat_missed",
+                    message = "The daemon stopped answering five heartbeats in a row",
+                    atEpochMs = DashboardSamples.now - 40_000
+                )
+            ),
+            fontScale = 2f,
+            width = 320.dp
+        )
+    }
+
+    @Test
+    @Category(Screenshot::class)
     fun anUnpairedPhone() = render("unpaired_411_light") { setScreen(bridge = BridgeState(), paired = false) }
 
     @Test
