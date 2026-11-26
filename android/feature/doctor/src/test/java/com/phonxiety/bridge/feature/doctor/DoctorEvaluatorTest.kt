@@ -1,5 +1,9 @@
 package com.phonxiety.bridge.feature.doctor
 
+import android.content.Context
+import android.content.res.Resources
+import androidx.test.core.app.ApplicationProvider
+import com.phonxiety.bridge.designsystem.asString
 import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.model.DoctorCheck
 import com.phonxiety.bridge.model.LinkError
@@ -18,9 +22,20 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /** The rows a snapshot produces: each check's state, its evidence and the repair attached to it. */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
 class DoctorEvaluatorTest {
+    private val resources: Resources = ApplicationProvider.getApplicationContext<Context>().resources
+
+    private fun DoctorRow.evidenceText(): String = evidence.joinToString(" · ") { it.asString(resources) }
+
+    private fun DoctorRow.titleText(): String = title.asString(resources)
+
     @Test
     fun anAllGreenInstallHasNoFailingRow() {
         val rows = TestData.rows()
@@ -37,7 +52,7 @@ class DoctorEvaluatorTest {
         val root = TestData.row(rows, DoctorEvaluator.ID_ROOT)
         assertEquals(DoctorSeverity.FAIL, root.severity)
         assertNull("re-rooting is not an executable fix", root.plan)
-        assertTrue(root.evidence.contains("refused"))
+        assertTrue(root.evidenceText().contains("refused"))
     }
 
     @Test
@@ -54,7 +69,7 @@ class DoctorEvaluatorTest {
         )
         val root = TestData.row(rows, DoctorEvaluator.ID_ROOT)
         assertEquals(DoctorSeverity.WARN, root.severity)
-        assertTrue(root.evidence.contains("installing would be a guess"))
+        assertTrue(root.evidenceText().contains("installing would be a guess"))
     }
 
     @Test
@@ -68,8 +83,8 @@ class DoctorEvaluatorTest {
 
         val root = TestData.row(rows, DoctorEvaluator.ID_ROOT)
         assertEquals(DoctorSeverity.OK, root.severity)
-        assertTrue(root.evidence.startsWith("KernelSU 3.3.1"))
-        assertTrue(root.evidence.contains("inactive leftovers: Magisk"))
+        assertTrue(root.evidenceText().startsWith("KernelSU 3.3.1"))
+        assertTrue(root.evidenceText().contains("Inactive leftovers: Magisk"))
     }
 
     @Test
@@ -81,8 +96,8 @@ class DoctorEvaluatorTest {
 
         val root = TestData.row(rows, DoctorEvaluator.ID_ROOT)
         assertEquals(DoctorSeverity.FAIL, root.severity)
-        assertTrue(root.evidence.contains("KernelSU manager is installed"))
-        assertTrue(root.evidence.contains("hidden from this app"))
+        assertTrue(root.evidenceText().contains("KernelSU is installed"))
+        assertTrue(root.evidenceText().contains("hidden from this app"))
     }
 
     @Test
@@ -93,8 +108,8 @@ class DoctorEvaluatorTest {
 
         val root = TestData.row(rows, DoctorEvaluator.ID_ROOT)
         assertEquals(DoctorSeverity.FAIL, root.severity)
-        assertTrue(root.evidence.contains("Magisk app is installed"))
-        assertTrue(root.evidence.contains("not active"))
+        assertTrue(root.evidenceText().contains("Magisk app is installed"))
+        assertTrue(root.evidenceText().contains("not active"))
     }
 
     @Test
@@ -109,7 +124,7 @@ class DoctorEvaluatorTest {
     fun aStagedModuleWaitsForItsReboot() {
         val rows = TestData.rows(snapshot = TestData.snapshot(module = ModuleState.Staged("0.3.0", 3)))
         assertEquals(DoctorSeverity.WARN, TestData.row(rows, DoctorEvaluator.ID_MODULE_PRESENT).severity)
-        assertTrue(TestData.row(rows, DoctorEvaluator.ID_MODULE_ENABLED).evidence.contains("next boot"))
+        assertTrue(TestData.row(rows, DoctorEvaluator.ID_MODULE_ENABLED).evidenceText().contains("next boot"))
     }
 
     @Test
@@ -125,7 +140,7 @@ class DoctorEvaluatorTest {
         )
         val overlay = TestData.row(rows, DoctorEvaluator.ID_OVERLAY)
         assertEquals(DoctorSeverity.FAIL, overlay.severity)
-        assertTrue(overlay.evidence.contains("the provider needs a metamodule"))
+        assertTrue(overlay.evidenceText().contains("needs a metamodule"))
     }
 
     @Test
@@ -142,7 +157,7 @@ class DoctorEvaluatorTest {
         )
         val overlay = TestData.row(rows, DoctorEvaluator.ID_OVERLAY)
         assertEquals(DoctorSeverity.FAIL, overlay.severity)
-        assertFalse(overlay.evidence.contains("metamodule"))
+        assertFalse(overlay.evidenceText().contains("metamodule"))
     }
 
     @Test
@@ -180,7 +195,7 @@ class DoctorEvaluatorTest {
         )
         val row = TestData.row(rows, "${DoctorEvaluator.ID_RUNTIME}:${RuntimePermission.ACCESS_LOCAL_NETWORK.androidName}")
         assertEquals(DoctorSeverity.FAIL, row.severity)
-        assertTrue(row.evidence.contains("timeout"))
+        assertTrue(row.evidenceText().contains("timeout"))
         assertEquals(DoctorFixId.REGRANT_RUNTIME_PERMISSION, row.plan?.fix)
     }
 
@@ -220,8 +235,8 @@ class DoctorEvaluatorTest {
             DoctorEvaluator.ID_LINK
         )
         assertEquals(DoctorSeverity.WARN, relay.severity)
-        assertTrue(relay.evidence.contains("relay"))
-        assertTrue(relay.evidence.contains("4 reconnects"))
+        assertTrue(relay.evidenceText().contains("Relay"))
+        assertTrue(relay.evidenceText().contains("4 reconnects"))
 
         val offline = TestData.row(
             TestData.rows(
@@ -233,7 +248,7 @@ class DoctorEvaluatorTest {
             DoctorEvaluator.ID_LINK
         )
         assertEquals(DoctorSeverity.FAIL, offline.severity)
-        assertTrue(offline.evidence.contains("auth_failed"))
+        assertTrue(offline.evidenceText().contains("auth_failed"))
     }
 
     @Test
@@ -241,7 +256,7 @@ class DoctorEvaluatorTest {
         val rows = TestData.rows(daemon = DaemonProbe.Unreachable("link_down", "no gateway"))
         val daemon = TestData.row(rows, DoctorEvaluator.ID_DAEMON)
         assertEquals(DoctorSeverity.FAIL, daemon.severity)
-        assertTrue(daemon.evidence.contains("link_down"))
+        assertTrue(daemon.evidenceText().contains("link_down"))
         assertEquals(DoctorFixId.RESTART_SERVICE, daemon.plan?.fix)
         assertEquals(DoctorSeverity.UNKNOWN, TestData.row(rows, DoctorEvaluator.ID_RELAY).severity)
         assertFalse(rows.any { it.kind == DoctorItemKind.DAEMON_CHECK })
@@ -261,13 +276,13 @@ class DoctorEvaluatorTest {
         val rows = TestData.rows(daemon = DaemonProbe.Reached(report))
         val relay = TestData.row(rows, DoctorEvaluator.ID_RELAY)
         assertEquals(DoctorSeverity.WARN, relay.severity)
-        assertTrue(relay.evidence.contains("pair by address instead"))
-        assertTrue(relay.evidence.contains("2 custom relays"))
+        assertTrue(relay.evidenceText().contains("pair by address instead"))
+        assertTrue(relay.evidenceText().contains("2 custom relays"))
         assertEquals(DoctorFixId.DAEMON_FIX, relay.plan?.fix)
         assertEquals(DoctorPolicy.RELAY_FIX, relay.plan?.daemonFix)
 
         val phone = TestData.row(rows, "${DoctorEvaluator.ID_DAEMON_CHECK}:phone")
-        assertEquals("Phone connection", phone.title)
+        assertEquals("Phone connection", phone.titleText())
         assertEquals(DoctorSeverity.FAIL, phone.severity)
         assertNull("the daemon names its own fix in its fixes list", phone.plan)
     }

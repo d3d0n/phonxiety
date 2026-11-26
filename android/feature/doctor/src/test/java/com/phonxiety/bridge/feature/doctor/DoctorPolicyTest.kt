@@ -1,17 +1,33 @@
 package com.phonxiety.bridge.feature.doctor
 
+import android.content.Context
+import android.content.res.Resources
+import androidx.test.core.app.ApplicationProvider
+import com.phonxiety.bridge.designsystem.UiText
+import com.phonxiety.bridge.designsystem.asString
 import com.phonxiety.bridge.model.LinkState
 import com.phonxiety.bridge.root.ModuleState
+import com.phonxiety.bridge.root.Overlay
 import com.phonxiety.bridge.root.RootId
 import com.phonxiety.bridge.root.RuntimePermission
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /** The decision tree as a table: every check, its fix, and who may run it. */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
 class DoctorPolicyTest {
+    private val resources: Resources = ApplicationProvider.getApplicationContext<Context>().resources
+
+    private fun UiText.text(): String = asString(resources)
+
     @Test
     fun everyKindHasItsFixAndClass() {
         val expected = mapOf(
@@ -45,6 +61,35 @@ class DoctorPolicyTest {
         }
     }
 
+    /** The provider decides only the wording: Magisk and APatch mount system/ themselves. */
+    @Test
+    fun theOverlayCopyNamesAMetamoduleOnlyForAProviderThatNeedsOne() {
+        val magisk = requireNotNull(
+            DoctorPolicy.planFor(DoctorItemKind.OVERLAY, FixContext(RootId.MAGISK, Overlay.BUILT_IN))
+        )
+        val kernelSu = requireNotNull(
+            DoctorPolicy.planFor(DoctorItemKind.OVERLAY, FixContext(RootId.KERNELSU, Overlay.METAMODULE_MISSING))
+        )
+        val apatch = requireNotNull(
+            DoctorPolicy.planFor(DoctorItemKind.OVERLAY, FixContext(RootId.APATCH, Overlay.METAMODULE_MISSING))
+        )
+        val kernelSuReady = requireNotNull(
+            DoctorPolicy.planFor(DoctorItemKind.OVERLAY, FixContext(RootId.KERNELSU, Overlay.METAMODULE_PRESENT))
+        )
+
+        assertFalse(magisk.effect.text().contains("metamodule"))
+        assertTrue(kernelSu.effect.text().contains("metamodule"))
+        assertTrue(apatch.effect.text().contains("metamodule"))
+        assertFalse(kernelSuReady.effect.text().contains("needs a metamodule"))
+
+        // The fix and its risk do not move with the wording.
+        listOf(magisk, kernelSu, apatch, kernelSuReady).forEach { plan ->
+            assertEquals(DoctorFixId.REINSTALL_MODULE, plan.fix)
+            assertEquals(FixClass.CONFIRM, plan.risk)
+            assertTrue(plan.needsReboot)
+        }
+    }
+
     @Test
     fun rebootingFixesSaySoAndAskFirst() {
         val rebooting = listOf(
@@ -58,24 +103,21 @@ class DoctorPolicyTest {
             assertTrue("$kind must announce the reboot", plan.needsReboot)
             assertEquals(FixClass.CONFIRM, plan.risk)
         }
-        assertTrue(requireNotNull(DoctorPolicy.planFor(DoctorItemKind.LINK)).effect.isNotBlank())
-    }
-
-    @Test
-    fun theOverlayFixNamesAMetamoduleOnlyForProvidersThatNeedOne() {
-        val effect = requireNotNull(DoctorPolicy.planFor(DoctorItemKind.OVERLAY)).effect
-        assertTrue(effect.contains("A provider that mounts system/ through a metamodule"))
+        assertTrue(requireNotNull(DoctorPolicy.planFor(DoctorItemKind.LINK)).effect.text().isNotBlank())
     }
 
     @Test
     fun everyPlanExplainsEffectAndRollback() {
         DoctorItemKind.entries.mapNotNull(DoctorPolicy::planFor).forEach { plan ->
-            assertTrue("${plan.fix} has no effect text", plan.effect.isNotBlank())
-            assertTrue("${plan.fix} has no rollback text", plan.rollback.isNotBlank())
+            assertTrue("${plan.fix} has no effect text", plan.effect.text().isNotBlank())
+            assertTrue("${plan.fix} has no rollback text", plan.rollback.text().isNotBlank())
+            assertFalse("${plan.fix} ships a Markdown backtick", plan.effect.text().contains('`'))
+            assertFalse("${plan.fix} ships a Markdown backtick", plan.rollback.text().contains('`'))
         }
         val daemonPlan = DoctorPolicy.daemonPlan("relay_config", "re-read the relay list", restartRequired = true)
-        assertTrue(daemonPlan.effect.isNotBlank())
-        assertTrue(daemonPlan.rollback.isNotBlank())
+        assertTrue(daemonPlan.effect.text().contains("relay_config"))
+        assertTrue(daemonPlan.rollback.text().isNotBlank())
+        assertFalse(daemonPlan.effect.text().contains('`'))
     }
 
     @Test
@@ -158,9 +200,18 @@ class DoctorPolicyTest {
             val pages = RecoveryBook.pages(provider)
             assertEquals(RecoveryId.entries.toList(), pages.map { it.id })
             pages.forEach { page ->
-                assertTrue("${page.id} has no happened text", page.happened.isNotBlank())
+                assertTrue("${page.id} has no title", page.title.text().isNotBlank())
+                assertTrue("${page.id} has no happened text", page.happened.text().isNotBlank())
                 assertTrue("${page.id} has no phone steps", page.onPhone.isNotEmpty())
                 assertTrue("${page.id} has no computer steps", page.fromComputer.isNotEmpty())
+                page.onPhone.forEach { step ->
+                    assertTrue("${page.id} has an empty step", step.text.text().isNotBlank())
+                    assertFalse("${page.id} ships a Markdown backtick", step.text.text().contains('`'))
+                }
+                page.fromComputer.forEach { step ->
+                    assertTrue("${page.id} has an empty step", step.text.text().isNotBlank())
+                    assertFalse("${page.id} ships a Markdown backtick", step.text.text().contains('`'))
+                }
             }
         }
     }
