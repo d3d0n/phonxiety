@@ -96,14 +96,26 @@ private fun CameraQrPreview(
     val executor = remember { Executors.newSingleThreadExecutor() }
     val code = rememberUpdatedState(onCode)
     var failure by remember { mutableStateOf<String?>(null) }
+    val release = remember {
+        val released = AtomicBoolean(false)
+        val closeOnce: () -> Unit = {
+            if (released.compareAndSet(false, true)) {
+                executor.shutdown()
+                scanner.close()
+            }
+        }
+        closeOnce
+    }
 
     DisposableEffect(Unit) {
         val report: (Throwable) -> Unit = { error -> failure = error.message ?: error.javaClass.simpleName }
         val future = try {
             ProcessCameraProvider.getInstance(context)
         } catch (error: Exception) {
+            // No session was created, but the scanner and executor above are already live: the
+            // dialog's own disposal is the only owner that can release them, exactly once.
             report(error)
-            return@DisposableEffect onDispose { }
+            return@DisposableEffect onDispose { release() }
         }
         val session = CameraSession(
             future = future,
@@ -129,10 +141,7 @@ private fun CameraQrPreview(
                 bound.filterIsInstance<ImageAnalysis>().forEach { runCatching { it.clearAnalyzer() } }
                 provider.unbind(*bound.toTypedArray())
             },
-            release = {
-                executor.shutdown()
-                scanner.close()
-            }
+            release = release
         )
         session.start()
         onDispose { session.dispose() }

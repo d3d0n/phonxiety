@@ -96,14 +96,24 @@ class CameraQrScannerTest {
     }
 
     @Test
-    fun aCodeIsDeliveredOnceAndNeverAfterTheDismissal() {
+    fun aCodeThatArrivesAfterTheDismissalIsDropped() {
+        val session = session(PendingProvider())
+        val codes = mutableListOf<String>()
+
+        session.dispose()
+        assertFalse(session.wantsCode())
+        session.deliver("late") { codes += it }
+
+        assertTrue("a code from a closed dialog must be dropped", codes.isEmpty())
+    }
+
+    @Test
+    fun onlyTheFirstCodeOfAnOpenSessionIsDelivered() {
         val session = session(PendingProvider())
         val codes = mutableListOf<String>()
 
         session.deliver("first") { codes += it }
         session.deliver("second") { codes += it }
-        session.dispose()
-        session.deliver("late") { codes += it }
 
         assertEquals(listOf("first"), codes)
     }

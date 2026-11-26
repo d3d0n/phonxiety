@@ -344,6 +344,30 @@ class DoctorViewModelTest {
         assertEquals(DoctorSeverity.OK, viewModel.state.value.row(DoctorEvaluator.ID_LINK)?.severity)
     }
 
+    @Test
+    fun aPairingCacheThatCatchesUpIsShownAsStoredWithoutALinkChange() = runTest(dispatcher) {
+        val pairing = FakePairing(paired = false)
+        val viewModel = viewModel(
+            source = FakeDoctorSource(TestData.snapshot()),
+            bridge = FakeBridgeState(TestData.bridge(link = LinkState.Offline)),
+            pairing = pairing,
+            daemon = FakeDaemonApi().apply { doctorOutcome = ApiOutcome.Ok(200, TestData.report()) }
+        )
+        advanceUntilIdle()
+
+        val before = viewModel.state.value.row(DoctorEvaluator.ID_PAIRING)
+        assertEquals(DoctorSeverity.FAIL, before?.severity)
+        assertEquals("no pairing link is stored", before?.evidence)
+
+        // The link does not move: only the cache re-read on IO catches up with the stored config.
+        pairing.state.value = true
+        advanceUntilIdle()
+
+        val after = viewModel.state.value.row(DoctorEvaluator.ID_PAIRING)
+        assertEquals(DoctorSeverity.OK, after?.severity)
+        assertEquals("a pairing is stored", after?.evidence)
+    }
+
     private fun TestScope.viewModel(
         source: FakeDoctorSource,
         bridge: FakeBridgeState = FakeBridgeState(TestData.bridge()),

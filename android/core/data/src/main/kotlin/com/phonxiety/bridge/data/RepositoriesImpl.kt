@@ -18,9 +18,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 @Singleton
@@ -54,48 +55,59 @@ class DevicePairingRepository internal constructor(
     private val state = MutableStateFlow(read())
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    // One lock around every storage read-and-publish and every storage-and-cache mutation, so an
+    // older refresh can never publish a value read before a newer refresh or pairing wrote its own.
+    private val mutex = Mutex()
+
     override val paired: StateFlow<Boolean> = state.asStateFlow()
 
     init {
         scope.launch {
             // A service start reloads config.json and then attaches its engine, which is the only
             // signal the app process gets about a config written by the host task. The first
-            // emission is the state the constructor has already read.
+            // emission is the link state at subscription time: a config written between the
+            // constructor's read and this subscription shows up here and only here, so it refreshes
+            // the cache like every later change.
             BridgeRuntime.state
                 .map { it.link }
                 .distinctUntilChanged()
-                .drop(1)
                 .collect { refresh() }
         }
     }
 
     /** Re-reads the stored config on the IO dispatcher; the cached value moves only when it changed. */
-    suspend fun refresh() = withContext(Dispatchers.IO) { state.value = read() }
+    suspend fun refresh() = withContext(Dispatchers.IO) {
+        mutex.withLock { state.value = read() }
+    }
 
     override suspend fun pair(link: String): PairResult = withContext(Dispatchers.IO) {
-        when (val parsed = PairingLink.parse(link)) {
-            is PairingResult.Invalid -> PairResult.Invalid(parsed.error.code)
+        mutex.withLock {
+            when (val parsed = PairingLink.parse(link)) {
+                is PairingResult.Invalid -> PairResult.Invalid(parsed.error.code)
 
-            is PairingResult.Valid -> {
-                try {
-                    val stored = BridgeConfigLoader.write(context, parsed.config)
-                    BridgeRuntime.rememberPairing(stored.kind)
-                    BridgeService.start(context)
-                    state.value = true
-                    PairResult.Paired
-                } catch (e: BridgeConfigException) {
-                    PairResult.Invalid(e.code)
-                } catch (e: SecurityException) {
-                    PairResult.Invalid("pairing_store_failed")
+                is PairingResult.Valid -> {
+                    try {
+                        val stored = BridgeConfigLoader.write(context, parsed.config)
+                        BridgeRuntime.rememberPairing(stored.kind)
+                        BridgeService.start(context)
+                        state.value = true
+                        PairResult.Paired
+                    } catch (e: BridgeConfigException) {
+                        PairResult.Invalid(e.code)
+                    } catch (e: SecurityException) {
+                        PairResult.Invalid("pairing_store_failed")
+                    }
                 }
             }
         }
     }
 
     override suspend fun unpair() = withContext(Dispatchers.IO) {
-        BridgeConfigLoader.delete(context)
-        BridgeRuntime.forgetPairing()
-        BridgeService.stop(context)
-        state.value = false
+        mutex.withLock {
+            BridgeConfigLoader.delete(context)
+            BridgeRuntime.forgetPairing()
+            BridgeService.stop(context)
+            state.value = false
+        }
     }
 }

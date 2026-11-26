@@ -216,7 +216,7 @@ class FakeBridgeState(initial: BridgeState = BridgeState()) : BridgeStateReposit
 }
 
 class FakePairing(paired: Boolean = true) : PairingRepository {
-    private val state = MutableStateFlow(paired)
+    val state = MutableStateFlow(paired)
     override val paired: StateFlow<Boolean> = state
     var pairResult: PairResult = PairResult.Paired
 
