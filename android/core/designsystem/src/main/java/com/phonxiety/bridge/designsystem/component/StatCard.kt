@@ -181,8 +181,11 @@ fun KeyValueRow(
     val valueWidth = measurer.measure(text = value, style = valueStyle, softWrap = false).size.width
     BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
         val gap = with(LocalDensity.current) { KEY_VALUE_GAP.roundToPx() }
+        // The value never renders narrower than its minimum width, so a short value takes that
+        // width in the row; fitting on its own glyphs would pick a row its children cannot hold.
+        val valueFloor = with(LocalDensity.current) { KEY_VALUE_MIN_VALUE_WIDTH.roundToPx() }
         val room = if (constraints.hasBoundedWidth) constraints.maxWidth else Int.MAX_VALUE
-        if (labelWidth + gap + valueWidth <= room) {
+        if (labelWidth + gap + maxOf(valueWidth, valueFloor) <= room) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
@@ -202,7 +205,7 @@ fun KeyValueRow(
                     overflow = TextOverflow.Clip,
                     modifier = Modifier
                         .padding(start = KEY_VALUE_GAP)
-                        .widthIn(min = 96.dp)
+                        .widthIn(min = KEY_VALUE_MIN_VALUE_WIDTH)
                 )
             }
         } else {
@@ -229,7 +232,13 @@ fun KeyValueRow(
 }
 
 /** The space between a label and a value that share a row. */
-private val KEY_VALUE_GAP = 16.dp
+internal val KEY_VALUE_GAP = 16.dp
+
+/**
+ * A value's own floor, so a changing number in a row does not shift its label. The row fit
+ * measures this floor rather than the value's glyphs: a short value still reserves it.
+ */
+internal val KEY_VALUE_MIN_VALUE_WIDTH = 96.dp
 
 /**
  * Joins a value and its unit the way the writing rules ask. A percent goes through the locale's own
