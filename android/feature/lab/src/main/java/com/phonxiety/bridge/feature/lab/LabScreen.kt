@@ -41,6 +41,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -362,7 +363,7 @@ private fun HistoryRow(run: LinkTestResult) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = localTime(run.at) ?: stringResource(R.string.lab_none),
+                text = localTime(run.at, LocalLabClock.current()) ?: stringResource(R.string.lab_none),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f)
@@ -449,7 +450,7 @@ private fun ProbeCard(probe: ProbeUi, callbacks: LabCallbacks) {
         probe.rows.forEach { row -> ProbeRow(row) }
         probe.checkedAt?.let {
             Text(
-                text = stringResource(R.string.lab_probe_checked, localTime(it) ?: it),
+                text = stringResource(R.string.lab_probe_checked, localTime(it, LocalLabClock.current()) ?: it),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -488,6 +489,20 @@ private fun ProbeRow(row: ProbeRowUi) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        }
+        row.details?.let { details ->
+            var open by rememberSaveable(row.key) { mutableStateOf(false) }
+            TextButton(onClick = { open = !open }) {
+                Text(stringResource(if (open) R.string.lab_probe_details_hide else R.string.lab_probe_details_show))
+            }
+            if (open) {
+                Text(
+                    text = details,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }
@@ -984,6 +999,9 @@ internal fun numberText(value: Number): String {
     val text = NumberFormat.getIntegerInstance().format(value.toLong())
     return text.replace('-', '\u2212')
 }
+
+/** The clock that decides whether a stamp is from today; screenshot tests pin it. */
+internal val LocalLabClock = staticCompositionLocalOf<() -> Long> { { System.currentTimeMillis() } }
 
 /**
  * Daemon timestamps are UTC ISO-8601; the lab is read on this phone, so a run from today shows its

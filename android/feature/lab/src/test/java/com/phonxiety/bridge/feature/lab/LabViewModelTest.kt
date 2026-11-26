@@ -326,6 +326,41 @@ class LabViewModelTest {
     }
 
     @Test
+    fun `a missing tailscale is the computer's and the daemon's own words stay under details`() = runBlocking<Unit> {
+        api.probeHandler = {
+            ApiOutcome.Ok(
+                200,
+                ProbeResult(
+                    candidates = listOf(
+                        ProbeCandidate("tailscale", available = false, reachable = false, reason = "not_installed"),
+                        ProbeCandidate(
+                            "iroh",
+                            available = false,
+                            reachable = false,
+                            detail = "the iroh endpoint is not bound on this daemon"
+                        )
+                    ),
+                    checkedAt = "2026-11-26T10:00:00+00:00"
+                )
+            )
+        }
+        val vm = viewModel()
+        vm.toggleProbeCandidate("lan")
+        vm.runProbe()
+        withTimeout(5_000) { vm.state.first { it.probe.rows.size == 2 } }
+        val tailscale = vm.state.value.probe.rows.single { it.key == "tailscale" }
+        assertEquals(UiText.Res(R.string.lab_probe_reason_not_installed), tailscale.note)
+        assertTrue(
+            "the note names the computer",
+            context.getString(R.string.lab_probe_reason_not_installed).contains("computer")
+        )
+        assertEquals("reason: not_installed", tailscale.details)
+        val iroh = vm.state.value.probe.rows.single { it.key == "iroh" }
+        assertEquals("the iroh endpoint is not bound on this daemon", iroh.details)
+        assertNull(iroh.rttMs)
+    }
+
+    @Test
     fun `diagnostics text renders and the log view honours the filter`() = runBlocking<Unit> {
         api.diagnosticsHandler = {
             ApiOutcome.Ok(

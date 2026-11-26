@@ -71,7 +71,9 @@ data class ProbeRowUi(
     val verdict: ProbeVerdict = ProbeVerdict.NOT_CHECKED,
     val rttMs: Long? = null,
     val note: UiText? = null,
-    val listenerNote: UiText? = null
+    val listenerNote: UiText? = null,
+    /** The daemon's own detail and reason, verbatim, shown only under Details. */
+    val details: String? = null
 )
 
 data class AudioUi(

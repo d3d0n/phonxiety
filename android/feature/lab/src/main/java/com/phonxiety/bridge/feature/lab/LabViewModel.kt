@@ -158,12 +158,18 @@ class LabViewModel @Inject constructor(
         // The bridge marks a path it never probed with "not_measured": that is a third state, not
         // an unreachable one, and it never carries an RTT.
         val notMeasured = candidate.reason == NOT_MEASURED
+        // The daemon's own words stay available verbatim under Details, whatever the verdict says.
+        val details = listOfNotNull(
+            candidate.detail?.takeIf { it.isNotBlank() },
+            candidate.reason?.takeIf { it.isNotBlank() }?.let { "reason: $it" }
+        ).joinToString("\n").ifBlank { null }
         return when {
             notMeasured -> ProbeRowUi(
                 key = candidate.name,
                 endpoint = endpoint,
                 verdict = ProbeVerdict.NOT_CHECKED,
-                note = reasonText(candidate.reason)
+                note = reasonText(candidate.reason),
+                details = details
             )
 
             candidate.available && candidate.reachable -> ProbeRowUi(
@@ -172,21 +178,24 @@ class LabViewModel @Inject constructor(
                 verdict = ProbeVerdict.REACHED,
                 rttMs = rttMs,
                 note = rttMs?.let { UiText.Res(R.string.lab_probe_note_bridge_reached, listOf(millisText(it))) }
-                    ?: candidate.detail?.let { UiText.Literal(it) }
+                    ?: candidate.detail?.let { UiText.Literal(it) },
+                details = details
             )
 
             candidate.available -> ProbeRowUi(
                 key = candidate.name,
                 endpoint = endpoint,
                 verdict = ProbeVerdict.NOT_REACHED,
-                note = reasonText(candidate.reason) ?: UiText.Res(R.string.lab_probe_reason_listener)
+                note = reasonText(candidate.reason) ?: UiText.Res(R.string.lab_probe_reason_listener),
+                details = details
             )
 
             else -> ProbeRowUi(
                 key = candidate.name,
                 endpoint = endpoint,
                 verdict = ProbeVerdict.NOT_CHECKED,
-                note = reasonText(candidate.reason) ?: UiText.Res(R.string.lab_probe_reason_none)
+                note = reasonText(candidate.reason) ?: UiText.Res(R.string.lab_probe_reason_none),
+                details = details
             )
         }
     }
@@ -242,7 +251,8 @@ class LabViewModel @Inject constructor(
                 listenerNote = listenerNote(lan)
             )
         }
-        return rows.map { if (it.key == lan.name) updated else it }
+        // This phone's own check replaces the verdict; the daemon's diagnostics stay under Details.
+        return rows.map { if (it.key == lan.name) updated.copy(details = updated.details ?: it.details) else it }
     }
 
     /** A row this phone could not measure; the bridge's own listener answer stays a second line. */
@@ -262,6 +272,7 @@ class LabViewModel @Inject constructor(
         null, "" -> null
         "not_measured" -> UiText.Res(R.string.lab_probe_reason_not_measured)
         "not_installed" -> UiText.Res(R.string.lab_probe_reason_not_installed)
+        "not_connected" -> UiText.Res(R.string.lab_probe_reason_not_connected)
         "no_lan_address" -> UiText.Res(R.string.lab_probe_reason_no_lan_address)
         "no_listener_answer" -> UiText.Res(R.string.lab_probe_reason_listener)
         "unreachable_from_phone" -> UiText.Res(R.string.lab_probe_reason_unreachable_phone)

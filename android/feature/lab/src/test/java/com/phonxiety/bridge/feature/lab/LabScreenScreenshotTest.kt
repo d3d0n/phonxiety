@@ -61,7 +61,9 @@ class LabScreenScreenshotTest {
         composeRule.setContent {
             val density = LocalDensity.current
             CompositionLocalProvider(
-                LocalDensity provides Density(density.density, fontScale = fontScale)
+                LocalDensity provides Density(density.density, fontScale = fontScale),
+                // The samples are from 2026-11-26: render them as "today" on any test date.
+                LocalLabClock provides { FIXED_NOW_MILLIS }
             ) {
                 PhonxietyTheme(darkTheme = dark, dynamicColor = dynamicColor) {
                     Box(
@@ -272,5 +274,11 @@ class LabScreenScreenshotTest {
 
     private companion object {
         const val SCREEN_TAG = "lab_capture"
+
+        /** Noon on the samples' day, in the device zone, so their times render as "today". */
+        val FIXED_NOW_MILLIS: Long = java.time.LocalDateTime.parse("2026-11-26T12:00:00")
+            .atZone(java.time.ZoneId.systemDefault())
+            .toInstant()
+            .toEpochMilli()
     }
 }

@@ -68,13 +68,16 @@
     <string name="lab_probe_note_bridge_reached">The bridge reached it in %1$s.</string>
     <string name="lab_probe_listener_answers">The bridge\'s own listener answers there.</string>
     <string name="lab_probe_listener_silent">The bridge\'s listener doesn\'t answer there either.</string>
-    <string name="lab_probe_reason_not_installed">Not set up on this phone.</string>
+    <string name="lab_probe_reason_not_installed">Tailscale isn\'t installed on the computer.</string>
+    <string name="lab_probe_reason_not_connected">Tailscale on the computer isn\'t connected to a tailnet.</string>
     <string name="lab_probe_reason_not_measured">The bridge didn\'t measure this path.</string>
     <string name="lab_probe_reason_no_lan_address">The bridge reports no LAN address.</string>
     <string name="lab_probe_reason_listener">The listener didn\'t answer.</string>
     <string name="lab_probe_reason_unreachable_phone">This phone couldn\'t reach it.</string>
     <string name="lab_probe_reason_unchecked">This phone couldn\'t run its own check.</string>
-    <string name="lab_probe_reason_none">This phone has no such path.</string>
+    <string name="lab_probe_reason_none">The computer doesn\'t offer this path.</string>
+    <string name="lab_probe_details_show">Details</string>
+    <string name="lab_probe_details_hide">Hide details</string>
 
     <!-- Loopback and tone -->
     <string name="lab_audio_title">Loopback and tone</string>
