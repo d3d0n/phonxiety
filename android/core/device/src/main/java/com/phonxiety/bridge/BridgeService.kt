@@ -28,10 +28,18 @@ class BridgeService : Service() {
         /** Starts the link as a foreground service; safe to call repeatedly. */
         fun start(context: Context) {
             try {
-                context.startForegroundService(Intent(context, BridgeService::class.java))
+                startOrThrow(context)
             } catch (e: Exception) {
                 BridgeLog.w(TAG, "cannot start bridge service: ${e.javaClass.simpleName}")
             }
+        }
+
+        /**
+         * [start] for a caller that must undo its own work when the start is refused, such as
+         * pairing: throws whatever `startForegroundService` threw.
+         */
+        fun startOrThrow(context: Context) {
+            context.startForegroundService(Intent(context, BridgeService::class.java))
         }
 
         fun stop(context: Context) {

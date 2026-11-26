@@ -45,8 +45,8 @@ class RuntimeBridgeStateRepository @Inject constructor() : BridgeStateRepository
 @Singleton
 class DevicePairingRepository internal constructor(
     private val context: Context,
-    /** The service start that follows the write; a seam for the rollback a failed start needs. */
-    private val startService: (Context) -> Unit = { BridgeService.start(it) },
+    /** The service start that follows the write; it throws when refused, so the write is undone. */
+    private val startService: (Context) -> Unit = { BridgeService.startOrThrow(it) },
     private val read: () -> Boolean
 ) : PairingRepository {
     @Inject

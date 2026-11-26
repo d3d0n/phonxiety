@@ -1,6 +1,9 @@
 package com.phonxiety.bridge.data
 
+import android.content.ComponentName
 import android.content.Context
+import android.content.ContextWrapper
+import android.content.Intent
 import com.phonxiety.bridge.BridgeConfig
 import com.phonxiety.bridge.BridgeConfigLoader
 import com.phonxiety.bridge.BridgeRuntime
@@ -239,6 +242,30 @@ class DevicePairingRepositoryTest {
         assertNull(BridgeConfigLoader.loadOrNull(context))
         assertNull("the app is not left believing it is paired", BridgeRuntime.pairing)
         assertFalse("a rejected attempt leaves the cache alone", repository.paired.value)
+    }
+
+    /**
+     * The production start, not a test seam: a context that refuses the foreground-service start
+     * must reach the rollback, so the refused attempt leaves no pairing behind.
+     */
+    @Test
+    fun aRefusedForegroundServiceStartIsARejectedAttempt() = runTest {
+        BridgeConfigLoader.delete(context)
+        BridgeRuntime.forgetPairing()
+        val refusing = object : ContextWrapper(context) {
+            override fun startForegroundService(service: Intent?): ComponentName = throw SecurityException("refused")
+        }
+        val repository = DevicePairingRepository(
+            context = refusing,
+            read = { BridgeConfigLoader.loadOrNull(context) != null }
+        )
+
+        val result = repository.pair(REPLACEMENT_LINK)
+
+        assertEquals(PairResult.Invalid("pairing_store_failed"), result)
+        assertNull(BridgeConfigLoader.loadOrNull(context))
+        assertNull(BridgeRuntime.pairing)
+        assertFalse(repository.paired.value)
     }
 
     /** A config of the other transport, so a rollback has a link kind to restore as well. */
