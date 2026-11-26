@@ -29,8 +29,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # Installs cmdline-tools + platform-tools into ANDROID_SDK_ROOT.
+      # Installs cmdline-tools + platform-tools into ANDROID_SDK_ROOT.  The
+      # action's default package list still names "tools", which the SDK
+      # repository no longer has, so the list is given explicitly.
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
 
       - uses: actions/cache@v4
         with:
