@@ -3,30 +3,36 @@ package com.phonxiety.bridge.feature.updates
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.phonxiety.bridge.data.updates.AppInstallState
+import com.phonxiety.bridge.data.updates.CompatibilityNote
 import com.phonxiety.bridge.data.updates.InstallFailure
 import com.phonxiety.bridge.data.updates.ModuleInstallFailure
 import com.phonxiety.bridge.data.updates.ModuleInstallState
@@ -36,21 +42,24 @@ import com.phonxiety.bridge.data.updates.RollbackPendingReason
 import com.phonxiety.bridge.data.updates.RollbackPlan
 import com.phonxiety.bridge.data.updates.RollbackRecovery
 import com.phonxiety.bridge.data.updates.RollbackState
-import com.phonxiety.bridge.data.updates.RollbackStep
 import com.phonxiety.bridge.data.updates.UpdateCheck
 import com.phonxiety.bridge.data.updates.UpdateCheckError
 import com.phonxiety.bridge.data.updates.UpdateRowState
 import com.phonxiety.bridge.data.updates.UpdateStatus
 import com.phonxiety.bridge.data.updates.UpdateTarget
 import com.phonxiety.bridge.data.updates.UpdateVerdict
+import com.phonxiety.bridge.designsystem.asString
+import com.phonxiety.bridge.designsystem.component.ActionEmphasis
 import com.phonxiety.bridge.designsystem.component.EmptyState
 import com.phonxiety.bridge.designsystem.component.ErrorCard
 import com.phonxiety.bridge.designsystem.component.KeyValueRow
 import com.phonxiety.bridge.designsystem.component.LoadingState
 import com.phonxiety.bridge.designsystem.component.PrimaryActionButton
+import com.phonxiety.bridge.designsystem.component.ScreenScaffold
 import com.phonxiety.bridge.designsystem.component.SectionCard
 import com.phonxiety.bridge.designsystem.component.StatusPill
 import com.phonxiety.bridge.designsystem.component.StatusTone
+import java.text.NumberFormat
 
 /** The Updates entry point; the app host only supplies navigation. */
 @Composable
@@ -78,7 +87,8 @@ fun UpdatesRoute(
 /**
  * App, Module and Daemon rows: installed against available, the compatibility verdict and exactly
  * one action per row. The daemon is not installed from the phone, so its row explains what to run
- * on the computer instead of pretending to have a button.
+ * on the computer instead of pretending to have a button. While a call runs, every action that
+ * would end it is disabled and says why; the view model refuses the same actions again.
  */
 @Composable
 fun UpdatesScreen(
@@ -94,80 +104,103 @@ fun UpdatesScreen(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .windowInsetsPadding(WindowInsets.safeDrawing),
-        contentAlignment = Alignment.TopCenter
-    ) {
-        Column(
-            modifier = Modifier
-                .widthIn(max = 560.dp)
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+    Box(modifier = modifier.fillMaxSize()) {
+        ScreenScaffold(
+            title = stringResource(R.string.updates_title),
+            onBack = onBack
         ) {
-            Header(state.check?.verdict, loading = state.loading || state.check == null, onBack = onBack)
-            val check = state.check
-            val verdict = check?.verdict
-            when {
-                state.loading && check == null -> LoadingState("Checking versions…")
-
-                check?.error != null -> CheckErrorCard(check, onRefresh)
-
-                verdict != null -> {
-                    CompatibilityCard(verdict)
-                    RowCard(
-                        row = verdict.app,
-                        installedExtra = null,
-                        action = {
-                            AppAction(
-                                row = verdict.app,
-                                install = state.appInstall,
-                                onInstall = onInstallApp,
-                                onDismiss = onDismiss
-                            )
-                        }
-                    )
-                    RowCard(
-                        row = verdict.module,
-                        installedExtra = check.installed?.let { installed ->
-                            if (installed.moduleDisabled) "disabled" else null
-                        },
-                        action = {
-                            ModuleAction(
-                                row = verdict.module,
-                                install = state.moduleInstall,
-                                onInstall = onInstallModule,
-                                onDismiss = onDismiss
-                            )
-                        }
-                    )
-                    DaemonCard(verdict.daemon)
-                    TextButton(onClick = onRefresh) { Text("Check again") }
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // The app bar holds only the title: a status pill there squeezes the title into a
+                // column of single letters once the font scale doubles. The pill appears only for
+                // the check itself — with a verdict, each row and the compatibility card already
+                // carry their status, and repeating "Incompatible" here would say it twice.
+                if (state.loading || state.check?.verdict == null) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        HeaderStatus(state)
+                    }
                 }
+                if (state.callActive) {
+                    Text(
+                        text = stringResource(R.string.updates_call_active_summary),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                val check = state.check
+                val verdict = check?.verdict
+                when {
+                    state.loading && check == null -> LoadingState(stringResource(R.string.updates_loading))
 
-                else -> EmptyState(
-                    title = "No update document",
-                    message = "The daemon answered without a release to compare against."
+                    check?.error != null -> CheckErrorCard(check, onRefresh)
+
+                    verdict != null -> {
+                        CompatibilityCard(verdict)
+                        RowCard(
+                            row = verdict.app,
+                            action = {
+                                AppAction(
+                                    row = verdict.app,
+                                    install = state.appInstall,
+                                    callActive = state.callActive,
+                                    onInstall = onInstallApp,
+                                    onDismiss = onDismiss
+                                )
+                            }
+                        )
+                        RowCard(
+                            row = verdict.module,
+                            extraRows = moduleExtraRows(check),
+                            action = {
+                                ModuleAction(
+                                    row = verdict.module,
+                                    install = state.moduleInstall,
+                                    callActive = state.callActive,
+                                    onInstall = onInstallModule,
+                                    onDismiss = onDismiss
+                                )
+                            }
+                        )
+                        DaemonCard(verdict.daemon)
+                        TextButton(onClick = onRefresh) {
+                            Text(stringResource(R.string.updates_check_again))
+                        }
+                    }
+
+                    else -> EmptyState(
+                        title = stringResource(R.string.updates_empty_title),
+                        message = stringResource(R.string.updates_empty_message),
+                        action = {
+                            TextButton(onClick = onRefresh) {
+                                Text(stringResource(R.string.updates_check_again))
+                            }
+                        }
+                    )
+                }
+                // The rollback reads the phone, not the daemon, so it stays usable when the check fails.
+                RollbackSection(
+                    plan = state.rollbackPlan,
+                    recovery = state.rollbackRecovery,
+                    recoveryDismissed = state.rollbackRecoveryDismissed,
+                    rollback = state.moduleRollback,
+                    appInstall = state.rollbackAppInstall,
+                    callActive = state.callActive,
+                    onRollback = onRollback,
+                    onDismiss = onDismiss,
+                    onDismissRecovery = onDismissRollbackRecovery
                 )
             }
-            // The rollback reads the phone, not the daemon, so it stays usable when the check fails.
-            RollbackSection(
-                plan = state.rollbackPlan,
-                recovery = state.rollbackRecovery,
-                recoveryDismissed = state.rollbackRecoveryDismissed,
-                rollback = state.moduleRollback,
-                appInstall = state.rollbackAppInstall,
-                onRollback = onRollback,
-                onDismiss = onDismiss,
-                onDismissRecovery = onDismissRollbackRecovery
-            )
         }
         state.rollbackConfirmation?.let { confirmation ->
             ConfirmRollbackDialog(
                 plan = confirmation,
+                runningVersion = state.check?.installed?.appVersion,
+                callActive = state.callActive,
                 onConfirm = onConfirmRollback,
                 onDismiss = onDismissRollback
             )
@@ -175,86 +208,148 @@ fun UpdatesScreen(
     }
 }
 
+/** The check's own state, shown only while there is no verdict to read the rows from. */
 @Composable
-private fun Header(verdict: UpdateVerdict?, loading: Boolean, onBack: () -> Unit) {
-    Column {
-        TextButton(onClick = onBack, modifier = Modifier.padding(bottom = 4.dp)) { Text("Back") }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(text = "Updates", style = MaterialTheme.typography.headlineMedium)
-                Text(
-                    text = "App, module and daemon",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            when {
-                loading -> StatusPill("Checking", StatusTone.NEUTRAL, pulse = true)
-                verdict == null -> StatusPill("No data", StatusTone.NEUTRAL)
-                !verdict.compatible -> StatusPill("Incompatible", StatusTone.NEGATIVE)
-                verdict.hasUpdate -> StatusPill("Update available", StatusTone.WARNING)
-                else -> StatusPill("Up to date", StatusTone.POSITIVE)
-            }
+private fun HeaderStatus(state: UpdatesUiState) {
+    when {
+        state.loading ->
+            StatusPill(stringResource(R.string.updates_status_checking), StatusTone.NEUTRAL, pulse = true)
+
+        state.check?.error != null ->
+            StatusPill(stringResource(R.string.updates_status_check_failed), StatusTone.NEGATIVE)
+
+        else -> StatusPill(stringResource(R.string.updates_status_unknown), StatusTone.NEUTRAL)
+    }
+}
+
+/**
+ * A section card whose status pill moves under the title once the font scale doubles: side by side,
+ * the pill leaves the title a few characters per line and the word breaks into single letters.
+ */
+@Composable
+private fun StatusSectionCard(
+    title: String,
+    subtitle: String? = null,
+    status: (@Composable RowScope.() -> Unit)? = null,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val stacked = LocalDensity.current.fontScale >= STACK_STATUS_AT_FONT_SCALE
+    SectionCard(
+        title = title,
+        subtitle = subtitle,
+        status = if (stacked) null else status
+    ) {
+        if (stacked && status != null) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), content = status)
         }
+        content()
     }
 }
 
 @Composable
 private fun CheckErrorCard(check: UpdateCheck, onRefresh: () -> Unit) {
-    val (title, message) = when (check.error) {
-        UpdateCheckError.LINK_DOWN ->
-            "The daemon did not answer" to "The update document arrives over the device link. Check the dashboard, then try again."
-
-        UpdateCheckError.NO_MANIFEST ->
-            "No update document is published" to "On the computer run `mise run phone:publish` to write update.json, then check again."
-
-        UpdateCheckError.UNKNOWN_CHANNEL ->
-            "No release on this channel" to "The document has no release under the channel this app asked for."
-
-        UpdateCheckError.MANIFEST_INVALID ->
-            "The update document cannot be used" to "It exists but a required field is missing or malformed, so nothing is offered."
-
-        null -> "The check failed" to "No reason was reported."
+    val title = when (check.error) {
+        UpdateCheckError.LINK_DOWN -> stringResource(R.string.updates_error_link_title)
+        UpdateCheckError.NO_MANIFEST -> stringResource(R.string.updates_error_no_manifest_title)
+        UpdateCheckError.UNKNOWN_CHANNEL -> stringResource(R.string.updates_error_channel_title)
+        UpdateCheckError.MANIFEST_INVALID -> stringResource(R.string.updates_error_invalid_title)
+        null -> stringResource(R.string.updates_error_unknown_title)
     }
+    val message = when (check.error) {
+        UpdateCheckError.LINK_DOWN -> stringResource(R.string.updates_error_link_message)
+        UpdateCheckError.NO_MANIFEST -> stringResource(R.string.updates_error_no_manifest_message)
+        UpdateCheckError.UNKNOWN_CHANNEL -> stringResource(R.string.updates_error_channel_message)
+        UpdateCheckError.MANIFEST_INVALID -> stringResource(R.string.updates_error_invalid_message)
+        null -> stringResource(R.string.updates_error_unknown_message)
+    }
+    // The one command that fixes a missing document is a separate monospace line, shown open.
+    val command = check.error == UpdateCheckError.NO_MANIFEST
     ErrorCard(
         title = title,
         message = message,
-        output = check.detail,
-        actionLabel = "Try again",
+        output = if (command) stringResource(R.string.updates_command_publish) else check.detail,
+        initiallyExpanded = command,
+        actionLabel = stringResource(R.string.updates_check_again),
         onAction = onRefresh
     )
 }
 
 @Composable
 private fun CompatibilityCard(verdict: UpdateVerdict) {
-    val notes = verdict.rows.filter { it.status == UpdateStatus.INCOMPATIBLE }.flatMap { it.notes }
-    SectionCard(
-        title = "Compatibility",
-        subtitle = "Protocol, app API and module schema",
+    // A note belongs to the card that carries the fix: a blocked row's notes are shown here once,
+    // and its own card does not repeat them.
+    val problems = verdict.rows.filter { it.status == UpdateStatus.INCOMPATIBLE }.flatMap { it.notes }
+    StatusSectionCard(
+        title = stringResource(R.string.updates_compatibility_title),
+        subtitle = stringResource(R.string.updates_compatibility_subtitle),
         status = {
             if (verdict.compatible) {
-                StatusPill("Compatible", StatusTone.POSITIVE)
+                StatusPill(stringResource(R.string.updates_compatibility_ok_pill), StatusTone.POSITIVE)
             } else {
-                StatusPill("Incompatible", StatusTone.NEGATIVE)
+                StatusPill(stringResource(R.string.updates_compatibility_bad_pill), StatusTone.NEGATIVE)
             }
         }
     ) {
-        if (notes.isEmpty()) {
+        if (problems.isEmpty()) {
             Text(
-                text = "This phone, the module and the daemon agree on every version this release needs.",
+                text = stringResource(R.string.updates_compatibility_ok),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         } else {
-            notes.forEach { note ->
-                Text(
-                    text = note,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error
-                )
+            problems.forEach { note ->
+                NoteItem(note, tone = MaterialTheme.colorScheme.error)
+            }
+        }
+    }
+}
+
+@Composable
+private fun NoteItem(note: CompatibilityNote, tone: Color) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            text = note.text().asString(),
+            style = MaterialTheme.typography.bodySmall,
+            color = tone
+        )
+        if (note is CompatibilityNote.NewPrivilegedGrants) {
+            PermissionDetails(note.permissions)
+        }
+    }
+}
+
+/** The raw permission identifiers stay one disclosure below their human titles. */
+@Composable
+private fun PermissionDetails(permissions: List<String>) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    TextButton(
+        onClick = { expanded = !expanded },
+        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp)
+    ) {
+        Text(
+            stringResource(
+                if (expanded) R.string.updates_hide_details else R.string.updates_show_details
+            )
+        )
+    }
+    if (expanded) {
+        Column(
+            modifier = Modifier.padding(start = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            permissions.forEach { permission ->
+                Column {
+                    Text(
+                        text = privilegedTitle(permission).asString(),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Text(
+                        text = permission,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }
@@ -263,78 +358,117 @@ private fun CompatibilityCard(verdict: UpdateVerdict) {
 @Composable
 private fun RowCard(
     row: UpdateRowState,
-    installedExtra: String?,
-    action: @Composable () -> Unit
+    action: @Composable () -> Unit,
+    extraRows: List<Pair<String, String>> = emptyList()
 ) {
-    SectionCard(
+    StatusSectionCard(
         title = row.target.title(),
         subtitle = row.target.subtitle(),
         status = { StatusPill(row.status.label(), row.status.tone()) }
     ) {
         KeyValueRow(
-            label = "Installed",
-            value = listOfNotNull(row.installedVersion, installedExtra).joinToString(" · ").ifEmpty { "—" },
+            label = stringResource(R.string.updates_row_installed),
+            value = row.installedVersion ?: stringResource(R.string.updates_none),
             mono = true
         )
-        KeyValueRow(label = "Available", value = row.availableVersion ?: "—", mono = true)
-        row.notes.forEach { note ->
-            Text(
-                text = note,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+        extraRows.forEach { (label, value) -> KeyValueRow(label = label, value = value) }
+        KeyValueRow(
+            label = stringResource(R.string.updates_row_available),
+            value = row.availableVersion ?: stringResource(R.string.updates_none),
+            mono = true
+        )
+        if (row.status != UpdateStatus.INCOMPATIBLE) {
+            row.notes.forEach { note ->
+                NoteItem(note, tone = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
         action()
     }
+}
+
+/** The module's own state is its own row: the installed version stays a pure version. */
+@Composable
+private fun moduleExtraRows(check: UpdateCheck?): List<Pair<String, String>> = if (check?.installed?.moduleDisabled == true) {
+    listOf(
+        stringResource(R.string.updates_module_state) to
+            stringResource(R.string.updates_module_disabled)
+    )
+} else {
+    emptyList()
 }
 
 @Composable
 private fun AppAction(
     row: UpdateRowState,
     install: AppInstallState,
+    callActive: Boolean,
     onInstall: () -> Unit,
     onDismiss: () -> Unit
 ) {
     when (install) {
         AppInstallState.Idle -> if (row.status == UpdateStatus.UPDATE_AVAILABLE) {
+            val version = row.availableVersion
             PrimaryActionButton(
-                label = "Install ${row.availableVersion ?: "the update"}",
+                label = version?.let { stringResource(R.string.updates_install_app, it) }
+                    ?: stringResource(R.string.updates_install_app_generic),
                 onClick = onInstall,
-                supportingText = "The SHA-256 and the signing certificate are checked before the install. " +
-                    "Android may also ask to scan the file or confirm with your screen lock; that is expected " +
-                    "for an app installed from a file."
+                enabled = !callActive,
+                supportingText = if (callActive) {
+                    stringResource(R.string.updates_blocked_call_app)
+                } else {
+                    stringResource(R.string.updates_install_app_support)
+                }
             )
         }
 
         is AppInstallState.Downloading -> PrimaryActionButton(
-            label = "Downloading…",
+            label = install.progress?.let {
+                stringResource(R.string.updates_downloading_percent, downloadPercent(it))
+            } ?: stringResource(R.string.updates_downloading),
             onClick = {},
             busy = true,
             progress = install.progress
         )
 
-        AppInstallState.Verifying -> PrimaryActionButton(label = "Checking the download…", onClick = {}, busy = true)
-
-        is AppInstallState.Installing -> PrimaryActionButton(label = "Installing…", onClick = {}, busy = true)
-
-        AppInstallState.AwaitingConfirmation -> PrimaryActionButton(
-            label = "Confirm in the system dialog",
+        AppInstallState.Verifying -> PrimaryActionButton(
+            label = stringResource(R.string.updates_verifying),
             onClick = {},
-            busy = true,
-            supportingText = "Finish the update in the dialog the system opened."
+            busy = true
         )
 
+        is AppInstallState.Installing -> PrimaryActionButton(
+            label = row.availableVersion?.let {
+                stringResource(R.string.updates_installing_version, it)
+            } ?: stringResource(R.string.updates_installing),
+            onClick = {},
+            busy = true
+        )
+
+        AppInstallState.AwaitingConfirmation -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            StatusPill(stringResource(R.string.updates_awaiting_pill), StatusTone.ACCENT, pulse = true)
+            Text(
+                text = stringResource(R.string.updates_awaiting_text),
+                style = MaterialTheme.typography.bodyMedium
+            )
+        }
+
         is AppInstallState.Installed -> Text(
-            text = "Installed ${install.versionName ?: "the update"}. The service restarts by itself.",
+            text = install.versionName?.let {
+                stringResource(R.string.updates_installed_done, it)
+            } ?: stringResource(R.string.updates_installed_done_unknown),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.tertiary
         )
 
-        is AppInstallState.Failed -> ErrorCard(
+        is AppInstallState.Failed -> InstallFailureCard(
             title = install.code.title(),
-            message = install.detail ?: install.code.message(),
-            actionLabel = "Dismiss",
-            onAction = onDismiss
+            message = install.code.message(),
+            detail = install.detail,
+            callActive = callActive,
+            blockedCopy = stringResource(R.string.updates_blocked_call_app),
+            retryLabel = stringResource(R.string.updates_install_again),
+            onRetry = onInstall,
+            onDismiss = onDismiss
         )
     }
 }
@@ -343,64 +477,141 @@ private fun AppAction(
 private fun ModuleAction(
     row: UpdateRowState,
     install: ModuleInstallState,
+    callActive: Boolean,
     onInstall: () -> Unit,
     onDismiss: () -> Unit
 ) {
     when (install) {
         ModuleInstallState.Idle -> if (row.status == UpdateStatus.UPDATE_AVAILABLE) {
+            val version = row.availableVersion
             PrimaryActionButton(
-                label = "Install module ${row.availableVersion ?: ""}".trim(),
+                label = version?.let { stringResource(R.string.updates_install_module, it) }
+                    ?: stringResource(R.string.updates_install_module_generic),
                 onClick = onInstall,
-                supportingText = if (row.requiresReboot) {
-                    "The module is rebuilt from this build and installed as root; a reboot follows."
-                } else {
-                    "The module is rebuilt from this build and installed as root."
+                enabled = !callActive,
+                emphasis = ActionEmphasis.TONAL,
+                supportingText = when {
+                    callActive -> stringResource(R.string.updates_blocked_call_module)
+                    row.requiresReboot -> stringResource(R.string.updates_install_module_support_reboot)
+                    else -> stringResource(R.string.updates_install_module_support)
                 }
             )
         }
 
-        ModuleInstallState.Building -> PrimaryActionButton(label = "Rebuilding the module…", onClick = {}, busy = true)
+        ModuleInstallState.Building -> PrimaryActionButton(
+            label = stringResource(R.string.updates_module_building),
+            onClick = {},
+            busy = true
+        )
 
-        ModuleInstallState.Installing -> PrimaryActionButton(label = "Installing the module…", onClick = {}, busy = true)
+        ModuleInstallState.Installing -> PrimaryActionButton(
+            label = stringResource(R.string.updates_module_installing),
+            onClick = {},
+            busy = true
+        )
 
         is ModuleInstallState.RebootPending -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            StatusPill("Reboot needed", StatusTone.WARNING)
+            StatusPill(stringResource(R.string.updates_module_reboot_pill), StatusTone.WARNING)
             Text(
-                text = install.detail ?: "The module is installed. Reboot this phone to mount the new overlay.",
+                text = install.detail ?: stringResource(R.string.updates_module_reboot_detail),
                 style = MaterialTheme.typography.bodyMedium
             )
         }
 
-        is ModuleInstallState.Failed -> ErrorCard(
+        is ModuleInstallState.Failed -> InstallFailureCard(
             title = install.code.title(),
-            message = install.detail ?: install.code.message(),
-            actionLabel = "Dismiss",
-            onAction = onDismiss
+            message = install.code.message(),
+            detail = install.detail,
+            callActive = callActive,
+            blockedCopy = stringResource(R.string.updates_blocked_call_module),
+            retryLabel = stringResource(R.string.updates_install_module_again),
+            onRetry = onInstall,
+            onDismiss = onDismiss
         )
+    }
+}
+
+/**
+ * A failure with its retry: the cause first, the next step second, and the provider's or the
+ * installer's own output either behind Details or as its own monospace line. Every card names its
+ * own retry, because two identical "Try again" buttons cannot be told apart by a screen reader.
+ * Retrying is an install, so a running call blocks it.
+ */
+@Composable
+private fun InstallFailureCard(
+    title: String,
+    message: String,
+    detail: String?,
+    callActive: Boolean,
+    blockedCopy: String,
+    retryLabel: String,
+    onRetry: () -> Unit,
+    onDismiss: () -> Unit,
+    inlineDetail: Boolean = false
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        ErrorCard(
+            title = title,
+            message = if (callActive) "$message\n\n$blockedCopy" else message,
+            output = detail.takeUnless { inlineDetail },
+            actionLabel = retryLabel.takeUnless { callActive },
+            onAction = onRetry.takeUnless { callActive },
+            dismissLabel = stringResource(R.string.updates_dismiss),
+            onDismiss = onDismiss
+        )
+        if (inlineDetail) {
+            detail?.takeIf { it.isNotBlank() }?.let { CommandLine(it) }
+        }
     }
 }
 
 @Composable
 private fun DaemonCard(row: UpdateRowState) {
-    SectionCard(
-        title = "Daemon",
-        subtitle = "Runs on your computer; this phone cannot install it",
+    StatusSectionCard(
+        title = stringResource(R.string.updates_target_daemon),
+        subtitle = stringResource(R.string.updates_target_daemon_subtitle),
         status = { StatusPill(row.status.label(), row.status.tone()) }
     ) {
-        KeyValueRow(label = "Installed", value = row.installedVersion ?: "—", mono = true)
-        KeyValueRow(label = "Needs at least", value = row.availableVersion ?: "—", mono = true)
-        row.notes.forEach { note ->
-            Text(
-                text = note,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+        KeyValueRow(
+            label = stringResource(R.string.updates_row_installed),
+            value = row.installedVersion ?: stringResource(R.string.updates_none),
+            mono = true
+        )
+        KeyValueRow(
+            label = stringResource(R.string.updates_row_needs_at_least),
+            value = row.availableVersion ?: stringResource(R.string.updates_none),
+            mono = true
+        )
+        if (row.status != UpdateStatus.INCOMPATIBLE) {
+            row.notes.forEach { note ->
+                NoteItem(note, tone = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
         if (row.status == UpdateStatus.UPDATE_AVAILABLE) {
             HorizontalDivider()
             Text(
-                text = "On your computer: run `mise run setup`, then restart the daemon with `mise run daemon:install`.",
-                style = MaterialTheme.typography.bodyMedium,
+                text = stringResource(R.string.updates_daemon_instructions),
+                style = MaterialTheme.typography.bodyMedium
+            )
+            CommandLine(stringResource(R.string.updates_command_setup))
+            CommandLine(stringResource(R.string.updates_command_daemon_install))
+        }
+    }
+}
+
+/** A command is its own monospace line: selectable, and never inside prose. */
+@Composable
+private fun CommandLine(command: String, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        shape = MaterialTheme.shapes.small,
+        color = MaterialTheme.colorScheme.surfaceContainerHighest
+    ) {
+        SelectionContainer {
+            Text(
+                text = command,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                style = MaterialTheme.typography.bodySmall,
                 fontFamily = FontFamily.Monospace
             )
         }
@@ -421,6 +632,7 @@ private fun RollbackSection(
     recoveryDismissed: Boolean,
     rollback: RollbackState,
     appInstall: AppInstallState,
+    callActive: Boolean,
     onRollback: () -> Unit,
     onDismiss: () -> Unit,
     onDismissRecovery: () -> Unit
@@ -429,15 +641,21 @@ private fun RollbackSection(
     // Action ownership comes from the recovery itself, never from whether its notice is visible:
     // dismissing the notice must not expose a fresh plan while the recorded rollback is pending.
     val pending = recovery as? RollbackRecovery.Pending
+    val silentBlocker = plan is RollbackPlan.Unavailable &&
+        (plan.blocker == RollbackBlocker.NO_KEPT_APK || plan.blocker == RollbackBlocker.APP_NOT_NEWER)
     val nothingToOffer = recovery == null && appInstall is AppInstallState.Idle &&
-        (plan == null || (plan is RollbackPlan.Unavailable && plan.blocker == RollbackBlocker.NO_KEPT_APK))
+        (plan == null || silentBlocker)
     if (nothingToOffer) return
 
-    SectionCard(title = "Rollback", subtitle = rollbackSubtitle(plan)) {
+    SectionCard(
+        title = stringResource(R.string.updates_rollback_title),
+        // A recorded rollback speaks for itself; a plan subtitle would describe a different plan.
+        subtitle = rollbackSubtitle(plan).takeIf { shownRecovery == null }
+    ) {
         // While the detached script owns the removal, the journal's module_staged step is expected.
         if (rollback !is RollbackState.Started) {
             shownRecovery?.let {
-                RecoveryBlock(recovery = it, onRetry = onRollback, onDismiss = onDismissRecovery)
+                RecoveryBlock(recovery = it, callActive = callActive, onRetry = onRollback, onDismiss = onDismissRecovery)
             }
         }
         // A recorded rollback owns the next step: retrying finishes it, so a fresh plan — which may
@@ -449,12 +667,19 @@ private fun RollbackSection(
             plan = plan.takeIf { pending == null },
             rollback = rollback,
             appInstall = appInstall,
+            callActive = callActive,
             onRollback = onRollback,
             onDismiss = onDismiss
         )
         // A dismissed notice hides the explanation, not the retry that finishes the journal.
         if (pending != null && shownRecovery == null && rollback == RollbackState.Idle && appInstall is AppInstallState.Idle) {
-            TextButton(onClick = onRollback) { Text("Finish the rollback") }
+            PrimaryActionButton(
+                label = stringResource(R.string.updates_rollback_finish),
+                onClick = onRollback,
+                enabled = !callActive,
+                emphasis = ActionEmphasis.TEXT,
+                supportingText = stringResource(R.string.updates_blocked_call_rollback).takeIf { callActive }
+            )
         }
     }
 }
@@ -463,18 +688,17 @@ private fun RollbackSection(
 private fun PlanExplanation(plan: RollbackPlan) {
     when (plan) {
         is RollbackPlan.AppOnly -> Text(
-            text = "The APK replaced by the last update is kept in app files. Reinstalling it is a downgrade, " +
-                "which needs root.",
+            text = stringResource(R.string.updates_rollback_app_only_explanation),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
         is RollbackPlan.WithPreviousModule -> Text(
-            text = "The system image carries module ${plan.moduleVersionName ?: plan.moduleVersionCode}, newer than " +
-                "the version this rollback returns to (${plan.previousVersionName ?: plan.previousVersionCode}), " +
-                "so Android refuses an app-only downgrade. The rollback is one step: reinstall module " +
-                "${plan.previousVersionName ?: plan.previousVersionCode} as root, remove the app update that " +
-                "shadows it, then reboot this phone.",
+            text = stringResource(
+                R.string.updates_rollback_with_module_explanation,
+                plan.moduleVersionName ?: plan.moduleVersionCode.toString(),
+                plan.previousVersionName ?: plan.previousVersionCode.toString()
+            ),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -492,79 +716,106 @@ private fun ActionState(
     plan: RollbackPlan?,
     rollback: RollbackState,
     appInstall: AppInstallState,
+    callActive: Boolean,
     onRollback: () -> Unit,
     onDismiss: () -> Unit
 ) {
     when {
-        appInstall is AppInstallState.Failed -> ErrorCard(
+        appInstall is AppInstallState.Failed -> InstallFailureCard(
             title = appInstall.code.title(),
-            message = appInstall.detail ?: appInstall.code.message(),
-            actionLabel = "Dismiss",
-            onAction = onDismiss
+            message = appInstall.code.message(),
+            detail = appInstall.detail,
+            callActive = callActive,
+            blockedCopy = stringResource(R.string.updates_blocked_call_rollback_app),
+            retryLabel = stringResource(R.string.updates_reinstall_again),
+            onRetry = onRollback,
+            onDismiss = onDismiss,
+            inlineDetail = true
         )
 
         appInstall.busy -> PrimaryActionButton(
-            label = "Reinstalling the previous app…",
+            label = stringResource(R.string.updates_rollback_reinstalling),
             onClick = {},
             busy = true
         )
 
         appInstall is AppInstallState.Installed -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            StatusPill("Rolled back", StatusTone.POSITIVE)
+            StatusPill(stringResource(R.string.updates_rollback_done_pill), StatusTone.POSITIVE)
             Text(
-                text = "The phone runs ${appInstall.versionName ?: "the previous app"} again.",
+                text = stringResource(
+                    R.string.updates_rollback_done,
+                    appInstall.versionName ?: stringResource(R.string.updates_rollback_previous_app)
+                ),
                 style = MaterialTheme.typography.bodyMedium
             )
         }
 
         else -> when (rollback) {
             RollbackState.Idle -> when (plan) {
-                is RollbackPlan.AppOnly -> TextButton(onClick = onRollback) { Text("Reinstall the previous app") }
+                is RollbackPlan.AppOnly -> PrimaryActionButton(
+                    label = stringResource(R.string.updates_rollback_action_app),
+                    onClick = onRollback,
+                    enabled = !callActive,
+                    emphasis = ActionEmphasis.TEXT,
+                    supportingText = stringResource(R.string.updates_blocked_call_rollback_app).takeIf { callActive }
+                )
 
                 is RollbackPlan.WithPreviousModule -> PrimaryActionButton(
-                    label = "Roll back to ${plan.previousVersionName ?: "the previous module"}",
+                    label = stringResource(
+                        R.string.updates_rollback_action_module,
+                        plan.previousVersionName ?: plan.previousVersionCode.toString()
+                    ),
                     onClick = onRollback,
-                    supportingText = "One step that ends with a reboot. The phone asks before starting it."
+                    enabled = !callActive,
+                    supportingText = if (callActive) {
+                        stringResource(R.string.updates_blocked_call_rollback)
+                    } else {
+                        stringResource(R.string.updates_rollback_support_module)
+                    }
                 )
 
                 is RollbackPlan.Unavailable, null -> Unit
             }
 
             RollbackState.Preparing -> PrimaryActionButton(
-                label = "Writing the rollback files…",
+                label = stringResource(R.string.updates_rollback_preparing),
                 onClick = {},
                 busy = true
             )
 
             RollbackState.StagingModule -> PrimaryActionButton(
-                label = "Staging the previous module…",
+                label = stringResource(R.string.updates_rollback_staging),
                 onClick = {},
                 busy = true
             )
 
             RollbackState.StartingRemoval -> PrimaryActionButton(
-                label = "Starting the removal…",
+                label = stringResource(R.string.updates_rollback_starting),
                 onClick = {},
                 busy = true
             )
 
             is RollbackState.Started -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                StatusPill("Rollback started", StatusTone.WARNING)
+                StatusPill(stringResource(R.string.updates_rollback_started_pill), StatusTone.WARNING)
                 Text(
-                    text = "Module ${rollback.versionName ?: "of the previous version"} is staged. The app update is " +
-                        "removed in the background and the phone reboots once that is verified. If the phone does " +
-                        "not reboot, open Updates again to see what the script recorded.",
+                    text = rollback.versionName?.let {
+                        stringResource(R.string.updates_rollback_started_text, it)
+                    } ?: stringResource(R.string.updates_rollback_started_previous),
                     style = MaterialTheme.typography.bodyMedium
                 )
-                TextButton(onClick = onDismiss) { Text("Dismiss") }
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.updates_dismiss)) }
             }
 
-            is RollbackState.Failed -> ErrorCard(
+            is RollbackState.Failed -> InstallFailureCard(
                 title = rollback.code.title(),
-                message = rollback.message(),
-                output = rollback.detail,
-                actionLabel = "Dismiss",
-                onAction = onDismiss
+                message = rollback.code.message(),
+                detail = rollback.detail,
+                callActive = callActive,
+                blockedCopy = stringResource(R.string.updates_blocked_call_rollback),
+                retryLabel = stringResource(R.string.updates_rollback_again),
+                onRetry = onRollback,
+                onDismiss = onDismiss,
+                inlineDetail = true
             )
         }
     }
@@ -573,151 +824,213 @@ private fun ActionState(
 @Composable
 private fun RecoveryBlock(
     recovery: RollbackRecovery,
+    callActive: Boolean,
     onRetry: () -> Unit,
     onDismiss: () -> Unit
 ) {
     when (recovery) {
         is RollbackRecovery.Completed -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            StatusPill("Rolled back", StatusTone.POSITIVE)
+            StatusPill(stringResource(R.string.updates_rollback_done_pill), StatusTone.POSITIVE)
             Text(
-                text = "The phone runs ${recovery.versionName ?: "the previous version"}: the module and the " +
-                    "selected app match the rollback target.",
+                text = stringResource(
+                    R.string.updates_rollback_completed,
+                    recovery.versionName ?: stringResource(R.string.updates_rollback_previous_version)
+                ),
                 style = MaterialTheme.typography.bodyMedium
             )
         }
 
         is RollbackRecovery.Pending -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            StatusPill("Rollback unfinished", StatusTone.WARNING)
+            StatusPill(stringResource(R.string.updates_rollback_unfinished_pill), StatusTone.WARNING)
             Text(text = recovery.sentence(), style = MaterialTheme.typography.bodyMedium)
+            recovery.detail?.takeIf { it.isNotBlank() }?.let { CommandLine(it) }
             Text(
-                text = "Finishing it repeats the removal this rollback recorded, by the version it targets. A " +
-                    "reboot before that can leave the older module next to the newer app.",
+                text = stringResource(R.string.updates_rollback_pending_warning),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = onRetry) { Text("Finish the rollback") }
-                TextButton(onClick = onDismiss) { Text("Dismiss") }
+                TextButton(onClick = onRetry, enabled = !callActive) {
+                    Text(stringResource(R.string.updates_rollback_finish))
+                }
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.updates_dismiss)) }
+            }
+            if (callActive) {
+                Text(
+                    text = stringResource(R.string.updates_blocked_call_rollback),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }
 }
 
+/** Both rollbacks change the app under the running process, so both ask before they start. */
 @Composable
 private fun ConfirmRollbackDialog(
-    plan: RollbackPlan.WithPreviousModule,
+    plan: RollbackPlan,
+    runningVersion: String?,
+    callActive: Boolean,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    val previous = plan.previousVersionName ?: plan.previousVersionCode.toString()
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Roll back to $previous?") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    "Reinstalls module $previous as root, removes the app update installed on this phone so the " +
-                        "module's copy is used again, and reboots once the removal is verified."
-                )
-                Text(
-                    text = "Rollback: install ${plan.moduleVersionName ?: "the current release"} again from " +
-                        "Updates to return to it.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = "Removing the app update can erase this app's data, which means pairing this phone " +
-                        "again. Newer data is usually kept because the versions match, but a reset is possible.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = "The phone reboots, so a call in progress ends.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error
-                )
-            }
-        },
-        confirmButton = { TextButton(onClick = onConfirm) { Text("Roll back and reboot") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Not now") } }
-    )
+    when (plan) {
+        is RollbackPlan.AppOnly -> {
+            val kept = plan.keptVersionName ?: plan.keptVersionCode.toString()
+            AlertDialog(
+                onDismissRequest = onDismiss,
+                title = { Text(stringResource(R.string.updates_dialog_app_title)) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = runningVersion?.let {
+                                stringResource(R.string.updates_dialog_app_body, it, kept)
+                            } ?: stringResource(R.string.updates_dialog_app_body_unknown, kept)
+                        )
+                        if (callActive) {
+                            Text(
+                                text = stringResource(R.string.updates_dialog_call_blocked),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = onConfirm, enabled = !callActive) {
+                        Text(stringResource(R.string.updates_dialog_app_confirm))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.updates_cancel)) }
+                }
+            )
+        }
+
+        is RollbackPlan.WithPreviousModule -> {
+            val previous = plan.previousVersionName ?: plan.previousVersionCode.toString()
+            AlertDialog(
+                onDismissRequest = onDismiss,
+                title = { Text(stringResource(R.string.updates_dialog_module_title, previous)) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(stringResource(R.string.updates_dialog_module_body, previous))
+                        Text(
+                            text = stringResource(
+                                R.string.updates_dialog_module_return,
+                                plan.moduleVersionName ?: plan.moduleVersionCode.toString()
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = stringResource(R.string.updates_dialog_module_data),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = stringResource(R.string.updates_dialog_module_call),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        if (callActive) {
+                            Text(
+                                text = stringResource(R.string.updates_dialog_call_blocked),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = onConfirm, enabled = !callActive) {
+                        Text(stringResource(R.string.updates_dialog_module_confirm))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.updates_cancel)) }
+                }
+            )
+        }
+
+        is RollbackPlan.Unavailable -> Unit
+    }
 }
 
+@Composable
 private fun rollbackSubtitle(plan: RollbackPlan?): String = when (plan) {
-    is RollbackPlan.WithPreviousModule -> "One step, then a reboot"
-    is RollbackPlan.AppOnly -> "The previous app is kept on this phone"
-    is RollbackPlan.Unavailable -> "Not available on this phone"
-    null -> "Reading this phone"
+    is RollbackPlan.WithPreviousModule -> stringResource(R.string.updates_rollback_subtitle_one_step)
+    is RollbackPlan.AppOnly -> stringResource(R.string.updates_rollback_subtitle_app_only)
+    is RollbackPlan.Unavailable -> stringResource(R.string.updates_rollback_subtitle_unavailable)
+    null -> stringResource(R.string.updates_rollback_subtitle_reading)
 }
 
+@Composable
 private fun RollbackBlocker.explanation(plan: RollbackPlan.Unavailable): String {
-    val system = plan.moduleVersion ?: plan.moduleVersionCode?.toString() ?: "a newer version"
+    val system = plan.moduleVersion ?: plan.moduleVersionCode?.toString()
+        ?: stringResource(R.string.updates_rollback_newer_module)
     val kept = plan.keptVersionName ?: plan.keptVersionCode.toString()
     return when (this) {
-        RollbackBlocker.NO_KEPT_APK -> "No previous APK is kept, so there is nothing to roll back to."
+        RollbackBlocker.NO_KEPT_APK -> stringResource(R.string.updates_blocker_no_kept_apk)
 
         RollbackBlocker.NO_PREVIOUS_MODULE ->
-            "The system image carries module $system, newer than the kept app $kept. Android refuses an app-only " +
-                "downgrade below the system image, and this phone has no archive of the previous module to put " +
-                "back. Install the previous release's module from the update document (or flash it in the root " +
-                "manager), then check again."
+            stringResource(R.string.updates_blocker_no_previous_module, system, kept)
 
-        RollbackBlocker.STORAGE_UNREADABLE ->
-            "The rollback archive under /data/adb/phonxiety could not be read. Grant root to Phonxiety, then " +
-                "check again."
+        RollbackBlocker.STORAGE_UNREADABLE -> stringResource(R.string.updates_blocker_storage_unreadable)
 
         RollbackBlocker.SYSTEM_VERSION_UNKNOWN ->
-            "The APK the module mounted on the system image could not be read, so the downgrade floor is " +
-                "unknown. Reinstall the module from the update document, then check again."
+            stringResource(R.string.updates_blocker_system_version_unknown)
 
-        RollbackBlocker.STALE_ARCHIVE ->
-            "The kept module archive is not older than the system image's copy ($system), so reinstalling it " +
-                "would roll nothing back. Nothing is offered."
+        RollbackBlocker.STALE_ARCHIVE -> stringResource(R.string.updates_blocker_stale_archive, system)
 
-        RollbackBlocker.ARCHIVE_MISMATCH ->
-            "The kept module archive does not hash to the value recorded with it, so its bytes are not the " +
-                "previous module. Nothing is offered; install the module update again to keep a fresh copy."
+        RollbackBlocker.ARCHIVE_MISMATCH -> stringResource(R.string.updates_blocker_archive_mismatch)
+
+        RollbackBlocker.APP_NOT_NEWER -> stringResource(R.string.updates_blocker_app_not_newer)
     }
 }
 
-private fun RollbackRecovery.Pending.sentence(): String {
-    val head = when (reason) {
-        RollbackPendingReason.REMOVAL_NOT_STARTED ->
-            "The previous module is staged, but the app update was not removed: the script never recorded a result."
+@Composable
+private fun RollbackRecovery.Pending.sentence(): String = when (reason) {
+    RollbackPendingReason.REMOVAL_NOT_STARTED ->
+        stringResource(R.string.updates_pending_removal_not_started)
 
-        RollbackPendingReason.REMOVAL_FAILED ->
-            "The previous module is staged, but removing the app update failed."
+    RollbackPendingReason.REMOVAL_FAILED -> stringResource(R.string.updates_pending_removal_failed)
 
-        RollbackPendingReason.REMOVAL_UNVERIFIED ->
-            "The previous module is staged, but the removal could not be verified, so nothing was rebooted."
+    RollbackPendingReason.REMOVAL_UNVERIFIED -> stringResource(R.string.updates_pending_removal_unverified)
 
-        RollbackPendingReason.OLD_APP_NOT_SELECTED ->
-            "The removal was recorded, but the data-partition app copy is still what runs."
+    RollbackPendingReason.OLD_APP_NOT_SELECTED -> stringResource(R.string.updates_pending_old_app)
 
-        RollbackPendingReason.VERSION_MISMATCH ->
-            "The removal was recorded, but the phone does not match the rollback target."
+    RollbackPendingReason.VERSION_MISMATCH -> stringResource(R.string.updates_pending_version_mismatch)
+}
+
+@Composable
+private fun UpdateTarget.title(): String = stringResource(
+    when (this) {
+        UpdateTarget.APP -> R.string.updates_target_app
+        UpdateTarget.MODULE -> R.string.updates_target_module
+        UpdateTarget.DAEMON -> R.string.updates_target_daemon
     }
-    return listOfNotNull(head, detail?.takeIf { it.isNotBlank() }?.let { "Details: $it" }).joinToString(" ")
-}
+)
 
-private fun UpdateTarget.title(): String = when (this) {
-    UpdateTarget.APP -> "App"
-    UpdateTarget.MODULE -> "Module"
-    UpdateTarget.DAEMON -> "Daemon"
-}
+@Composable
+private fun UpdateTarget.subtitle(): String = stringResource(
+    when (this) {
+        UpdateTarget.APP -> R.string.updates_target_app_subtitle
+        UpdateTarget.MODULE -> R.string.updates_target_module_subtitle
+        UpdateTarget.DAEMON -> R.string.updates_target_daemon_subtitle
+    }
+)
 
-private fun UpdateTarget.subtitle(): String = when (this) {
-    UpdateTarget.APP -> "The APK on this phone"
-    UpdateTarget.MODULE -> "The privileged module and its allowlist"
-    UpdateTarget.DAEMON -> "Runs on your computer"
-}
-
-private fun UpdateStatus.label(): String = when (this) {
-    UpdateStatus.UP_TO_DATE -> "Up to date"
-    UpdateStatus.UPDATE_AVAILABLE -> "Update available"
-    UpdateStatus.INCOMPATIBLE -> "Incompatible"
-    UpdateStatus.UNKNOWN -> "Unknown"
-}
+@Composable
+private fun UpdateStatus.label(): String = stringResource(
+    when (this) {
+        UpdateStatus.UP_TO_DATE -> R.string.updates_status_up_to_date
+        UpdateStatus.UPDATE_AVAILABLE -> R.string.updates_status_update_available
+        UpdateStatus.INCOMPATIBLE -> R.string.updates_status_incompatible
+        UpdateStatus.UNKNOWN -> R.string.updates_status_unknown
+    }
+)
 
 private fun UpdateStatus.tone(): StatusTone = when (this) {
     UpdateStatus.UP_TO_DATE -> StatusTone.POSITIVE
@@ -726,104 +1039,110 @@ private fun UpdateStatus.tone(): StatusTone = when (this) {
     UpdateStatus.UNKNOWN -> StatusTone.NEUTRAL
 }
 
-internal fun InstallFailure.title(): String = when (this) {
-    InstallFailure.DOWNLOAD_FAILED -> "The download failed"
-    InstallFailure.HASH_MISMATCH -> "The download is not the published file"
-    InstallFailure.SIGNING_CERT_MISMATCH -> "The update is signed with a different key"
-    InstallFailure.WRONG_PACKAGE -> "The file is a different app"
-    InstallFailure.NOT_AN_APK -> "The file is not a readable APK"
-    InstallFailure.DOWNGRADE_REFUSED -> "The file is older than the installed app"
-    InstallFailure.INSTALL_BLOCKED -> "The system blocked the install"
-    InstallFailure.INSTALL_ABORTED -> "The install was cancelled"
-    InstallFailure.INSTALL_CONFLICT -> "The install conflicted with the installed app"
-    InstallFailure.INSTALL_INCOMPATIBLE -> "The update does not fit this phone"
-    InstallFailure.STORAGE_FULL -> "There is not enough free space"
-    InstallFailure.INSTALL_TIMED_OUT -> "The installer did not answer"
-    InstallFailure.INSTALL_FAILED -> "The install failed"
-    InstallFailure.NO_KEPT_APK -> "No previous app is kept"
-    InstallFailure.ROOT_UNAVAILABLE -> "Root is not available"
-    InstallFailure.ROLLBACK_FAILED -> "The rollback failed"
+@Composable
+internal fun InstallFailure.title(): String = stringResource(
+    when (this) {
+        InstallFailure.DOWNLOAD_FAILED -> R.string.updates_install_failed_download_title
+        InstallFailure.HASH_MISMATCH -> R.string.updates_install_failed_hash_title
+        InstallFailure.SIGNING_CERT_MISMATCH -> R.string.updates_install_failed_cert_title
+        InstallFailure.WRONG_PACKAGE -> R.string.updates_install_failed_package_title
+        InstallFailure.NOT_AN_APK -> R.string.updates_install_failed_not_apk_title
+        InstallFailure.DOWNGRADE_REFUSED -> R.string.updates_install_failed_downgrade_title
+        InstallFailure.INSTALL_BLOCKED -> R.string.updates_install_failed_blocked_title
+        InstallFailure.INSTALL_ABORTED -> R.string.updates_install_failed_aborted_title
+        InstallFailure.INSTALL_CONFLICT -> R.string.updates_install_failed_conflict_title
+        InstallFailure.INSTALL_INCOMPATIBLE -> R.string.updates_install_failed_incompatible_title
+        InstallFailure.STORAGE_FULL -> R.string.updates_install_failed_storage_title
+        InstallFailure.INSTALL_TIMED_OUT -> R.string.updates_install_failed_timeout_title
+        InstallFailure.INSTALL_FAILED -> R.string.updates_install_failed_install_title
+        InstallFailure.NO_KEPT_APK -> R.string.updates_install_failed_no_kept_title
+        InstallFailure.ROOT_UNAVAILABLE -> R.string.updates_install_failed_root_title
+        InstallFailure.ROLLBACK_FAILED -> R.string.updates_install_failed_rollback_title
+    }
+)
+
+@Composable
+internal fun InstallFailure.message(): String = stringResource(
+    when (this) {
+        InstallFailure.DOWNLOAD_FAILED -> R.string.updates_install_failed_download_message
+        InstallFailure.HASH_MISMATCH -> R.string.updates_install_failed_hash_message
+        InstallFailure.SIGNING_CERT_MISMATCH -> R.string.updates_install_failed_cert_message
+        InstallFailure.WRONG_PACKAGE -> R.string.updates_install_failed_package_message
+        InstallFailure.NOT_AN_APK -> R.string.updates_install_failed_not_apk_message
+        InstallFailure.DOWNGRADE_REFUSED -> R.string.updates_install_failed_downgrade_message
+        InstallFailure.INSTALL_BLOCKED -> R.string.updates_install_failed_blocked_message
+        InstallFailure.INSTALL_ABORTED -> R.string.updates_install_failed_aborted_message
+        InstallFailure.INSTALL_CONFLICT -> R.string.updates_install_failed_conflict_message
+        InstallFailure.INSTALL_INCOMPATIBLE -> R.string.updates_install_failed_incompatible_message
+        InstallFailure.STORAGE_FULL -> R.string.updates_install_failed_storage_message
+        InstallFailure.INSTALL_TIMED_OUT -> R.string.updates_install_failed_timeout_message
+        InstallFailure.INSTALL_FAILED -> R.string.updates_install_failed_install_message
+        InstallFailure.NO_KEPT_APK -> R.string.updates_install_failed_no_kept_message
+        InstallFailure.ROOT_UNAVAILABLE -> R.string.updates_install_failed_root_message
+        InstallFailure.ROLLBACK_FAILED -> R.string.updates_install_failed_rollback_message
+    }
+)
+
+@Composable
+internal fun RollbackFailure.title(): String = stringResource(
+    when (this) {
+        RollbackFailure.NO_KEPT_APK -> R.string.updates_rollback_failed_no_kept_title
+        RollbackFailure.NO_PREVIOUS_MODULE -> R.string.updates_rollback_failed_no_module_title
+        RollbackFailure.SYSTEM_VERSION_UNKNOWN -> R.string.updates_rollback_failed_system_title
+        RollbackFailure.STORAGE_UNREADABLE -> R.string.updates_rollback_failed_storage_title
+        RollbackFailure.STALE_ARCHIVE -> R.string.updates_rollback_failed_stale_title
+        RollbackFailure.ARCHIVE_MISMATCH -> R.string.updates_rollback_failed_mismatch_title
+        RollbackFailure.APP_NOT_NEWER -> R.string.updates_rollback_failed_app_not_newer_title
+        RollbackFailure.PREPARATION_FAILED -> R.string.updates_rollback_failed_preparation_title
+        RollbackFailure.MODULE_STAGE_FAILED -> R.string.updates_rollback_failed_stage_title
+        RollbackFailure.REMOVAL_NOT_STARTED -> R.string.updates_rollback_failed_removal_title
+    }
+)
+
+@Composable
+internal fun RollbackFailure.message(): String = stringResource(
+    when (this) {
+        RollbackFailure.NO_KEPT_APK -> R.string.updates_rollback_failed_no_kept_message
+        RollbackFailure.NO_PREVIOUS_MODULE -> R.string.updates_rollback_failed_no_module_message
+        RollbackFailure.SYSTEM_VERSION_UNKNOWN -> R.string.updates_rollback_failed_system_message
+        RollbackFailure.STORAGE_UNREADABLE -> R.string.updates_rollback_failed_storage_message
+        RollbackFailure.STALE_ARCHIVE -> R.string.updates_rollback_failed_stale_message
+        RollbackFailure.ARCHIVE_MISMATCH -> R.string.updates_rollback_failed_mismatch_message
+        RollbackFailure.APP_NOT_NEWER -> R.string.updates_rollback_failed_app_not_newer_message
+        RollbackFailure.PREPARATION_FAILED -> R.string.updates_rollback_failed_preparation_message
+        RollbackFailure.MODULE_STAGE_FAILED -> R.string.updates_rollback_failed_stage_message
+        RollbackFailure.REMOVAL_NOT_STARTED -> R.string.updates_rollback_failed_removal_message
+    }
+)
+
+@Composable
+internal fun ModuleInstallFailure.title(): String = stringResource(
+    when (this) {
+        ModuleInstallFailure.BUILD_FAILED -> R.string.updates_module_failed_build_title
+        ModuleInstallFailure.ROOT_UNAVAILABLE -> R.string.updates_module_failed_root_title
+        ModuleInstallFailure.PROVIDER_CONFLICT -> R.string.updates_module_failed_conflict_title
+        ModuleInstallFailure.INSTALL_FAILED -> R.string.updates_module_failed_install_title
+        ModuleInstallFailure.REBOOT_FAILED -> R.string.updates_module_failed_reboot_title
+    }
+)
+
+@Composable
+internal fun ModuleInstallFailure.message(): String = stringResource(
+    when (this) {
+        ModuleInstallFailure.BUILD_FAILED -> R.string.updates_module_failed_build_message
+        ModuleInstallFailure.ROOT_UNAVAILABLE -> R.string.updates_module_failed_root_message
+        ModuleInstallFailure.PROVIDER_CONFLICT -> R.string.updates_module_failed_conflict_message
+        ModuleInstallFailure.INSTALL_FAILED -> R.string.updates_module_failed_install_message
+        ModuleInstallFailure.REBOOT_FAILED -> R.string.updates_module_failed_reboot_message
+    }
+)
+
+/** `78%` in English and the locale's own percent form elsewhere, with no space before the sign. */
+internal fun downloadPercent(fraction: Float): String {
+    val format = NumberFormat.getPercentInstance()
+    format.maximumFractionDigits = 0
+    return format.format(fraction.coerceIn(0f, 1f))
 }
 
-internal fun InstallFailure.message(): String = when (this) {
-    InstallFailure.HASH_MISMATCH -> "The bytes on disk do not match the SHA-256 in the update document."
-    InstallFailure.SIGNING_CERT_MISMATCH -> "The archive's signing certificate is not the one this app was installed with, so it is refused."
-    InstallFailure.WRONG_PACKAGE -> "The archive's package name is not this app's."
-    InstallFailure.NOT_AN_APK -> "The download is not a readable APK."
-    InstallFailure.DOWNGRADE_REFUSED -> "An older version is never installed over a newer one."
-    InstallFailure.INSTALL_BLOCKED -> "Another policy or the system installer refused this update."
-    InstallFailure.INSTALL_ABORTED -> "The install was cancelled before it finished."
-    InstallFailure.INSTALL_CONFLICT -> "The archive conflicts with data of the installed app."
-    InstallFailure.INSTALL_INCOMPATIBLE -> "The APK targets a phone or an SDK this one is not."
-    InstallFailure.STORAGE_FULL -> "The installer could not write the app."
-    InstallFailure.INSTALL_TIMED_OUT -> "The system installer never reported a result."
-    InstallFailure.INSTALL_FAILED -> "The system installer reported a failure."
-    InstallFailure.NO_KEPT_APK -> "No previous APK is kept, so there is nothing to roll back to."
-    InstallFailure.ROOT_UNAVAILABLE -> "Root access is needed to install an older version."
-    InstallFailure.ROLLBACK_FAILED -> "`pm install` did not accept the kept APK."
-    InstallFailure.DOWNLOAD_FAILED -> "The release could not be downloaded."
-}
-
-internal fun RollbackFailure.title(): String = when (this) {
-    RollbackFailure.NO_KEPT_APK -> "No previous app is kept"
-    RollbackFailure.NO_PREVIOUS_MODULE -> "No previous module is kept"
-    RollbackFailure.SYSTEM_VERSION_UNKNOWN -> "The system image's version is unknown"
-    RollbackFailure.STORAGE_UNREADABLE -> "The rollback archive cannot be read"
-    RollbackFailure.STALE_ARCHIVE -> "The kept module is not older"
-    RollbackFailure.ARCHIVE_MISMATCH -> "The kept module changed since the check"
-    RollbackFailure.PREPARATION_FAILED -> "The rollback files could not be written"
-    RollbackFailure.MODULE_STAGE_FAILED -> "The previous module was not staged"
-    RollbackFailure.REMOVAL_NOT_STARTED -> "The removal script did not start"
-}
-
-/** The sentence a failed rollback shows, always naming what the phone already changed. */
-internal fun RollbackState.Failed.message(): String = when (code) {
-    RollbackFailure.NO_KEPT_APK -> "No previous APK is kept, so there is nothing to roll back to."
-
-    RollbackFailure.NO_PREVIOUS_MODULE ->
-        "The system image is newer than the kept app and no archive of the previous module is kept, so nothing " +
-            "can be put back. Nothing on the phone changed."
-
-    RollbackFailure.SYSTEM_VERSION_UNKNOWN ->
-        "The APK mounted on the system image could not be read, so the downgrade floor is unknown. Nothing on " +
-            "the phone changed."
-
-    RollbackFailure.STORAGE_UNREADABLE ->
-        "The rollback archive under /data/adb/phonxiety could not be read. Nothing on the phone changed."
-
-    RollbackFailure.STALE_ARCHIVE ->
-        "The kept module archive is not older than the system image's copy, so it is not a rollback. Nothing " +
-            "on the phone changed."
-
-    RollbackFailure.ARCHIVE_MISMATCH ->
-        "The published archive is not the one this check planned for. Nothing on the phone changed; check again " +
-            "before rolling back."
-
-    RollbackFailure.PREPARATION_FAILED ->
-        "The script and the journal could not be written on this phone, so nothing was staged and nothing on the " +
-            "phone changed. Free space in the app's storage, then try again."
-
-    RollbackFailure.MODULE_STAGE_FAILED ->
-        "The module installer refused the previous zip, so nothing on the phone changed."
-
-    RollbackFailure.REMOVAL_NOT_STARTED ->
-        "The previous module is staged, but the removal script could not start: the app update is still " +
-            "installed, and a reboot now can leave the older module next to the newer app. Retry the rollback " +
-            "before rebooting."
-}
-
-internal fun ModuleInstallFailure.title(): String = when (this) {
-    ModuleInstallFailure.BUILD_FAILED -> "The module could not be rebuilt"
-    ModuleInstallFailure.ROOT_UNAVAILABLE -> "Root is not available"
-    ModuleInstallFailure.PROVIDER_CONFLICT -> "More than one root provider answered"
-    ModuleInstallFailure.INSTALL_FAILED -> "The module install failed"
-    ModuleInstallFailure.REBOOT_FAILED -> "The reboot was not accepted"
-}
-
-internal fun ModuleInstallFailure.message(): String = when (this) {
-    ModuleInstallFailure.BUILD_FAILED -> "The APK or the module payload assets could not be read."
-    ModuleInstallFailure.ROOT_UNAVAILABLE -> "Grant root to Phonxiety in the manager, then try again."
-    ModuleInstallFailure.PROVIDER_CONFLICT -> "Magisk, KernelSU and APatch module systems conflict; keep one enabled before installing."
-    ModuleInstallFailure.INSTALL_FAILED -> "The provider's installer reported a failure; its output is above."
-    ModuleInstallFailure.REBOOT_FAILED -> "The module is installed; reboot this phone by hand to apply it."
-}
+/** Above this font scale a title and its status pill no longer fit on one line. */
+private const val STACK_STATUS_AT_FONT_SCALE = 1.5f

@@ -54,6 +54,7 @@ class DefaultUpdatesServiceRollbackTest {
                     keptApkExists = true,
                     keptVersionName = "0.3.0",
                     keptVersionCode = 3,
+                    runningVersionCode = 4,
                     mounted = MountedSystemApkVersion.Present(SYSTEM_APK, "0.3.0", 3),
                     archive = RollbackArchiveState.Present(archive)
                 )

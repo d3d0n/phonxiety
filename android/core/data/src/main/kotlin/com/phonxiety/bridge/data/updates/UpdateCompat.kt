@@ -34,6 +34,53 @@ data class InstalledVersions(
     val daemonNotes: List<String> = emptyList()
 )
 
+/**
+ * One fact a row needs to explain itself, carrying the values a sentence needs instead of the
+ * sentence itself. The Updates feature resolves each kind against its own resources, so the
+ * compatibility decision stays here and user-visible copy stays in the feature. [Reported] holds
+ * the daemon's own text, which is shown verbatim rather than replaced by an invented sentence.
+ */
+sealed interface CompatibilityNote {
+    /** The app release needs a newer Android than this phone runs. */
+    data class NeedsNewerAndroid(val requiredSdk: Int, val phoneSdk: Int) : CompatibilityNote
+
+    /** The module release's payload schema is newer than this app understands. */
+    data class NewerModuleSchema(val requiredSchema: Int, val supportedSchema: Int) : CompatibilityNote
+
+    /** Root denied or the providers conflicted, so the module state could not be probed. */
+    data object ModuleStateUnknown : CompatibilityNote
+
+    /** No module is installed, so the phone has no privileged copies. */
+    data object ModuleNotInstalled : CompatibilityNote
+
+    /** The module is installed but its `disable` flag is set. */
+    data object ModuleDisabled : CompatibilityNote
+
+    /** A reboot mounts the module update. */
+    data object ModuleRebootRequired : CompatibilityNote
+
+    /** Privileged permissions the release grants that this installation does not hold. */
+    data class NewPrivilegedGrants(val permissions: List<String>) : CompatibilityNote
+
+    /** The daemon on the computer is older than this release needs. */
+    data class NeedsNewerDaemon(val minVersion: String) : CompatibilityNote
+
+    /** The daemon answers an older app API than this release needs. */
+    data class DaemonApiOlder(val daemonAppApi: Int, val requiredAppApi: Int) : CompatibilityNote
+
+    /** The daemon does not accept the device protocol this app speaks. */
+    data class DaemonProtocolUnsupported(
+        val daemonProtocols: List<Int>,
+        val appProtocol: Int
+    ) : CompatibilityNote
+
+    /** The daemon did not answer, so its version is unknown. */
+    data object DaemonUnreachable : CompatibilityNote
+
+    /** The daemon's own text, verbatim. */
+    data class Reported(val text: String) : CompatibilityNote
+}
+
 /** One row: installed against available, with the notes that justify the verdict. */
 data class UpdateRowState(
     val target: UpdateTarget,
@@ -41,7 +88,7 @@ data class UpdateRowState(
     val availableVersion: String?,
     val status: UpdateStatus,
     val requiresReboot: Boolean = false,
-    val notes: List<String> = emptyList()
+    val notes: List<CompatibilityNote> = emptyList()
 ) {
     val hasUpdate: Boolean get() = status == UpdateStatus.UPDATE_AVAILABLE
 }
@@ -78,7 +125,7 @@ object UpdateCompat {
                 installedVersion = installed.appVersion,
                 availableVersion = apk.version,
                 status = UpdateStatus.INCOMPATIBLE,
-                notes = listOf("This release needs Android API ${apk.minSdk}; this phone is API ${installed.deviceSdk}.")
+                notes = listOf(CompatibilityNote.NeedsNewerAndroid(apk.minSdk, installed.deviceSdk))
             )
         }
         if (apk.versionCode > installed.appVersionCode) {
@@ -104,10 +151,7 @@ object UpdateCompat {
                 installedVersion = installed.moduleVersion,
                 availableVersion = module.version,
                 status = UpdateStatus.INCOMPATIBLE,
-                notes = listOf(
-                    "This module release uses payload schema ${module.schemaVersion}; this app understands up to " +
-                        "$MODULE_SCHEMA_VERSION. Update the app first."
-                )
+                notes = listOf(CompatibilityNote.NewerModuleSchema(module.schemaVersion, MODULE_SCHEMA_VERSION))
             )
         }
         if (installed.moduleInstalled == null) {
@@ -116,7 +160,7 @@ object UpdateCompat {
                 installedVersion = installed.moduleVersion,
                 availableVersion = module.version,
                 status = UpdateStatus.UNKNOWN,
-                notes = listOf("The module state could not be read; root access is needed to check it.")
+                notes = listOf(CompatibilityNote.ModuleStateUnknown)
             )
         }
         if (!installed.moduleInstalled) {
@@ -126,20 +170,17 @@ object UpdateCompat {
                 availableVersion = module.version,
                 status = UpdateStatus.UPDATE_AVAILABLE,
                 requiresReboot = true,
-                notes = listOf("The module is not installed, so this phone has no privileged copies.")
+                notes = listOf(CompatibilityNote.ModuleNotInstalled)
             )
         }
         val installedCode = (installed.moduleVersionCode ?: 0).toLong()
         if (module.versionCode > installedCode) {
             val missingPermissions = module.permissions.toSet() - installed.grantedPrivilegedPermissions
             val notes = buildList {
-                if (installed.moduleDisabled) add("The installed module is disabled; enable it in Doctor.")
-                if (module.requiresReboot) add("A reboot applies the module update.")
+                if (installed.moduleDisabled) add(CompatibilityNote.ModuleDisabled)
+                if (module.requiresReboot) add(CompatibilityNote.ModuleRebootRequired)
                 if (missingPermissions.isNotEmpty()) {
-                    add(
-                        "New privileged grants in this release: " +
-                            missingPermissions.sorted().joinToString(", ") + ". Reboot to apply them."
-                    )
+                    add(CompatibilityNote.NewPrivilegedGrants(missingPermissions.sorted()))
                 }
             }
             return UpdateRowState(
@@ -157,7 +198,7 @@ object UpdateCompat {
             availableVersion = module.version,
             status = UpdateStatus.UP_TO_DATE,
             notes = listOfNotNull(
-                "The installed module is disabled; enable it in Doctor.".takeIf { installed.moduleDisabled }
+                CompatibilityNote.ModuleDisabled.takeIf { installed.moduleDisabled }
             )
         )
     }
@@ -169,8 +210,8 @@ object UpdateCompat {
                 installedVersion = installed.daemonVersion,
                 availableVersion = daemon.minVersion,
                 status = UpdateStatus.INCOMPATIBLE,
-                notes = installed.daemonNotes.ifEmpty {
-                    listOf("This app and the daemon disagree about the protocol; update the one named above.")
+                notes = installed.daemonNotes.map(CompatibilityNote::Reported).ifEmpty {
+                    listOf(CompatibilityNote.NeedsNewerDaemon(daemon.minVersion))
                 }
             )
         }
@@ -180,7 +221,7 @@ object UpdateCompat {
                 installedVersion = null,
                 availableVersion = daemon.minVersion,
                 status = UpdateStatus.UNKNOWN,
-                notes = listOf("The daemon did not answer, so its version is unknown.")
+                notes = listOf(CompatibilityNote.DaemonUnreachable)
             )
         }
         if (VersionOrder.compare(installed.daemonVersion, daemon.minVersion) < 0) {
@@ -189,7 +230,7 @@ object UpdateCompat {
                 installedVersion = installed.daemonVersion,
                 availableVersion = daemon.minVersion,
                 status = UpdateStatus.UPDATE_AVAILABLE,
-                notes = listOf("This app needs daemon ${daemon.minVersion} or newer on the computer.")
+                notes = listOf(CompatibilityNote.NeedsNewerDaemon(daemon.minVersion))
             )
         }
         val appApi = installed.daemonAppApi
@@ -199,7 +240,7 @@ object UpdateCompat {
                 installedVersion = installed.daemonVersion,
                 availableVersion = daemon.minVersion,
                 status = UpdateStatus.UPDATE_AVAILABLE,
-                notes = listOf("The daemon speaks app API $appApi; this app needs app API ${daemon.appApi}.")
+                notes = listOf(CompatibilityNote.DaemonApiOlder(appApi, daemon.appApi))
             )
         }
         if (installed.daemonProtocolVersions.isNotEmpty() && daemon.protocol !in installed.daemonProtocolVersions) {
@@ -209,8 +250,7 @@ object UpdateCompat {
                 availableVersion = daemon.minVersion,
                 status = UpdateStatus.INCOMPATIBLE,
                 notes = listOf(
-                    "The daemon accepts device protocol " +
-                        installed.daemonProtocolVersions.joinToString(", ") + "; this app speaks ${daemon.protocol}."
+                    CompatibilityNote.DaemonProtocolUnsupported(installed.daemonProtocolVersions, daemon.protocol)
                 )
             )
         }
@@ -219,7 +259,7 @@ object UpdateCompat {
             installedVersion = installed.daemonVersion,
             availableVersion = daemon.minVersion,
             status = UpdateStatus.UP_TO_DATE,
-            notes = installed.daemonNotes
+            notes = installed.daemonNotes.map(CompatibilityNote::Reported)
         )
     }
 }

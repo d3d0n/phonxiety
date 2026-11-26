@@ -29,7 +29,10 @@ class UpdateCompatTest {
         val verdict = UpdateCompat.evaluate(manifest(), installed(deviceSdk = 33))
         assertEquals(UpdateStatus.INCOMPATIBLE, verdict.app.status)
         assertFalse(verdict.compatible)
-        assertTrue(verdict.app.notes.single().contains("API 34"))
+        assertEquals(
+            CompatibilityNote.NeedsNewerAndroid(requiredSdk = 34, phoneSdk = 33),
+            verdict.app.notes.single()
+        )
     }
 
     @Test
@@ -45,14 +48,23 @@ class UpdateCompatTest {
         )
         assertEquals(UpdateStatus.UPDATE_AVAILABLE, verdict.module.status)
         assertTrue(verdict.module.requiresReboot)
-        assertTrue(verdict.module.notes.any { it.contains("CONTROL_INCALL_EXPERIENCE") })
+        assertEquals(
+            listOf(
+                CompatibilityNote.ModuleRebootRequired,
+                CompatibilityNote.NewPrivilegedGrants(listOf("android.permission.CONTROL_INCALL_EXPERIENCE"))
+            ),
+            verdict.module.notes
+        )
     }
 
     @Test
     fun `a newer payload schema needs the app first`() {
         val verdict = UpdateCompat.evaluate(manifest(moduleSchema = 2), installed())
         assertEquals(UpdateStatus.INCOMPATIBLE, verdict.module.status)
-        assertTrue(verdict.module.notes.single().contains("schema 2"))
+        assertEquals(
+            CompatibilityNote.NewerModuleSchema(requiredSchema = 2, supportedSchema = 1),
+            verdict.module.notes.single()
+        )
     }
 
     @Test
@@ -75,7 +87,20 @@ class UpdateCompatTest {
     fun `an older daemon is called out for the computer`() {
         val verdict = UpdateCompat.evaluate(manifest(), installed(daemonVersion = "0.0.9"))
         assertEquals(UpdateStatus.UPDATE_AVAILABLE, verdict.daemon.status)
-        assertTrue(verdict.daemon.notes.single().contains("0.1.0"))
+        assertEquals(CompatibilityNote.NeedsNewerDaemon("0.1.0"), verdict.daemon.notes.single())
+    }
+
+    @Test
+    fun `the daemon's own words stay verbatim`() {
+        val verdict = UpdateCompat.evaluate(
+            manifest(),
+            installed(daemonCompatible = false, daemonNotes = listOf("protocol ranges do not overlap"))
+        )
+        assertEquals(UpdateStatus.INCOMPATIBLE, verdict.daemon.status)
+        assertEquals(
+            CompatibilityNote.Reported("protocol ranges do not overlap"),
+            verdict.daemon.notes.single()
+        )
     }
 
     @Test
@@ -136,7 +161,8 @@ class UpdateCompatTest {
         granted: Set<String> = setOf("android.permission.CAPTURE_AUDIO_OUTPUT"),
         daemonVersion: String? = "0.1.0",
         daemonProtocols: List<Int> = listOf(3),
-        daemonCompatible: Boolean? = true
+        daemonCompatible: Boolean? = true,
+        daemonNotes: List<String> = emptyList()
     ) = InstalledVersions(
         appVersion = "0.4.0",
         appVersionCode = appVersionCode,
@@ -148,6 +174,7 @@ class UpdateCompatTest {
         daemonVersion = daemonVersion,
         daemonAppApi = 1,
         daemonProtocolVersions = daemonProtocols,
-        daemonCompatible = daemonCompatible
+        daemonCompatible = daemonCompatible,
+        daemonNotes = daemonNotes
     )
 }

@@ -48,7 +48,13 @@ enum class RollbackBlocker {
     STALE_ARCHIVE,
 
     /** The published archive's bytes are not the ones its own metadata names. */
-    ARCHIVE_MISMATCH
+    ARCHIVE_MISMATCH,
+
+    /**
+     * The app already runs the kept version: there is nothing older to return to, and offering the
+     * kept APK again would repeat the downgrade the phone just made.
+     */
+    APP_NOT_NEWER
 }
 
 /**
@@ -85,6 +91,8 @@ data class RollbackFacts(
     val keptApkExists: Boolean,
     val keptVersionName: String?,
     val keptVersionCode: Long,
+    /** The version code of the app running now: a rollback only exists while it is newer. */
+    val runningVersionCode: Long,
     val mounted: MountedSystemApkVersion,
     val archive: RollbackArchiveState
 )
@@ -98,6 +106,16 @@ object RollbackPlanner {
             return RollbackPlan.Unavailable(RollbackBlocker.SYSTEM_VERSION_UNKNOWN)
         }
         if (mounted !is MountedSystemApkVersion.Present || mounted.versionCode <= facts.keptVersionCode) {
+            // Reinstalling the kept APK only rolls back while something newer runs. After a
+            // completed rollback the kept version is what runs, and offering it again would repeat
+            // the downgrade the phone just made.
+            if (facts.runningVersionCode <= facts.keptVersionCode) {
+                return RollbackPlan.Unavailable(
+                    blocker = RollbackBlocker.APP_NOT_NEWER,
+                    keptVersionName = facts.keptVersionName,
+                    keptVersionCode = facts.keptVersionCode
+                )
+            }
             return RollbackPlan.AppOnly(facts.keptVersionName, facts.keptVersionCode)
         }
         return when (val archive = facts.archive) {
@@ -372,6 +390,9 @@ enum class RollbackFailure {
     STORAGE_UNREADABLE,
     STALE_ARCHIVE,
     ARCHIVE_MISMATCH,
+
+    /** The app already runs the kept version, so there is nothing to roll back to. */
+    APP_NOT_NEWER,
 
     /** The local script or journal could not be written, so nothing was staged. */
     PREPARATION_FAILED,
