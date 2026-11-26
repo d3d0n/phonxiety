@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.IBinder
 import com.phonxiety.bridge.device.R
+import com.phonxiety.bridge.net.IrohSupport
 
 /**
  * Idle device link.  The app starts it when it is paired, from [MainActivity]
@@ -41,6 +42,12 @@ class BridgeService : Service() {
 
     @Volatile private var foregroundReady = false
     private var engine: BridgeEngine? = null
+
+    /**
+     * The service-owned boot network observer; null while it could not be
+     * registered.
+     */
+    private var bootNetworkWatch: (() -> Unit)? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -82,6 +89,13 @@ class BridgeService : Service() {
         }
 
         BridgeRuntime.rememberPairing(config.kind)
+        // Registered before the engine exists, so the observer sees the boot
+        // network come up before any link binds.  An endpoint bound while the
+        // default network has no INTERNET is recycled here once it appears,
+        // instead of staying cached for the process.
+        if (config is BridgeConfig.Iroh && bootNetworkWatch == null) {
+            bootNetworkWatch = IrohSupport.watchBootNetwork(this)
+        }
         val created = BridgeEngine(applicationContext, config) { textRes ->
             updateNotification(getString(textRes))
         }
@@ -92,6 +106,8 @@ class BridgeService : Service() {
     }
 
     override fun onDestroy() {
+        bootNetworkWatch?.let { close -> close() }
+        bootNetworkWatch = null
         val current = engine
         engine = null
         if (current != null) BridgeRuntime.detach(current)

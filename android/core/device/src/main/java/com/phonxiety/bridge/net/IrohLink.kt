@@ -71,7 +71,14 @@ object IrohSupport {
     private const val TAG = "PhonxietyBridge"
     private const val SECRET_KEY_FILE = "iroh-secret.key"
     private const val SECRET_KEY_BYTES = 32
-    private const val NETWORK_WAIT_MS = 30_000L
+
+    /**
+     * How long a bind waits for the default network to report INTERNET.  A boot
+     * network that is still coming up must not spend the link's whole budget
+     * here: the bind continues, and [watchBootNetwork] recycles that endpoint
+     * generation once INTERNET appears.
+     */
+    private const val NETWORK_WAIT_MS = 8_000L
 
     /** ALPN of the device protocol, per the iroh link contract. */
     val ALPN: ByteArray = "phonxiety/device/2".toByteArray(Charsets.UTF_8)
@@ -92,6 +99,12 @@ object IrohSupport {
     private var generationSeq = 0L
 
     /**
+     * The boot half of the endpoint's lifetime: a generation bound before the
+     * default network reported INTERNET is recycled once it does.
+     */
+    private val bootNetwork = IrohBootNetwork { generation -> recycleEndpoint(generation) }
+
+    /**
      * The endpoint and the generation it was bound under.  A link remembers
      * its generation so it can recycle only the endpoint it dialled through,
      * never the one a newer link bound after a replacement.
@@ -108,26 +121,35 @@ object IrohSupport {
     private suspend fun bind(context: Context): IrohEndpoint {
         installAndroidContext(context)
         val key = secretKey(context)
-        val endpoint = withContext(Dispatchers.IO) {
-            awaitNetwork(context)
+        val manager = context.getSystemService(ConnectivityManager::class.java)
+        val (endpoint, hadInternet) = withContext(Dispatchers.IO) {
+            awaitNetwork(manager)
+            // Whether this bind could find a path is decided here, before the
+            // native bind starts; a generation bound without INTERNET is the
+            // one the boot observer may recycle.
+            val hadInternet = manager != null && hasInternet(manager)
             Endpoint.bind(
                 EndpointOptions(
                     preset = presetN0(),
                     secretKey = key,
                     relayMode = relayOption()
                 )
-            )
+            ) to hadInternet
         }
-        return IrohEndpoint(endpoint, synchronized(endpointState) { ++generationSeq })
+        val generation = synchronized(endpointState) { ++generationSeq }
+        bootNetwork.bound(generation, hadInternet)
+        return IrohEndpoint(endpoint, generation)
     }
 
     /**
      * An endpoint bound before Android has an internet-capable network never
-     * recovers a direct path, so wait for one first.  Gives up after 30 s and
-     * binds anyway.
+     * recovers a direct path, so wait for one first.  Gives up after
+     * [NETWORK_WAIT_MS] and binds anyway; the supervisor's attempt deadline and
+     * backoff own the rest, and a boot-time bind is recycled by
+     * [watchBootNetwork] once INTERNET appears.
      */
-    private suspend fun awaitNetwork(context: Context) {
-        val manager = context.getSystemService(ConnectivityManager::class.java) ?: return
+    private suspend fun awaitNetwork(manager: ConnectivityManager?) {
+        if (manager == null) return
         if (hasInternet(manager)) return
         withTimeoutOrNull(NETWORK_WAIT_MS) {
             suspendCancellableCoroutine { continuation ->
@@ -301,6 +323,48 @@ object IrohSupport {
         }
     }
 
+    /**
+     * Watches Android's default network for the INTERNET capability until the
+     * returned function unregisters it.  The service registers this as it
+     * starts, before any link exists, so an endpoint bound during boot is
+     * recycled the moment INTERNET appears instead of staying cached for the
+     * life of the process.  iroh's own netmon is not used: on Android 17 it
+     * reported changes continuously and churned the endpoint.
+     */
+    fun watchBootNetwork(context: Context): () -> Unit {
+        val manager = context.getSystemService(ConnectivityManager::class.java) ?: return {}
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                if (hasInternet(manager)) bootNetwork.internetAvailable()
+            }
+
+            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                    bootNetwork.internetAvailable()
+                }
+            }
+        }
+        val release: () -> Unit = {
+            runCatching { manager.unregisterNetworkCallback(callback) }
+            bootNetwork.reset()
+        }
+        try {
+            manager.registerDefaultNetworkCallback(callback)
+        } catch (e: Exception) {
+            BridgeLog.w(TAG, "boot network watch unavailable: ${e.javaClass.simpleName}")
+            return {}
+        }
+        return release
+    }
+
+    /**
+     * Registers the live link dialled through [generation] as the owner of the
+     * boot-bound endpoint: the boot observer asks it before recycling, so the
+     * link's admission and cooldown decide.  A generation that was not bound
+     * without INTERNET is never registered.
+     */
+    internal fun attachBootLink(generation: Long, link: IrohBootNetwork.LiveLink): () -> Unit = bootNetwork.attach(generation, link)
+
     private fun stopAsync(endpoint: Endpoint, name: String) {
         irohIo.launch {
             try {
@@ -440,6 +504,110 @@ internal class IrohLinkAdmission {
 }
 
 /**
+ * The boot half of the endpoint's lifetime.
+ *
+ * An endpoint bound while Android's default network had no INTERNET capability
+ * cannot find a direct path, and the process-wide cache would hand it to every
+ * later attempt.  This records the generation bound in that state and recycles
+ * exactly that one once INTERNET appears; a generation bound with INTERNET is
+ * never touched.
+ *
+ * A live link that dialled through the boot-bound generation keeps a veto: the
+ * observer asks it, and only the link's own admission path — call ownership and
+ * the escalation cooldown — may recycle.  A link that refuses keeps the
+ * endpoint, so boot timing never cuts a call.
+ */
+internal class IrohBootNetwork(
+    /** Recycles [generation] only while it is still the bound one. */
+    private val recycle: (generation: Long) -> Boolean
+) {
+    /** A live link's answer to the boot observer: true when it recycled and reconnects. */
+    fun interface LiveLink {
+        fun onInternetAppeared(): Boolean
+    }
+
+    private companion object {
+        const val NO_GENERATION = -1L
+    }
+
+    private val lock = Any()
+
+    /** The generation bound while the default network lacked INTERNET, if any. */
+    private var bootGeneration = NO_GENERATION
+
+    /** The live link dialling through [bootGeneration], while it runs. */
+    private var live: Pair<Long, LiveLink>? = null
+
+    /** A new endpoint was bound; [hadInternet] is the capability at its bind time. */
+    fun bound(generation: Long, hadInternet: Boolean) {
+        synchronized(lock) {
+            bootGeneration = if (hadInternet) NO_GENERATION else generation
+        }
+    }
+
+    /**
+     * Registers the live link dialling through [generation].  Returns the
+     * release; a generation that is not the boot-bound one is not registered.
+     */
+    fun attach(generation: Long, link: LiveLink): () -> Unit {
+        synchronized(lock) {
+            if (bootGeneration != generation) return {}
+            live = generation to link
+        }
+        return { synchronized(lock) { if (live?.second === link) live = null } }
+    }
+
+    /** The default network reports INTERNET: recycle the boot-bound generation, once. */
+    fun internetAvailable() {
+        val generation: Long
+        val link: LiveLink?
+        synchronized(lock) {
+            generation = bootGeneration
+            if (generation == NO_GENERATION) return
+            link = live?.takeIf { it.first == generation }?.second
+        }
+        // Outside the lock: a live link takes its own admission, which reaches
+        // the engine and the supervisor.
+        val recycled = if (link != null) link.onInternetAppeared() else recycle(generation)
+        if (recycled) {
+            synchronized(lock) { if (bootGeneration == generation) bootGeneration = NO_GENERATION }
+        }
+    }
+
+    /** The service stopped watching: nothing stays armed for a later service start. */
+    fun reset() {
+        synchronized(lock) {
+            bootGeneration = NO_GENERATION
+            live = null
+        }
+    }
+}
+
+/**
+ * The gates a live link puts in front of the boot recycle: the same ones as any
+ * other network change.  The engine's idle-link action is refused while a call
+ * or a dial owns the bridge, and [admitRecycle] is the escalation policy's
+ * cooldown; only an admitted action may recycle the endpoint.
+ */
+internal class IrohBootVeto(
+    private val beginIdleLinkAction: () -> IdleLinkAction?,
+    private val admitRecycle: () -> IrohNetworkDecision
+) {
+    /**
+     * The action the caller must hand to its terminal link transition, or null
+     * when a call or the cooldown keeps the boot-time endpoint in place.
+     */
+    fun admit(): IdleLinkAction? {
+        val action = beginIdleLinkAction() ?: return null
+        if (admitRecycle() != IrohNetworkDecision.RECYCLE) {
+            action.release()
+            return null
+        }
+        return action
+    }
+}
+
+/**
  * The link's late-bound subscriptions: the relay-only monitor and Android's
  * default-network watch.
  *
@@ -455,6 +623,7 @@ internal class IrohLinkWatchers(private val isClosed: () -> Boolean) {
     private var stopped = false
     private var monitor: IrohPathMonitor? = null
     private var networkWatch: (() -> Unit)? = null
+    private var bootWatch: (() -> Unit)? = null
 
     /** The monitor while it is attached; null once the link ended. */
     fun monitor(): IrohPathMonitor? = synchronized(lock) { if (stopped) null else monitor }
@@ -465,12 +634,20 @@ internal class IrohLinkWatchers(private val isClosed: () -> Boolean) {
     /** Attaches Android's network watch; false means the caller unregisters it now. */
     fun attachNetworkWatch(release: () -> Unit): Boolean = attach { networkWatch = release }
 
+    /**
+     * Attaches the boot observer's veto; false means the caller releases it now.
+     * The link must never answer for an endpoint after it ended.
+     */
+    fun attachBootWatch(release: () -> Unit): Boolean = attach { bootWatch = release }
+
     /** Stops accepting handles and returns every release to run outside the lock. */
     fun detachAll(): List<() -> Unit> = synchronized(lock) {
         stopped = true
-        val releases = ArrayList<() -> Unit>(2)
+        val releases = ArrayList<() -> Unit>(3)
+        bootWatch?.let { releases += it }
         networkWatch?.let { releases += it }
         monitor?.let { attached -> releases += { attached.cancel() } }
+        bootWatch = null
         networkWatch = null
         monitor = null
         releases
@@ -563,6 +740,15 @@ private class IrohLink(
         isClosed = { cancelled.get() || downOnce.get() }
     )
 
+    /**
+     * The boot observer's gates for this link: a call or the cooldown keeps the
+     * endpoint bound before INTERNET appeared.
+     */
+    private val bootVeto = IrohBootVeto(
+        beginIdleLinkAction = beginIdleLinkAction,
+        admitRecycle = { watchers.monitor()?.admitNetworkRecycle() ?: IrohNetworkDecision.HELD }
+    )
+
     override val backlogBytes: Long get() = backlog.get()
 
     override val supportsAttachments: Boolean get() = true
@@ -607,7 +793,7 @@ private class IrohLink(
             val auth = Framing.encode(Framing.KIND_TEXT, authMessage())
                 ?: return fail(listener, "connect_failed")
             controlSend.writeAll(auth)
-            if (cancelled.get()) {
+            if (cancelled.get() || downOnce.get()) {
                 runCatching { link.close(0, "cancelled".toByteArray()) }
                 return
             }
@@ -617,6 +803,12 @@ private class IrohLink(
             val audioSend = link.openUni()
             runCatching { controlSend.setPriority(CONTROL_PRIORITY) }
             runCatching { audioSend.setPriority(AUDIO_PRIORITY) }
+            if (cancelled.get() || downOnce.get()) {
+                // An endpoint recycle or a reader ended the attempt while it
+                // was opening: never publish it as live.
+                runCatching { link.close(0, "closed".toByteArray(Charsets.UTF_8)) }
+                return
+            }
             listener.onLinkOpened()
             scope.launch { readLoop(control.recv(), Framing.KIND_TEXT, listener) }
             scope.launch { audioReadLoop(link, listener) }
@@ -652,6 +844,11 @@ private class IrohLink(
             // changes; only a replaced or lost default network recycles the endpoint.
             val unwatch = IrohSupport.watchNetwork(context) { reason -> onNetworkChange(reason, listener) }
             if (!watchers.attachNetworkWatch(unwatch)) unwatch()
+            // The boot observer may recycle the generation this link dialled
+            // through, but only this link's admission and cooldown decide: a
+            // call or a recent escalation keeps the endpoint.
+            val releaseBoot = IrohSupport.attachBootLink(bound.generation) { onBootInternet(listener) }
+            if (!watchers.attachBootWatch(releaseBoot)) releaseBoot()
         } catch (t: Throwable) {
             if (!cancelled.get()) {
                 BridgeLog.w(TAG, "iroh connect failed: ${t.javaClass.simpleName}")
@@ -797,32 +994,57 @@ private class IrohLink(
      * keeps migrating the connection; inside the cooldown this link keeps
      * running rather than churning a third endpoint.
      */
-    private fun onNetworkChange(reason: String, listener: DeviceLink.Listener) {
-        if (cancelled.get() || downOnce.get()) return
+    private fun onNetworkChange(reason: String, listener: DeviceLink.Listener): Boolean {
+        if (cancelled.get() || downOnce.get()) return false
         val pathMonitor = watchers.monitor()
         pathMonitor?.noteNetworkChange()
         val action = beginIdleLinkAction() ?: run {
             BridgeLog.i(TAG, "$reason: a call or another link action owns the link, keeping the iroh endpoint")
-            return
+            return false
         }
-        when (pathMonitor?.admitNetworkRecycle() ?: IrohNetworkDecision.HELD) {
+        return when (pathMonitor?.admitNetworkRecycle() ?: IrohNetworkDecision.HELD) {
             IrohNetworkDecision.RECYCLE -> withAdmission(action) {
                 lifecycle.run(recycle = true) {
                     BridgeLog.i(TAG, "$reason: recreating the iroh endpoint")
                     fail(listener, reason)
                 }
-            }
+            } == IrohActionOutcome.EXECUTED
 
             IrohNetworkDecision.DURING_CALL -> {
                 BridgeLog.i(TAG, "$reason during a call: keeping the iroh endpoint")
                 action.release()
+                false
             }
 
             IrohNetworkDecision.HELD -> {
                 BridgeLog.i(TAG, "$reason inside the escalation cooldown: keeping the iroh link")
                 action.release()
+                false
             }
+        } ?: false
+    }
+
+    /**
+     * The boot observer found INTERNET for the generation this link dialled
+     * through: recycle that generation and reconnect through a fresh endpoint —
+     * but only through the same admission and cooldown as any other network
+     * change, so a call or a recent escalation keeps this link.  False when the
+     * endpoint stays.
+     */
+    private fun onBootInternet(listener: DeviceLink.Listener): Boolean {
+        if (cancelled.get() || downOnce.get()) return false
+        watchers.monitor()?.noteNetworkChange()
+        val action = bootVeto.admit() ?: run {
+            BridgeLog.i(TAG, "network_internet: a call or a recent escalation keeps the boot-time iroh endpoint")
+            return false
         }
+        val handled = withAdmission(action) {
+            lifecycle.run(recycle = true) {
+                BridgeLog.i(TAG, "network_internet: recreating the boot-time iroh endpoint")
+                fail(listener, "network_internet")
+            } == IrohActionOutcome.EXECUTED
+        }
+        return handled ?: false
     }
 
     /**

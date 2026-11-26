@@ -91,7 +91,7 @@ class LinkSupervisorTest {
         assertEquals(0, calls.binaries.size)
         assertEquals(listOf("closed"), calls.downs)
         assertTrue(supervisor.isUp())
-        assertEquals(1, scheduler.scheduledDelays.size)
+        assertEquals(1, scheduler.reconnectDelays.size)
 
         // Nor may it open: the live link keeps the slot and the stale one is closed.
         first.open()
@@ -160,7 +160,94 @@ class LinkSupervisorTest {
 
         assertEquals(listOf("hello_failed"), calls.downs)
         assertFalse(supervisor.isUp())
+        assertEquals(listOf(1_000L), scheduler.reconnectDelays)
+    }
+
+    @Test
+    fun anAttemptThatNeverOpensIsDroppedAfterTheDeadlineAndReconnects() {
+        val supervisor = supervisor()
+        supervisor.start()
+        val attempt = factory.last()
+        assertEquals(1, factory.created.size)
+        assertEquals(1, scheduler.pendingCount)
+
+        scheduler.advance(LinkSupervisor.ATTEMPT_TIMEOUT_MS - 1)
+        assertEquals(emptyList<String>(), calls.downs)
+        assertEquals(0, attempt.cancelling)
+
+        scheduler.advance(1)
+        assertEquals(listOf("connect_timeout"), calls.downs)
+        assertEquals(1, attempt.cancelling)
+        // Only the backoff is left: the deadline is gone with the attempt.
+        assertEquals(listOf(LinkSupervisor.ATTEMPT_TIMEOUT_MS, 1_000L), scheduler.scheduledDelays)
+        assertEquals(1, scheduler.pendingCount)
+
+        scheduler.advance(1_000)
+        assertEquals(2, factory.created.size)
+
+        // A link that opens keeps no attempt deadline at all.
+        factory.last().open()
+        assertTrue(supervisor.isUp())
+        assertEquals(0, scheduler.pendingCount)
+        scheduler.advance(LinkSupervisor.ATTEMPT_TIMEOUT_MS * 3)
+        assertEquals(listOf("connect_timeout"), calls.downs)
+        assertTrue(supervisor.isUp())
+    }
+
+    @Test
+    fun aThrowingFactoryIsOneFailedAttemptAndTheSupervisorKeepsGoing() {
+        val throwing = ThrowingFactory()
+        val supervisor = LinkSupervisor(throwing, calls, scheduler) { clock.now }
+        supervisor.start()
+
+        assertEquals(0, throwing.created.size)
+        assertEquals(emptyList<String>(), calls.downs)
         assertEquals(listOf(1_000L), scheduler.scheduledDelays)
+
+        // The failure doubles the backoff like any other attempt.
+        scheduler.advance(1_000)
+        assertEquals(listOf(1_000L, 2_000L), scheduler.scheduledDelays)
+        assertEquals(0, throwing.created.size)
+
+        throwing.fail = false
+        scheduler.advance(2_000)
+        assertEquals(1, throwing.created.size)
+        throwing.last().open()
+        assertTrue(supervisor.isUp())
+
+        // A throw after a working link is one more failed attempt.
+        throwing.fail = true
+        throwing.last().down("closed")
+        assertEquals(1_000L, scheduler.scheduledDelays.last())
+        scheduler.advance(1_000)
+        assertEquals(1, throwing.created.size)
+        assertEquals(listOf(1_000L, 2_000L, 1_000L, 2_000L), scheduler.reconnectDelays)
+        throwing.fail = false
+        scheduler.advance(2_000)
+        assertEquals(2, throwing.created.size)
+        throwing.last().open()
+        assertTrue(supervisor.isUp())
+    }
+
+    @Test
+    fun aThrowingHelloReportsTheLinkDownAndReconnects() {
+        calls.helloThrows = true
+        val supervisor = supervisor()
+        supervisor.start()
+        factory.last().open()
+
+        assertEquals(listOf("hello_failed"), calls.downs)
+        assertFalse(supervisor.isUp())
+        // The attempt deadline is gone: only the reconnect is pending.
+        assertEquals(listOf(1_000L), scheduler.reconnectDelays)
+        assertEquals(1, scheduler.pendingCount)
+
+        calls.helloThrows = false
+        scheduler.advance(1_000)
+        assertEquals(2, factory.created.size)
+        factory.last().open()
+        assertTrue(supervisor.isUp())
+        assertEquals(0, scheduler.pendingCount)
     }
 
     @Test
@@ -177,7 +264,7 @@ class LinkSupervisorTest {
         // A late down after cancel reports nothing and schedules nothing.
         link.down("closed")
         assertEquals(emptyList<String>(), calls.downs)
-        assertEquals(0, scheduler.scheduledDelays.size)
+        assertEquals(0, scheduler.reconnectDelays.size)
         assertEquals(1, factory.created.size)
 
         // Start after cancel does not resurrect the link.
@@ -186,6 +273,19 @@ class LinkSupervisorTest {
 
         supervisor.shutdown()
         assertEquals(1, factory.shutdowns)
+    }
+
+    @Test
+    fun cancelDropsTheAttemptDeadline() {
+        val supervisor = supervisor()
+        supervisor.start()
+        assertEquals(1, scheduler.pendingCount)
+
+        supervisor.cancel()
+        assertEquals(0, scheduler.pendingCount)
+        scheduler.advance(LinkSupervisor.ATTEMPT_TIMEOUT_MS * 2)
+        assertEquals(emptyList<String>(), calls.downs)
+        assertEquals(1, factory.created.size)
     }
 
     // ------------------------------------------------------------------
@@ -204,6 +304,13 @@ class LinkSupervisorTest {
         private var order = 0
 
         val scheduledDelays = mutableListOf<Long>()
+
+        /** Reconnect delays, without the per-attempt deadline. */
+        val reconnectDelays: List<Long>
+            get() = scheduledDelays.filter { it != LinkSupervisor.ATTEMPT_TIMEOUT_MS }
+
+        /** Tasks still armed, so a cancelled deadline is observable. */
+        val pendingCount: Int get() = pending.size
 
         override fun after(delayMs: Long, task: () -> Unit): LinkTask {
             scheduledDelays += delayMs
@@ -233,9 +340,11 @@ class LinkSupervisorTest {
         val binaries = mutableListOf<ByteString>()
         val downs = mutableListOf<String>()
         var helloQueued = true
+        var helloThrows = false
 
         override fun onLinkOpened(): Boolean {
             opened += Unit
+            if (helloThrows) throw IllegalStateException("hello failed")
             return helloQueued
         }
 
@@ -263,6 +372,21 @@ class LinkSupervisorTest {
         override fun shutdown() {
             shutdowns++
         }
+    }
+
+    /** A factory whose create() can fail the way a candidate plan or probe does. */
+    private class ThrowingFactory : DeviceLinkFactory {
+        var fail = true
+        val created = mutableListOf<FakeLink>()
+
+        fun last(): FakeLink = created.last()
+
+        override fun create(): DeviceLink {
+            if (fail) throw IllegalStateException("no candidate")
+            return FakeLink().also { created += it }
+        }
+
+        override fun shutdown() = Unit
     }
 
     /** A link the test opens, feeds and drops by hand. */
