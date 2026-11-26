@@ -122,23 +122,60 @@ class EngineStateStore {
         }
     }
 
+    /**
+     * Places a new call, or replays the start of the one the store already shows. A duplicate dial
+     * for the same [callId] is not a new call: the placement time, the recorded answer and the phase
+     * stay, or a replay would restart the ring the call has already rung, flash the card back to
+     * dialing and lose the connect time.
+     */
     fun callStarted(callId: String, destinationMasked: String, startedAtEpochMs: Long) {
         mutable.update {
+            val existing = it.call?.takeIf { call -> call.callId == callId }
             it.copy(
                 call = CallState(
                     callId = callId,
                     destinationMasked = destinationMasked,
-                    phase = CallPhase.DIALING,
-                    startedAtEpochMs = startedAtEpochMs
+                    phase = existing?.phase ?: CallPhase.DIALING,
+                    startedAtEpochMs = existing?.startedAtEpochMs ?: startedAtEpochMs,
+                    connectedAtEpochMs = existing?.connectedAtEpochMs
                 )
             )
         }
     }
 
-    fun callPhase(phase: CallPhase) {
+    /**
+     * Moves the call to [phase], recording its connect time on the first [CallPhase.ACTIVE].
+     * Telecom's own [connectTimeMillis] is preferred when it is positive, because the system's
+     * call chip counts from it; otherwise the engine's clock at this transition is used. The stamp
+     * belongs to the call and is never replaced by a later ACTIVE, so a screen opened mid-call
+     * counts from the answer rather than from the moment it opened.
+     */
+    fun callPhase(phase: CallPhase, connectTimeMillis: Long? = null) {
+        advance(phase, connectTimeMillis, stampWhenUnknown = true)
+    }
+
+    /**
+     * Replays a phase of a call that answered before this process observed it: the intent a restart
+     * restored from the ledger, or a duplicate dial of a call already owned. Unlike [callPhase] this
+     * never stamps an answer of its own, because the engine's clock at replay is the moment the
+     * restore ran, not when the line came up. Only Telecom's [connectTimeMillis] may supply the
+     * stamp, and an already recorded one is kept.
+     */
+    fun callPhaseReplayed(phase: CallPhase, connectTimeMillis: Long? = null) {
+        advance(phase, connectTimeMillis, stampWhenUnknown = false)
+    }
+
+    private fun advance(phase: CallPhase, connectTimeMillis: Long?, stampWhenUnknown: Boolean) {
         mutable.update { current ->
             val call = current.call ?: return@update current
-            current.copy(call = call.copy(phase = phase))
+            val connectedAt = when {
+                call.connectedAtEpochMs != null -> call.connectedAtEpochMs
+                phase != CallPhase.ACTIVE -> null
+                connectTimeMillis != null && connectTimeMillis > 0 -> connectTimeMillis
+                stampWhenUnknown -> System.currentTimeMillis()
+                else -> null
+            }
+            current.copy(call = call.copy(phase = phase, connectedAtEpochMs = connectedAt))
         }
     }
 
