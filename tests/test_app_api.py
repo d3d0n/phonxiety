@@ -9,13 +9,14 @@ import socket
 import ssl
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from typing import Any
 from unittest import mock
 
 from phonxiety.app_api import APP_API_VERSION, AppApi, _probe_lan_listener, redact
-from phonxiety.controller import CallController
+from phonxiety.controller import LOOPBACK_PROBE_S, CallController
 from phonxiety.device import MAX_API_RESULT_CHARS, DeviceHub
 from phonxiety.models import CallRequest, CallState
 from phonxiety.net.framing import HEADER_BYTES, TEXT, frame, parse_header
@@ -205,6 +206,7 @@ class InfoTests(_ApiCase):
         self.assertTrue(body["voice_controls"]["instruction"])
         self.assertTrue(body["voice_controls"]["pause"])
         self.assertFalse(body["voice_controls"]["loopback"])
+        self.assertTrue(body["voice_controls"]["test_call_probes"])
         self.assertEqual(body["phone"]["device"], None)
 
     async def test_info_reports_the_other_addresses_with_the_pin(self) -> None:
@@ -269,7 +271,8 @@ class LinkTestAndProbeTests(_ApiCase):
         self.assertEqual((status, body["verdict"], body["loss"]), (200, "failed", 0.8))
 
     async def test_probe_reports_tailscale_unavailable_without_the_binary(self) -> None:
-        with mock.patch("phonxiety.app_api.shutil.which", return_value=None):
+        with mock.patch("phonxiety.app_api.shutil.which", return_value=None), \
+                mock.patch.object(self.device, "status", return_value={"connected": True, "peer": "iroh:abcd"}):
             status, body = await self.call("POST", "/app/v1/probe", body={"candidates": ["iroh", "tailscale"]})
         self.assertEqual(status, 200)
         iroh, tailscale = body["candidates"]
@@ -278,6 +281,38 @@ class LinkTestAndProbeTests(_ApiCase):
         self.assertIsInstance(iroh["rtt_ms"], float)
         self.assertFalse(tailscale["available"])
         self.assertEqual(tailscale["reason"], "not_installed")
+
+    async def test_iroh_is_not_measured_over_another_path(self) -> None:
+        with mock.patch.object(self.device, "status", return_value={"connected": True, "peer": "100.64.0.5"}):
+            status, body = await self.call("POST", "/app/v1/probe", body={"candidates": ["iroh"]})
+        self.assertEqual(status, 200)
+        iroh = body["candidates"][0]
+        self.assertTrue(iroh["available"])
+        self.assertFalse(iroh["reachable"])
+        self.assertIsNone(iroh["rtt_ms"])
+        self.assertEqual(iroh["reason"], "not_measured")
+        self.assertIn("linked over tailscale", iroh["detail"])
+
+    async def test_iroh_link_is_reachable_with_the_link_rtt(self) -> None:
+        with mock.patch.object(self.device, "status", return_value={"connected": True, "peer": "iroh:abcd"}):
+            status, body = await self.call("POST", "/app/v1/probe", body={"candidates": ["iroh"]})
+        self.assertEqual(status, 200)
+        iroh = body["candidates"][0]
+        self.assertTrue(iroh["reachable"])
+        self.assertIsInstance(iroh["rtt_ms"], float)
+
+    async def test_tailscale_has_no_rtt_when_it_is_not_the_path(self) -> None:
+        with mock.patch("phonxiety.app_api.shutil.which", return_value="/usr/bin/tailscale"), \
+                mock.patch("phonxiety.app_api.tailscale_addresses", return_value=["100.64.0.2"]), \
+                mock.patch.object(self.device, "status", return_value={"connected": True, "peer": "iroh:abcd"}):
+            status, body = await self.call("POST", "/app/v1/probe", body={"candidates": ["tailscale"]})
+        self.assertEqual(status, 200)
+        tailscale = body["candidates"][0]
+        self.assertTrue(tailscale["available"])
+        self.assertFalse(tailscale["reachable"])
+        self.assertIsNone(tailscale["rtt_ms"])
+        self.assertEqual(tailscale["reason"], "not_measured")
+        self.assertIn("linked over iroh", tailscale["detail"])
 
     async def test_probe_reports_every_tailnet_address_and_the_path(self) -> None:
         with mock.patch("phonxiety.app_api.shutil.which", return_value="/usr/bin/tailscale"), \
@@ -701,6 +736,97 @@ class TestLabAndDoctorTests(_ApiCase):
         self.assertEqual(status, 200)
         self.assertTrue((self.state / "diagnostics").is_dir())
         self.assertFalse(body["restart_required"])
+
+
+class TestCallProbeTests(_ApiCase):
+    CAPS = ["loopback_start", "loopback_stop", "tone_start"]
+
+    async def _answer(self, body: dict[str, Any]) -> str:
+        status, snapshot = await self.call("POST", "/app/v1/test-call", body=body)
+        self.assertEqual(status, 200, snapshot)
+        call_id = snapshot["call_id"]
+        await asyncio.wait_for(self.device.dialled.wait(), 1)
+        await self.controller.on_device_event({"type": "call_state", "call_id": call_id, "state": "active"})
+        return call_id
+
+    async def test_probe_options_are_validated_with_named_fields(self) -> None:
+        self.device.info["control_caps"] = self.CAPS
+        for tone, field in (
+            ({"hz": 9000, "dbfs": -20, "seconds": 2}, "tone.hz"),
+            ({"hz": 440, "dbfs": -80, "seconds": 2}, "tone.dbfs"),
+            ({"hz": 440, "dbfs": -20, "seconds": 0}, "tone.seconds"),
+            ({"hz": 440, "dbfs": -20, "seconds": 11}, "tone.seconds"),
+            ({"hz": 440, "dbfs": -20}, "tone.seconds"),
+            ("loud", "tone"),
+        ):
+            status, body = await self.call(
+                "POST", "/app/v1/test-call", body={"destination": "+12025550123", "tone": tone},
+            )
+            self.assertEqual((status, body["code"]), (400, "invalid_argument"), tone)
+            self.assertIn(field, body["message"])
+        status, body = await self.call(
+            "POST", "/app/v1/test-call", body={"destination": "+12025550123", "loopback": "yes"},
+        )
+        self.assertEqual((status, body["code"]), (400, "invalid_argument"))
+        self.assertIn("loopback", body["message"])
+        # Falsey is not the same as absent: these are malformed values, not "no probe".
+        for falsey in (0, None, "", [], {}):
+            status, body = await self.call(
+                "POST", "/app/v1/test-call", body={"destination": "+12025550123", "loopback": falsey},
+            )
+            self.assertEqual((status, body["code"]), (400, "invalid_argument"), falsey)
+            self.assertIn("loopback", body["message"])
+        self.assertFalse(self.device.dialled.is_set())
+
+    async def test_probes_need_the_phone_capabilities(self) -> None:
+        for extra in ({"loopback": True}, {"tone": {"seconds": 2}}):
+            status, body = await self.call(
+                "POST", "/app/v1/test-call", body={"destination": "+12025550123", **extra},
+            )
+            self.assertEqual((status, body["code"]), (409, "unsupported_by_phone"), extra)
+        self.assertFalse(self.device.dialled.is_set())
+
+    async def test_probes_start_with_the_audio_and_stop_at_the_end(self) -> None:
+        self.device.info["control_caps"] = self.CAPS
+        call_id = await self._answer({
+            "destination": "+12025550123",
+            "loopback": True,
+            "tone": {"hz": 440, "dbfs": -18, "seconds": 1},
+        })
+        started = [command for command in self.device.commands if command[0] in ("loopback_start", "tone_start")]
+        self.assertEqual(started, [
+            ("loopback_start", call_id, {}),
+            ("tone_start", call_id, {"hz": 440, "dbfs": -18.0}),
+        ])
+        # The loopback probe keeps the call from ending for its minimum window.
+        hold = self.controller._calls[call_id].probe_hold_until - time.monotonic()
+        self.assertGreater(hold, 8)
+        self.assertLessEqual(hold, LOOPBACK_PROBE_S)
+        await asyncio.sleep(1.05)
+        self.assertIn(("tone_stop", call_id, {}), self.device.commands)
+        await self.call("POST", f"/app/v1/calls/{call_id}/hangup")
+        result = await self.controller.wait_call_result(call_id, wait_s=5)
+        self.assertEqual(result["state"], "ended")
+        self.assertIn(("loopback_stop", call_id, {}), self.device.commands)
+
+    async def test_no_probe_options_sends_exactly_todays_commands(self) -> None:
+        status, snapshot = await self.call(
+            "POST", "/app/v1/test-call", body={"destination": "+12025550123", "max_duration_s": 30},
+        )
+        self.assertEqual(status, 200)
+        call_id = snapshot["call_id"]
+        await asyncio.wait_for(self.device.dialled.wait(), 1)
+        await self.controller.on_device_event({"type": "call_state", "call_id": call_id, "state": "active"})
+        self.assertIsNone(self.controller._calls[call_id].test_audio)
+        self.assertEqual(self.store.request(call_id).constraints, AppApi.TEST_CONSTRAINTS)
+        await self.call("POST", f"/app/v1/calls/{call_id}/hangup")
+        result = await self.controller.wait_call_result(call_id, wait_s=5)
+        self.assertEqual(result["state"], "ended")
+        self.assertEqual(self.device.commands, [
+            ("dial", call_id, {"destination": "+12025550123"}),
+            ("start_audio", call_id, {"epoch": 1, "codec": "pcm"}),
+            ("hangup", call_id, {}),
+        ])
 
 
 class DiagnosticsTests(_ApiCase):

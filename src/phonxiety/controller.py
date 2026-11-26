@@ -16,7 +16,7 @@ from .audio.recording import CallRecorder
 from .audio.share import make_shareable
 from .device import CommandSuppressed, DeviceError, DeviceHub
 from .interfaces import ToolHandler, VoiceCallbacks, VoiceSession, line_action
-from .models import CallRequest, CallState, TERMINAL_STATES
+from .models import CallRequest, CallState, TERMINAL_STATES, TestAudioOptions
 from .prompts import render
 from .store import CallStore
 
@@ -32,6 +32,8 @@ CLOSE_CANCEL_BUDGET_S = 5.0
 # DIAL_RETRY_WAIT_S for the phone's link.  An ambiguous end of the link is never retried.
 DIAL_REFUSALS = frozenset({"link_down", "device_not_connected", "device_replaced"})
 DIAL_RETRY_WAIT_S = 20.0
+# A Lab loopback probe needs long enough to hear both directions before the call may end.
+LOOPBACK_PROBE_S = 10.0
 
 
 class _DialRefused(DeviceError):
@@ -101,6 +103,20 @@ class _Call:
     # Paused from the phone: the agent keeps talking into the session but nothing reaches the line.
     muted: bool = False
     marks: list[dict[str, Any]] = field(default_factory=list)
+    # Optional Lab test-call probes, started once the audio is up (see place_call).
+    test_audio: TestAudioOptions | None = None
+    probe_hold_until: float | None = None
+    # One finish is being started or held for the probes: repeats must not stack goodbyes.
+    finish_armed: bool = False
+    # The task that ends the call once the probe deadline passes; cancelled when the
+    # hold is withdrawn, on hang-up and in finalization.
+    finish_hold_task: asyncio.Task[Any] | None = None
+    # A held finish that will end without a farewell: like a started one, it silences
+    # any further spoken answer (see _run_delegation).
+    held_without_farewell: bool = False
+    loopback_on: bool = False
+    tone_on: bool = False
+    tone_stop_task: asyncio.Task[Any] | None = None
 
 
 class CallController:
@@ -203,13 +219,13 @@ class CallController:
                 )
             self._begin_finalize(call)
 
-    async def place_call(self, request: CallRequest) -> dict[str, Any]:
+    async def place_call(self, request: CallRequest, *, test_audio: TestAudioOptions | None = None) -> dict[str, Any]:
         if self._closing:
             raise RuntimeError("daemon_stopping")
         async with self._lock:
             call_id, created = self.store.reserve(request)
             if created:
-                call = _Call(call_id, request)
+                call = _Call(call_id, request, test_audio=test_audio)
                 self._calls[call_id] = call
                 call.prepare_task = self._spawn(self._prepare(call), f"prepare:{call_id}")
             return self.store.snapshot(call_id)
@@ -247,6 +263,7 @@ class CallController:
             call.output_open = False
             self._cancel(call.work_task)
             self._cancel(call.ending_task)
+            self._abort_finish_hold(call)
             if self.store.cancel_preparing(call_id):
                 self._cancel(call.prepare_task)
                 self._begin_finalize(call)
@@ -559,6 +576,90 @@ class CallController:
         if self._owned(call) and not call.finalizing:
             await self.hangup_call(call.call_id, "duration_limit")
 
+    async def _start_test_probes(self, call: _Call) -> None:
+        """Start the Lab test call's automatic probes; the audio is up when this runs.
+
+        A probe is best-effort: a phone that refuses one command must not lose the call.
+        The call then holds its finish until the probes have run (tone seconds, and a
+        minimum window for loopback) so the agent cannot cut them short.
+        """
+        options = call.test_audio
+        if options is None:
+            return
+        began = time.monotonic()
+        hold_s = 0.0
+        if options.loopback:
+            try:
+                await self.device.command("loopback_start", call.call_id, timeout=5)
+            except Exception as exc:
+                log.warning("call %s: loopback probe could not start: %s", call.call_id, exc)
+            else:
+                call.loopback_on = True
+                hold_s = max(hold_s, LOOPBACK_PROBE_S)
+        if options.tone is not None:
+            tone = options.tone
+            try:
+                await self.device.command("tone_start", call.call_id, hz=tone.hz, dbfs=tone.dbfs, timeout=5)
+            except Exception as exc:
+                log.warning("call %s: tone probe could not start: %s", call.call_id, exc)
+            else:
+                call.tone_on = True
+                hold_s = max(hold_s, tone.seconds)
+                call.tone_stop_task = self._spawn(
+                    self._stop_tone_probe(call, tone.seconds), f"tone:{call.call_id}"
+                )
+        if hold_s > 0:
+            call.probe_hold_until = began + hold_s
+            log.info("call %s: test probes hold the finish for %.1f s", call.call_id, hold_s)
+
+    async def _stop_tone_probe(self, call: _Call, seconds: float) -> None:
+        await asyncio.sleep(seconds)
+        if not self._owned(call) or not call.tone_on:
+            return
+        with contextlib.suppress(Exception):
+            await self.device.command("tone_stop", call.call_id, timeout=5)
+        call.tone_on = False
+
+    async def _stop_test_probes(self, call: _Call) -> None:
+        """Stop whatever probe is still running; `_finalize` calls this once per call."""
+        if call.loopback_on:
+            call.loopback_on = False
+            with contextlib.suppress(Exception):
+                await self.device.command("loopback_stop", call.call_id, timeout=5)
+        if call.tone_on:
+            call.tone_on = False
+            with contextlib.suppress(Exception):
+                await self.device.command("tone_stop", call.call_id, timeout=5)
+
+    async def _hold_finish(self, call: _Call, farewell_pending: bool, deadline: float) -> None:
+        """Wait out the Lab probes, then end the call; runs as its own task.
+
+        The voice readers await delegation callbacks inline, so the wait must not
+        live there: speech, hang-ups and failure events are read only between
+        callbacks, and a sleep here would stall all of them.
+        """
+        remaining = deadline - time.monotonic()
+        log.info("call %s: holding the finish %.1f s for the audio probes", call.call_id, remaining)
+        await asyncio.sleep(max(0.0, remaining))
+        if not self._owned(call) or call.finalizing or self.store.state(call.call_id) != CallState.ACTIVE:
+            return
+        await self._begin_finish(call, farewell_pending)
+
+    def _abort_finish_hold(self, call: _Call) -> None:
+        """Withdraw a finish that was waiting for the probes: the line moved on.
+
+        The probe deadline is kept as it is, so a later finish still waits for the
+        probes to run their full window instead of starting a new one.  The task
+        reference stays for `_finalize` to join.
+        """
+        task = call.finish_hold_task
+        if task is None or task.done():
+            return
+        self._cancel(task)
+        call.held_without_farewell = False
+        if not call.finalizing and self.store.state(call.call_id) != CallState.ENDING:
+            call.finish_armed = False
+
     async def on_device_event(self, event: dict[str, Any]) -> None:
         kind = event.get("type")
         if kind == "hello":
@@ -618,6 +719,8 @@ class CallController:
                         return
                     call.audio_ready = True
                     call.output_open = True
+                    if call.test_audio is not None:
+                        await self._start_test_probes(call)
                     if call.voice:
                         await call.voice.append_context(render("voice/call_connected"))
                     call.last_activity = time.monotonic()
@@ -739,6 +842,7 @@ class CallController:
             if not self.store.resume_active(call.call_id):
                 return
             call.finish_requested_at = None
+            call.finish_armed = False
             call.finish_speech_seen = False
             call.proposed_result = None
             call.output_open = True
@@ -758,6 +862,7 @@ class CallController:
             return
         call.generation += 1
         self._cancel(call.work_task)
+        self._abort_finish_hold(call)
         generation = call.generation
         log.info(
             "call %s: delegation %s accepted as action generation %d: %r",
@@ -780,6 +885,9 @@ class CallController:
         if call.work_is_review and call.work_task is not None and not call.work_task.done():
             call.generation += 1
             self._cancel(call.work_task)
+        # The line is still alive: a finish waiting for the probes is withdrawn, and a
+        # later review asks again while the original probe deadline still stands.
+        self._abort_finish_hold(call)
 
     async def _supervise(self, call: _Call) -> None:
         """Review the line whenever it goes quiet, and after every assistant turn if asked to.
@@ -882,9 +990,34 @@ class CallController:
         return {"send_dtmf": send_dtmf, "finish_call": finish_call}
 
     async def _start_finish(self, call: _Call, farewell_pending: bool) -> None:
+        """Arm one finish; with Lab probes pending the hold is a task of its own.
+
+        The caller is a voice event reader (a review's tool handler or a delegation
+        callback), so it returns at once even while the probes hold the ending.
+        """
+        if call.finish_armed:
+            return
+        call.finish_armed = True
+        # A Lab test call with probes stays up until they have run, however early the
+        # agent decides it is done; a hangup from the app is not held and still ends it.
+        deadline = call.probe_hold_until
+        if deadline is None or deadline <= time.monotonic():
+            if not self._owned(call) or call.finalizing or self.store.state(call.call_id) != CallState.ACTIVE:
+                return
+            await self._begin_finish(call, farewell_pending)
+            return
+        call.held_without_farewell = not farewell_pending
+        call.finish_hold_task = self._spawn(
+            self._hold_finish(call, farewell_pending, deadline), f"finish-hold:{call.call_id}",
+        )
+
+    async def _begin_finish(self, call: _Call, farewell_pending: bool) -> None:
         self.store.begin_ending(call.call_id)
         call.finish_requested_at = time.monotonic()
         call.farewell_pending = farewell_pending
+        # From here finish_requested_at and farewell_pending decide whether answers are spoken;
+        # a hold's own flag would outlive a reopened call and silence its next answer.
+        call.held_without_farewell = False
         # Without a pending farewell the last completed assistant turn already was the goodbye.
         call.finish_turn_base = call.assistant_turns if farewell_pending else call.assistant_turns - 1
         call.finish_speech_seen = not farewell_pending
@@ -934,8 +1067,10 @@ class CallController:
             self._check_work(call, generation)
             log.info("call %s: delegation %s answered (%d chars)", call.call_id, delegation_id, len(text))
             call.last_activity = time.monotonic()
-            # A finish without a pending farewell disconnects now; a spoken answer would be cut off.
-            if call.voice and (call.finish_requested_at is None or call.farewell_pending):
+            # A finish without a pending farewell disconnects now (or once the Lab probes have run);
+            # a spoken answer would be cut off, and speech would withdraw a held finish.
+            silent_finish = (call.finish_requested_at is not None and not call.farewell_pending) or call.held_without_farewell
+            if call.voice and not silent_finish:
                 await call.voice.append_context(f"FINAL_RESULT: {text}", delegation_id=delegation_id)
         except asyncio.CancelledError:
             log.info("call %s: delegation %s cancelled", call.call_id, delegation_id)
@@ -1055,16 +1190,21 @@ class CallController:
         call.audio_ready = False
         call.output_open = False
         call.generation += 1
+        self._cancel(call.finish_hold_task)
         self.device.stop_stream()
         call.finalize_task = self._spawn(self._finalize(call), f"finalize:{call.call_id}")
 
     async def _finalize(self, call: _Call) -> None:
         current = asyncio.current_task()
-        jobs = [call.prepare_task, call.work_task, call.ring_task, call.duration_task, call.ending_task, call.watch_task]
+        jobs = [
+            call.prepare_task, call.work_task, call.ring_task, call.duration_task, call.ending_task,
+            call.watch_task, call.tone_stop_task, call.finish_hold_task,
+        ]
         for job in jobs:
             if job is not current:
                 self._cancel(job)
         await asyncio.gather(*(job for job in jobs if job is not None and job is not current), return_exceptions=True)
+        await self._stop_test_probes(call)
         if call.voice is not None:
             try:
                 async with asyncio.timeout(5):
