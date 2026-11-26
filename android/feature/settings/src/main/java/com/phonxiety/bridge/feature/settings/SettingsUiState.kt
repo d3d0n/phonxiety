@@ -1,6 +1,7 @@
 package com.phonxiety.bridge.feature.settings
 
 import com.phonxiety.bridge.PhoneSettings
+import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.net.StoredCandidate
 import com.phonxiety.bridge.net.isTailnet
 import kotlinx.serialization.SerialName
@@ -64,21 +65,37 @@ fun DaemonSettingsValues.toForm(): DaemonForm = DaemonForm(
     irohRelays = irohRelays.joinToString("\n")
 )
 
-fun DaemonForm.toValues(fallback: DaemonSettingsValues): DaemonSettingsValues = DaemonSettingsValues(
-    audioCodec = audioCodec,
-    opusBitrate = opusBitrate.trim().toIntOrNull() ?: fallback.opusBitrate,
-    voiceBackend = voiceBackend,
-    codexVoice = codexVoice.trim(),
-    geminiVoice = geminiVoice.trim(),
-    codexTaskModel = codexTaskModel.trim(),
-    geminiModel = geminiModel.trim(),
-    languageHint = languageHint.trim(),
-    ringTimeout = ringTimeout.trim().toIntOrNull() ?: fallback.ringTimeout,
-    maxDuration = maxDuration.trim().toIntOrNull() ?: fallback.maxDuration,
-    defaultResultFields = defaultResultFields.split(",").map { it.trim() }.filter { it.isNotEmpty() },
-    defaultConstraints = defaultConstraints.trim(),
-    irohRelays = irohRelays.lines().map { it.trim() }.filter { it.isNotEmpty() }
-)
+/** The numeric fields the form edits; a half-typed or blank one blocks the save. */
+enum class DaemonNumericField { OPUS_BITRATE, RING_TIMEOUT, MAX_DURATION }
+
+/** Fields whose text is not a whole positive number yet. Never silently replaced by the old value. */
+fun DaemonForm.invalidNumericFields(): Set<DaemonNumericField> = buildSet {
+    if (!opusBitrate.isWholePositiveNumber()) add(DaemonNumericField.OPUS_BITRATE)
+    if (!ringTimeout.isWholePositiveNumber()) add(DaemonNumericField.RING_TIMEOUT)
+    if (!maxDuration.isWholePositiveNumber()) add(DaemonNumericField.MAX_DURATION)
+}
+
+private fun String.isWholePositiveNumber(): Boolean = trim().toIntOrNull()?.let { it > 0 } == true
+
+/** The form as values, or null while a numeric field cannot be saved as typed. */
+fun DaemonForm.toValuesOrNull(): DaemonSettingsValues? {
+    if (invalidNumericFields().isNotEmpty()) return null
+    return DaemonSettingsValues(
+        audioCodec = audioCodec,
+        opusBitrate = requireNotNull(opusBitrate.trim().toIntOrNull()),
+        voiceBackend = voiceBackend,
+        codexVoice = codexVoice.trim(),
+        geminiVoice = geminiVoice.trim(),
+        codexTaskModel = codexTaskModel.trim(),
+        geminiModel = geminiModel.trim(),
+        languageHint = languageHint.trim(),
+        ringTimeout = requireNotNull(ringTimeout.trim().toIntOrNull()),
+        maxDuration = requireNotNull(maxDuration.trim().toIntOrNull()),
+        defaultResultFields = defaultResultFields.split(",").map { it.trim() }.filter { it.isNotEmpty() },
+        defaultConstraints = defaultConstraints.trim(),
+        irohRelays = irohRelays.lines().map { it.trim() }.filter { it.isNotEmpty() }
+    )
+}
 
 private val formJson = Json {
     encodeDefaults = true
@@ -95,19 +112,29 @@ fun diff(before: DaemonSettingsValues, after: DaemonSettingsValues): JsonObject 
 data class DaemonSettingsUi(
     val loading: Boolean = false,
     val saving: Boolean = false,
-    val error: String? = null,
+    val error: UiText? = null,
     val values: DaemonSettingsValues = DaemonSettingsValues(),
     val form: DaemonForm = DaemonForm(),
     val restartRequiredFields: List<String> = emptyList(),
     val changesApplied: List<String> = emptyList()
 ) {
-    val dirty: Boolean get() = form.toValues(values) != values
+    /** Numeric fields that cannot be saved yet; the screen marks each one. */
+    val invalidFields: Set<DaemonNumericField> get() = form.invalidNumericFields()
+
+    val valid: Boolean get() = invalidFields.isEmpty()
+
+    /**
+     * True when the text would send something different. An invalid field counts as edited when its
+     * text differs from the canonical form, so the save button still explains itself.
+     */
+    val dirty: Boolean
+        get() = form.toValuesOrNull()?.let { it != values } ?: (form != values.toForm())
 }
 
 data class AutoTuneUi(
     val enabled: Boolean = false,
     val changes: List<AutoTuneLogEntry> = emptyList(),
-    val suggestions: List<String> = emptyList(),
+    val suggestions: List<UiText> = emptyList(),
     val lastEvaluatedAtMs: Long? = null
 )
 
@@ -115,7 +142,7 @@ data class AutoTuneUi(
 data class ConnectionUi(
     val candidates: List<StoredCandidate> = emptyList(),
     val refreshing: Boolean = false,
-    val error: String? = null
+    val error: UiText? = null
 ) {
     val tailnetCount: Int get() = candidates.count { it.isTailnet }
 
@@ -127,5 +154,5 @@ data class SettingsUiState(
     val phone: PhoneSettings = PhoneSettings(),
     val connection: ConnectionUi = ConnectionUi(),
     val autoTune: AutoTuneUi = AutoTuneUi(),
-    val message: String? = null
+    val message: UiText? = null
 )

@@ -151,8 +151,12 @@ object DoctorSamples {
         ),
         daemonFixes = daemonFixes(brokenDaemon),
         changeLog = listOf(
-            DoctorChangeEntry(CHECKED_AT - 120_000, "Restarted the bridge service to reopen the link"),
-            DoctorChangeEntry(CHECKED_AT - 60_000, "Asked for android.permission.ACCESS_LOCAL_NETWORK again")
+            DoctorChangeEntry(CHECKED_AT - 120_000, DoctorLogEvent.BRIDGE_RESTARTED),
+            DoctorChangeEntry(
+                CHECKED_AT - 60_000,
+                DoctorLogEvent.PERMISSION_ASKED,
+                listOf(RuntimePermission.ACCESS_LOCAL_NETWORK.androidName)
+            )
         ),
         selected = DoctorEvaluator.ID_OVERLAY,
         provider = RootId.MAGISK,
@@ -168,7 +172,7 @@ object DoctorSamples {
         val row = state.row(DoctorEvaluator.ID_OVERLAY) ?: return state
         val plan = row.plan ?: return state
         return state.copy(
-            pending = FixRequest(rowId = row.id, title = row.title, plan = plan, subject = row.subject)
+            pending = FixRequest(rowId = row.id, checkTitle = row.title, plan = plan, subject = row.subject)
         )
     }
 

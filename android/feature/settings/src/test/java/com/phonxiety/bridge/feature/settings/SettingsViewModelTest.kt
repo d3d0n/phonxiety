@@ -7,6 +7,8 @@ import com.phonxiety.bridge.PhonePreferences
 import com.phonxiety.bridge.PhoneSettings
 import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.BridgeStateRepository
+import com.phonxiety.bridge.designsystem.UiText
+import com.phonxiety.bridge.designsystem.asString
 import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.model.ConnectionInfo
 import com.phonxiety.bridge.model.DaemonInfo
@@ -116,6 +118,26 @@ class SettingsViewModelTest {
     }
 
     @Test
+    fun `an invalid number is never sent and never reported as saved`() = runBlocking<Unit> {
+        val vm = viewModel()
+        withTimeout(5_000) { vm.state.first { !it.daemon.loading } }
+
+        vm.updateForm { it.copy(ringTimeout = "soon") }
+        assertTrue("the edit is visible to the user", vm.state.value.daemon.dirty)
+        assertTrue("the field blocks the save", DaemonNumericField.RING_TIMEOUT in vm.state.value.daemon.invalidFields)
+        assertEquals(null, vm.state.value.daemon.form.toValuesOrNull())
+
+        vm.saveDaemonSettings()
+        withTimeout(5_000) { vm.state.first { it.message != null } }
+
+        assertTrue("nothing may reach the daemon", api.putSettingsBodies.isEmpty())
+        val message = requireNotNull(vm.state.value.message).asString(context.resources)
+        assertTrue(message.contains("Not saved"))
+        assertFalse(message.contains("Saved."))
+        assertEquals("60", vm.state.value.daemon.values.ringTimeout.toString())
+    }
+
+    @Test
     fun `phone preferences are written where the engine reads them`() = runBlocking<Unit> {
         val vm = viewModel()
         vm.setCodec("opus")
@@ -203,7 +225,8 @@ class SettingsViewModelTest {
         assertEquals(16_000, prefs.settings.value.maxBitrate)
         assertFalse(prefs.settings.value.wifiLowLatency)
         val entries = vm.state.value.autoTune.changes
-        assertTrue(entries.all { it.reason.isNotBlank() })
+        val resources = context.resources
+        assertTrue(entries.all { it.reasonText().asString(resources).isNotBlank() })
         assertTrue(entries.any { it.key == TuneKey.WIFI_LOW_LATENCY.key })
 
         // A second evaluation over the same evidence must not double-log anything.

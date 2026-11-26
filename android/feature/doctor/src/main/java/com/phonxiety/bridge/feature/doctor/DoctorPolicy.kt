@@ -1,77 +1,87 @@
 package com.phonxiety.bridge.feature.doctor
 
+import com.phonxiety.bridge.designsystem.UiText
+
 /**
  * The decision tree: every failing check maps to one fix and one risk class, and the class decides
  * whether Doctor may act on its own. Nothing here touches a device, so every cell of the table is
  * unit-tested.
+ *
+ * [FixContext] changes only the wording: Magisk and APatch mount `system/` themselves, while a
+ * KernelSU install without a metamodule needs one before any module is mounted.
  */
 object DoctorPolicy {
     /**
      * The fix for a failing [kind], or null when the check only explains (root itself, daemon
      * self-check details) or needs a provider-specific procedure from the guided recovery pages.
      */
-    fun planFor(kind: DoctorItemKind): FixPlan? = when (kind) {
+    fun planFor(kind: DoctorItemKind, context: FixContext = FixContext()): FixPlan? = when (kind) {
         // Root is a capability to restore by hand: the recovery page walks through re-rooting.
         DoctorItemKind.ROOT_PROVIDER -> null
 
         DoctorItemKind.MODULE_PRESENT -> FixPlan(
             fix = DoctorFixId.REINSTALL_MODULE,
             risk = FixClass.CONFIRM,
-            effect = "Rebuilds the module from this APK and reinstalls it through the root manager. " +
-                "The phone reboots so the overlay is mounted and the privileged allowlist is re-read.",
-            rollback = "The previous zip stays in Updates; reinstall it to go back.",
+            effect = UiText.Res(
+                if (context.needsMetamodule) {
+                    R.string.doctor_effect_module_install_metamodule
+                } else {
+                    R.string.doctor_effect_module_install
+                }
+            ),
+            rollback = UiText.Res(R.string.doctor_rollback_module),
             needsReboot = true
         )
 
         DoctorItemKind.MODULE_ENABLED -> FixPlan(
             fix = DoctorFixId.ENABLE_MODULE,
             risk = FixClass.CONFIRM,
-            effect = "Clears the module's disable flag through the root manager. The phone reboots so " +
-                "the overlay is mounted from the next boot on.",
-            rollback = "Disable the module again from the root manager; nothing on the phone is deleted.",
+            effect = UiText.Res(R.string.doctor_effect_module_enable),
+            rollback = UiText.Res(R.string.doctor_rollback_module_disable),
             needsReboot = true
         )
 
         DoctorItemKind.OVERLAY -> FixPlan(
             fix = DoctorFixId.REINSTALL_MODULE,
             risk = FixClass.CONFIRM,
-            effect = "Reinstalls the module with its APK and privapp allowlist together. A provider that " +
-                "mounts system/ through a metamodule needs one installed first, or the overlay is never mounted.",
-            rollback = "The previous zip stays in Updates; reinstall it to go back.",
+            effect = UiText.Res(
+                if (context.needsMetamodule) {
+                    R.string.doctor_effect_module_install_metamodule
+                } else {
+                    R.string.doctor_effect_module_install
+                }
+            ),
+            rollback = UiText.Res(R.string.doctor_rollback_module),
             needsReboot = true
         )
 
         DoctorItemKind.PRIVILEGED_PERMISSION -> FixPlan(
             fix = DoctorFixId.REINSTALL_MODULE,
             risk = FixClass.CONFIRM,
-            effect = "Reinstalls the module so the privapp allowlist matches this build, then reboots. " +
-                "An APK without its allowlist is the worst failure in this project.",
-            rollback = "The previous zip stays in Updates; reinstall it to go back.",
+            effect = UiText.Res(R.string.doctor_effect_allowlist),
+            rollback = UiText.Res(R.string.doctor_rollback_module),
             needsReboot = true
         )
 
         DoctorItemKind.RUNTIME_PERMISSION -> FixPlan(
             fix = DoctorFixId.REGRANT_RUNTIME_PERMISSION,
             risk = FixClass.CONFIRM,
-            effect = "Shows the system permission dialog for this permission. The bridge checks again " +
-                "as soon as the dialog closes.",
-            rollback = "Revoke it in Settings → Apps → Phonxiety → Permissions."
+            effect = UiText.Res(R.string.doctor_effect_runtime_permission),
+            rollback = UiText.Res(R.string.doctor_rollback_runtime_permission)
         )
 
         DoctorItemKind.NOTIFICATIONS -> FixPlan(
             fix = DoctorFixId.REGRANT_NOTIFICATION,
             risk = FixClass.CONFIRM,
-            effect = "Asks for the notification permission, or opens Phonxiety's notification settings when " +
-                "the permission is granted but notifications are switched off.",
-            rollback = "Turn notifications off again in Settings → Apps → Phonxiety → Notifications."
+            effect = UiText.Res(R.string.doctor_effect_notifications),
+            rollback = UiText.Res(R.string.doctor_rollback_notifications)
         )
 
         DoctorItemKind.BATTERY_EXEMPTION -> FixPlan(
             fix = DoctorFixId.REQUEST_BATTERY_EXEMPTION,
             risk = FixClass.CONFIRM,
-            effect = "Opens the system dialog that exempts Phonxiety from battery optimisation, so the " +
-                "heartbeat survives a locked, idle phone.",
-            rollback = "Remove it in Settings → Apps → Phonxiety → Battery → Unrestricted → Optimised."
+            effect = UiText.Res(R.string.doctor_effect_background),
+            rollback = UiText.Res(R.string.doctor_rollback_background)
         )
 
         // A recorded crash or exit is evidence, not a symptom with a switch: the row explains the
@@ -81,26 +91,23 @@ object DoctorPolicy {
         DoctorItemKind.PAIRING -> FixPlan(
             fix = DoctorFixId.REPAIR_PAIRING,
             risk = FixClass.CONFIRM,
-            effect = "Opens the pairing recovery page. The computer prints a fresh QR with `phonxiety pair` and " +
-                "the phone pairs again; the stored token is replaced.",
-            rollback = "The old pairing is gone once the new one is stored; pair again to undo."
+            effect = UiText.Res(R.string.doctor_effect_pairing),
+            rollback = UiText.Res(R.string.doctor_rollback_pairing)
         )
 
-        // Restarting the service reopens the link and re-arms the heartbeat without a reboot.
+        // Restarting the bridge reopens the link and re-arms the heartbeat without a reboot.
         DoctorItemKind.LINK -> FixPlan(
             fix = DoctorFixId.RESTART_SERVICE,
             risk = FixClass.AUTOMATIC,
-            effect = "Stops and starts the bridge foreground service, which reopens the device link and " +
-                "re-arms the heartbeat. The pairing is untouched.",
-            rollback = "Nothing to undo: the service comes back with the stored pairing."
+            effect = UiText.Res(R.string.doctor_effect_bridge_restart),
+            rollback = UiText.Res(R.string.doctor_rollback_bridge)
         )
 
         DoctorItemKind.DAEMON -> FixPlan(
             fix = DoctorFixId.RESTART_SERVICE,
             risk = FixClass.AUTOMATIC,
-            effect = "Stops and starts the bridge foreground service so the app API reconnects from a clean " +
-                "socket. The daemon itself is not touched.",
-            rollback = "Nothing to undo: the service comes back with the stored pairing."
+            effect = UiText.Res(R.string.doctor_effect_bridge_reconnect),
+            rollback = UiText.Res(R.string.doctor_rollback_bridge)
         )
 
         DoctorItemKind.RELAY -> daemonPlan(
@@ -116,17 +123,19 @@ object DoctorPolicy {
     fun daemonPlan(fix: String, description: String?, restartRequired: Boolean): FixPlan = FixPlan(
         fix = DoctorFixId.DAEMON_FIX,
         risk = if (restartRequired) FixClass.CONFIRM else FixClass.AUTOMATIC,
-        effect = buildString {
-            append("The daemon applies `$fix`")
-            if (!description.isNullOrBlank()) append(": $description")
-            append('.')
-            if (restartRequired) append(" The daemon restarts, which drops a call that is running.")
+        effect = when {
+            !description.isNullOrBlank() && restartRequired ->
+                UiText.Res(R.string.doctor_effect_daemon_fix_described_restart, listOf(fix, description))
+
+            !description.isNullOrBlank() -> UiText.Res(R.string.doctor_effect_daemon_fix_described, listOf(fix, description))
+
+            restartRequired -> UiText.Res(R.string.doctor_effect_daemon_fix_restart, listOf(fix))
+
+            else -> UiText.Res(R.string.doctor_effect_daemon_fix, listOf(fix))
         },
-        rollback = if (restartRequired) {
-            "Restart the daemon on the computer with `phonxiety stop` and `phonxiety start`."
-        } else {
-            "Nothing on the phone changes; the daemon recreates what it needs."
-        },
+        rollback = UiText.Res(
+            if (restartRequired) R.string.doctor_rollback_daemon_restart else R.string.doctor_rollback_daemon
+        ),
         restartsDaemon = restartRequired,
         daemonFix = fix
     )

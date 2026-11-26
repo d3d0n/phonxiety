@@ -1,0 +1,327 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Screen and summary -->
+    <string name="doctor_title">Doctor</string>
+    <string name="doctor_card_summary">Self-check</string>
+    <string name="doctor_status_all_pass">All checks pass</string>
+    <plurals name="doctor_status_needs_fix">
+        <item quantity="one">%1$d check needs a fix</item>
+        <item quantity="other">%1$d checks need a fix</item>
+    </plurals>
+    <string name="doctor_status_inconclusive">Inconclusive</string>
+    <string name="doctor_status_reading">Reading…</string>
+    <string name="doctor_status_read_failed">The read failed</string>
+    <string name="doctor_status_not_checked">Not checked yet</string>
+    <plurals name="doctor_summary_passed">
+        <item quantity="one">%1$d of %2$d checks passes</item>
+        <item quantity="other">%1$d of %2$d checks pass</item>
+    </plurals>
+    <plurals name="doctor_summary_all_pass">
+        <item quantity="one">%1$d check passes</item>
+        <item quantity="other">%1$d checks pass</item>
+    </plurals>
+    <string name="doctor_summary_line_all_pass">Every check passes. Doctor keeps the evidence behind each one.</string>
+    <string name="doctor_summary_line_unknown">Doctor could not read enough to judge. Check again after granting root access.</string>
+    <string name="doctor_summary_line_call">A call is running. Fixes that would drop it stay blocked until the call ends.</string>
+    <plurals name="doctor_summary_line_needs_fix">
+        <item quantity="one">%1$d check needs a fix. Automatic fixes already ran; the rest explain their effect before they act.</item>
+        <item quantity="other">%1$d checks need a fix. Automatic fixes already ran; the rest explain their effect before they act.</item>
+    </plurals>
+    <string name="doctor_summary_reading">Reading the phone and the daemon…</string>
+    <string name="doctor_read_error_title">The phone could not be read</string>
+    <string name="doctor_action_run_checks">Run checks again</string>
+    <string name="doctor_running">Running: %1$s</string>
+    <string name="doctor_loading_report">Reading the daemon\'s report…</string>
+
+    <!-- Check groups -->
+    <string name="doctor_group_root">Root and module</string>
+    <string name="doctor_group_permissions">Permissions</string>
+    <string name="doctor_group_device">Device</string>
+    <string name="doctor_group_link">Link</string>
+    <string name="doctor_group_daemon">Daemon</string>
+
+    <!-- Row titles -->
+    <string name="doctor_row_root_provider">Root provider</string>
+    <string name="doctor_row_module_installed">Module installed</string>
+    <string name="doctor_row_module_enabled">Module enabled</string>
+    <string name="doctor_row_overlay">System overlay applied</string>
+    <string name="doctor_row_notifications">Notifications</string>
+    <string name="doctor_row_battery">Battery exemption</string>
+    <string name="doctor_row_pairing">Pairing</string>
+    <string name="doctor_row_last_crash">Last process exit</string>
+    <string name="doctor_row_link">Device link</string>
+    <string name="doctor_row_daemon">Daemon reachable</string>
+    <string name="doctor_row_relay">Relay configuration</string>
+
+    <string name="doctor_privileged_capture_audio">Capture audio output</string>
+    <string name="doctor_privileged_modify_phone_state">Modify phone state</string>
+    <string name="doctor_privileged_control_in_call">Control in-call experience</string>
+    <string name="doctor_privileged_install_updates">Install self updates</string>
+    <string name="doctor_privileged_reboot">Reboot</string>
+
+    <string name="doctor_runtime_record_audio">Record audio</string>
+    <string name="doctor_runtime_call_phone">Place calls</string>
+    <string name="doctor_runtime_read_phone_state">Read phone state</string>
+    <string name="doctor_runtime_modify_audio">Change audio settings</string>
+    <string name="doctor_runtime_post_notifications">Post notifications</string>
+    <string name="doctor_runtime_local_network">Local network (Android 17)</string>
+
+    <string name="doctor_check_daemon">Daemon process</string>
+    <string name="doctor_check_phone">Phone connection</string>
+    <string name="doctor_check_codex_auth">Codex credentials</string>
+    <string name="doctor_check_voice_backend">Voice backend</string>
+    <string name="doctor_check_disk">Daemon storage</string>
+
+    <!-- Severity -->
+    <string name="doctor_severity_warning">Warning</string>
+    <string name="doctor_severity_failed">Failed</string>
+    <string name="doctor_severity_unknown">Unknown</string>
+
+    <!-- Evidence: root provider -->
+    <string name="doctor_evidence_root_conflict">%1$s are present, but nothing said which one answers su; installing would be a guess.</string>
+    <string name="doctor_evidence_leftovers">Inactive leftovers: %1$s</string>
+    <string name="doctor_evidence_root_no_provider">Root is granted, but no supported manager was found.</string>
+    <string name="doctor_evidence_root_granted">%1$s %2$s</string>
+    <string name="doctor_evidence_manager_installed">manager installed</string>
+    <string name="doctor_evidence_manager_missing">manager app not installed</string>
+    <string name="doctor_evidence_root_denied">su answered, but the manager refused this app.</string>
+    <string name="doctor_evidence_root_hidden">%1$s is installed, but su is hidden from this app until it is allowed in Superuser.</string>
+    <string name="doctor_evidence_root_not_rooted">No su binary answered.</string>
+    <string name="doctor_evidence_root_not_rooted_magisk">No su binary answered. The Magisk app is installed, so Magisk itself is not active.</string>
+    <string name="doctor_evidence_root_timeout">su did not answer within %1$d&#160;s.</string>
+
+    <!-- Evidence: module -->
+    <string name="doctor_evidence_module_not_asked">The root provider could not be asked.</string>
+    <string name="doctor_evidence_module_unreadable">The module directory under /data/adb could not be read.</string>
+    <string name="doctor_evidence_module_absent">No phonxiety_bridge module under /data/adb/modules.</string>
+    <string name="doctor_evidence_module_staged">Version %1$s installed; waiting for the reboot that applies it.</string>
+    <string name="doctor_evidence_module_staged_no_version">Installed; waiting for the reboot that applies it.</string>
+    <string name="doctor_evidence_module_enabled">Version %1$s installed.</string>
+    <string name="doctor_evidence_module_enabled_no_version">Installed.</string>
+    <string name="doctor_evidence_module_disabled">Version %1$s installed, disabled.</string>
+    <string name="doctor_evidence_module_disabled_no_version">Installed, disabled.</string>
+    <string name="doctor_evidence_module_remove_pending">Installed, but the remove flag is set.</string>
+    <string name="doctor_evidence_module_unknown">The module state could not be read.</string>
+
+    <string name="doctor_evidence_enabled_flag_absent">The disable flag is absent.</string>
+    <string name="doctor_evidence_enabled_staged">The overlay applies on the next boot.</string>
+    <string name="doctor_evidence_enabled_disabled">The disable flag is set; the overlay is not mounted.</string>
+    <string name="doctor_evidence_enabled_absent">The module is not installed.</string>
+    <string name="doctor_evidence_enabled_remove_pending">The remove flag is set; it disappears on the next boot.</string>
+
+    <!-- Evidence: overlay and permissions -->
+    <string name="doctor_evidence_overlay_no_package_manager">The package manager did not answer.</string>
+    <string name="doctor_evidence_overlay_privapp">Runs from %1$s.</string>
+    <string name="doctor_evidence_overlay_updated">An updated system app runs from %1$s.</string>
+    <string name="doctor_evidence_overlay_not_mounted">The app runs from %1$s; the module\'s overlay is not mounted.</string>
+    <string name="doctor_evidence_overlay_metamodule">The app runs from %1$s; the module\'s overlay is not mounted. The root manager needs a metamodule to mount system/.</string>
+    <string name="doctor_evidence_privileged_granted">Granted by the module\'s allowlist.</string>
+    <string name="doctor_evidence_privileged_missing">Not granted; the module\'s allowlist does not cover it.</string>
+    <string name="doctor_evidence_granted">Granted.</string>
+    <string name="doctor_evidence_not_granted">Not granted.</string>
+    <string name="doctor_evidence_local_network_missing">Not granted; Android 17 reports the missing grant as a timeout, not as a denial.</string>
+    <string name="doctor_evidence_notifications_permission">The notification permission is not granted.</string>
+    <string name="doctor_evidence_notifications_switched_off">The permission is granted, but notifications are switched off.</string>
+    <string name="doctor_evidence_notifications_allowed">Notifications are allowed.</string>
+    <string name="doctor_evidence_battery_allowed">Allowed to run in the background.</string>
+    <string name="doctor_evidence_battery_missing">Not allowed; a locked phone can miss the heartbeat.</string>
+    <string name="doctor_evidence_battery_unknown">The power manager did not answer.</string>
+    <string name="doctor_evidence_pairing_stored">A pairing is stored.</string>
+    <string name="doctor_evidence_pairing_missing">No pairing is stored.</string>
+
+    <!-- Evidence: crash, link, daemon -->
+    <string name="doctor_evidence_crash_memory">%1$s. The system reclaimed the process\'s memory; keep the service heap small and allow background running.</string>
+    <string name="doctor_evidence_crash_trace">%1$s. The trace is in the diagnostics bundle.</string>
+    <string name="doctor_evidence_link_connecting">Connecting</string>
+    <string name="doctor_evidence_link_offline">Offline; no path to the daemon</string>
+    <plurals name="doctor_evidence_reconnects">
+        <item quantity="one">%1$d reconnect</item>
+        <item quantity="other">%1$d reconnects</item>
+    </plurals>
+    <string name="doctor_evidence_rtt">%1$d&#160;ms</string>
+    <plurals name="doctor_evidence_daemon_checks">
+        <item quantity="one">%1$d check</item>
+        <item quantity="other">%1$d checks</item>
+    </plurals>
+    <string name="doctor_evidence_daemon_status_clear">All clear</string>
+    <string name="doctor_evidence_daemon_status_warnings">Warnings</string>
+    <string name="doctor_evidence_daemon_status_failures">Failures</string>
+    <string name="doctor_evidence_relay_missing">The daemon did not report a relay state.</string>
+    <string name="doctor_evidence_daemon_no_detail">The daemon reported no detail.</string>
+
+    <string name="doctor_link_path_direct">Direct</string>
+    <string name="doctor_link_path_relay">Relay</string>
+    <string name="doctor_link_path_unknown">Unknown</string>
+    <string name="doctor_link_kind_iroh">iroh</string>
+    <string name="doctor_link_kind_lan">LAN</string>
+    <string name="doctor_link_kind_tailscale">Tailscale</string>
+
+    <!-- Fix labels -->
+    <string name="doctor_fix_restart_bridge">Restart the bridge</string>
+    <string name="doctor_fix_grant_again">Grant again</string>
+    <string name="doctor_fix_allow_notifications">Allow notifications</string>
+    <string name="doctor_fix_allow_background">Allow background running</string>
+    <string name="doctor_fix_reenable_module">Re-enable the module</string>
+    <string name="doctor_fix_reinstall_module">Reinstall the module</string>
+    <string name="doctor_fix_open_pairing">Open pairing recovery</string>
+    <string name="doctor_fix_run">Run fix</string>
+
+    <!-- Fix effects -->
+    <string name="doctor_effect_module_install">This installs the module and its allowlist together, so the privileged permissions come back.</string>
+    <string name="doctor_effect_module_install_metamodule">The root manager needs a metamodule to mount system/. Install it from Setup first; then this reinstalls the module and its allowlist together.</string>
+    <string name="doctor_effect_module_enable">Clears the module\'s disable flag through the root manager.</string>
+    <string name="doctor_effect_allowlist">Without the allowlist, the app cannot use its privileged permissions. This reinstalls the module and its allowlist together.</string>
+    <string name="doctor_effect_runtime_permission">Opens the system permission dialog for this permission. The check runs again when the dialog closes.</string>
+    <string name="doctor_effect_notifications">Asks for the notification permission, or opens Phonxiety\'s notification settings when the permission is granted but notifications are switched off.</string>
+    <string name="doctor_effect_background">Opens the system dialog that allows background running, so the heartbeat survives a locked phone.</string>
+    <string name="doctor_effect_pairing">Opens the pairing recovery guide. The computer prints a fresh QR, and the phone pairs again; the stored token is replaced.</string>
+    <string name="doctor_effect_bridge_restart">Stops and starts the bridge, which reopens the device link and re-arms the heartbeat. The pairing is untouched.</string>
+    <string name="doctor_effect_bridge_reconnect">Stops and starts the bridge so the app API reconnects from a clean socket. The daemon on your computer is not touched.</string>
+    <string name="doctor_effect_daemon_fix">The daemon applies %1$s.</string>
+    <string name="doctor_effect_daemon_fix_described">The daemon applies %1$s: %2$s.</string>
+    <string name="doctor_effect_daemon_fix_restart">The daemon applies %1$s. The daemon restarts, which drops a running call.</string>
+    <string name="doctor_effect_daemon_fix_described_restart">The daemon applies %1$s: %2$s. The daemon restarts, which drops a running call.</string>
+
+    <!-- Fix rollbacks -->
+    <string name="doctor_rollback_module">The previous zip stays in Updates. Reinstall it to go back.</string>
+    <string name="doctor_rollback_module_disable">Disable the module again from the root manager; nothing on the phone is deleted.</string>
+    <string name="doctor_rollback_runtime_permission">Revoke it in Settings → Apps → Phonxiety → Permissions.</string>
+    <string name="doctor_rollback_notifications">Turn notifications off again in Settings → Apps → Phonxiety → Notifications.</string>
+    <string name="doctor_rollback_background">Remove the exemption in Settings → Apps → Phonxiety → Battery.</string>
+    <string name="doctor_rollback_pairing">The old pairing is replaced. Pair again to return to the previous daemon.</string>
+    <string name="doctor_rollback_bridge">Nothing to undo. The bridge comes back with the stored pairing.</string>
+    <string name="doctor_rollback_daemon_restart">Nothing changes on the phone. The daemon keeps the new value until it is restarted again.</string>
+    <string name="doctor_rollback_daemon">Nothing changes on the phone; the daemon recreates what it needs.</string>
+
+    <!-- Detail card and row actions -->
+    <string name="doctor_rollback_label">Rollback</string>
+    <string name="doctor_reboot_notice">The phone reboots when the fix succeeds.</string>
+    <string name="doctor_blocked_in_call">Not during a call: this would drop it.</string>
+    <string name="doctor_open_recovery">Open recovery</string>
+    <string name="doctor_select_check_title">Select a check</string>
+    <string name="doctor_select_check_message">The evidence, the fix and its rollback appear here.</string>
+
+    <!-- Confirm dialog -->
+    <string name="doctor_confirm_title">%1$s?</string>
+    <string name="doctor_confirm_check_failed">The check “%1$s” failed.</string>
+    <string name="doctor_confirm_action_reboot">%1$s and reboot</string>
+    <string name="doctor_confirm_cancel">Cancel</string>
+
+    <!-- Risk classes -->
+    <string name="doctor_risk_automatic">Runs on open</string>
+    <string name="doctor_risk_confirm">Asks first</string>
+    <string name="doctor_risk_never">Blocked in a call</string>
+
+    <!-- Daemon fixes -->
+    <string name="doctor_card_daemon_fixes">Daemon fixes</string>
+    <string name="doctor_daemon_fixes_subtitle">Reported by the daemon. Each one says what it restarts.</string>
+    <string name="doctor_daemon_fixes_none">The daemon offered no fixes.</string>
+
+    <!-- Change log -->
+    <string name="doctor_card_changes">What Doctor changed</string>
+    <string name="doctor_changes_subtitle">Fixes it ran without asking are recorded here.</string>
+    <string name="doctor_changes_none">Doctor has not changed anything yet.</string>
+    <string name="doctor_change_line">%1$s  %2$s</string>
+
+    <!-- Recovery -->
+    <string name="doctor_card_recovery">Recovery guides</string>
+    <string name="doctor_recovery_subtitle">Commands are filled in for %1$s.</string>
+    <string name="doctor_recovery_subtitle_unknown">Commands use the safe mode and flags every root manager honours.</string>
+    <string name="doctor_recovery_what_happened">What happened</string>
+    <string name="doctor_recovery_on_phone">On the phone</string>
+    <string name="doctor_recovery_from_computer">From the computer</string>
+    <string name="doctor_recovery_copy">Copy</string>
+    <string name="doctor_recovery_copied">Command copied</string>
+    <string name="doctor_clipboard_label">Phonxiety command</string>
+
+    <!-- Recovery page titles and explanations -->
+    <string name="doctor_recovery_bootloop_title">The phone boot-loops after a module update</string>
+    <string name="doctor_recovery_bootloop_happened">The overlay or the privapp allowlist stopped the system server from starting. Every supported root solution can boot with its modules disabled, and no user data is touched.</string>
+    <string name="doctor_recovery_module_disabled_title">The module is disabled</string>
+    <string name="doctor_recovery_module_disabled_happened">Safe mode or the manager turned the module off. The overlay is not mounted, so the privileged grants are absent and calls fail without a clear error.</string>
+    <string name="doctor_recovery_root_lost_title">Root is gone after an update</string>
+    <string name="doctor_recovery_root_lost_happened">An over-the-air update flashed a stock boot image, so su is gone. The pairing lives in device-protected storage and survives the update.</string>
+    <string name="doctor_recovery_grants_lost_title">The privileged grants are missing</string>
+    <string name="doctor_recovery_grants_lost_happened">The module is enabled, but this APK does not run from /system/priv-app, or a permission is missing from its allowlist. Capture and in-call control then fail without a clear error.</string>
+    <string name="doctor_recovery_daemon_unreachable_title">The daemon cannot be reached</string>
+    <string name="doctor_recovery_daemon_unreachable_happened">The link is down, the daemon is not running, or the path is blocked. Android 17 reports a missing local-network grant as a timeout, so the permission comes before any network theory.</string>
+    <string name="doctor_recovery_pairing_rejected_title">The pairing was rejected</string>
+    <string name="doctor_recovery_pairing_rejected_happened">The daemon answered but refused the credentials: the token expired, the certificate changed, or the protocol versions differ.</string>
+    <string name="doctor_recovery_audio_silent_title">The link is up but audio is silent</string>
+    <string name="doctor_recovery_audio_silent_happened">On Android 17 the audio hardening and the foreground-service type decide whether the bridge may touch audio outside a call. A silent link looks exactly like a connected one.</string>
+    <string name="doctor_recovery_call_dropped_title">The call dropped at the phone</string>
+    <string name="doctor_recovery_call_dropped_happened">The call ended on the phone side. The link counters and the daemon\'s error say whether the link or the audio path went first.</string>
+
+    <!-- Recovery steps -->
+    <string name="doctor_recovery_bootloop_safe_mode">Enter safe mode for %1$s, which disables every module for the next boot.</string>
+    <string name="doctor_recovery_bootloop_safe_mode_unknown">Enter your root manager\'s safe mode, which disables every module for the next boot.</string>
+    <string name="doctor_recovery_bootloop_phone_magisk">Hold volume-down while the boot animation starts; Magisk then boots without modules.</string>
+    <string name="doctor_recovery_bootloop_phone_kernelsu">Press volume-down three times while the boot animation runs; KernelSU disables every module.</string>
+    <string name="doctor_recovery_bootloop_phone_apatch">Boot into APatch\'s rescue from the manager\'s safe mode; it disables every module.</string>
+    <string name="doctor_recovery_bootloop_phone_unknown">Use the rescue or safe mode of your root manager; it disables every module.</string>
+    <string name="doctor_recovery_bootloop_open_manager">Once Android starts, open the manager and delete or disable the Phonxiety module before rebooting again.</string>
+    <string name="doctor_recovery_bootloop_remove">Remove the module from a root shell:</string>
+    <string name="doctor_recovery_bootloop_authorize">If adb is not authorized yet, authorize it with the provider\'s safe mode first; the manager\'s remove button does the same thing.</string>
+    <string name="doctor_recovery_module_enable">Open %1$s, open Modules, and enable Phonxiety.</string>
+    <string name="doctor_recovery_module_enable_unknown">Open your root manager, open Modules, and enable Phonxiety.</string>
+    <string name="doctor_recovery_module_reboot">Reboot: the overlay is mounted at boot, never while the phone runs.</string>
+    <string name="doctor_recovery_module_clear_flag">Clear the disable flag:</string>
+    <string name="doctor_recovery_module_check_dir">Then check the module directory:</string>
+    <string name="doctor_recovery_root_magisk">Patch the new boot image in the Magisk app and flash it with fastboot.</string>
+    <string name="doctor_recovery_root_kernelsu">Install the KernelSU LKM to the inactive slot from the KernelSU app, then reboot.</string>
+    <string name="doctor_recovery_root_apatch">Re-patch the boot image in APatch and flash it.</string>
+    <string name="doctor_recovery_root_unknown">Re-root with the tool you used before; the manager\'s own flow is the only supported path.</string>
+    <string name="doctor_recovery_root_recheck">Open Phonxiety and press Run checks again; the module and the pairing are still in place.</string>
+    <string name="doctor_recovery_root_confirm">Confirm root before changing anything else:</string>
+    <string name="doctor_recovery_root_pairing_kept">The pairing is kept; a lost module is reinstalled from Doctor once root answers.</string>
+    <string name="doctor_recovery_grants_open_doctor">Open Doctor: the missing permission is named in the Permissions group.</string>
+    <string name="doctor_recovery_grants_reinstall">Reinstall the module from Doctor or Updates; the APK and its allowlist ship together.</string>
+    <string name="doctor_recovery_grants_reboot">Reboot, then press Run checks again.</string>
+    <string name="doctor_recovery_grants_package_path">Where the package actually runs from:</string>
+    <string name="doctor_recovery_grants_granted">What the platform granted it:</string>
+    <string name="doctor_recovery_daemon_check_link">Check the Link group: a relay path works but adds latency; offline means no path at all.</string>
+    <string name="doctor_recovery_daemon_grant_local">If Local network is missing from Permissions, grant it; without it the phone cannot reach a LAN address.</string>
+    <string name="doctor_recovery_daemon_recheck_network">Run the checks again after switching between Wi-Fi and mobile data.</string>
+    <string name="doctor_recovery_daemon_status">What the daemon sees:</string>
+    <string name="doctor_recovery_daemon_link_test">Measure the link from the computer side:</string>
+    <string name="doctor_recovery_daemon_restart">Restart the daemon if it is not answering:</string>
+    <string name="doctor_recovery_pairing_row">Doctor\'s pairing row says whether the failure is the token, the certificate or the protocol.</string>
+    <string name="doctor_recovery_pairing_again">Open Setup and pair again with a fresh QR from the computer; the stored token is replaced.</string>
+    <string name="doctor_recovery_pairing_new_qr">Print a fresh pairing QR:</string>
+    <string name="doctor_recovery_pairing_versions">The daemon\'s versions, including the app API:</string>
+    <string name="doctor_recovery_audio_lab">Run a test call from the Test lab: the call foreground service is the only place capture and playback are allowed.</string>
+    <string name="doctor_recovery_audio_service">Check that the call service is running in the Daemon group; a stopped service means the audio path is gone.</string>
+    <string name="doctor_recovery_audio_hardening">Turn the audio hardening into a hard failure so the next attempt names the rule:</string>
+    <string name="doctor_recovery_audio_rules">Read the hardening rules in force:</string>
+    <string name="doctor_recovery_call_counters">Doctor\'s link row carries the reconnect count and the last error.</string>
+    <string name="doctor_recovery_call_battery">If it dropped with the screen off, the background exemption is the first suspect.</string>
+    <string name="doctor_recovery_call_last_error">The last error and the link counters:</string>
+    <string name="doctor_recovery_call_measure">A fresh measurement of the path:</string>
+
+    <!-- Change log events -->
+    <string name="doctor_log_bridge_restarted">Restarted the bridge to reopen the link</string>
+    <string name="doctor_log_permission_asked">Asked for %1$s again</string>
+    <string name="doctor_log_notifications_asked">Asked to allow notifications</string>
+    <string name="doctor_log_background_asked">Asked for the background exemption</string>
+    <string name="doctor_log_module_enabled">Re-enabled the module</string>
+    <string name="doctor_log_module_enabled_output">Re-enabled the module: %1$s</string>
+    <string name="doctor_log_module_reinstalled">Reinstalled the module</string>
+    <string name="doctor_log_module_reinstalled_output">Reinstalled the module: %1$s</string>
+    <string name="doctor_log_reboot_requested">Requested the reboot that applies the module</string>
+    <string name="doctor_log_rebooted">Requested a reboot</string>
+    <string name="doctor_log_fix_failed">The fix failed: %1$s</string>
+    <string name="doctor_log_fix_failed_no_output">The fix failed: the provider printed nothing</string>
+    <string name="doctor_log_reboot_failed">The reboot request failed: %1$s</string>
+    <string name="doctor_log_pairing_opened">Opened pairing recovery</string>
+    <string name="doctor_log_daemon_fix">The daemon applied %1$s</string>
+    <string name="doctor_log_daemon_fix_more">The daemon applied %1$s (%2$s)</string>
+
+    <!-- Messages -->
+    <string name="doctor_message_call_blocks_fix">Not while a call is running. This fix would drop it.</string>
+    <string name="doctor_message_call_blocks_daemon">Not while a call is running. Restarting the daemon would drop it.</string>
+    <string name="doctor_message_daemon_timeout">The daemon did not answer within %1$d&#160;s.</string>
+    <string name="doctor_message_daemon_restart">Restart the daemon on your computer so the new value takes effect.</string>
+    <string name="doctor_message_daemon_refused">The daemon refused %1$s: %2$s %3$s</string>
+    <string name="doctor_message_fix_failed">The fix failed. Open recovery for the manager\'s own commands.</string>
+    <string name="doctor_message_read_failed">The phone could not be read</string>
+</resources>

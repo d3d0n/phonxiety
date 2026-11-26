@@ -1,6 +1,11 @@
 package com.phonxiety.bridge.feature.doctor
 
+import android.content.Context
+import android.content.res.Resources
+import androidx.test.core.app.ApplicationProvider
 import com.phonxiety.bridge.data.ApiOutcome
+import com.phonxiety.bridge.designsystem.UiText
+import com.phonxiety.bridge.designsystem.asString
 import com.phonxiety.bridge.model.DoctorFixResult
 import com.phonxiety.bridge.model.LinkState
 import com.phonxiety.bridge.root.ModuleState
@@ -25,9 +30,18 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
 class DoctorViewModelTest {
+    private val resources: Resources = ApplicationProvider.getApplicationContext<Context>().resources
+
+    private fun DoctorRow.evidenceText(): String = evidence.joinToString(" · ") { it.asString(resources) }
+
     private val dispatcher = StandardTestDispatcher()
 
     @Before
@@ -57,7 +71,7 @@ class DoctorViewModelTest {
         advanceUntilIdle()
 
         assertEquals(1, service.restarts)
-        assertTrue(log.recorded.any { it.text == "Restarted the bridge service to reopen the link" })
+        assertTrue(log.recorded.any { it.event == DoctorLogEvent.BRIDGE_RESTARTED })
         assertFalse(viewModel.state.value.checking)
         assertTrue(viewModel.state.value.rows.isNotEmpty())
         assertEquals(RootId.MAGISK, viewModel.state.value.provider)
@@ -100,7 +114,7 @@ class DoctorViewModelTest {
         val state = viewModel.state.value
         val daemonRow = state.row(DoctorEvaluator.ID_DAEMON)
         assertEquals(DoctorSeverity.FAIL, daemonRow?.severity)
-        assertTrue(requireNotNull(daemonRow).evidence.contains("link_down"))
+        assertTrue(requireNotNull(daemonRow).evidenceText().contains("link_down"))
         assertEquals(DoctorSeverity.UNKNOWN, state.row(DoctorEvaluator.ID_RELAY)?.severity)
         assertFalse(state.rows.any { it.kind == DoctorItemKind.DAEMON_CHECK })
         assertTrue(state.daemonFixes.isEmpty())
@@ -196,8 +210,12 @@ class DoctorViewModelTest {
 
         assertEquals(1, source.enables)
         assertEquals(1, source.reboots)
-        assertTrue(log.recorded.any { it.text.startsWith("Re-enabling the module") })
-        assertTrue(log.recorded.any { it.text.contains("Requested the reboot") })
+        assertTrue(
+            log.recorded.any {
+                it.event == DoctorLogEvent.MODULE_ENABLED || it.event == DoctorLogEvent.MODULE_ENABLED_OUTPUT
+            }
+        )
+        assertTrue(log.recorded.any { it.event == DoctorLogEvent.REBOOT_REQUESTED })
     }
 
     @Test
@@ -221,7 +239,9 @@ class DoctorViewModelTest {
         assertEquals(0, source.reboots)
         assertNotNull(viewModel.state.value.message)
         assertTrue(
-            viewModel.state.value.changeLog.any { it.text.contains("Reinstalling the module failed") }
+            viewModel.state.value.changeLog.any {
+                it.event == DoctorLogEvent.FIX_FAILED && it.args.any { arg -> arg.contains("magisk --install-module") }
+            }
         )
     }
 
@@ -259,7 +279,11 @@ class DoctorViewModelTest {
         viewModel.confirmFix()
         advanceUntilIdle()
         assertEquals(listOf("state_dirs", "relay_config"), daemon.appliedFixes)
-        assertTrue(log.recorded.any { it.text.contains("Daemon applied relay_config") })
+        assertTrue(
+            log.recorded.any {
+                it.event == DoctorLogEvent.DAEMON_FIX_APPLIED && it.args.firstOrNull() == "relay_config"
+            }
+        )
     }
 
     @Test
@@ -274,7 +298,8 @@ class DoctorViewModelTest {
         viewModel.requestDaemonFix("state_dirs")
         advanceUntilIdle()
 
-        assertTrue(requireNotNull(viewModel.state.value.message).contains("unknown_fix"))
+        val message = requireNotNull(viewModel.state.value.message) as UiText.Res
+        assertTrue(message.args.contains("unknown_fix"))
     }
 
     @Test
@@ -307,7 +332,7 @@ class DoctorViewModelTest {
 
         val state = viewModel.state.value
         assertFalse(state.checking)
-        assertEquals("su did not answer", state.readError)
+        assertEquals(UiText.Literal("su did not answer"), state.readError)
         assertTrue(state.rows.isEmpty())
     }
 
@@ -357,7 +382,7 @@ class DoctorViewModelTest {
 
         val before = viewModel.state.value.row(DoctorEvaluator.ID_PAIRING)
         assertEquals(DoctorSeverity.FAIL, before?.severity)
-        assertEquals("no pairing link is stored", before?.evidence)
+        assertEquals("No pairing is stored.", before?.evidenceText())
 
         // The link does not move: only the cache re-read on IO catches up with the stored config.
         pairing.state.value = true
@@ -365,7 +390,7 @@ class DoctorViewModelTest {
 
         val after = viewModel.state.value.row(DoctorEvaluator.ID_PAIRING)
         assertEquals(DoctorSeverity.OK, after?.severity)
-        assertEquals("a pairing is stored", after?.evidence)
+        assertEquals("A pairing is stored.", after?.evidenceText())
     }
 
     private fun TestScope.viewModel(

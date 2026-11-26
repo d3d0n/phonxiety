@@ -6,6 +6,7 @@ import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.BridgeStateRepository
 import com.phonxiety.bridge.data.DaemonApi
 import com.phonxiety.bridge.data.PairingRepository
+import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.CallPhase
 import com.phonxiety.bridge.model.LinkState
 import com.phonxiety.bridge.root.ProviderResult
@@ -113,7 +114,7 @@ constructor(
             }
 
             FixClass.NEVER -> _state.update { current ->
-                current.copy(message = "Not while a call is running — ${plan.fix.label} would drop it.")
+                current.copy(message = UiText.Res(R.string.doctor_message_call_blocks_fix))
             }
         }
     }
@@ -121,20 +122,24 @@ constructor(
     fun requestDaemonFix(fix: String) {
         val offer = _state.value.daemonFixes.firstOrNull { it.fix == fix } ?: return
         when (val risk = DoctorPolicy.effectiveRisk(offer.plan, _state.value.callActive)) {
-            FixClass.AUTOMATIC -> run(fix, null, offer.plan.copy(risk = risk))
+            FixClass.AUTOMATIC -> run(
+                UiText.Literal(offer.description ?: fix),
+                null,
+                offer.plan.copy(risk = risk)
+            )
 
             FixClass.CONFIRM -> _state.update {
                 it.copy(
                     pending = FixRequest(
                         rowId = DAEMON_FIX_PREFIX + fix,
-                        title = offer.description ?: fix,
+                        checkTitle = UiText.Literal(offer.description ?: fix),
                         plan = offer.plan.copy(risk = risk)
                     )
                 )
             }
 
             FixClass.NEVER -> _state.update { current ->
-                current.copy(message = "Not while a call is running: restarting the daemon would drop it.")
+                current.copy(message = UiText.Res(R.string.doctor_message_call_blocks_daemon))
             }
         }
     }
@@ -142,7 +147,7 @@ constructor(
     fun confirmFix() {
         val pending = _state.value.pending ?: return
         _state.update { it.copy(pending = null) }
-        run(pending.title, pending.subject, pending.plan)
+        run(pending.checkTitle, pending.subject, pending.plan)
     }
 
     fun dismissConfirm() {
@@ -166,7 +171,7 @@ constructor(
         _state.update { it.copy(message = null) }
     }
 
-    private fun run(title: String, subject: String?, plan: FixPlan) {
+    private fun run(title: UiText, subject: String?, plan: FixPlan) {
         if (_state.value.running != null) return
         viewModelScope.launch(io) {
             _state.update { it.copy(running = plan.fix) }
@@ -179,17 +184,17 @@ constructor(
         }
     }
 
-    private suspend fun execute(title: String, subject: String?, plan: FixPlan) {
+    private suspend fun execute(title: UiText, subject: String?, plan: FixPlan) {
         when (plan.fix) {
             DoctorFixId.RESTART_SERVICE -> {
                 serviceControl.restart()
-                record("Restarted the bridge service to reopen the link")
+                record(DoctorLogEvent.BRIDGE_RESTARTED)
             }
 
             DoctorFixId.REGRANT_RUNTIME_PERMISSION -> {
                 val permission = subject ?: RuntimePermission.RECORD_AUDIO.androidName
                 _effects.tryEmit(DoctorEffect.RequestRuntimePermissions(listOf(permission)))
-                record("Asked for $permission again")
+                record(DoctorLogEvent.PERMISSION_ASKED, permission)
             }
 
             DoctorFixId.REGRANT_NOTIFICATION -> {
@@ -200,29 +205,29 @@ constructor(
                         DoctorEffect.RequestRuntimePermissions(listOf(RuntimePermission.POST_NOTIFICATIONS.androidName))
                     )
                 }
-                record("Asked to allow notifications")
+                record(DoctorLogEvent.NOTIFICATIONS_ASKED)
             }
 
             DoctorFixId.REQUEST_BATTERY_EXEMPTION -> {
                 _effects.tryEmit(DoctorEffect.RequestBatteryExemption)
-                record("Asked for the battery exemption")
+                record(DoctorLogEvent.BACKGROUND_ASKED)
             }
 
             DoctorFixId.ENABLE_MODULE -> {
                 val result = source.enableModule()
-                recordResult("Re-enabling the module", result)
+                recordResult(DoctorLogEvent.MODULE_ENABLED, DoctorLogEvent.MODULE_ENABLED_OUTPUT, result)
                 if (result.isSuccess) reboot()
             }
 
             DoctorFixId.REINSTALL_MODULE -> {
                 val result = source.reinstallModule()
-                recordResult("Reinstalling the module", result)
+                recordResult(DoctorLogEvent.MODULE_REINSTALLED, DoctorLogEvent.MODULE_REINSTALLED_OUTPUT, result)
                 if (result.isSuccess) reboot()
             }
 
             DoctorFixId.REPAIR_PAIRING -> {
                 _state.update { it.copy(page = RecoveryBook.page(RecoveryId.PAIRING_REJECTED, it.provider)) }
-                record("Opened pairing recovery")
+                record(DoctorLogEvent.PAIRING_RECOVERY_OPENED)
             }
 
             DoctorFixId.DAEMON_FIX -> applyDaemonFix(plan.daemonFix ?: return)
@@ -231,50 +236,70 @@ constructor(
 
     private suspend fun applyDaemonFix(fix: String) {
         when (val outcome = withTimeoutOrNull(DAEMON_TIMEOUT_MS) { daemonApi.doctorFix(fix) }) {
-            null -> report("The daemon did not answer within ${DAEMON_TIMEOUT_MS / 1000} s")
+            null -> report(UiText.Res(R.string.doctor_message_daemon_timeout, listOf(DAEMON_TIMEOUT_MS / 1000)))
 
             is ApiOutcome.Ok -> {
                 val applied = outcome.value.applied.joinToString(", ") { it.fix }
-                record("Daemon applied $fix" + if (applied.isNotEmpty()) " ($applied)" else "")
+                if (applied.isEmpty()) {
+                    record(DoctorLogEvent.DAEMON_FIX_APPLIED, fix)
+                } else {
+                    record(DoctorLogEvent.DAEMON_FIX_APPLIED_MORE, fix, applied)
+                }
                 if (outcome.value.restartRequired) {
-                    _state.update { it.copy(message = "Restart phonxietyd on the computer so the new value takes effect.") }
+                    report(UiText.Res(R.string.doctor_message_daemon_restart))
                 }
             }
 
-            is ApiOutcome.Failure -> report("The daemon refused $fix: ${outcome.code} ${outcome.message}")
+            // The daemon's own code and message stay verbatim inside the sentence.
+            is ApiOutcome.Failure -> report(
+                UiText.Res(
+                    R.string.doctor_message_daemon_refused,
+                    listOf(fix, outcome.code, outcome.message)
+                )
+            )
         }
     }
 
     private suspend fun reboot() {
         val result = source.reboot()
         if (result.isSuccess) {
-            record("Requested the reboot that applies the module")
+            record(DoctorLogEvent.REBOOT_REQUESTED)
         } else {
-            recordResult("Rebooting", result)
+            record(DoctorLogEvent.REBOOT_FAILED, result.detail())
         }
     }
 
-    private fun recordResult(action: String, result: ProviderResult) {
+    private fun recordResult(successEvent: DoctorLogEvent, outputEvent: DoctorLogEvent, result: ProviderResult) {
         when (result) {
             is ProviderResult.Success -> {
                 val output = result.tail(1).joinToString()
-                record(if (output.isEmpty()) action else "$action: $output")
+                if (output.isEmpty()) {
+                    record(successEvent)
+                } else {
+                    record(outputEvent, output)
+                }
             }
 
             else -> {
-                val detail = result.tail().joinToString("\n").ifEmpty { "the provider printed nothing" }
-                record("$action failed: $detail")
-                report("$action failed. Open Guided recovery for the provider's own commands.")
+                val detail = result.detail()
+                if (detail.isEmpty()) {
+                    record(DoctorLogEvent.FIX_FAILED)
+                } else {
+                    record(DoctorLogEvent.FIX_FAILED, detail)
+                }
+                report(UiText.Res(R.string.doctor_message_fix_failed))
             }
         }
     }
 
-    private fun record(text: String) {
-        changeLog.record(DoctorChangeEntry(System.currentTimeMillis(), text))
+    private fun ProviderResult.detail(): String = tail().joinToString(" ")
+
+    private fun record(event: DoctorLogEvent, vararg args: String) {
+        changeLog.record(DoctorChangeEntry(System.currentTimeMillis(), event, args.toList()))
         _state.update { it.copy(changeLog = changeLog.entries()) }
     }
 
-    private fun report(text: String) {
+    private fun report(text: UiText) {
         _state.update { it.copy(message = text) }
     }
 
@@ -287,7 +312,8 @@ constructor(
             _state.update {
                 it.copy(
                     checking = false,
-                    readError = error.message ?: "the device could not be read"
+                    readError = error.message?.let(UiText::Literal)
+                        ?: UiText.Res(R.string.doctor_message_read_failed)
                 )
             }
             return
