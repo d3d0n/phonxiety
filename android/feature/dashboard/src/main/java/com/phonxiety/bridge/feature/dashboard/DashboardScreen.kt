@@ -1,8 +1,12 @@
 package com.phonxiety.bridge.feature.dashboard
 
+import android.content.Context
+import android.text.format.DateFormat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,18 +18,27 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -43,6 +56,8 @@ import com.phonxiety.bridge.designsystem.component.StatTile
 import com.phonxiety.bridge.designsystem.component.StatTone
 import com.phonxiety.bridge.designsystem.component.StatusPill
 import com.phonxiety.bridge.designsystem.component.StatusTone
+import com.phonxiety.bridge.designsystem.formatDuration
+import com.phonxiety.bridge.designsystem.formatElapsedTime
 import com.phonxiety.bridge.model.AudioState
 import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.model.CallPhase
@@ -51,7 +66,19 @@ import com.phonxiety.bridge.model.DeviceState
 import com.phonxiety.bridge.model.LinkKind
 import com.phonxiety.bridge.model.LinkState
 import com.phonxiety.bridge.model.PathKind
+import java.util.Date
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.delay
+
+/** Unit symbols are not translated; the designsystem joins them to the value with a no-break space. */
+private const val UNIT_MILLISECONDS = "ms"
+private const val UNIT_KILOBITS = "kbit/s"
+
+/** A missing measurement is a dash, never a fabricated zero. */
+internal const val MISSING_VALUE = "—"
+
+/** The playback ring is 48 kHz mono, so one millisecond of downlink audio is 48 samples. */
+internal const val AUDIO_SAMPLES_PER_MILLISECOND = 48L
 
 /** The dashboard entry point; the app host only supplies navigation. */
 @Composable
@@ -82,6 +109,9 @@ fun DashboardRoute(
 /**
  * Link, call, audio and device cards plus the permissions the bridge is missing. Every "connected"
  * claim on this screen is a measurement from [DashboardUiState.bridge]; nothing here probes.
+ *
+ * The call card comes first because it answers "what is happening now"; the actions follow the
+ * answer. [nowEpochMs] fixes the clock for previews and screenshots; the screen ticks by itself.
  */
 @Composable
 fun DashboardScreen(
@@ -94,168 +124,269 @@ fun DashboardScreen(
     onOpenUpdates: () -> Unit,
     onUnpair: () -> Unit,
     modifier: Modifier = Modifier,
-    nowEpochMs: Long = System.currentTimeMillis()
+    nowEpochMs: Long? = null
 ) {
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .windowInsetsPadding(WindowInsets.safeDrawing),
-        contentAlignment = Alignment.TopCenter
+    val ticked by tickingNow()
+    val now = nowEpochMs ?: ticked
+    Surface(
+        modifier = modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background,
+        contentColor = MaterialTheme.colorScheme.onBackground
     ) {
-        Column(
+        Box(
             modifier = Modifier
-                .widthIn(max = 560.dp)
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.safeDrawing),
+            contentAlignment = Alignment.TopCenter
         ) {
-            DashboardHeader(state.bridge)
-            state.bridge.lastError?.let { error ->
-                ErrorCard(
-                    title = "The link reported an error",
-                    message = "${error.message} (${error.code})",
-                    actionLabel = "Open Doctor",
-                    onAction = onOpenDoctor
-                )
-            }
-            if (!state.paired) {
-                EmptyState(
-                    title = "This phone is not paired",
-                    message = "Pair it with the computer that runs the daemon, then the wizard finishes setup by itself."
-                )
-                PrimaryActionButton(label = "Set up this phone", onClick = onOpenSetup)
-            } else {
-                QuickActionsCard(
-                    inCall = state.bridge.call.isLive(),
-                    onNewCall = onNewCall,
-                    onRunLinkTest = onRunLinkTest,
-                    onOpenDoctor = onOpenDoctor,
-                    onOpenUpdates = onOpenUpdates
-                )
-                LinkCard(state.bridge.link, nowEpochMs)
-                CallCard(state.bridge.call, nowEpochMs, onOpenLiveCall)
-                AudioCard(state.bridge.audio)
-                DeviceCard(state.bridge.device, state.simOperator)
-                PermissionCard(state.bridge.device.missingPermissions, onOpenSetup)
-                PairingCard(
-                    inCall = state.bridge.call.isLive(),
-                    onOpenSetup = onOpenSetup,
-                    onUnpair = onUnpair
-                )
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 560.dp)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                DashboardHeader(state.bridge, state.paired)
+                state.bridge.lastError?.let { error ->
+                    ErrorCard(
+                        title = stringResource(R.string.dashboard_link_error_title),
+                        message = error.message,
+                        output = error.code,
+                        actionLabel = stringResource(R.string.dashboard_open_doctor),
+                        onAction = onOpenDoctor
+                    )
+                }
+                if (!state.paired) {
+                    EmptyState(
+                        title = stringResource(R.string.dashboard_unpaired_title),
+                        message = stringResource(R.string.dashboard_unpaired_message)
+                    )
+                    PrimaryActionButton(
+                        label = stringResource(R.string.dashboard_set_up_phone),
+                        onClick = onOpenSetup
+                    )
+                } else {
+                    CallCard(state.bridge.call, now, onOpenLiveCall)
+                    QuickActionsCard(
+                        call = state.bridge.call,
+                        showLinkTest = state.bridge.link is LinkState.Up,
+                        onNewCall = onNewCall,
+                        onRunLinkTest = onRunLinkTest,
+                        onOpenDoctor = onOpenDoctor,
+                        onOpenUpdates = onOpenUpdates
+                    )
+                    LinkCard(state.bridge.link, now, onRunLinkTest)
+                    AudioCard(state.bridge.audio)
+                    DeviceCard(state.bridge.device, state.simOperator)
+                    PermissionCard(state.bridge.device.missingPermissions, onOpenSetup)
+                    PairingCard(
+                        inCall = state.bridge.call.isLive(),
+                        onOpenSetup = onOpenSetup,
+                        onUnpair = onUnpair
+                    )
+                }
             }
         }
     }
 }
 
+/** Tiles reflow instead of squeezing: three across at 100 %, as many rows as the font needs. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun DashboardHeader(bridge: BridgeState) {
+private fun TileRow(content: @Composable () -> Unit) {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        content()
+    }
+}
+
+/** Action buttons wrap at their own width so no label is ever split or clipped. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ActionFlow(content: @Composable () -> Unit) {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        content()
+    }
+}
+
+/** The title and the one pill that answers "what is happening now". */
+@Composable
+private fun DashboardHeader(bridge: BridgeState, paired: Boolean) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(text = "phonxiety", style = MaterialTheme.typography.headlineMedium)
+            Text(text = stringResource(R.string.dashboard_title), style = MaterialTheme.typography.headlineMedium)
             Text(
-                text = "Bridge control",
+                text = stringResource(R.string.dashboard_subtitle),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        when (val link = bridge.link) {
-            is LinkState.Up -> LinkPathPill(link.path.toDesignPath())
-            is LinkState.Connecting -> StatusPill("Connecting", StatusTone.WARNING, pulse = true)
-            LinkState.Offline -> StatusPill("Offline", StatusTone.NEUTRAL)
-        }
+        HeaderStatus(bridge, paired)
     }
 }
 
 @Composable
-private fun LinkCard(link: LinkState, nowEpochMs: Long) {
-    SectionCard(
-        title = "Link",
-        subtitle = "How this phone reaches the daemon",
-        status = {
-            when (link) {
-                is LinkState.Up -> LinkPathPill(link.path.toDesignPath())
-                is LinkState.Connecting -> StatusPill("Connecting", StatusTone.WARNING, pulse = true)
-                LinkState.Offline -> StatusPill("Offline", StatusTone.NEUTRAL)
-            }
-        }
-    ) {
-        when (link) {
-            is LinkState.Up -> {
-                Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                    StatTile(
-                        label = "Transport",
-                        value = link.kind.label(),
-                        caption = link.path.label()
-                    )
-                    StatTile(
-                        label = "RTT p50",
-                        value = link.rttMs?.let { "$it ms" } ?: "—",
-                        mono = true,
-                        tone = rttTone(link.rttMs)
-                    )
-                    StatTile(
-                        label = "Up for",
-                        value = formatUptime(link.sinceEpochMs, nowEpochMs),
-                        mono = true
-                    )
-                }
-                KeyValueRow(label = "Reconnects", value = link.reconnects.toString(), mono = true)
-                link.address?.let { address ->
-                    KeyValueRow(label = "Endpoint", value = address, mono = true)
-                }
-            }
+private fun HeaderStatus(bridge: BridgeState, paired: Boolean) {
+    val call = bridge.call.takeIfLive()
+    when {
+        call != null -> StatusPill(
+            label = phaseLabel(call.phase),
+            tone = phaseTone(call.phase),
+            pulse = call.phase == CallPhase.DIALING
+        )
 
-            is LinkState.Connecting -> {
-                Text(
-                    text = "Trying ${link.candidate.label()}…",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+        !paired -> StatusPill(
+            label = stringResource(R.string.dashboard_status_not_paired),
+            tone = StatusTone.NEUTRAL
+        )
+
+        else -> when (val link = bridge.link) {
+            is LinkState.Up -> LinkPathPill(link.path.toDesignPath())
+
+            is LinkState.Connecting -> StatusPill(
+                label = stringResource(R.string.dashboard_status_connecting),
+                tone = StatusTone.WARNING,
+                pulse = true
+            )
+
+            LinkState.Offline -> StatusPill(
+                label = stringResource(R.string.dashboard_status_offline),
+                tone = StatusTone.NEUTRAL
+            )
+        }
+    }
+}
+
+/**
+ * The call in progress or the last one, then one primary action: open it. An ended call keeps its
+ * numbers for review but carries no filled button.
+ */
+@Composable
+private fun CallCard(call: CallState?, nowEpochMs: Long, onOpenLiveCall: (String) -> Unit) {
+    val context = LocalContext.current
+    // While a call is live the header pill already names its phase; the card does not repeat it.
+    val status: (@Composable androidx.compose.foundation.layout.RowScope.() -> Unit)? = when {
+        call == null -> {
+            {
+                StatusPill(
+                    label = stringResource(R.string.dashboard_call_idle),
+                    tone = StatusTone.NEUTRAL
                 )
             }
+        }
 
-            LinkState.Offline -> {
-                Text(
-                    text = "No path to the daemon. The service keeps retrying; the last numbers are gone because they would be a guess.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+        !call.isLive() -> {
+            {
+                StatusPill(
+                    label = phaseLabel(call.phase),
+                    tone = phaseTone(call.phase)
+                )
+            }
+        }
+
+        else -> null
+    }
+    SectionCard(
+        title = stringResource(R.string.dashboard_call_title),
+        status = status
+    ) {
+        if (call == null) {
+            Text(
+                text = stringResource(R.string.dashboard_call_empty),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            TileRow {
+                StatTile(
+                    label = stringResource(R.string.dashboard_destination),
+                    value = call.destinationMasked,
+                    mono = true
+                )
+                StatTile(
+                    label = stringResource(R.string.dashboard_duration),
+                    value = call.startedAtEpochMs
+                        ?.let { formatElapsedTime(secondsBetween(it, nowEpochMs)) }
+                        ?: MISSING_VALUE,
+                    mono = true
+                )
+                StatTile(
+                    label = stringResource(R.string.dashboard_connected_at),
+                    value = call.startedAtEpochMs?.let { timeOf(context, it) } ?: MISSING_VALUE,
+                    mono = true
+                )
+            }
+            if (call.isLive()) {
+                PrimaryActionButton(
+                    label = stringResource(R.string.dashboard_open_live_call),
+                    onClick = { onOpenLiveCall(call.callId) }
                 )
             }
         }
     }
 }
 
-/** The four things worth one tap: place a call, prove the link, repair it, update it. */
+/**
+ * The actions that are not the call: prove the link, repair it, update it. A call in progress
+ * explains why a second one is not offered instead of disabling a button without a reason.
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun QuickActionsCard(
-    inCall: Boolean,
+    call: CallState?,
+    showLinkTest: Boolean,
     onNewCall: () -> Unit,
     onRunLinkTest: () -> Unit,
     onOpenDoctor: () -> Unit,
     onOpenUpdates: () -> Unit
 ) {
-    SectionCard(title = "Actions") {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilledTonalButton(
-                onClick = onNewCall,
-                modifier = Modifier.weight(1f),
-                enabled = !inCall
-            ) {
-                Text("New call")
+    SectionCard(title = stringResource(R.string.dashboard_actions_title)) {
+        if (call.isLive()) {
+            Text(
+                text = stringResource(R.string.dashboard_actions_call_running),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            ActionFlow {
+                if (showLinkTest) {
+                    OutlinedButton(onClick = onRunLinkTest) {
+                        Text(stringResource(R.string.dashboard_link_test))
+                    }
+                }
+                OutlinedButton(onClick = onOpenDoctor) {
+                    Text(stringResource(R.string.dashboard_doctor))
+                }
+                OutlinedButton(onClick = onOpenUpdates) {
+                    Text(stringResource(R.string.dashboard_updates))
+                }
             }
-            FilledTonalButton(onClick = onRunLinkTest, modifier = Modifier.weight(1f)) {
-                Text("Link test")
-            }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilledTonalButton(onClick = onOpenDoctor, modifier = Modifier.weight(1f)) {
-                Text("Doctor")
-            }
-            FilledTonalButton(onClick = onOpenUpdates, modifier = Modifier.weight(1f)) {
-                Text("Updates")
+        } else {
+            ActionFlow {
+                Button(onClick = onNewCall) {
+                    Text(stringResource(R.string.dashboard_new_call))
+                }
+                if (showLinkTest) {
+                    OutlinedButton(onClick = onRunLinkTest) {
+                        Text(stringResource(R.string.dashboard_link_test))
+                    }
+                }
+                OutlinedButton(onClick = onOpenDoctor) {
+                    Text(stringResource(R.string.dashboard_doctor))
+                }
+                OutlinedButton(onClick = onOpenUpdates) {
+                    Text(stringResource(R.string.dashboard_updates))
+                }
             }
         }
     }
@@ -264,73 +395,134 @@ private fun QuickActionsCard(
 /** An ended call stays on the card for review; only a call still in progress blocks the actions. */
 private fun CallState?.isLive(): Boolean = this != null && phase != CallPhase.ENDED
 
+private fun CallState?.takeIfLive(): CallState? = takeIf { it.isLive() }
+
 @Composable
-private fun CallCard(call: CallState?, nowEpochMs: Long, onOpenLiveCall: (String) -> Unit) {
+private fun LinkCard(link: LinkState, nowEpochMs: Long, onRunLinkTest: () -> Unit) {
     SectionCard(
-        title = "Call",
-        status = {
-            if (call == null) {
-                StatusPill("Idle", StatusTone.NEUTRAL)
-            } else {
-                StatusPill(call.phase.label(), phaseTone(call.phase), pulse = call.phase == CallPhase.DIALING)
-            }
-        }
+        title = stringResource(R.string.dashboard_link_title),
+        subtitle = stringResource(R.string.dashboard_link_subtitle)
     ) {
-        if (call == null) {
-            Text(
-                text = "No call is running. The agent's calls appear here while they are live.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        } else {
-            Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                StatTile(label = "Destination", value = call.destinationMasked, mono = true)
-                StatTile(
-                    label = "Duration",
-                    value = call.startedAtEpochMs?.let { formatUptime(it, nowEpochMs) } ?: "—",
+        when (link) {
+            is LinkState.Up -> {
+                TileRow {
+                    StatTile(
+                        label = stringResource(R.string.dashboard_transport),
+                        value = linkKindLabel(link.kind)
+                    )
+                    StatTile(
+                        label = stringResource(R.string.dashboard_latency_median),
+                        value = link.rttMs?.toString() ?: MISSING_VALUE,
+                        mono = true,
+                        tone = rttTone(link.rttMs),
+                        unit = if (link.rttMs != null) UNIT_MILLISECONDS else null
+                    )
+                    StatTile(
+                        label = stringResource(R.string.dashboard_up_for),
+                        value = formatDuration(secondsBetween(link.sinceEpochMs, nowEpochMs)),
+                        mono = true
+                    )
+                }
+                KeyValueRow(
+                    label = stringResource(R.string.dashboard_reconnects),
+                    value = link.reconnects.toString(),
                     mono = true
                 )
-                StatTile(label = "Phase", value = call.phase.label())
+                link.address?.let { address ->
+                    KeyValueRow(
+                        label = stringResource(R.string.dashboard_endpoint),
+                        value = address,
+                        mono = true,
+                        valueMaxLines = 2
+                    )
+                }
             }
-            TextButton(onClick = { onOpenLiveCall(call.callId) }) { Text("Supervise this call") }
+
+            is LinkState.Connecting -> Column {
+                Text(
+                    text = stringResource(
+                        R.string.dashboard_connecting_trying,
+                        linkKindLabel(link.candidate)
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                TextButton(onClick = onRunLinkTest) {
+                    Text(stringResource(R.string.dashboard_link_test))
+                }
+            }
+
+            LinkState.Offline -> Column {
+                Text(
+                    text = stringResource(R.string.dashboard_link_offline),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                TextButton(onClick = onRunLinkTest) {
+                    Text(stringResource(R.string.dashboard_link_test))
+                }
+            }
         }
     }
 }
 
+/** With no stream there are no measurements: the card says when one starts instead of showing zeros. */
 @Composable
 private fun AudioCard(audio: AudioState) {
+    val codec = audio.codec
     SectionCard(
-        title = "Audio",
+        title = stringResource(R.string.dashboard_audio_title),
         status = {
-            val codec = audio.codec
             if (codec == null) {
-                StatusPill("No stream", StatusTone.NEUTRAL)
+                StatusPill(
+                    label = stringResource(R.string.dashboard_no_stream),
+                    tone = StatusTone.NEUTRAL
+                )
             } else {
-                StatusPill(codec, StatusTone.ACCENT)
+                StatusPill(label = humanizeToken(codec), tone = StatusTone.ACCENT)
             }
         }
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+        if (codec == null) {
+            Text(
+                text = stringResource(R.string.dashboard_no_audio_stream),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            return@SectionCard
+        }
+        TileRow {
             StatTile(
-                label = "Bitrate",
-                value = audio.bitrate?.let { "$it kbit/s" } ?: "—",
+                label = stringResource(R.string.dashboard_bitrate),
+                value = audio.bitrate?.toString() ?: MISSING_VALUE,
+                mono = true,
+                unit = audio.bitrate?.let { UNIT_KILOBITS }
+            )
+            StatTile(
+                label = stringResource(R.string.dashboard_frames_out),
+                value = audio.framesOut.toString(),
                 mono = true
             )
-            StatTile(label = "Frames out", value = audio.framesOut.toString(), mono = true)
             StatTile(
-                label = "Drops",
-                value = audio.drops.toString(),
+                label = stringResource(R.string.dashboard_playback_drops),
+                value = playbackDropMillis(audio.drops).toString(),
                 mono = true,
-                tone = if (audio.drops > 0) StatTone.NEGATIVE else StatTone.NEUTRAL
+                tone = if (audio.drops > 0) StatTone.NEGATIVE else StatTone.NEUTRAL,
+                unit = UNIT_MILLISECONDS
             )
         }
+        Text(
+            text = stringResource(R.string.dashboard_playback_drops_caption),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         LevelMeter(
-            label = "Microphone",
+            label = stringResource(R.string.dashboard_microphone),
             levelDbfs = audio.txLevelDbfs,
             modifier = Modifier.fillMaxWidth()
         )
         LevelMeter(
-            label = "Speaker",
+            label = stringResource(R.string.dashboard_far_end),
             levelDbfs = audio.rxLevelDbfs,
             modifier = Modifier.fillMaxWidth()
         )
@@ -339,49 +531,51 @@ private fun AudioCard(audio: AudioState) {
 
 @Composable
 private fun DeviceCard(device: DeviceState, simOperator: String?) {
-    SectionCard(title = "Phone") {
-        Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+    SectionCard(title = stringResource(R.string.dashboard_phone_title)) {
+        val thermal = device.thermal
+        TileRow {
             StatTile(
-                label = "Battery",
-                value = device.batteryPercent?.let { "$it %" } ?: "—",
+                label = stringResource(R.string.dashboard_battery),
+                value = device.batteryPercent?.toString() ?: MISSING_VALUE,
                 mono = true,
                 caption = when (device.charging) {
-                    true -> "charging"
-                    false -> "on battery"
+                    true -> stringResource(R.string.dashboard_charging)
+                    false -> stringResource(R.string.dashboard_on_battery)
                     null -> null
+                },
+                unit = if (device.batteryPercent != null) "%" else null
+            )
+            StatTile(
+                label = stringResource(R.string.dashboard_thermal),
+                value = thermal?.let { thermalLabel(it) } ?: MISSING_VALUE,
+                tone = when (thermalState(thermal)) {
+                    ThermalState.NONE, ThermalState.UNKNOWN -> StatTone.NEUTRAL
+                    ThermalState.WARM, ThermalState.HOT -> StatTone.WARNING
                 }
             )
             StatTile(
-                label = "Thermal",
-                value = device.thermal ?: "—",
-                tone = if (device.thermal == null || device.thermal == "NONE") {
-                    StatTone.NEUTRAL
-                } else {
-                    StatTone.WARNING
-                }
-            )
-            StatTile(
-                label = "Doze",
+                label = stringResource(R.string.dashboard_doze),
                 value = when (device.dozeExempt) {
-                    true -> "Exempt"
-                    false -> "Limited"
-                    null -> "—"
+                    true -> stringResource(R.string.dashboard_doze_exempt)
+                    false -> stringResource(R.string.dashboard_doze_limited)
+                    null -> MISSING_VALUE
                 },
                 mono = device.dozeExempt != null,
                 tone = if (device.dozeExempt == true) StatTone.POSITIVE else StatTone.NEUTRAL
             )
         }
-        if (device.network != null || device.wifiRssi != null) {
+        val network = device.network
+        if (network != null || device.wifiRssi != null) {
             KeyValueRow(
-                label = "Network",
+                label = stringResource(R.string.dashboard_network),
                 value = listOfNotNull(
-                    device.network,
-                    device.wifiRssi?.let { "$it dBm" }
+                    network?.let { networkLabel(it) },
+                    device.wifiRssi?.let { formatDbm(it) }
                 ).joinToString(" · ")
             )
         }
         if (simOperator != null) {
-            KeyValueRow(label = "SIM", value = simOperator)
+            KeyValueRow(label = stringResource(R.string.dashboard_sim), value = simOperator)
         }
     }
 }
@@ -389,26 +583,57 @@ private fun DeviceCard(device: DeviceState, simOperator: String?) {
 @Composable
 private fun PermissionCard(missing: List<String>, onOpenSetup: () -> Unit) {
     SectionCard(
-        title = "Permissions",
+        title = stringResource(R.string.dashboard_permissions_title),
         status = {
             if (missing.isEmpty()) {
-                StatusPill("All granted", StatusTone.POSITIVE)
+                StatusPill(
+                    label = stringResource(R.string.dashboard_permissions_all_granted),
+                    tone = StatusTone.POSITIVE
+                )
             } else {
-                StatusPill("${missing.size} missing", StatusTone.NEGATIVE)
+                StatusPill(
+                    label = pluralStringResource(
+                        R.plurals.dashboard_permissions_missing,
+                        missing.size,
+                        missing.size
+                    ),
+                    tone = StatusTone.NEGATIVE
+                )
             }
         }
     ) {
         if (missing.isEmpty()) {
             Text(
-                text = "Microphone, calls, notifications and the local network are granted.",
+                text = stringResource(R.string.dashboard_permissions_all_text),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         } else {
             missing.forEach { permission ->
-                KeyValueRow(label = permission.label(), value = "Missing")
+                val known = knownPermission(permission)
+                if (known != null) {
+                    KeyValueRow(
+                        label = stringResource(known),
+                        value = stringResource(R.string.dashboard_permission_not_granted)
+                    )
+                } else {
+                    Column {
+                        KeyValueRow(
+                            label = stringResource(R.string.dashboard_permission_other),
+                            value = stringResource(R.string.dashboard_permission_not_granted)
+                        )
+                        Text(
+                            text = permission,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
-            TextButton(onClick = onOpenSetup) { Text("Fix in setup") }
+            TextButton(onClick = onOpenSetup) {
+                Text(stringResource(R.string.dashboard_fix_in_setup))
+            }
         }
     }
 }
@@ -420,25 +645,30 @@ private fun PairingCard(
     onUnpair: () -> Unit
 ) {
     var confirming by remember { mutableStateOf(false) }
-    SectionCard(title = "Pairing") {
+    SectionCard(title = stringResource(R.string.dashboard_pairing_title)) {
         Text(
-            text = "This phone is paired with a daemon. The bearer token stays in device-protected storage and is never rendered.",
+            text = stringResource(R.string.dashboard_pairing_text),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         HorizontalDivider()
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            TextButton(onClick = onOpenSetup) { Text("Pair another computer") }
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = onOpenSetup) {
+                Text(stringResource(R.string.dashboard_pair_another))
+            }
             TextButton(
                 onClick = { confirming = true },
-                enabled = !inCall
+                enabled = !inCall,
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error
+                )
             ) {
-                Text("Unpair")
+                Text(stringResource(R.string.dashboard_unpair))
             }
         }
         if (inCall) {
             Text(
-                text = "Unpairing is blocked while a call is running.",
+                text = stringResource(R.string.dashboard_unpair_blocked),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -447,8 +677,8 @@ private fun PairingCard(
     if (confirming) {
         AlertDialog(
             onDismissRequest = { confirming = false },
-            title = { Text("Unpair this phone?") },
-            text = { Text("The service stops and the stored pairing is deleted. You can pair again with the QR code on your computer.") },
+            title = { Text(stringResource(R.string.dashboard_unpair_title)) },
+            text = { Text(stringResource(R.string.dashboard_unpair_body)) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -456,40 +686,49 @@ private fun PairingCard(
                         onUnpair()
                     }
                 ) {
-                    Text("Unpair")
+                    Text(stringResource(R.string.dashboard_unpair))
                 }
             },
             dismissButton = {
-                TextButton(onClick = { confirming = false }) { Text("Cancel") }
+                TextButton(onClick = { confirming = false }) {
+                    Text(stringResource(R.string.dashboard_cancel))
+                }
             }
         )
     }
 }
 
+/**
+ * One clock read per second, so "Up for" and the call duration move while the screen is open.
+ * [clock] is injectable so a test can prove the value is re-read rather than frozen at composition.
+ */
+@Composable
+internal fun tickingNow(
+    periodMs: Long = 1_000L,
+    clock: () -> Long = System::currentTimeMillis
+): State<Long> = produceState(initialValue = clock()) {
+    while (true) {
+        delay(periodMs)
+        value = clock()
+    }
+}
+
+/** The link path as the pill names it; an unmeasured path stays "Unknown". */
 internal fun PathKind.toDesignPath(): LinkPath = when (this) {
     PathKind.DIRECT -> LinkPath.DIRECT
     PathKind.RELAY -> LinkPath.RELAY
-    PathKind.UNKNOWN -> LinkPath.RELAY
+    PathKind.UNKNOWN -> LinkPath.UNKNOWN
 }
 
-internal fun PathKind.label(): String = when (this) {
-    PathKind.DIRECT -> "direct"
-    PathKind.RELAY -> "relay"
-    PathKind.UNKNOWN -> "unknown path"
-}
-
-internal fun LinkKind.label(): String = when (this) {
-    LinkKind.IROH -> "iroh"
-    LinkKind.WEBSOCKET -> "WebSocket"
-    LinkKind.TAILSCALE -> "Tailscale"
-}
-
-internal fun CallPhase.label(): String = when (this) {
-    CallPhase.DIALING -> "Dialing"
-    CallPhase.ACTIVE -> "Active"
-    CallPhase.ENDING -> "Ending"
-    CallPhase.ENDED -> "Ended"
-}
+@Composable
+internal fun phaseLabel(phase: CallPhase): String = stringResource(
+    when (phase) {
+        CallPhase.DIALING -> R.string.dashboard_phase_dialling
+        CallPhase.ACTIVE -> R.string.dashboard_phase_live
+        CallPhase.ENDING -> R.string.dashboard_phase_ending
+        CallPhase.ENDED -> R.string.dashboard_phase_ended
+    }
+)
 
 internal fun phaseTone(phase: CallPhase): StatusTone = when (phase) {
     CallPhase.DIALING -> StatusTone.WARNING
@@ -505,31 +744,82 @@ internal fun rttTone(rttMs: Long?): StatTone = when {
     else -> StatTone.NEGATIVE
 }
 
-/** `12 m`, `2 h 05 m`; uptimes are read at a glance, not to the second. */
-internal fun formatUptime(sinceEpochMs: Long, nowEpochMs: Long): String {
-    val elapsed = (nowEpochMs - sinceEpochMs).coerceAtLeast(0)
-    val minutes = TimeUnit.MILLISECONDS.toMinutes(elapsed)
-    return when {
-        minutes < 1 -> "<1 m"
+/** How warm the phone reports itself: the daemon's HAL names, in words a person reads. */
+internal enum class ThermalState { NONE, WARM, HOT, UNKNOWN }
 
-        minutes < 60 -> "$minutes m"
-
-        else -> {
-            val hours = minutes / 60
-            val rest = minutes % 60
-            if (rest == 0L) "$hours h" else "$hours h ${rest.toString().padStart(2, '0')} m"
-        }
-    }
+internal fun thermalState(raw: String?): ThermalState = when (raw?.lowercase()) {
+    null -> ThermalState.UNKNOWN
+    "none" -> ThermalState.NONE
+    "light" -> ThermalState.WARM
+    "moderate", "severe", "critical", "emergency", "shutdown" -> ThermalState.HOT
+    else -> ThermalState.UNKNOWN
 }
 
-internal fun String.label(): String = when (this) {
-    "android.permission.RECORD_AUDIO" -> "Microphone"
-    "android.permission.CALL_PHONE" -> "Phone calls"
-    "android.permission.READ_PHONE_STATE" -> "Phone state"
-    "android.permission.MODIFY_AUDIO_SETTINGS" -> "Audio settings"
-    "android.permission.POST_NOTIFICATIONS" -> "Notifications"
-    "android.permission.ACCESS_LOCAL_NETWORK" -> "Local network"
-    else -> substringAfterLast('.')
+@Composable
+internal fun thermalLabel(raw: String): String = stringResource(
+    when (thermalState(raw)) {
+        ThermalState.NONE -> R.string.dashboard_thermal_normal
+        ThermalState.WARM -> R.string.dashboard_thermal_warm
+        ThermalState.HOT -> R.string.dashboard_thermal_hot
+        ThermalState.UNKNOWN -> R.string.dashboard_thermal_unknown
+    }
+)
+
+/** The transport the daemon reports, in its own name. */
+@Composable
+internal fun linkKindLabel(kind: LinkKind): String = stringResource(
+    when (kind) {
+        LinkKind.IROH -> R.string.dashboard_link_kind_iroh
+        LinkKind.WEBSOCKET -> R.string.dashboard_link_kind_websocket
+        LinkKind.TAILSCALE -> R.string.dashboard_link_kind_tailscale
+    }
+)
+
+/** The network a person sees in the status bar, not the HAL's lower-case name. */
+internal enum class NetworkKind { WIFI, MOBILE, ETHERNET, UNKNOWN }
+
+internal fun networkKind(raw: String): NetworkKind = when (raw.lowercase()) {
+    "wifi", "wi-fi", "wlan" -> NetworkKind.WIFI
+    "cellular", "mobile", "lte", "5g", "nr" -> NetworkKind.MOBILE
+    "ethernet" -> NetworkKind.ETHERNET
+    else -> NetworkKind.UNKNOWN
+}
+
+@Composable
+internal fun networkLabel(raw: String): String = stringResource(
+    when (networkKind(raw)) {
+        NetworkKind.WIFI -> R.string.dashboard_network_wifi
+        NetworkKind.MOBILE -> R.string.dashboard_network_mobile
+        NetworkKind.ETHERNET -> R.string.dashboard_network_ethernet
+        NetworkKind.UNKNOWN -> R.string.dashboard_network_unknown
+    }
+)
+
+/** `-52` → `−52 dBm`: Unicode minus and a no-break space, so the value lines up in monospace. */
+internal fun formatDbm(rssi: Int): String {
+    val magnitude = if (rssi < 0) "−${-rssi}" else rssi.toString()
+    return "$magnitude\u00A0dBm"
+}
+
+/** Playback overflows are counted in samples; the tile reports the audio time they cost. */
+internal fun playbackDropMillis(samples: Long): Long = samples / AUDIO_SAMPLES_PER_MILLISECOND
+
+internal fun secondsBetween(fromEpochMs: Long, toEpochMs: Long): Long = TimeUnit.MILLISECONDS.toSeconds((toEpochMs - fromEpochMs).coerceAtLeast(0))
+
+/** The device's own clock format, so 12- and 24-hour phones both read correctly. */
+private fun timeOf(context: Context, epochMs: Long): String = DateFormat.getTimeFormat(context).format(Date(epochMs))
+
+/** A daemon token the screen shows as words: `reservation_time` → `Reservation time`. */
+internal fun humanizeToken(token: String): String = token.replace('_', ' ').replaceFirstChar { it.uppercase() }
+
+internal fun knownPermission(permission: String): Int? = when (permission) {
+    "android.permission.RECORD_AUDIO" -> R.string.dashboard_permission_microphone
+    "android.permission.CALL_PHONE" -> R.string.dashboard_permission_calls
+    "android.permission.READ_PHONE_STATE" -> R.string.dashboard_permission_phone_state
+    "android.permission.MODIFY_AUDIO_SETTINGS" -> R.string.dashboard_permission_audio_settings
+    "android.permission.POST_NOTIFICATIONS" -> R.string.dashboard_permission_notifications
+    "android.permission.ACCESS_LOCAL_NETWORK" -> R.string.dashboard_permission_local_network
+    else -> null
 }
 
 @Preview(name = "Direct link", showBackground = true)
@@ -629,7 +919,7 @@ object DashboardSamples {
             phase = CallPhase.ACTIVE,
             startedAtEpochMs = now - TimeUnit.SECONDS.toMillis(74)
         ),
-        audio = direct.audio.copy(rxLevelDbfs = -8f, txLevelDbfs = -34f)
+        audio = direct.audio.copy(rxLevelDbfs = -8f, txLevelDbfs = -34f, drops = 43_200)
     )
 
     val offline = BridgeState(

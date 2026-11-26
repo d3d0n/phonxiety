@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The dashboard: link, call, audio, phone, permissions and pairing. Every count is a
+         plural, every unit is joined by a no-break space through the designsystem formatters. -->
+
+    <string name="dashboard_title" translatable="false">phonxiety</string>
+    <string name="dashboard_subtitle">Bridge control</string>
+
+    <string name="dashboard_status_not_paired">Not paired</string>
+    <string name="dashboard_status_connecting">Connecting</string>
+    <string name="dashboard_status_offline">Offline</string>
+
+    <string name="dashboard_phase_dialling">Dialling</string>
+    <string name="dashboard_phase_live">Live</string>
+    <string name="dashboard_phase_ending">Ending</string>
+    <string name="dashboard_phase_ended">Ended</string>
+
+    <string name="dashboard_link_error_title">The link dropped</string>
+    <string name="dashboard_open_doctor">Open Doctor</string>
+
+    <string name="dashboard_unpaired_title">This phone is not paired</string>
+    <string name="dashboard_unpaired_message">Pair it with the computer that runs the daemon, then the wizard finishes setup by itself.</string>
+    <string name="dashboard_set_up_phone">Set up this phone</string>
+
+    <string name="dashboard_call_title">Call</string>
+    <string name="dashboard_call_idle">Idle</string>
+    <string name="dashboard_call_empty">No call is running. The agent\'s calls appear here while they are live.</string>
+    <string name="dashboard_destination">Destination</string>
+    <string name="dashboard_duration">Duration</string>
+    <string name="dashboard_connected_at">Connected at</string>
+    <string name="dashboard_open_live_call">Open live call</string>
+
+    <string name="dashboard_actions_title">Actions</string>
+    <string name="dashboard_new_call">New call</string>
+    <string name="dashboard_link_test">Link test</string>
+    <string name="dashboard_doctor">Doctor</string>
+    <string name="dashboard_updates">Updates</string>
+    <string name="dashboard_actions_call_running">A call is running. Open it above to end it before starting another.</string>
+
+    <string name="dashboard_link_title">Link</string>
+    <string name="dashboard_link_subtitle">How this phone reaches the daemon</string>
+    <string name="dashboard_transport">Transport</string>
+    <string name="dashboard_latency_median">Latency (median)</string>
+    <string name="dashboard_up_for">Up for</string>
+    <string name="dashboard_reconnects">Reconnects</string>
+    <string name="dashboard_endpoint">Endpoint</string>
+    <string name="dashboard_connecting_trying">Trying %1$s…</string>
+    <string name="dashboard_link_offline">No path to the daemon. Check that the computer is on and on the same network.</string>
+    <string name="dashboard_link_kind_iroh">Iroh</string>
+    <string name="dashboard_link_kind_websocket">WebSocket</string>
+    <string name="dashboard_link_kind_tailscale">Tailscale</string>
+
+    <string name="dashboard_audio_title">Audio</string>
+    <string name="dashboard_no_stream">No stream</string>
+    <string name="dashboard_no_audio_stream">No audio stream. It starts with a call.</string>
+    <string name="dashboard_bitrate">Bitrate</string>
+    <string name="dashboard_frames_out">Frames out</string>
+    <string name="dashboard_playback_drops">Playback drops</string>
+    <string name="dashboard_playback_drops_caption">Playback audio this phone discarded on this call</string>
+    <string name="dashboard_microphone">Microphone</string>
+    <string name="dashboard_far_end">Far end</string>
+
+    <string name="dashboard_phone_title">Phone</string>
+    <string name="dashboard_battery">Battery</string>
+    <string name="dashboard_charging">Charging</string>
+    <string name="dashboard_on_battery">On battery</string>
+    <string name="dashboard_thermal">Thermal</string>
+    <string name="dashboard_thermal_normal">Normal</string>
+    <string name="dashboard_thermal_warm">Warm</string>
+    <string name="dashboard_thermal_hot">Hot</string>
+    <string name="dashboard_thermal_unknown">Unknown</string>
+    <string name="dashboard_doze">Doze</string>
+    <string name="dashboard_doze_exempt">Exempt</string>
+    <string name="dashboard_doze_limited">Limited</string>
+    <string name="dashboard_network">Network</string>
+    <string name="dashboard_sim">SIM</string>
+    <string name="dashboard_network_wifi">Wi-Fi</string>
+    <string name="dashboard_network_mobile">Mobile data</string>
+    <string name="dashboard_network_ethernet">Ethernet</string>
+    <string name="dashboard_network_unknown">Unknown</string>
+
+    <string name="dashboard_permissions_title">Permissions</string>
+    <string name="dashboard_permissions_all_granted">All granted</string>
+    <plurals name="dashboard_permissions_missing">
+        <item quantity="one">%1$d permission missing</item>
+        <item quantity="other">%1$d permissions missing</item>
+    </plurals>
+    <string name="dashboard_permissions_all_text">Microphone, calls, notifications and the local network are granted.</string>
+    <string name="dashboard_permission_not_granted">Not granted</string>
+    <string name="dashboard_fix_in_setup">Fix in setup</string>
+    <string name="dashboard_permission_microphone">Microphone</string>
+    <string name="dashboard_permission_calls">Phone calls</string>
+    <string name="dashboard_permission_phone_state">Phone state</string>
+    <string name="dashboard_permission_audio_settings">Audio settings</string>
+    <string name="dashboard_permission_notifications">Notifications</string>
+    <string name="dashboard_permission_local_network">Local network</string>
+    <string name="dashboard_permission_other">Another permission</string>
+
+    <string name="dashboard_pairing_title">Pairing</string>
+    <string name="dashboard_pairing_text">This phone is paired with the computer that runs the daemon. The pairing is stored only on this phone.</string>
+    <string name="dashboard_pair_another">Pair another computer</string>
+    <string name="dashboard_unpair">Unpair</string>
+    <string name="dashboard_unpair_blocked">Unpairing is blocked while a call is running.</string>
+    <string name="dashboard_unpair_title">Unpair this phone?</string>
+    <string name="dashboard_unpair_body">The service stops and the stored pairing is deleted. You can pair again with the QR code on your computer.</string>
+    <string name="dashboard_cancel">Cancel</string>
+</resources>

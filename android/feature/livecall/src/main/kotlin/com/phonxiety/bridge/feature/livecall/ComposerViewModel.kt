@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.DaemonApi
+import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.ApiLimits
 import com.phonxiety.bridge.model.PlaceCallRequest
 import com.phonxiety.bridge.model.ValidationIssue
@@ -23,6 +24,17 @@ internal const val COMPOSER_DEFAULT_MAX_DURATION = 900
 internal const val COMPOSER_DEFAULT_RING_TIMEOUT = 60
 
 /**
+ * One validation failure in the shape the screen draws: [headline] is local copy for a problem the
+ * app knows, or the daemon's own sentence when it is not; [detail] keeps the verbatim diagnostic
+ * for the details disclosure, where a code belongs.
+ */
+data class ComposerIssue(
+    val location: String,
+    val headline: UiText,
+    val detail: String? = null
+)
+
+/**
  * The phone-originated call: a number, a brief, the limits, live validation from the daemon, then
  * one confirmation that names exactly what will be dialled.
  */
@@ -38,13 +50,15 @@ data class ComposerUiState(
     val limits: ApiLimits = ApiLimits(),
     val valid: Boolean? = null,
     val validating: Boolean = false,
-    val errors: List<ValidationIssue> = emptyList(),
-    val warnings: List<String> = emptyList(),
+    val errors: List<ComposerIssue> = emptyList(),
+    val warnings: List<UiText> = emptyList(),
     val confirming: Boolean = false,
     val placing: Boolean = false,
     val placedCallId: String? = null,
     val loadedFromPrefill: Boolean = false,
-    val error: String? = null
+    /** The placement itself failed; the card under the form says so. */
+    val placeError: UiText? = null,
+    val placeErrorDetail: String? = null
 ) {
     /** The exact payload: nothing is added between this and the dial. */
     val request: PlaceCallRequest
@@ -60,12 +74,37 @@ data class ComposerUiState(
 
     val ready: Boolean get() = valid == true && errors.isEmpty() && !placing
 
-    val destinationError: String? get() = errorFor("destination")
+    val destinationError: UiText? get() = issueFor("destination")?.headline
 
-    val goalError: String? get() = errorFor("goal")
+    val goalError: UiText? get() = issueFor("goal")?.headline
 
-    fun errorFor(field: String): String? = errors.firstOrNull { it.location == field }?.message
-        ?: errors.firstOrNull { it.location.startsWith("$field.") }?.message
+    /** The first field error, in reading order, for the action's supporting text. */
+    val firstFieldError: UiText? get() = listOfNotNull(destinationError, goalError).firstOrNull()
+
+    /** A failure of the check itself, not of a field: the daemon or the link refused the request. */
+    val requestIssue: ComposerIssue? get() = issueFor("request")
+
+    fun issueFor(field: String): ComposerIssue? = errors.firstOrNull { it.location == field }
+        ?: errors.firstOrNull { it.location.startsWith("$field.") }
+}
+
+/**
+ * A daemon validation message as the screen can draw it. Problems the app knows by location get
+ * local copy in the product's voice; anything else stays verbatim, because inventing a sentence for
+ * a diagnostic nobody predicted is how a screen starts lying.
+ */
+internal fun localIssue(location: String, message: String): ComposerIssue {
+    val headline = when {
+        location.startsWith("destination") && message.contains("emergency", ignoreCase = true) ->
+            UiText.Res(R.string.composer_error_destination_emergency)
+
+        location.startsWith("destination") -> UiText.Res(R.string.composer_error_destination)
+
+        location.startsWith("goal") -> UiText.Res(R.string.composer_error_goal)
+
+        else -> UiText.Literal(message)
+    }
+    return ComposerIssue(location = location, headline = headline, detail = message)
 }
 
 @HiltViewModel
@@ -138,7 +177,7 @@ class ComposerViewModel @Inject constructor(
     /** The confirmation step: only reachable once the daemon has validated the brief. */
     fun review() {
         if (_state.value.valid != true || _state.value.errors.isNotEmpty()) return
-        _state.update { it.copy(confirming = true, error = null) }
+        _state.update { it.copy(confirming = true, placeError = null, placeErrorDetail = null) }
     }
 
     fun dismissReview() {
@@ -153,7 +192,7 @@ class ComposerViewModel @Inject constructor(
             confirmationId = "app-$suffix",
             requestId = "app-$suffix"
         )
-        _state.update { it.copy(placing = true, error = null) }
+        _state.update { it.copy(placing = true, placeError = null, placeErrorDetail = null) }
         // From this moment the in-call screen Telecom draws may cover the composer, and only this
         // phone's own placement may pull the live screen back over it.
         LiveCallFront.expectPlacement()
@@ -174,7 +213,8 @@ class ComposerViewModel @Inject constructor(
                         it.copy(
                             placing = false,
                             confirming = false,
-                            error = "${outcome.message} (${outcome.code})"
+                            placeError = UiText.Literal(outcome.message),
+                            placeErrorDetail = outcome.code
                         )
                     }
                 }
@@ -203,16 +243,24 @@ class ComposerViewModel @Inject constructor(
                     it.copy(
                         validating = false,
                         valid = outcome.value.valid,
-                        errors = outcome.value.errors,
-                        warnings = outcome.value.warnings
+                        errors = outcome.value.errors.map { issue -> issue.asComposerIssue() },
+                        warnings = outcome.value.warnings.map(UiText::Literal)
                     )
                 }
 
+                // The check itself did not run: the daemon's sentence stays verbatim, its code
+                // goes behind details.
                 is ApiOutcome.Failure -> _state.update {
                     it.copy(
                         validating = false,
                         valid = false,
-                        errors = listOf(ValidationIssue("request", "${outcome.message} (${outcome.code})")),
+                        errors = listOf(
+                            ComposerIssue(
+                                location = "request",
+                                headline = UiText.Literal(outcome.message),
+                                detail = outcome.code
+                            )
+                        ),
                         warnings = emptyList()
                     )
                 }
@@ -243,3 +291,5 @@ class ComposerViewModel @Inject constructor(
         const val MAX_FIELDS = 64
     }
 }
+
+private fun ValidationIssue.asComposerIssue(): ComposerIssue = localIssue(location, message)

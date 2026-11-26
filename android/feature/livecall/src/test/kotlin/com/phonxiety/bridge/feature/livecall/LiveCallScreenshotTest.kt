@@ -3,10 +3,27 @@ package com.phonxiety.bridge.feature.livecall
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onLast
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeUp
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
 import com.phonxiety.bridge.model.AudioState
@@ -15,6 +32,7 @@ import com.phonxiety.bridge.model.PartialTurn
 import com.phonxiety.bridge.model.TranscriptTurn
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -22,7 +40,11 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
-/** The live call in the two layouts it has to work in: a stacked phone and a two-pane wide one. */
+/**
+ * The live call on the decision-10 matrix: 411 dp at 100 %, 320 dp at 200 %, light, dark and one
+ * dynamic-colour case, plus the controls after a scroll and the hang-up confirmation. Every capture
+ * runs the accessibility gate first.
+ */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "w411dp-h891dp-xxhdpi")
@@ -30,79 +52,176 @@ class LiveCallScreenshotTest {
     @get:Rule
     val composeRule = createComposeRule()
 
-    private fun capture(name: String, state: LiveCallUiState) {
+    private fun setScreen(
+        state: LiveCallUiState = LiveCallSamples.live,
+        dark: Boolean = false,
+        dynamicColor: Boolean = false,
+        fontScale: Float = 1f,
+        width: Dp = 411.dp,
+        onHangUp: () -> Unit = {},
+        onSendInstruction: () -> Unit = {}
+    ) {
         composeRule.setContent {
-            PhonxietyTheme(dynamicColor = false) {
-                Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-                    LiveCallScreen(
-                        state = state,
-                        onBack = {},
-                        onInstructionChange = {},
-                        onSendInstruction = {},
-                        onTogglePause = {},
-                        onSummarize = {},
-                        onDtmf = {},
-                        onMark = {},
-                        onHangUp = {},
-                        onReload = {},
-                        onOpenDetail = {},
-                        nowEpochMs = NOW
-                    )
+            val density = LocalDensity.current
+            CompositionLocalProvider(
+                LocalDensity provides Density(density.density, fontScale = fontScale)
+            ) {
+                PhonxietyTheme(darkTheme = dark, dynamicColor = dynamicColor) {
+                    Box(
+                        modifier = Modifier
+                            .testTag(SCREEN_TAG)
+                            .width(width)
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.background)
+                    ) {
+                        LiveCallScreen(
+                            state = state,
+                            onBack = {},
+                            onInstructionChange = {},
+                            onSendInstruction = onSendInstruction,
+                            onTogglePause = {},
+                            onSummarize = {},
+                            onDtmf = {},
+                            onMark = {},
+                            onHangUp = onHangUp,
+                            onReload = {},
+                            onOpenDetail = {},
+                            nowEpochMs = NOW
+                        )
+                    }
                 }
             }
         }
-        composeRule.onRoot().captureRoboImage("src/test/screenshots/live_call_$name.png")
+    }
+
+    private fun render(name: String, beforeCapture: () -> Unit = {}, content: () -> Unit) {
+        content()
+        beforeCapture()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag(SCREEN_TAG).captureRoboImage("src/test/screenshots/live_call_$name.png")
+        composeRule.onNodeWithTag(SCREEN_TAG).assertAccessible()
     }
 
     @Test
-    fun livePortrait() = capture("portrait", LiveCallSamples.live)
+    fun widePhoneInLight() = render("411_light") { setScreen() }
 
     @Test
-    @Config(sdk = [35], qualifiers = "w891dp-h411dp-xxhdpi")
-    fun liveInLandscape() {
-        composeRule.setContent {
-            PhonxietyTheme(dynamicColor = false) {
-                Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-                    LiveCallScreen(
-                        state = LiveCallSamples.live,
-                        onBack = {},
-                        onInstructionChange = {},
-                        onSendInstruction = {},
-                        onTogglePause = {},
-                        onSummarize = {},
-                        onDtmf = {},
-                        onMark = {},
-                        onHangUp = {},
-                        onReload = {},
-                        onOpenDetail = {},
-                        nowEpochMs = NOW
-                    )
-                }
-            }
-        }
-        composeRule.onRoot().captureRoboImage("src/test/screenshots/live_call_landscape.png")
+    fun widePhoneInDark() = render("411_dark") { setScreen(dark = true) }
+
+    @Test
+    fun widePhoneInDynamicColour() = render("411_dynamic") { setScreen(dynamicColor = true) }
+
+    @Test
+    fun smallScreenAtTwoHundredPercentInLight() = render("320_font200_light") { setScreen(fontScale = 2f, width = 320.dp) }
+
+    @Test
+    fun smallScreenAtTwoHundredPercentInDark() = render("320_font200_dark") { setScreen(dark = true, fontScale = 2f, width = 320.dp) }
+
+    @Test
+    fun theControlsAfterScrolling() = render(
+        "controls_lower_411_light",
+        beforeCapture = { scrollControls() }
+    ) { setScreen() }
+
+    @Test
+    fun theControlsAtTwoHundredPercent() = render(
+        "controls_lower_320_font200_dark",
+        beforeCapture = { scrollControls() }
+    ) { setScreen(dark = true, fontScale = 2f, width = 320.dp) }
+
+    @Test
+    fun aDroppedLink() = render("reconnecting_411_light") {
+        setScreen(state = LiveCallSamples.live.copy(reconnecting = true, partials = emptyList()))
     }
 
     @Test
-    fun pausedWithAnInstructionDraft() = capture(
-        "paused",
-        LiveCallSamples.live.copy(
-            muted = true,
-            instruction = "ask for Thursday",
-            activity = "waiting"
+    fun theEndedCallWithItsResult() = render("ended_411_light") { setScreen(state = LiveCallSamples.ended) }
+
+    @Test
+    fun aPausedAgentWithADraft() = render("paused_411_light") {
+        setScreen(
+            state = LiveCallSamples.live.copy(
+                muted = true,
+                instruction = "ask for Thursday",
+                activity = "waiting"
+            )
         )
-    )
+    }
 
     @Test
-    fun reconnecting() = capture(
-        "reconnecting",
-        LiveCallSamples.live.copy(reconnecting = true, partials = emptyList())
-    )
+    fun noAudioStreamShowsNoFabricatedZeros() = render("no_stream_411_dark") {
+        setScreen(state = LiveCallSamples.live.copy(audio = AudioState()), dark = true)
+    }
 
     @Test
-    fun endedWithResult() = capture("ended", LiveCallSamples.ended)
+    fun anAbsentStreamHasNoDropsFootnote() {
+        setScreen(state = LiveCallSamples.live.copy(audio = AudioState()))
+        composeRule.onNodeWithText("Playback audio this phone discarded on this call").assertDoesNotExist()
+        composeRule.onNodeWithText("Playback drops").assertExists()
+    }
+
+    @Test
+    fun theHangUpConfirmation() {
+        setScreen()
+        // A semantics click starts no ripple, so the capture does not depend on animation timing.
+        composeRule.onNodeWithText("Hang up").performSemanticsAction(SemanticsActions.OnClick)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag(SCREEN_TAG).assertAccessible()
+        composeRule.onAllNodes(isDialog()).onLast().assertAccessible()
+        composeRule.onAllNodes(isDialog()).onLast()
+            .captureRoboImage("src/test/screenshots/live_call_hangup_dialog_411_light.png")
+    }
+
+    @Test
+    fun aDroppedLinkNeverReadsAsALiveCall() {
+        setScreen(state = LiveCallSamples.live.copy(reconnecting = true))
+        composeRule.onNodeWithText("Reconnecting").assertExists()
+        composeRule.onNodeWithText("Live").assertDoesNotExist()
+        composeRule.onNodeWithText("Agent listening").assertDoesNotExist()
+    }
+
+    @Test
+    fun theInstructionFieldExplainsWhySendIsOff() {
+        setScreen(state = LiveCallSamples.live.copy(instruction = ""))
+        composeRule.onNodeWithText("Type an instruction, then send.").assertExists()
+    }
+
+    @Test
+    fun hangUpAsksFirstAndDismissingChangesNothing() {
+        var hangUps = 0
+        setScreen(onHangUp = { hangUps++ })
+        composeRule.onNodeWithText("Hang up").performSemanticsAction(SemanticsActions.OnClick)
+        composeRule.onNodeWithText("Keep talking").performSemanticsAction(SemanticsActions.OnClick)
+        composeRule.waitForIdle()
+        assertEquals(0, hangUps)
+
+        composeRule.onNodeWithText("Hang up").performSemanticsAction(SemanticsActions.OnClick)
+        composeRule.onAllNodesWithText("Hang up").onLast().performSemanticsAction(SemanticsActions.OnClick)
+        composeRule.waitForIdle()
+        assertEquals(1, hangUps)
+    }
+
+    @Test
+    fun sendingTheInstructionCallsTheAgent() {
+        var sends = 0
+        setScreen(state = LiveCallSamples.live.copy(instruction = "ask for Thursday"), onSendInstruction = { sends++ })
+        composeRule.onNodeWithContentDescription("Send instruction").performClick()
+        assertEquals(1, sends)
+    }
+
+    private fun scrollControls() {
+        // The bottom half holds the scrolling control column on a phone.
+        composeRule.onNodeWithTag(SCREEN_TAG).performTouchInput {
+            swipeUp(startY = height * 0.9f, endY = height * 0.55f)
+        }
+        composeRule.onNodeWithTag(SCREEN_TAG).performTouchInput {
+            swipeUp(startY = height * 0.9f, endY = height * 0.55f)
+        }
+        composeRule.waitForIdle()
+    }
 
     private companion object {
+        const val SCREEN_TAG = "live_call_capture"
         const val NOW = 1_764_000_074_000L
     }
 }
