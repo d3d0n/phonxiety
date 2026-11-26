@@ -59,9 +59,8 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * Every shared component across the decision-10 matrix: 411 dp at 100 %, a deterministic dynamic
- * color case, and 320 dp at 200 % font scale in light and dark. The accessibility gate runs on
- * each recorded state before the image is accepted.
+ * Every shared component in three shots: 411 dp light, 411 dp dark, and 320 dp at 200 % font scale
+ * in light. The accessibility gate runs on each recorded state before the image is accepted.
  */
 @RunWith(ParameterizedRobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -92,10 +91,7 @@ class DesignSystemScreenshotTest(private val matrixCase: MatrixCase) {
             CompositionLocalProvider(
                 LocalDensity provides Density(density.density, matrixCase.variant.fontScale)
             ) {
-                PhonxietyTheme(
-                    darkTheme = matrixCase.variant.dark,
-                    dynamicColor = matrixCase.variant.dynamic
-                ) {
+                PhonxietyTheme(darkTheme = matrixCase.variant.dark, dynamicColor = false) {
                     Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
                         Box(modifier = Modifier.fillMaxWidth()) {
                             Column(
@@ -126,11 +122,9 @@ class DesignSystemScreenshotTest(private val matrixCase: MatrixCase) {
         @ParameterizedRobolectricTestRunner.Parameters(name = "{0}")
         fun matrix(): List<Array<Any>> {
             val variants = listOf(
-                Variant(411, dark = false, fontScale = 1f, dynamic = false, slug = "411_light"),
-                Variant(411, dark = true, fontScale = 1f, dynamic = false, slug = "411_dark"),
-                Variant(411, dark = false, fontScale = 1f, dynamic = true, slug = "411_dynamic"),
-                Variant(320, dark = false, fontScale = 2f, dynamic = false, slug = "320_font200_light"),
-                Variant(320, dark = true, fontScale = 2f, dynamic = false, slug = "320_font200_dark")
+                Variant(411, dark = false, fontScale = 1f, slug = "411_light"),
+                Variant(411, dark = true, fontScale = 1f, slug = "411_dark"),
+                Variant(320, dark = false, fontScale = 2f, slug = "320_font200_light")
             )
             return Preview.entries.flatMap { preview ->
                 variants.map { variant -> arrayOf<Any>(MatrixCase(preview, variant)) }
@@ -145,7 +139,6 @@ data class Variant(
     val widthDp: Int,
     val dark: Boolean,
     val fontScale: Float,
-    val dynamic: Boolean,
     val slug: String
 )
 

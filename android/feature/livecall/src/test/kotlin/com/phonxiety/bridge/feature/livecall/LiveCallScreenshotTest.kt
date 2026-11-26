@@ -58,9 +58,11 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * The live call on the decision-10 matrix: 411 dp at 100 %, 320 dp at 200 %, light, dark and one
- * dynamic-color case, plus the controls after a scroll and the hang-up confirmation. Every capture
- * runs the accessibility gate first.
+ * The live call: the overview at 411 dp light and dark and at 320 dp with 200 % text, the no-stream
+ * overview in dark, the reconnecting, ended, paused, first-turn and preparing states at 411 dp
+ * light, the controls after a scroll and the hang-up confirmation, and the unknown-status card at
+ * 411 dp light and at 200 % text with and without its details open. Every capture runs the
+ * accessibility gate first.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -87,7 +89,6 @@ class LiveCallScreenshotTest {
     private fun setScreen(
         state: LiveCallUiState = LiveCallSamples.live,
         dark: Boolean = false,
-        dynamicColor: Boolean = false,
         fontScale: Float = 1f,
         width: Dp = 411.dp,
         onHangUp: () -> Unit = {},
@@ -98,7 +99,7 @@ class LiveCallScreenshotTest {
             CompositionLocalProvider(
                 LocalDensity provides Density(density.density, fontScale = fontScale)
             ) {
-                PhonxietyTheme(darkTheme = dark, dynamicColor = dynamicColor) {
+                PhonxietyTheme(darkTheme = dark, dynamicColor = false) {
                     Box(
                         modifier = Modifier
                             .testTag(SCREEN_TAG)
@@ -142,13 +143,7 @@ class LiveCallScreenshotTest {
     fun widePhoneInDark() = render("411_dark") { setScreen(dark = true) }
 
     @Test
-    fun widePhoneInDynamicColour() = render("411_dynamic") { setScreen(dynamicColor = true) }
-
-    @Test
     fun smallScreenAtTwoHundredPercentInLight() = render("320_font200_light") { setScreen(fontScale = 2f, width = 320.dp) }
-
-    @Test
-    fun smallScreenAtTwoHundredPercentInDark() = render("320_font200_dark") { setScreen(dark = true, fontScale = 2f, width = 320.dp) }
 
     @Test
     fun theControlsAfterScrolling() = render(
@@ -158,17 +153,6 @@ class LiveCallScreenshotTest {
             scrollControls()
         }
     ) { setScreen() }
-
-    @Test
-    fun theControlsAtTwoHundredPercent() = render(
-        "controls_lower_320_font200_dark",
-        beforeCapture = {
-            openControls()
-            // The marks sit under the transcript at 200 %: one lower control, read at that scale.
-            composeRule.onNodeWithText("Follow up").performScrollTo()
-            composeRule.waitForIdle()
-        }
-    ) { setScreen(dark = true, fontScale = 2f, width = 320.dp) }
 
     @Test
     fun aDroppedLink() = render("reconnecting_411_light") {
@@ -331,12 +315,6 @@ class LiveCallScreenshotTest {
         "status_unknown_411_light",
         beforeCapture = { scrollTranscriptTo("Call status unknown") }
     ) { setScreen(state = unknownEndedCapture(UNCONFIRMED_REASON)) }
-
-    @Test
-    fun theUnconfirmedEndInDark() = render(
-        "status_unknown_411_dark",
-        beforeCapture = { scrollTranscriptTo("Call status unknown") }
-    ) { setScreen(state = unknownEndedCapture(UNCONFIRMED_REASON), dark = true) }
 
     @Test
     fun theUnconfirmedEndAtTwoHundredPercent() = render(

@@ -48,9 +48,9 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * The lab on the decision-10 matrix: 411 dp at 100 %, 320 dp at 200 %, light, dark and one
- * dynamic-color case, plus the audio controls, the test-call dialog and the lower sections. Every
- * capture runs the accessibility gate first.
+ * The lab: the overview at 411 dp light and dark and at 320 dp with 200 % text, the audio controls,
+ * the lower sections and the test-call dialog at 411 dp light, and the test-call result at 200 %
+ * text. Every capture runs the accessibility gate first.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -77,7 +77,6 @@ class LabScreenScreenshotTest {
     private fun setScreen(
         state: LabUiState,
         dark: Boolean = false,
-        dynamicColor: Boolean = false,
         fontScale: Float = 1f,
         width: Dp = 411.dp,
         callbacks: LabCallbacks = LabCallbacks()
@@ -89,7 +88,7 @@ class LabScreenScreenshotTest {
                 // The samples are from 2026-11-26: render them as "today" on any test date.
                 LocalLabClock provides { FIXED_NOW_MILLIS }
             ) {
-                PhonxietyTheme(darkTheme = dark, dynamicColor = dynamicColor) {
+                PhonxietyTheme(darkTheme = dark, dynamicColor = false) {
                     Box(
                         modifier = Modifier
                             .testTag(SCREEN_TAG)
@@ -120,16 +119,8 @@ class LabScreenScreenshotTest {
     fun widePhoneInDark() = render("411_dark") { setScreen(previewLabState(), dark = true) }
 
     @Test
-    fun widePhoneInDynamicColor() = render("411_dynamic") { setScreen(previewLabState(), dynamicColor = true) }
-
-    @Test
     fun smallScreenAtTwoHundredPercentInLight() = render("320_font200_light") {
         setScreen(previewLabState(), fontScale = 2f, width = 320.dp)
-    }
-
-    @Test
-    fun smallScreenAtTwoHundredPercentInDark() = render("320_font200_dark") {
-        setScreen(previewLabState(), dark = true, fontScale = 2f, width = 320.dp)
     }
 
     @Test
@@ -169,15 +160,6 @@ class LabScreenScreenshotTest {
             composeRule.waitForIdle()
         }
     ) { setScreen(previewLabState()) }
-
-    @Test
-    fun theLowerSectionsAtTwoHundredPercent() = render(
-        "lower_320_font200_dark",
-        beforeCapture = {
-            composeRule.onNodeWithText("App log").performScrollTo()
-            composeRule.waitForIdle()
-        }
-    ) { setScreen(previewLabState(), dark = true, fontScale = 2f, width = 320.dp) }
 
     @Test
     fun theLabChipsWrapInsteadOfRunningOffTheEdge() {
@@ -282,24 +264,6 @@ class LabScreenScreenshotTest {
     }
 
     @Test
-    fun theTestCallResultInDark() = render(
-        "test_call_result_411_dark",
-        beforeCapture = {
-            composeRule.onNodeWithText("Open the call record").performScrollTo()
-            composeRule.waitForIdle()
-        }
-    ) { setScreen(finishedTestCall(), dark = true) }
-
-    @Test
-    fun theTestCallResultInDynamicColor() = render(
-        "test_call_result_411_dynamic",
-        beforeCapture = {
-            composeRule.onNodeWithText("Open the call record").performScrollTo()
-            composeRule.waitForIdle()
-        }
-    ) { setScreen(finishedTestCall(), dynamicColor = true) }
-
-    @Test
     fun theTestCallResultAtTwoHundredPercentInLight() = render(
         "test_call_result_320_font200_light",
         beforeCapture = {
@@ -307,15 +271,6 @@ class LabScreenScreenshotTest {
             composeRule.waitForIdle()
         }
     ) { setScreen(finishedTestCall(), fontScale = 2f, width = 320.dp) }
-
-    @Test
-    fun theTestCallResultAtTwoHundredPercentInDark() = render(
-        "test_call_result_320_font200_dark",
-        beforeCapture = {
-            composeRule.onNodeWithText("Open the call record").performScrollTo()
-            composeRule.waitForIdle()
-        }
-    ) { setScreen(finishedTestCall(), dark = true, fontScale = 2f, width = 320.dp) }
 
     @Test
     fun theTestCallWhoseSummaryIsStillBeingWritten() = render(

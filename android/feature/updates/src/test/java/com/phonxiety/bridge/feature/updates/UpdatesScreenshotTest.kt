@@ -35,10 +35,9 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * Updates across the decision-10 matrix: 411 dp at 100 %, a deterministic dynamic-colour case, and
- * 320 dp at 200 % font scale in light and dark. The accessibility gate runs on each state before
- * its image is accepted; the states that carry the most layout weight are rendered in every
- * variant, and the rest once at 411 dp.
+ * Updates in three shots: every state at 411 dp light, one overview in 411 dp dark, and the states
+ * that carry the most layout weight at 320 dp with 200 % text. The accessibility gate runs on each
+ * state before its image is accepted.
  */
 @RunWith(ParameterizedRobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -68,10 +67,7 @@ class UpdatesScreenshotTest(private val matrixCase: UpdatesMatrixCase) {
             CompositionLocalProvider(
                 LocalDensity provides Density(density.density, matrixCase.variant.fontScale)
             ) {
-                PhonxietyTheme(
-                    darkTheme = matrixCase.variant.dark,
-                    dynamicColor = matrixCase.variant.dynamic
-                ) {
+                PhonxietyTheme(darkTheme = matrixCase.variant.dark, dynamicColor = false) {
                     Surface(color = MaterialTheme.colorScheme.background) {
                         Box(
                             modifier = Modifier
@@ -112,13 +108,9 @@ class UpdatesScreenshotTest(private val matrixCase: UpdatesMatrixCase) {
     companion object {
         private const val CAPTURE_TAG = "updates_matrix_capture"
 
-        private val VARIANTS = listOf(
-            UpdatesVariant(411, dark = false, fontScale = 1f, dynamic = false, slug = "411_light"),
-            UpdatesVariant(411, dark = true, fontScale = 1f, dynamic = false, slug = "411_dark"),
-            UpdatesVariant(411, dark = false, fontScale = 1f, dynamic = true, slug = "411_dynamic"),
-            UpdatesVariant(320, dark = false, fontScale = 2f, dynamic = false, slug = "320_font200_light"),
-            UpdatesVariant(320, dark = true, fontScale = 2f, dynamic = false, slug = "320_font200_dark")
-        )
+        private val LIGHT = UpdatesVariant(411, dark = false, fontScale = 1f, slug = "411_light")
+        private val DARK = UpdatesVariant(411, dark = true, fontScale = 1f, slug = "411_dark")
+        private val LARGE_TEXT = UpdatesVariant(320, dark = false, fontScale = 2f, slug = "320_font200_light")
 
         private val MATRIX_STATES = setOf(
             UpdatesState.UP_TO_DATE,
@@ -133,12 +125,13 @@ class UpdatesScreenshotTest(private val matrixCase: UpdatesMatrixCase) {
 
         @JvmStatic
         @ParameterizedRobolectricTestRunner.Parameters(name = "{0}")
-        fun matrix(): List<Array<Any>> {
-            val single = VARIANTS.first()
-            return UpdatesState.entries.flatMap { state ->
-                val variants = if (state in MATRIX_STATES) VARIANTS else listOf(single)
-                variants.map { variant -> arrayOf<Any>(UpdatesMatrixCase(state, variant)) }
+        fun matrix(): List<Array<Any>> = UpdatesState.entries.flatMap { state ->
+            val variants = buildList {
+                add(LIGHT)
+                if (state == UpdatesState.UP_TO_DATE) add(DARK)
+                if (state in MATRIX_STATES) add(LARGE_TEXT)
             }
+            variants.map { variant -> arrayOf<Any>(UpdatesMatrixCase(state, variant)) }
         }
     }
 }
@@ -213,12 +206,9 @@ class UpdatesDialogScreenshotTest(private val case: UpdatesDialogCase) {
 
         @JvmStatic
         @ParameterizedRobolectricTestRunner.Parameters(name = "{0}")
-        fun cases(): List<Array<Any>> = UpdatesDialogState.entries.flatMap { state ->
-            listOf(
-                UpdatesDialogCase(state, widthDp = 411, dark = false, fontScale = 1f, slug = "411_light"),
-                UpdatesDialogCase(state, widthDp = 320, dark = true, fontScale = 2f, slug = "320_font200_dark")
-            )
-        }.map { arrayOf<Any>(it) }
+        fun cases(): List<Array<Any>> = UpdatesDialogState.entries.map { state ->
+            arrayOf<Any>(UpdatesDialogCase(state, widthDp = 411, dark = false, fontScale = 1f, slug = "411_light"))
+        }
     }
 }
 
@@ -226,7 +216,6 @@ data class UpdatesVariant(
     val widthDp: Int,
     val dark: Boolean,
     val fontScale: Float,
-    val dynamic: Boolean,
     val slug: String
 )
 

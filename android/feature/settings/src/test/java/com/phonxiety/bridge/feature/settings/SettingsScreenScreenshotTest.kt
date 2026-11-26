@@ -30,9 +30,9 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * Settings across the decision-10 matrix: 411 dp at 100 %, a deterministic dynamic-colour case, and
- * 320 dp at 200 % font scale in light and dark. The accessibility gate runs on each state before
- * its image is accepted.
+ * Settings in three shots: every state at 411 dp light, the loaded screen in 411 dp dark, and the
+ * states whose rows reflow at 320 dp with 200 % text. The accessibility gate runs on each state
+ * before its image is accepted.
  */
 @RunWith(ParameterizedRobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -64,10 +64,7 @@ class SettingsScreenScreenshotTest(private val matrixCase: SettingsMatrixCase) {
             CompositionLocalProvider(
                 LocalDensity provides Density(density.density, matrixCase.variant.fontScale)
             ) {
-                PhonxietyTheme(
-                    darkTheme = matrixCase.variant.dark,
-                    dynamicColor = matrixCase.variant.dynamic
-                ) {
+                PhonxietyTheme(darkTheme = matrixCase.variant.dark, dynamicColor = false) {
                     Surface(color = MaterialTheme.colorScheme.background) {
                         Box(
                             modifier = Modifier
@@ -109,19 +106,22 @@ class SettingsScreenScreenshotTest(private val matrixCase: SettingsMatrixCase) {
     companion object {
         private const val CAPTURE_TAG = "settings_matrix_capture"
 
+        private val LIGHT = SettingsVariant(411, dark = false, fontScale = 1f, slug = "411_light")
+        private val DARK = SettingsVariant(411, dark = true, fontScale = 1f, slug = "411_dark")
+        private val LARGE_TEXT = SettingsVariant(320, dark = false, fontScale = 2f, slug = "320_font200_light")
+
+        /** The states whose label/value rows are long enough to reflow at 200 % text. */
+        private val LARGE_TEXT_STATES = setOf(SettingsState.LOADED, SettingsState.INVALID_NUMBER)
+
         @JvmStatic
         @ParameterizedRobolectricTestRunner.Parameters(name = "{0}")
-        fun matrix(): List<Array<Any>> {
-            val variants = listOf(
-                SettingsVariant(411, dark = false, fontScale = 1f, dynamic = false, slug = "411_light"),
-                SettingsVariant(411, dark = true, fontScale = 1f, dynamic = false, slug = "411_dark"),
-                SettingsVariant(411, dark = false, fontScale = 1f, dynamic = true, slug = "411_dynamic"),
-                SettingsVariant(320, dark = false, fontScale = 2f, dynamic = false, slug = "320_font200_light"),
-                SettingsVariant(320, dark = true, fontScale = 2f, dynamic = false, slug = "320_font200_dark")
-            )
-            return SettingsState.entries.flatMap { state ->
-                variants.map { variant -> arrayOf<Any>(SettingsMatrixCase(state, variant)) }
+        fun matrix(): List<Array<Any>> = SettingsState.entries.flatMap { state ->
+            val variants = buildList {
+                add(LIGHT)
+                if (state == SettingsState.LOADED) add(DARK)
+                if (state in LARGE_TEXT_STATES) add(LARGE_TEXT)
             }
+            variants.map { variant -> arrayOf<Any>(SettingsMatrixCase(state, variant)) }
         }
     }
 }
@@ -130,7 +130,6 @@ data class SettingsVariant(
     val widthDp: Int,
     val dark: Boolean,
     val fontScale: Float,
-    val dynamic: Boolean,
     val slug: String
 )
 

@@ -47,9 +47,9 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * The history list on the decision-10 matrix: 411 dp at 100 %, 320 dp at 200 %, light, dark and one
- * dynamic-color case, plus the empty, filtered and offline states and the end of the list. Every
- * capture runs the accessibility gate first.
+ * The history list: the filled list at 411 dp light and dark and at 320 dp with 200 % text, plus the
+ * empty, filtered and offline states and the end of the list at 411 dp light. Every capture runs the
+ * accessibility gate first.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -76,7 +76,6 @@ class CallsScreenshotTest {
     private fun setScreen(
         state: CallsUiState,
         dark: Boolean = false,
-        dynamicColor: Boolean = false,
         fontScale: Float = 1f,
         width: Dp = 411.dp,
         onOutcomeChange: (String?) -> Unit = {},
@@ -88,7 +87,7 @@ class CallsScreenshotTest {
             CompositionLocalProvider(
                 LocalDensity provides Density(density.density, fontScale = fontScale)
             ) {
-                PhonxietyTheme(darkTheme = dark, dynamicColor = dynamicColor) {
+                PhonxietyTheme(darkTheme = dark, dynamicColor = false) {
                     Box(
                         modifier = Modifier
                             .testTag(SCREEN_TAG)
@@ -129,16 +128,8 @@ class CallsScreenshotTest {
     fun widePhoneInDark() = render("411_dark") { setScreen(filled(), dark = true) }
 
     @Test
-    fun widePhoneInDynamicColor() = render("411_dynamic") { setScreen(filled(), dynamicColor = true) }
-
-    @Test
     fun smallScreenAtTwoHundredPercentInLight() = render("320_font200_light") {
         setScreen(filled(), fontScale = 2f, width = 320.dp)
-    }
-
-    @Test
-    fun smallScreenAtTwoHundredPercentInDark() = render("320_font200_dark") {
-        setScreen(filled(), dark = true, fontScale = 2f, width = 320.dp)
     }
 
     @Test

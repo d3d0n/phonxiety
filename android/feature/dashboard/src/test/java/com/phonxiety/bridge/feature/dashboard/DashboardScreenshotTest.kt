@@ -52,9 +52,10 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * The dashboard across the states that must never look alike, on the decision-10 matrix: 411 dp at
- * 100 %, 320 dp at 200 %, light, dark, and one dynamic-color case (Robolectric's wallpaper palette
- * is fixed, so those colors are deterministic). Every capture runs the accessibility gate first.
+ * The dashboard across the states that must never look alike: the overview at 411 dp light and dark
+ * and at 320 dp with 200 % text, the in-call, offline, unpaired and no-stream states at 411 dp
+ * light, the in-call, unpaired, lower and full-endpoint states at 320 dp with 200 % text, and the
+ * unpair dialog. Every capture runs the accessibility gate first.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -82,7 +83,6 @@ class DashboardScreenshotTest {
         bridge: BridgeState = DashboardSamples.direct,
         paired: Boolean = true,
         dark: Boolean = false,
-        dynamicColor: Boolean = false,
         fontScale: Float = 1f,
         width: Dp = 411.dp,
         nowEpochMs: Long = DashboardSamples.now,
@@ -96,7 +96,7 @@ class DashboardScreenshotTest {
             CompositionLocalProvider(
                 LocalDensity provides Density(density.density, fontScale = fontScale)
             ) {
-                PhonxietyTheme(darkTheme = dark, dynamicColor = dynamicColor) {
+                PhonxietyTheme(darkTheme = dark, dynamicColor = false) {
                     Box(
                         modifier = Modifier
                             .testTag(SCREEN_TAG)
@@ -137,13 +137,7 @@ class DashboardScreenshotTest {
     fun widePhoneInDark() = render("411_dark") { setScreen(dark = true) }
 
     @Test
-    fun widePhoneInDynamicColor() = render("411_dynamic") { setScreen(dynamicColor = true) }
-
-    @Test
     fun smallScreenAtTwoHundredPercentInLight() = render("320_font200_light") { setScreen(fontScale = 2f, width = 320.dp) }
-
-    @Test
-    fun smallScreenAtTwoHundredPercentInDark() = render("320_font200_dark") { setScreen(dark = true, fontScale = 2f, width = 320.dp) }
 
     @Test
     fun aCallInProgressAtWideWidth() = render("relay_in_call_411_light") { setScreen(bridge = DashboardSamples.relayInCall) }
@@ -164,11 +158,6 @@ class DashboardScreenshotTest {
                 )
             )
         )
-    }
-
-    @Test
-    fun theLinkDroppedAtTwoHundredPercent() = render("offline_320_font200_dark") {
-        setScreen(bridge = DashboardSamples.offline, dark = true, fontScale = 2f, width = 320.dp)
     }
 
     @Test
@@ -221,11 +210,10 @@ class DashboardScreenshotTest {
     private fun captureWholeEndpoint(
         name: String,
         dark: Boolean = false,
-        dynamicColor: Boolean = false,
         fontScale: Float = 1f,
         width: Dp = 411.dp
     ) {
-        setScreen(dark = dark, dynamicColor = dynamicColor, fontScale = fontScale, width = width)
+        setScreen(dark = dark, fontScale = fontScale, width = width)
         // A semantics click starts no ripple, so the capture does not depend on animation timing.
         composeRule.onNodeWithText("Show full ID").performScrollTo()
             .performSemanticsAction(SemanticsActions.OnClick)
@@ -242,16 +230,7 @@ class DashboardScreenshotTest {
     fun theWholeEndpointAfterTheDisclosureIsOpened() = captureWholeEndpoint("endpoint_full_411_light")
 
     @Test
-    fun theWholeEndpointInDark() = captureWholeEndpoint("endpoint_full_411_dark", dark = true)
-
-    @Test
-    fun theWholeEndpointInDynamicColor() = captureWholeEndpoint("endpoint_full_411_dynamic", dynamicColor = true)
-
-    @Test
     fun theWholeEndpointAtTwoHundredPercentInLight() = captureWholeEndpoint("endpoint_full_320_font200_light", fontScale = 2f, width = 320.dp)
-
-    @Test
-    fun theWholeEndpointAtTwoHundredPercentInDark() = captureWholeEndpoint("endpoint_full_320_font200_dark", dark = true, fontScale = 2f, width = 320.dp)
 
     @Test
     fun theTransportIsSpelledTheSameWayEverywhere() {

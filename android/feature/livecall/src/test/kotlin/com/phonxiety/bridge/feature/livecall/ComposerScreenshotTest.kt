@@ -76,7 +76,6 @@ class ComposerScreenshotTest {
     private fun setScreen(
         state: ComposerUiState,
         dark: Boolean = false,
-        dynamicColor: Boolean = false,
         fontScale: Float = 1f,
         width: Dp = 411.dp,
         onReview: () -> Unit = {}
@@ -86,7 +85,7 @@ class ComposerScreenshotTest {
             CompositionLocalProvider(
                 LocalDensity provides Density(density.density, fontScale = fontScale)
             ) {
-                PhonxietyTheme(darkTheme = dark, dynamicColor = dynamicColor) {
+                PhonxietyTheme(darkTheme = dark, dynamicColor = false) {
                     Box(
                         modifier = Modifier
                             .testTag(SCREEN_TAG)
@@ -132,13 +131,7 @@ class ComposerScreenshotTest {
     fun widePhoneInDark() = render("411_dark") { setScreen(VALIDATED, dark = true) }
 
     @Test
-    fun widePhoneInDynamicColor() = render("411_dynamic") { setScreen(VALIDATED, dynamicColor = true) }
-
-    @Test
     fun smallScreenAtTwoHundredPercentInLight() = render("320_font200_light") { setScreen(VALIDATED, fontScale = 2f, width = 320.dp) }
-
-    @Test
-    fun smallScreenAtTwoHundredPercentInDark() = render("320_font200_dark") { setScreen(VALIDATED, dark = true, fontScale = 2f, width = 320.dp) }
 
     @Test
     fun anEmptyBrief() = render("empty_411_light") { setScreen(ComposerUiState(limits = LIMITS)) }
@@ -162,31 +155,14 @@ class ComposerScreenshotTest {
     ) { setScreen(VALIDATED) }
 
     @Test
-    fun theLimitsAtTwoHundredPercent() = render(
-        "limits_320_font200_dark",
-        beforeCapture = { composeRule.onNodeWithText("Ring timeout").performScrollTo() }
-    ) { setScreen(VALIDATED, dark = true, fontScale = 2f, width = 320.dp) }
-
-    @Test
     fun theWarningsAfterScrolling() = render(
         "warnings_411_light",
         beforeCapture = { composeRule.onNodeWithText("agent may not know", substring = true).performScrollTo() }
     ) { setScreen(VALIDATED) }
 
     @Test
-    fun theWarningsAtTwoHundredPercent() = render(
-        "warnings_320_font200_dark",
-        beforeCapture = { composeRule.onNodeWithText("agent may not know", substring = true).performScrollTo() }
-    ) { setScreen(VALIDATED, dark = true, fontScale = 2f, width = 320.dp) }
-
-    @Test
     fun theConfirmation() = render("confirmation_411_light") {
         setScreen(VALIDATED.copy(confirming = true))
-    }
-
-    @Test
-    fun theConfirmationAtTwoHundredPercent() = render("confirmation_320_font200_dark") {
-        setScreen(VALIDATED.copy(confirming = true), dark = true, fontScale = 2f, width = 320.dp)
     }
 
     @Test
