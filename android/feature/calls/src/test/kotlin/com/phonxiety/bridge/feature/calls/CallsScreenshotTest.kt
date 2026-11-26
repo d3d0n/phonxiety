@@ -196,6 +196,26 @@ class CallsScreenshotTest {
     }
 
     @Test
+    fun clearFiltersStaysReachableBeforeTheListLoads() {
+        // A filtered list that never loaded (here the refresh failed offline) has no empty state to
+        // carry the action, so the filter row keeps it.
+        setScreen(CallsUiState(filter = CallFilter(outcome = "declined"), loaded = false, offline = true))
+        composeRule.onAllNodesWithText("Clear filters").assertCountEquals(1)
+    }
+
+    @Test
+    fun aLoadedFilteredEmptyListOffersClearFiltersOnce() {
+        setScreen(CallsUiState(filter = CallFilter(outcome = "declined"), loaded = true))
+        composeRule.onAllNodesWithText("Clear filters").assertCountEquals(1)
+    }
+
+    @Test
+    fun aLoadedFilteredListKeepsClearFiltersInTheRow() {
+        setScreen(filled().copy(filter = CallFilter(outcome = "no_answer")))
+        composeRule.onAllNodesWithText("Clear filters").assertCountEquals(1)
+    }
+
+    @Test
     fun theFarEndRowSaysWhatItFilters() {
         setScreen(filled())
         composeRule.onNodeWithText("Reached").assertExists()

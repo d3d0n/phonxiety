@@ -248,8 +248,9 @@ private fun FilterRows(
                     leadingIcon = { SelectedCheck(selected) }
                 )
             }
-            // With nothing matching, the empty state carries the same action: one button, one word.
-            if (state.filtered && state.calls.isNotEmpty()) {
+            // A loaded list with nothing matching shows the same action in its empty state: one button,
+            // one word. Before the list has loaded (or after a failed refresh) only this row offers it.
+            if (state.filtered && (!state.loaded || state.calls.isNotEmpty())) {
                 TextButton(onClick = onClearFilters) { Text(stringResource(R.string.calls_filter_clear)) }
             }
         }
