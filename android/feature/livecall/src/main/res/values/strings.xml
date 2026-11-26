@@ -167,7 +167,6 @@
     <string name="composer_error_goal">The daemon needs a goal it can act on.</string>
     <string name="composer_error_goal_too_long">The goal is longer than the 8,000-character limit.</string>
     <string name="composer_goal_counter">%1$s / %2$s characters</string>
-    <string name="composer_error_request">The daemon did not accept the brief.</string>
 
     <string name="composer_action_placing">Placing the call…</string>
     <string name="composer_action_checking">Checking the brief…</string>

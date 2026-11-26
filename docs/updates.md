@@ -56,7 +56,8 @@ The copy written by `--serve` (the `dist/` copy keeps `https://` sources and no 
       "android.permission.MODIFY_PHONE_STATE",
       "android.permission.CONTROL_INCALL_EXPERIENCE",
       "android.permission.INSTALL_SELF_UPDATES",
-      "android.permission.REBOOT"
+      "android.permission.REBOOT",
+      "android.permission.START_FOREGROUND_SERVICES_FROM_BACKGROUND"
     ]
   },
   "daemon": {
@@ -83,7 +84,7 @@ The copy written by `--serve` (the `dist/` copy keeps `https://` sources and no 
 | `module.sha256` | manager | Digest of the published module zip (the app rebuilds its own from the running APK). |
 | `module.schemaVersion` | app | Payload schema. The app applies a release only when `schemaVersion <= MODULE_SCHEMA_VERSION` (currently `1`). |
 | `module.requiresReboot` | app | The release needs a boot. Every module release currently does. |
-| `module.permissions` | app | Privileged grants in the allowlist. A grant the installed app does not hold forces a reboot even if `requiresReboot` were false. |
+| `module.permissions` | app | Privileged grants in the allowlist. A grant the installed app does not hold forces a reboot even if `requiresReboot` were false, and makes the module install wait for the app update: the phone rebuilds the zip from the running APK. |
 | `daemon.minVersion`, `protocol`, `appApi` | app | What the daemon on the computer must be. Checked against `GET /app/v1/compat`. |
 | `daemon.moduleSchema` | app | Module schema the daemon understands (informational; the app applies its own gate). |
 
@@ -159,6 +160,17 @@ A module update is required when the packaged APK, the allowlist or the scripts 
 privileged permission is the case that matters: the old allowlist does not grant it, the app runs
 without it until the overlay is replaced by a boot, and the Updates screen says so next to the
 reboot note.
+
+That release is two steps, and the screen routes them in that order. The app row stays installable
+and says a module install and a reboot follow. The Module row's install is disabled until this phone
+runs the release's APK, because the rebuilt zip takes its APK from `ApplicationInfo.sourceDir`:
+installing it from the older app would put the older payload back and reboot for nothing. Once the
+app update has landed, the same row installs the module from the new APK and reboots.
+
+A module version code that did not change still needs the install when the grant is missing: the
+installed module was built from an app that did not request that permission. The Module row shows
+it as an install rather than "Up to date", and the install rebuilds from the running APK and
+reboots.
 
 ## Manager parity
 

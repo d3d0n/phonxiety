@@ -6,6 +6,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class UpdateCompatTest {
+    private val capturePermission: String = "android.permission.CAPTURE_AUDIO_OUTPUT"
+    private val startFromBackground: String = "android.permission.START_FOREGROUND_SERVICES_FROM_BACKGROUND"
+
     @Test
     fun `everything current is compatible with no action`() {
         val verdict = UpdateCompat.evaluate(manifest(), installed())
@@ -55,6 +58,76 @@ class UpdateCompatTest {
             ),
             verdict.module.notes
         )
+    }
+
+    @Test
+    fun `a release that adds a privileged grant needs both steps`() {
+        val verdict = UpdateCompat.evaluate(
+            manifest(modulePermissions = listOf(capturePermission, startFromBackground)),
+            installed(
+                appVersionCode = 3,
+                granted = setOf(capturePermission),
+                moduleVersionCode = 3
+            )
+        )
+
+        // Step 1 stays installable, and its copy says a module install and a reboot follow.
+        assertEquals(UpdateStatus.UPDATE_AVAILABLE, verdict.app.status)
+        assertEquals(listOf(CompatibilityNote.ModuleInstallFollows), verdict.app.notes)
+
+        // Step 2 is offered, needs the reboot, and waits for step 1 to land.
+        assertEquals(UpdateStatus.UPDATE_AVAILABLE, verdict.module.status)
+        assertTrue(
+            verdict.module.notes.contains(
+                CompatibilityNote.NewPrivilegedGrants(listOf(startFromBackground))
+            )
+        )
+        assertTrue(verdict.module.requiresReboot)
+        assertTrue(verdict.module.needsAppFirst)
+    }
+
+    @Test
+    fun `the module install is offered once the phone runs the release APK`() {
+        val behindApp = UpdateCompat.evaluate(
+            manifest(),
+            installed(appVersionCode = 3, moduleVersionCode = 3)
+        )
+        assertTrue(behindApp.module.needsAppFirst)
+
+        val currentApp = UpdateCompat.evaluate(manifest(), installed(moduleVersionCode = 3))
+        assertEquals(UpdateStatus.UPDATE_AVAILABLE, currentApp.module.status)
+        assertFalse(currentApp.module.needsAppFirst)
+        assertTrue("no grant is missing, so the app row has nothing to sequence", currentApp.app.notes.isEmpty())
+    }
+
+    @Test
+    fun `an equal module version with a missing grant is an install, not up to date`() {
+        val verdict = UpdateCompat.evaluate(
+            manifest(),
+            installed(appVersionCode = 4, granted = emptySet())
+        )
+
+        assertEquals(UpdateStatus.UP_TO_DATE, verdict.app.status)
+        assertEquals(UpdateStatus.UPDATE_AVAILABLE, verdict.module.status)
+        assertTrue(verdict.module.requiresReboot)
+        assertFalse(verdict.module.needsAppFirst)
+        assertTrue(
+            verdict.module.notes.contains(CompatibilityNote.NewPrivilegedGrants(listOf(capturePermission)))
+        )
+        assertTrue(verdict.hasUpdate)
+    }
+
+    @Test
+    fun `an unreadable module state does not claim a missing grant`() {
+        val verdict = UpdateCompat.evaluate(
+            manifest(),
+            installed(appVersionCode = 3, moduleInstalled = null, granted = emptySet())
+        )
+
+        assertEquals(UpdateStatus.UPDATE_AVAILABLE, verdict.app.status)
+        assertEquals(UpdateStatus.UNKNOWN, verdict.module.status)
+        assertTrue("an unreadable module cannot say a grant is missing", verdict.app.notes.isEmpty())
+        assertFalse(verdict.module.needsAppFirst)
     }
 
     @Test

@@ -62,6 +62,12 @@ sealed interface CompatibilityNote {
     /** Privileged permissions the release grants that this installation does not hold. */
     data class NewPrivilegedGrants(val permissions: List<String>) : CompatibilityNote
 
+    /**
+     * The module's payload is the APK that runs here, so its install follows the app update. Shown on
+     * the app row while the running app still predates the release.
+     */
+    data object ModuleInstallFollows : CompatibilityNote
+
     /** The daemon on the computer is older than this release needs. */
     data class NeedsNewerDaemon(val minVersion: String) : CompatibilityNote
 
@@ -88,7 +94,12 @@ data class UpdateRowState(
     val availableVersion: String?,
     val status: UpdateStatus,
     val requiresReboot: Boolean = false,
-    val notes: List<CompatibilityNote> = emptyList()
+    val notes: List<CompatibilityNote> = emptyList(),
+    /**
+     * The module install waits for the app row: the payload is rebuilt from the running APK, and
+     * rebuilding it from an older one would put the old allowlist back.
+     */
+    val needsAppFirst: Boolean = false
 ) {
     val hasUpdate: Boolean get() = status == UpdateStatus.UPDATE_AVAILABLE
 }
@@ -112,13 +123,24 @@ data class UpdateVerdict(
  * [InstalledVersions] live in [AndroidUpdateInventory], and every branch here is unit-tested.
  */
 object UpdateCompat {
-    fun evaluate(manifest: UpdateManifest, installed: InstalledVersions): UpdateVerdict = UpdateVerdict(
-        app = appRow(manifest.apk, installed),
-        module = moduleRow(manifest.module, installed),
-        daemon = daemonRow(manifest.daemon, installed)
-    )
+    fun evaluate(manifest: UpdateManifest, installed: InstalledVersions): UpdateVerdict {
+        val missing = missingGrants(manifest.module, installed)
+        val moduleStepFollows = installed.moduleInstalled == true && missing.isNotEmpty()
+        return UpdateVerdict(
+            app = appRow(manifest.apk, installed, moduleStepFollows = moduleStepFollows),
+            module = moduleRow(manifest.module, manifest.apk, installed, missing),
+            daemon = daemonRow(manifest.daemon, installed)
+        )
+    }
 
-    private fun appRow(apk: ApkRelease, installed: InstalledVersions): UpdateRowState {
+    /** Grants the release allowlists and this installation does not hold. */
+    private fun missingGrants(module: ModuleRelease, installed: InstalledVersions): List<String> = (module.permissions.toSet() - installed.grantedPrivilegedPermissions).sorted()
+
+    private fun appRow(
+        apk: ApkRelease,
+        installed: InstalledVersions,
+        moduleStepFollows: Boolean
+    ): UpdateRowState {
         if (installed.deviceSdk < apk.minSdk) {
             return UpdateRowState(
                 target = UpdateTarget.APP,
@@ -133,7 +155,8 @@ object UpdateCompat {
                 target = UpdateTarget.APP,
                 installedVersion = installed.appVersion,
                 availableVersion = apk.version,
-                status = UpdateStatus.UPDATE_AVAILABLE
+                status = UpdateStatus.UPDATE_AVAILABLE,
+                notes = if (moduleStepFollows) listOf(CompatibilityNote.ModuleInstallFollows) else emptyList()
             )
         }
         return UpdateRowState(
@@ -144,7 +167,12 @@ object UpdateCompat {
         )
     }
 
-    private fun moduleRow(module: ModuleRelease, installed: InstalledVersions): UpdateRowState {
+    private fun moduleRow(
+        module: ModuleRelease,
+        apk: ApkRelease,
+        installed: InstalledVersions,
+        missingGrants: List<String>
+    ): UpdateRowState {
         if (module.schemaVersion > MODULE_SCHEMA_VERSION) {
             return UpdateRowState(
                 target = UpdateTarget.MODULE,
@@ -163,6 +191,9 @@ object UpdateCompat {
                 notes = listOf(CompatibilityNote.ModuleStateUnknown)
             )
         }
+        // The module zip is rebuilt from the running APK, so an older app would rebuild the old
+        // payload: the install waits until this phone runs the release's APK.
+        val appReady = installed.appVersionCode >= apk.versionCode
         if (!installed.moduleInstalled) {
             return UpdateRowState(
                 target = UpdateTarget.MODULE,
@@ -170,26 +201,27 @@ object UpdateCompat {
                 availableVersion = module.version,
                 status = UpdateStatus.UPDATE_AVAILABLE,
                 requiresReboot = true,
-                notes = listOf(CompatibilityNote.ModuleNotInstalled)
+                notes = listOf(CompatibilityNote.ModuleNotInstalled),
+                needsAppFirst = !appReady
             )
         }
         val installedCode = (installed.moduleVersionCode ?: 0).toLong()
-        if (module.versionCode > installedCode) {
-            val missingPermissions = module.permissions.toSet() - installed.grantedPrivilegedPermissions
+        // Equal version codes still need the install when the grant is absent: the previous module
+        // was built from an app that did not request it.
+        if (module.versionCode > installedCode || missingGrants.isNotEmpty()) {
             val notes = buildList {
                 if (installed.moduleDisabled) add(CompatibilityNote.ModuleDisabled)
                 if (module.requiresReboot) add(CompatibilityNote.ModuleRebootRequired)
-                if (missingPermissions.isNotEmpty()) {
-                    add(CompatibilityNote.NewPrivilegedGrants(missingPermissions.sorted()))
-                }
+                if (missingGrants.isNotEmpty()) add(CompatibilityNote.NewPrivilegedGrants(missingGrants))
             }
             return UpdateRowState(
                 target = UpdateTarget.MODULE,
                 installedVersion = installed.moduleVersion,
                 availableVersion = module.version,
                 status = UpdateStatus.UPDATE_AVAILABLE,
-                requiresReboot = module.requiresReboot || missingPermissions.isNotEmpty(),
-                notes = notes
+                requiresReboot = module.requiresReboot || missingGrants.isNotEmpty(),
+                notes = notes,
+                needsAppFirst = !appReady
             )
         }
         return UpdateRowState(

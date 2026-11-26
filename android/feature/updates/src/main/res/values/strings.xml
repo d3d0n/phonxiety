@@ -72,6 +72,7 @@
         <item quantity="one">%1$d new privileged permission in this release. Reboot to apply it.</item>
         <item quantity="other">%1$d new privileged permissions in this release. Reboot to apply them.</item>
     </plurals>
+    <string name="updates_note_module_follows">This app update is step 1. Step 2 installs the module from it, then the phone reboots.</string>
     <string name="updates_note_daemon_old">Update the daemon on your computer to %1$s or newer.</string>
     <string name="updates_note_daemon_api">The daemon speaks app API %1$d; this app needs app API %2$d. Update the daemon on your computer.</string>
     <string name="updates_note_daemon_protocol">The daemon accepts device protocol %1$s; this app speaks %2$d. Update the daemon on your computer.</string>
@@ -83,6 +84,7 @@
     <string name="updates_permission_control_in_call">Control in-call experience</string>
     <string name="updates_permission_install_updates">Install self updates</string>
     <string name="updates_permission_reboot">Reboot</string>
+    <string name="updates_permission_start_after_boot">Start after boot</string>
 
     <!-- App install -->
     <string name="updates_install_app">Install %1$s</string>
@@ -103,6 +105,7 @@
     <string name="updates_install_module">Install module %1$s</string>
     <string name="updates_install_module_generic">Install module</string>
     <string name="updates_install_module_again">Install the module again</string>
+    <string name="updates_install_module_after_app">Install the app update first.</string>
     <string name="updates_install_module_support_reboot">Installs the module as root, then reboots the phone.</string>
     <string name="updates_install_module_support">Installs the module as root.</string>
     <string name="updates_module_building">Rebuilding the module…</string>

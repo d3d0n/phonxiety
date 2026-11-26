@@ -41,6 +41,11 @@
     <uses-permission
         android:name="android.permission.CONTROL_INCALL_EXPERIENCE"
         tools:ignore="ProtectedPermissions" />
+    <!-- Starts BridgeService outside the boot broadcast's temporary allowlist: a slow
+         cold start after a reboot, a tile or a notification while the app is invisible. -->
+    <uses-permission
+        android:name="android.permission.START_FOREGROUND_SERVICES_FROM_BACKGROUND"
+        tools:ignore="ProtectedPermissions" />
 
     <application android:supportsRtl="true">
 

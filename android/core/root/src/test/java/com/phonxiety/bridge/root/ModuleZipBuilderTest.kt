@@ -117,7 +117,7 @@ class ModuleZipBuilderTest {
     }
 
     @Test
-    fun allowlistStaysExactlyTheFivePrivilegedPermissions() = runTest {
+    fun allowlistStaysExactlyThePrivilegedPermissions() = runTest {
         val zip = builder().build()
         val allowlist = text(zip, ModuleZipBuilder.ALLOWLIST)
 

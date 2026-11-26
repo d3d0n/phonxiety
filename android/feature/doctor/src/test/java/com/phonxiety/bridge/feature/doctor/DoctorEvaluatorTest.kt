@@ -39,7 +39,7 @@ class DoctorEvaluatorTest {
     @Test
     fun anAllGreenInstallHasNoFailingRow() {
         val rows = TestData.rows()
-        assertEquals(24, rows.size)
+        assertEquals(25, rows.size)
         assertTrue(rows.none { it.needsFix })
         assertEquals(DoctorSeverity.OK, DoctorUiState(rows = rows).overall)
     }
@@ -186,6 +186,34 @@ class DoctorEvaluatorTest {
         val row = TestData.row(failing, "${DoctorEvaluator.ID_PRIVILEGED}:$missing")
         assertEquals(DoctorSeverity.FAIL, row.severity)
         assertEquals(DoctorFixId.REINSTALL_MODULE, row.plan?.fix)
+    }
+
+    @Test
+    fun theBackgroundStartGrantFailsWithItsTitleAndReinstallsTheModule() {
+        val missing = PrivilegedPermissions.START_FOREGROUND_SERVICES_FROM_BACKGROUND
+        // The app update runs from /data over the module's older system copy, which lacks the grant.
+        val rows = TestData.rows(
+            snapshot = TestData.snapshot(
+                facts = TestData.facts(
+                    apkPath = "/data/app/~~updated/com.phonxiety.bridge/base.apk",
+                    granted = PrivilegedPermissions.ALL - missing,
+                    updated = true
+                )
+            )
+        )
+
+        // An updated system app keeps its overlay and its privileged place.
+        assertEquals(DoctorSeverity.OK, TestData.row(rows, DoctorEvaluator.ID_OVERLAY).severity)
+
+        val row = TestData.row(rows, "${DoctorEvaluator.ID_PRIVILEGED}:$missing")
+        assertEquals(DoctorSeverity.FAIL, row.severity)
+        assertEquals("Start after boot", row.titleText())
+        assertEquals(DoctorFixId.REINSTALL_MODULE, row.plan?.fix)
+        assertEquals(FixClass.CONFIRM, row.plan?.risk)
+        assertTrue(row.plan?.needsReboot == true)
+        assertEquals(RecoveryId.PRIVILEGED_GRANT_LOST, DoctorPolicy.recoveryFor(row.kind))
+        // A privileged grant is never a runtime prompt: no dialog can give it.
+        assertTrue(DoctorPolicy.automaticFixes(rows, callActive = false).none { it.id == row.id })
     }
 
     @Test

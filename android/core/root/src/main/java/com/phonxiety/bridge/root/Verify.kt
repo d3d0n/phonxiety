@@ -7,13 +7,16 @@ object PrivilegedPermissions {
     const val CONTROL_INCALL_EXPERIENCE: String = "android.permission.CONTROL_INCALL_EXPERIENCE"
     const val INSTALL_SELF_UPDATES: String = "android.permission.INSTALL_SELF_UPDATES"
     const val REBOOT: String = "android.permission.REBOOT"
+    const val START_FOREGROUND_SERVICES_FROM_BACKGROUND: String =
+        "android.permission.START_FOREGROUND_SERVICES_FROM_BACKGROUND"
 
     val ALL: Set<String> = setOf(
         CAPTURE_AUDIO_OUTPUT,
         MODIFY_PHONE_STATE,
         CONTROL_INCALL_EXPERIENCE,
         INSTALL_SELF_UPDATES,
-        REBOOT
+        REBOOT,
+        START_FOREGROUND_SERVICES_FROM_BACKGROUND
     )
 }
 

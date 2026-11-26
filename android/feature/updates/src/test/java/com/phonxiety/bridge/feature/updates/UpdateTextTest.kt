@@ -60,6 +60,14 @@ class UpdateTextTest {
     }
 
     @Test
+    fun `an app row whose module step follows says so`() {
+        assertEquals(
+            UiText.Res(R.string.updates_note_module_follows),
+            CompatibilityNote.ModuleInstallFollows.text()
+        )
+    }
+
+    @Test
     fun `the daemon protocol note joins the versions it accepts`() {
         assertEquals(
             UiText.Res(R.string.updates_note_daemon_protocol, listOf("2, 3", 4)),
@@ -80,6 +88,14 @@ class UpdateTextTest {
         assertEquals(
             UiText.Res(R.string.updates_permission_capture_audio),
             privilegedTitle("android.permission.CAPTURE_AUDIO_OUTPUT")
+        )
+    }
+
+    @Test
+    fun `the background start grant gets a human title`() {
+        assertEquals(
+            UiText.Res(R.string.updates_permission_start_after_boot),
+            privilegedTitle("android.permission.START_FOREGROUND_SERVICES_FROM_BACKGROUND")
         )
     }
 

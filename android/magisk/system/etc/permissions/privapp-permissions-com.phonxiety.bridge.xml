@@ -7,6 +7,9 @@
           CONTROL_INCALL_EXPERIENCE non-UI InCallService binding
           INSTALL_SELF_UPDATES      PackageInstaller session for APK-only updates
           REBOOT                    reboot after a module install (PowerManager)
+          START_FOREGROUND_SERVICES_FROM_BACKGROUND
+                                    start the bridge service after boot and from
+                                    invisible contexts
         Runtime permissions (RECORD_AUDIO, CALL_PHONE, READ_PHONE_STATE,
         POST_NOTIFICATIONS) are requested by the app or granted by the
         phone:pair task. INSTALL_PACKAGES is deliberately not granted.
@@ -17,5 +20,6 @@
         <permission name="android.permission.CONTROL_INCALL_EXPERIENCE" />
         <permission name="android.permission.INSTALL_SELF_UPDATES" />
         <permission name="android.permission.REBOOT" />
+        <permission name="android.permission.START_FOREGROUND_SERVICES_FROM_BACKGROUND" />
     </privapp-permissions>
 </permissions>

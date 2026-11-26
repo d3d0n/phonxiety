@@ -707,13 +707,20 @@ private fun ReadyToInstallContent(state: WizardState.ReadyToInstall) {
         label = stringResource(R.string.onboarding_row_provider),
         value = state.provider.providerLabel()
     )
+    // The identifiers are long, so each grant is its own stacked line: side by side, the longest
+    // one (START_FOREGROUND_SERVICES_FROM_BACKGROUND) squeezes its label into single characters.
     PRIVILEGED_GRANTS.forEach { grant ->
-        KeyValueRow(
-            label = stringResource(grant.label),
-            value = grant.permission,
-            mono = true,
-            valueMaxLines = 2
-        )
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                text = stringResource(grant.label),
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Text(
+                text = grant.permission,
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
     HorizontalDivider()
     Text(
@@ -976,7 +983,11 @@ private val PRIVILEGED_GRANTS = listOf(
     PrivilegedGrant(R.string.onboarding_grant_call_state, "MODIFY_PHONE_STATE"),
     PrivilegedGrant(R.string.onboarding_grant_in_call_control, "CONTROL_INCALL_EXPERIENCE"),
     PrivilegedGrant(R.string.onboarding_grant_self_updates, "INSTALL_SELF_UPDATES"),
-    PrivilegedGrant(R.string.onboarding_grant_reboot, "REBOOT")
+    PrivilegedGrant(R.string.onboarding_grant_reboot, "REBOOT"),
+    PrivilegedGrant(
+        R.string.onboarding_grant_start_after_boot,
+        "START_FOREGROUND_SERVICES_FROM_BACKGROUND"
+    )
 )
 
 internal fun RootId.managerName(): String = when (this) {

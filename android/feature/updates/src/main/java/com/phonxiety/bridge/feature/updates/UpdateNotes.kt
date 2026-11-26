@@ -36,6 +36,8 @@ internal fun CompatibilityNote.text(): UiText = when (this) {
     is CompatibilityNote.NewPrivilegedGrants ->
         UiText.Plural(R.plurals.updates_note_privileged, permissions.size)
 
+    CompatibilityNote.ModuleInstallFollows -> UiText.Res(R.string.updates_note_module_follows)
+
     is CompatibilityNote.NeedsNewerDaemon ->
         UiText.Res(R.string.updates_note_daemon_old, listOf(minVersion))
 
@@ -79,5 +81,6 @@ internal fun privilegedTitle(permission: String): UiText = when (permission) {
     "android.permission.CONTROL_INCALL_EXPERIENCE" -> UiText.Res(R.string.updates_permission_control_in_call)
     "android.permission.INSTALL_SELF_UPDATES" -> UiText.Res(R.string.updates_permission_install_updates)
     "android.permission.REBOOT" -> UiText.Res(R.string.updates_permission_reboot)
+    "android.permission.START_FOREGROUND_SERVICES_FROM_BACKGROUND" -> UiText.Res(R.string.updates_permission_start_after_boot)
     else -> UiText.Literal(permission.substringAfterLast('.'))
 }

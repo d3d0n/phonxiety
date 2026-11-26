@@ -239,6 +239,7 @@ enum class UpdatesState(val slug: String, private val observation: () -> Updates
     MANIFEST_MISSING("manifest_missing", UpdatesSamples::manifestMissing),
     MODULE_PERMISSIONS("module_permissions", UpdatesSamples::modulePermissions),
     MODULE_DISABLED("module_disabled", UpdatesSamples::moduleDisabled),
+    MODULE_GRANT_MISSING("module_grant_missing", UpdatesSamples::moduleGrantMissing),
     CALL_ACTIVE("call_active", UpdatesSamples::callActive),
     ROLLBACK_APP_ONLY("rollback_app_only", UpdatesSamples::rollbackAppOnly),
     ROLLBACK_WITH_MODULE("rollback_with_module", UpdatesSamples::rollbackWithModule),

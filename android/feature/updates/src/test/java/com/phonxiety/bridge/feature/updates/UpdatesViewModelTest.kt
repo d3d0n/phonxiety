@@ -186,6 +186,42 @@ class UpdatesViewModelTest {
     }
 
     @Test
+    fun `the module install waits for the app update that carries its payload`() = runTest(testDispatcher.scheduler) {
+        val service = FakeUpdatesService().apply {
+            result = UpdatesSamples.check(
+                UpdatesSamples.installed(
+                    appVersionCode = 3,
+                    appVersion = "0.3.0",
+                    moduleVersionCode = 3,
+                    moduleVersion = "0.3.0"
+                )
+            )
+        }
+        val viewModel = UpdatesViewModel(service, bridge)
+        backgroundScope.launch { viewModel.state.collect {} }
+        advanceUntilIdle()
+        assertTrue(viewModel.state.value.check?.verdict?.module?.needsAppFirst == true)
+
+        viewModel.installModule()
+        advanceUntilIdle()
+
+        assertEquals("the module is never rebuilt from the old app", 0, service.moduleInstalls)
+
+        // Once the app update has landed the same row installs, and its payload is the new app.
+        service.result = UpdatesSamples.check(
+            UpdatesSamples.installed(moduleVersionCode = 3, moduleVersion = "0.3.0")
+        )
+        viewModel.refresh()
+        advanceUntilIdle()
+        assertFalse(viewModel.state.value.check?.verdict?.module?.needsAppFirst ?: true)
+
+        viewModel.installModule()
+        advanceUntilIdle()
+
+        assertEquals(1, service.moduleInstalls)
+    }
+
+    @Test
     fun `an app only rollback failure stays in the rollback section and retries as a rollback`() = runTest(testDispatcher.scheduler) {
         val service = FakeUpdatesService().apply { rollbackPlan.value = UpdatesSamples.appOnlyRollback() }
         val viewModel = UpdatesViewModel(service, bridge)

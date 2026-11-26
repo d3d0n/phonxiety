@@ -127,7 +127,8 @@ class ModuleZipBuilder(
             PrivilegedPermissions.MODIFY_PHONE_STATE,
             PrivilegedPermissions.CONTROL_INCALL_EXPERIENCE,
             PrivilegedPermissions.INSTALL_SELF_UPDATES,
-            PrivilegedPermissions.REBOOT
+            PrivilegedPermissions.REBOOT,
+            PrivilegedPermissions.START_FOREGROUND_SERVICES_FROM_BACKGROUND
         )) {
             require(allowlist.contains(permission)) { "allowlist is missing $permission" }
         }

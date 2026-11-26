@@ -59,6 +59,7 @@
     <string name="doctor_privileged_control_in_call">Control in-call experience</string>
     <string name="doctor_privileged_install_updates">Install self updates</string>
     <string name="doctor_privileged_reboot">Reboot</string>
+    <string name="doctor_privileged_start_after_boot">Start after boot</string>
 
     <string name="doctor_runtime_record_audio">Record audio</string>
     <string name="doctor_runtime_call_phone">Place calls</string>
