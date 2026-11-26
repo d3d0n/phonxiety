@@ -481,21 +481,22 @@ class BridgeEngine(
     }
 
     private fun publishRoute() {
-        // Also the cache below: a frame refused by the hello gate must not be
-        // remembered as sent.
+        // A frame refused by the hello gate must not be remembered as sent:
+        // the existing one-second tick retries it once the link can carry it.
         if (!helloDelivered) return
         val route = links.route() ?: return
         val key = "${route.relay}|${route.rttMs}"
         if (key == lastRouteKey) return
-        lastRouteKey = key
-        stateStore.route(RouteSnapshot(route.relay, route.rttMs))
-        onLinkState(R.string.notification_link_connected)
-        send(
+        val sent = send(
             DeviceOutbound.LinkRoute(
                 path = if (route.relay) "relay" else "direct",
                 rttMs = route.rttMs
             )
         )
+        if (!sent) return
+        lastRouteKey = key
+        stateStore.route(RouteSnapshot(route.relay, route.rttMs))
+        onLinkState(R.string.notification_link_connected)
     }
 
     /**
@@ -2528,35 +2529,58 @@ internal data class PhoneCapabilities(
  * a permission granted or revoked while the link is up stays invisible to it
  * until the next handshake.  This watch compares permission samples against the
  * last hello — never against the UI [Capabilities], which [BridgeEngine] also
- * writes with the daemon's voice-control support — and reports a difference.
+ * writes with the daemon's voice-control support — and only reports a change
+ * that two consecutive samples agree on.
  */
 internal class CapabilityWatch {
     private var announced: PhoneCapabilities? = null
 
+    /** The last sample that differed from [announced], waiting for the next one. */
+    private var candidate: PhoneCapabilities? = null
+
     /** The transport accepted a hello carrying [capabilities]. */
+    @Synchronized
     fun helloSent(capabilities: PhoneCapabilities) {
         announced = capabilities
+        candidate = null
     }
 
     /** The link went down: the next hello announces whatever it finds then. */
+    @Synchronized
     fun helloGone() {
         announced = null
+        candidate = null
     }
 
-    /** True when [current] differs from the last hello; false before the first one. */
-    fun differsFromLastHello(current: PhoneCapabilities): Boolean {
-        val last = announced ?: return false
-        return last != current
+    /**
+     * Records one permission sample and says whether the change is stable:
+     * true only when this sample and the one before it agree and both differ
+     * from the last hello.  A sample matching the last hello clears the
+     * candidate, so permissions alternating around the hello never admit a
+     * refresh.  False before the first hello.
+     */
+    @Synchronized
+    fun stableChange(current: PhoneCapabilities): Boolean {
+        if (announced == null || current == announced) {
+            candidate = null
+            return false
+        }
+        val previous = candidate
+        candidate = current
+        return previous == current
     }
 }
 
 /**
- * Turns a capability difference into one link refresh.
+ * Turns a stable capability change into one link refresh.
  *
+ * Two consecutive samples must agree and differ from the last hello before a
+ * refresh is admitted, so a permission flapping on and off never reconnects.
  * The idle door is taken before the decision and held through the synchronous
  * link-down publication, so a call reserved a moment earlier is never cut by a
- * refresh decided on an older sample.  A refused door defers: the next sample
- * decides again, and a change that reverted meanwhile causes no refresh.
+ * refresh decided on an older sample; the re-sample under the door re-checks
+ * the change has not reverted meanwhile.  A refused door defers: the candidate
+ * stays, and the next stable sample decides again.
  */
 internal class CapabilityRefresh(
     private val watch: CapabilityWatch,
@@ -2570,10 +2594,10 @@ internal class CapabilityRefresh(
      * hello carrying what the phone can do now.
      */
     fun run(): Boolean {
-        if (!watch.differsFromLastHello(sample())) return false
+        if (!watch.stableChange(sample())) return false
         val action = admission.tryBeginIdleLinkAction(callOwned) ?: return false
         try {
-            if (!watch.differsFromLastHello(sample())) return false
+            if (!watch.stableChange(sample())) return false
             return reconnect(CAPABILITIES_CHANGED)
         } finally {
             action.close()

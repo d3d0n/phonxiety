@@ -6,7 +6,6 @@ import okio.ByteString
 import okio.ByteString.Companion.toByteString
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -163,20 +162,27 @@ class LinkSupervisorTest {
     @Test
     fun textBinaryAndAttachmentsAreRefusedUntilHelloIsQueued() = runBlocking {
         val supervisor = supervisor()
+        val refused = mutableListOf<Boolean>()
+        var upDuringHello = false
+        calls.beforeHello = {
+            // The link is live and its hello is not queued yet: this is the
+            // window the gate exists for.  Preferences the daemon would read
+            // as its first control frame must not reach the transport.
+            upDuringHello = supervisor.isUp()
+            refused += supervisor.sendText("""{"type":"api","id":"x"}""")
+            refused += supervisor.sendFrame(ByteArray(4), 4)
+            refused += runBlocking { supervisor.openAttachment("{}") } != null
+        }
         supervisor.start()
         val link = factory.last()
+        link.open()
 
-        // The link is live before its hello: every other frame is refused at
-        // once instead of waiting, because the transports cannot be fed yet.
-        assertFalse(supervisor.sendText("""{"type":"api","id":"x"}"""))
-        assertFalse(supervisor.sendFrame(ByteArray(4), 4))
-        assertNull(supervisor.openAttachment("{}"))
-        assertEquals(0, link.sentText.size)
+        assertTrue(upDuringHello)
+        assertEquals(listOf(false, false, false), refused)
+        assertEquals(listOf(HELLO), link.sentText)
         assertEquals(0, link.sentFrameLengths.size)
         assertEquals(0, link.attachments)
 
-        link.open()
-        assertEquals(listOf(HELLO), link.sentText)
         assertTrue(supervisor.sendText("""{"type":"api","id":"x"}"""))
         assertTrue(supervisor.sendFrame(ByteArray(4), 4))
         supervisor.openAttachment("{}")

@@ -92,6 +92,9 @@ class CapabilityWatchTest {
         assertEquals(false, helloOf(factory.last()).capabilities.frameworkAudio)
 
         sample = PhoneCapabilities(callControl = true, frameworkAudio = true)
+        // One sample alone is not a change: the watch waits for the next tick
+        // to agree before it touches the link.
+        assertFalse(refresh.run())
         assertTrue(refresh.run())
 
         assertEquals(listOf(CapabilityRefresh.CAPABILITIES_CHANGED), downs)
@@ -122,9 +125,47 @@ class CapabilityWatchTest {
     }
 
     @Test
+    fun alternatingPermissionSamplesNeverReconnect() {
+        openLink()
+        val announced = PhoneCapabilities(callControl = true, frameworkAudio = false)
+        val changed = PhoneCapabilities(callControl = true, frameworkAudio = true)
+
+        // Permissions flapping around the accepted hello must never be read as
+        // a stable change, however long the flapping lasts.
+        repeat(10) { tick ->
+            sample = if (tick % 2 == 0) changed else announced
+            assertFalse(refresh.run())
+        }
+
+        assertEquals(1, factory.created.size)
+        assertEquals(emptyList<String>(), downs)
+        assertTrue(supervisor.isUp())
+    }
+
+    @Test
+    fun aChangeHeldForTwoSamplesReconnectsOnce() {
+        openLink()
+        sample = PhoneCapabilities(callControl = true, frameworkAudio = true)
+
+        assertFalse(refresh.run())
+        assertTrue(refresh.run())
+        assertEquals(listOf(CapabilityRefresh.CAPABILITIES_CHANGED), downs)
+
+        // The reconnect re-handshakes with the same capabilities: the stable
+        // change has been announced and nothing else follows.
+        scheduler.advance(LinkSupervisor.RECONNECT_BASE_MS)
+        factory.last().open()
+        repeat(3) { assertFalse(refresh.run()) }
+        assertEquals(1, downs.size)
+        assertEquals(2, factory.created.size)
+        assertTrue(supervisor.isUp())
+    }
+
+    @Test
     fun aFreshHelloStopsFurtherReconnects() {
         openLink()
         sample = PhoneCapabilities(callControl = false, frameworkAudio = true)
+        assertFalse(refresh.run())
         assertTrue(refresh.run())
         scheduler.advance(LinkSupervisor.RECONNECT_BASE_MS)
         factory.last().open()
@@ -143,6 +184,7 @@ class CapabilityWatchTest {
 
         sample = PhoneCapabilities(callControl = false, frameworkAudio = true)
         assertFalse(refresh.run())
+        assertFalse(refresh.run())
         assertTrue(supervisor.isUp())
         assertEquals(emptyList<String>(), downs)
 
@@ -153,8 +195,24 @@ class CapabilityWatchTest {
         assertTrue(supervisor.isUp())
         assertEquals(emptyList<String>(), downs)
 
-        // Still different at the next sample after the call: now it refreshes.
+        // Still different at the next samples after the call: now it refreshes.
         sample = PhoneCapabilities(callControl = false, frameworkAudio = true)
+        assertFalse(refresh.run())
+        assertTrue(refresh.run())
+        assertEquals(listOf(CapabilityRefresh.CAPABILITIES_CHANGED), downs)
+    }
+
+    @Test
+    fun aChangeThatStayedStableThroughACallRefreshesAtItsEnd() {
+        openLink()
+        callOwned = true
+        sample = PhoneCapabilities(callControl = false, frameworkAudio = true)
+        repeat(3) { assertFalse(refresh.run()) }
+        assertEquals(emptyList<String>(), downs)
+
+        // The candidate already has its two agreeing samples; the first tick
+        // after the call is admitted and refreshes.
+        callOwned = false
         assertTrue(refresh.run())
         assertEquals(listOf(CapabilityRefresh.CAPABILITIES_CHANGED), downs)
     }
@@ -163,6 +221,8 @@ class CapabilityWatchTest {
     fun aRefreshInFlightKeepsADialOutAndAConcurrentRefreshDefers() {
         openLink()
         sample = PhoneCapabilities(callControl = false, frameworkAudio = true)
+        // Prime the candidate, so the sample below is a stable change.
+        assertFalse(refresh.run())
         val action = admission.tryBeginIdleLinkAction { callOwned }
         assertNotNull(action)
         try {
