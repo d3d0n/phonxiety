@@ -23,6 +23,8 @@ isForeground=true
 ## Before this change (same phone, 12:46, module without the grant)
 code:SYSTEM_ALLOW_LISTED (the app is on the user's battery-optimization exemption list: dumpsys deviceidle whitelist -> user,com.phonxiety.bridge)
 
-## Reboot -> connected (python3 /tmp/phx_boot_timer.py --reboot)
-13:09:55 sys.boot_completed (phone uptime 11.38 s)
-13:10:03 phone connected +8.7 s after boot_completed
+## Reboot -> connected (python3 /tmp/phx_boot_timer.py --reboot; a connected line counts only after the
+## daemon has reported the phone gone, and only an exact "phone connected")
+13:35:54 rebooting
+13:36:22 sys.boot_completed (phone uptime 11.24 s)
+13:36:30 phone connected +7.8 s after boot_completed
