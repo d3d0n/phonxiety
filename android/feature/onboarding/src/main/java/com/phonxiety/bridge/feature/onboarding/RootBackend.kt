@@ -8,6 +8,21 @@ import com.phonxiety.bridge.root.RebootReason
 import com.phonxiety.bridge.root.RootCapabilities
 import com.phonxiety.bridge.root.RootDetection
 import com.phonxiety.bridge.root.VerifyReport
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+
+/**
+ * Where a metamodule install is: the archive is downloaded first and installed second, and the two
+ * steps are named separately so a minute of silence reads as progress instead of a hang.
+ */
+sealed interface SetupInstallPhase {
+    /** [bytes] received so far; [total] is null when the server sent no length. */
+    data class Downloading(val bytes: Long, val total: Long?) : SetupInstallPhase
+
+    data object Installing : SetupInstallPhase
+}
+
+private val idleInstallPhase = MutableStateFlow<SetupInstallPhase?>(null)
 
 /**
  * The device operations the wizard performs, as one seam. Production is [AndroidRootBackend], which
@@ -26,6 +41,10 @@ interface RootBackend {
     suspend fun install(provider: DetectedProvider, operation: InstallOperation): ProviderResult
 
     suspend fun reboot(provider: DetectedProvider, reason: RebootReason): ProviderResult
+
+    /** The metamodule download/install step, or null when nothing is being prepared. */
+    val installPhase: StateFlow<SetupInstallPhase?>
+        get() = idleInstallPhase
 }
 
 /** Whether the runtime permissions the wizard asks for are still missing. */

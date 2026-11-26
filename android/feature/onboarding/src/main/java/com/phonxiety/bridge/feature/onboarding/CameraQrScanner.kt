@@ -2,7 +2,9 @@ package com.phonxiety.bridge.feature.onboarding
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.OptIn
@@ -14,6 +16,8 @@ import androidx.camera.core.Preview
 import androidx.camera.core.UseCase
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.material3.AlertDialog
@@ -27,12 +31,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.mlkit.vision.barcode.BarcodeScanner
@@ -52,21 +60,39 @@ import java.util.concurrent.atomic.AtomicBoolean
 @Composable
 internal fun QrScanDialog(
     onCode: (String) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onPasteRequested: () -> Unit
 ) {
     val context = LocalContext.current
     var granted by remember { mutableStateOf(cameraGranted(context)) }
+    // Asked once per dialog: a rotation must not re-ask, and a blocked camera must not loop.
+    var asked by rememberSaveable { mutableStateOf(false) }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { allowed ->
         granted = allowed
     }
-    LaunchedEffect(granted) {
-        if (!granted) permission.launch(Manifest.permission.CAMERA)
+    LaunchedEffect(granted, asked) {
+        if (!granted && !asked) {
+            asked = true
+            permission.launch(Manifest.permission.CAMERA)
+        }
     }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-        title = { Text("Scan the pairing code") },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.onboarding_cancel)) }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = {
+                    onDismiss()
+                    onPasteRequested()
+                }
+            ) {
+                Text(stringResource(R.string.onboarding_scanner_paste))
+            }
+        },
+        title = { Text(stringResource(R.string.onboarding_scanner_title)) },
         text = {
             if (granted) {
                 CameraQrPreview(
@@ -76,7 +102,21 @@ internal fun QrScanDialog(
                         .height(280.dp)
                 )
             } else {
-                Text("The camera permission is needed to scan the code. Paste the pairing link instead if you prefer.")
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(stringResource(R.string.onboarding_scanner_permission))
+                    TextButton(
+                        onClick = {
+                            context.startActivity(
+                                Intent(
+                                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                    "package:${context.packageName}".toUri()
+                                )
+                            )
+                        }
+                    ) {
+                        Text(stringResource(R.string.onboarding_scanner_open_settings))
+                    }
+                }
             }
         }
     )
@@ -151,11 +191,18 @@ private fun CameraQrPreview(
     if (message == null) {
         AndroidView(factory = { previewView }, modifier = modifier)
     } else {
-        Text(
-            text = "The camera could not start ($message). Paste the pairing link instead.",
-            modifier = modifier,
-            style = MaterialTheme.typography.bodyMedium
-        )
+        // The headline is ours; the platform's own words stay visible as evidence, in monospace.
+        Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                text = stringResource(R.string.onboarding_scanner_failed),
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 

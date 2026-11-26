@@ -1,11 +1,15 @@
 package com.phonxiety.bridge.feature.onboarding
 
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.security.MessageDigest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+
+/** Version of the pinned metamodule, named in the wizard's copy so it cannot drift from the URL. */
+const val METAMODULE_VERSION: String = "1.3.1"
 
 /** Pinned KernelSU metamodule: the exact archive the wizard installs and verifies. */
 const val METAMODULE_URL: String =
@@ -26,20 +30,35 @@ fun interface MetamoduleSource {
     suspend fun zip(): MetamoduleResult
 }
 
-/** Bytes for one URL; production is [OkHttpFetcher], tests pass a lambda. */
+/**
+ * Bytes for one URL; production is [OkHttpFetcher], tests pass a lambda. [onProgress] receives the
+ * running byte count and the declared length, so the wizard can show the download as it happens.
+ */
 fun interface HttpFetcher {
-    suspend fun get(url: String): ByteArray
+    suspend fun get(url: String, onProgress: (Long, Long?) -> Unit): ByteArray
 }
 
 class OkHttpFetcher(
     private val client: OkHttpClient = OkHttpClient()
 ) : HttpFetcher {
-    override suspend fun get(url: String): ByteArray = withContext(Dispatchers.IO) {
+    override suspend fun get(url: String, onProgress: (Long, Long?) -> Unit): ByteArray = withContext(Dispatchers.IO) {
         val response = client.newCall(Request.Builder().url(url).build()).execute()
         response.use {
             require(it.isSuccessful) { "HTTP ${it.code} from $url" }
             val body = requireNotNull(it.body) { "empty body from $url" }
-            body.bytes()
+            val total = body.contentLength().takeIf { length -> length > 0 }
+            val stream = body.byteStream()
+            val output = ByteArrayOutputStream(total?.toInt()?.coerceAtLeast(0) ?: 64 * 1024)
+            val buffer = ByteArray(16 * 1024)
+            var read = 0L
+            while (true) {
+                val count = stream.read(buffer)
+                if (count < 0) break
+                output.write(buffer, 0, count)
+                read += count
+                onProgress(read, total)
+            }
+            output.toByteArray()
         }
     }
 }
@@ -53,7 +72,8 @@ class HttpMetamoduleSource(
     private val cacheDir: File,
     private val fetcher: HttpFetcher = OkHttpFetcher(),
     private val url: String = METAMODULE_URL,
-    private val expectedSha256: String = METAMODULE_SHA256
+    private val expectedSha256: String = METAMODULE_SHA256,
+    private val onProgress: (Long, Long?) -> Unit = { _, _ -> }
 ) : MetamoduleSource {
     override suspend fun zip(): MetamoduleResult {
         val cached = File(cacheDir, CACHE_NAME)
@@ -61,7 +81,7 @@ class HttpMetamoduleSource(
             return MetamoduleResult.Ready(cached)
         }
         val bytes = try {
-            fetcher.get(url)
+            fetcher.get(url, onProgress)
         } catch (error: Exception) {
             return MetamoduleResult.Failed(
                 "the metamodule download failed: ${error.message ?: "no reason given"}"

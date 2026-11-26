@@ -20,7 +20,7 @@ class MetamoduleSourceTest {
     fun acceptsAnArchiveWithThePinnedHash() = runTest {
         val source = HttpMetamoduleSource(
             cacheDir = temporary.root,
-            fetcher = HttpFetcher { archive },
+            fetcher = HttpFetcher { _, _ -> archive },
             url = TEST_URL,
             expectedSha256 = archiveSha
         )
@@ -37,7 +37,7 @@ class MetamoduleSourceTest {
         val expected = "00".repeat(32)
         val source = HttpMetamoduleSource(
             cacheDir = temporary.root,
-            fetcher = HttpFetcher { archive },
+            fetcher = HttpFetcher { _, _ -> archive },
             url = TEST_URL,
             expectedSha256 = expected
         )
@@ -56,7 +56,7 @@ class MetamoduleSourceTest {
         var fetches = 0
         val source = HttpMetamoduleSource(
             cacheDir = temporary.root,
-            fetcher = HttpFetcher {
+            fetcher = HttpFetcher { _, _ ->
                 fetches++
                 archive
             },
@@ -77,7 +77,7 @@ class MetamoduleSourceTest {
         cached.writeBytes("corrupt".toByteArray())
         val source = HttpMetamoduleSource(
             cacheDir = temporary.root,
-            fetcher = HttpFetcher { archive },
+            fetcher = HttpFetcher { _, _ -> archive },
             url = TEST_URL,
             expectedSha256 = archiveSha
         )
