@@ -17,6 +17,41 @@ internal fun interface CandidateProbe {
 /** The candidate the current link was built for; the engine shows it in [com.phonxiety.bridge.model.BridgeState]. */
 internal data class SelectedCandidate(val kind: LinkKind, val host: String?)
 
+/** What this phone measured on one daemon LAN address. */
+data class LanPathProbe(
+    val address: String,
+    val reachable: Boolean,
+    val rttMs: Long?
+)
+
+/**
+ * Probes the daemon's LAN addresses from this phone, with the measurement link
+ * selection already trusts: [WebSocketCandidateProbe] opens three consecutive
+ * TLS handshakes pinned to the daemon certificate and carrying the bearer
+ * token, so a socket that opens proves both the pin and the credential.
+ *
+ * The daemon cannot see this half of the path — it only knows that its own
+ * listener answers on the host — so a phone on the same network asks the
+ * question here instead of inferring it from whichever link happens to be up.
+ * Stops at the first address that answers; at most
+ * [LAN_PATH_PROBE_ADDRESSES] addresses are tried.
+ */
+object LanPathProber {
+    fun probe(urls: List<String>, certSha256: String?, token: String): List<LanPathProbe> {
+        val prober = WebSocketCandidateProbe(token)
+        val results = ArrayList<LanPathProbe>(minOf(urls.size, LAN_PATH_PROBE_ADDRESSES))
+        for (url in urls.take(LAN_PATH_PROBE_ADDRESSES)) {
+            val report = prober.probe(Candidate.address(url, certSha256))
+            results += LanPathProbe(url, report.eligible, report.p50RttMs)
+            if (report.eligible) break
+        }
+        return results
+    }
+}
+
+/** A phone asking for a LAN check does not probe every address the daemon listed. */
+private const val LAN_PATH_PROBE_ADDRESSES = 4
+
 /**
  * Creates links for the candidate selection: before every address attempt it
  * probes the candidates allowed by the current [ConnectionMode], asks
