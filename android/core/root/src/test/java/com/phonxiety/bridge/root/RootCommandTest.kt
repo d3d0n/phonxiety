@@ -67,6 +67,34 @@ class RootCommandTest {
     }
 
     @Test
+    fun rollbackScriptsStayInsideTheRollbackDirectory() {
+        assertEquals("mkdir -p /data/adb/phonxiety", RootCommand.createRollbackDirectory().script)
+        assertEquals(
+            "cp -f /data/user/0/com.phonxiety.bridge/cache/rollback.json /data/adb/phonxiety/rollback.json.tmp",
+            RootCommand.copyIntoRollbackDirectory(
+                "/data/user/0/com.phonxiety.bridge/cache/rollback.json",
+                "rollback.json"
+            ).script
+        )
+        assertEquals(
+            "mv -f /data/adb/phonxiety/rollback.json.tmp /data/adb/phonxiety/rollback.json",
+            RootCommand.renameRollbackFile("rollback.json").script
+        )
+        assertEquals("cat /data/adb/phonxiety/rollback.json", RootCommand.readRollbackFile("rollback.json").script)
+        assertEquals("rm -f /data/adb/phonxiety/rollback.json", RootCommand.removeRollbackFile("rollback.json").script)
+        assertEquals(
+            "nohup sh /data/adb/phonxiety/rollback.sh >/data/adb/phonxiety/rollback.log 2>&1 &",
+            RootCommand.startRollbackScript().script
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            RootCommand.copyIntoRollbackDirectory("/data/user/0/x; reboot", "rollback.json")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            RootCommand.readRollbackFile("../../etc/hosts")
+        }
+    }
+
+    @Test
     fun stagingAndModuleReads() {
         assertEquals(
             "cp -f /data/user/0/com.phonxiety.bridge/cache/module.zip /data/local/tmp/phonxiety_bridge.zip",
@@ -80,6 +108,56 @@ class RootCommandTest {
             "cat /data/adb/modules/phonxiety_bridge/module.prop",
             RootCommand.readModuleFile("/data/adb/modules/phonxiety_bridge/module.prop").script
         )
+    }
+
+    @Test
+    fun rollbackGenerationsAreNamedByTheirDigest() {
+        val sha = "a".repeat(64)
+        val generation = RootCommand.rollbackGenerationName(sha)!!
+        assertEquals("g-$sha", generation)
+        assertEquals(
+            "mkdir -p /data/adb/phonxiety/g-$sha",
+            RootCommand.createRollbackGeneration(generation).script
+        )
+        assertEquals(
+            "cp -f /data/user/0/com.phonxiety.bridge/cache/x.zip /data/adb/phonxiety/g-$sha/module-previous.zip.tmp",
+            RootCommand.copyIntoRollbackGeneration(
+                "/data/user/0/com.phonxiety.bridge/cache/x.zip",
+                generation,
+                "module-previous.zip"
+            ).script
+        )
+        assertEquals(
+            "mv -f /data/adb/phonxiety/g-$sha/module-previous.zip.tmp /data/adb/phonxiety/g-$sha/module-previous.zip",
+            RootCommand.renameInRollbackGeneration(generation, "module-previous.zip").script
+        )
+        assertEquals(
+            "cat /data/adb/phonxiety/g-$sha/module-previous.json",
+            RootCommand.readRollbackGenerationFile(generation, "module-previous.json").script
+        )
+        assertEquals(
+            "sha256sum /data/adb/phonxiety/g-$sha/module-previous.zip",
+            RootCommand.hashRollbackGenerationFile(generation, "module-previous.zip").script
+        )
+        assertEquals(
+            "rm -rf /data/adb/phonxiety/g-$sha",
+            RootCommand.removeRollbackGeneration(generation).script
+        )
+        assertEquals(null, RootCommand.rollbackGenerationName(""))
+        assertEquals(null, RootCommand.rollbackGenerationName("../etc"))
+    }
+
+    @Test
+    fun aGenerationNameTheShellCouldReadCannotEscape() {
+        assertThrows(IllegalArgumentException::class.java) {
+            RootCommand.readRollbackGenerationFile("g-../../etc/hosts; reboot", "module-previous.json")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            RootCommand.removeRollbackGeneration("../../data")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            RootCommand.copyIntoRollbackGeneration("/tmp/a.zip; reboot", RootCommand.rollbackGenerationName("a".repeat(64))!!, "x.zip")
+        }
     }
 
     @Test

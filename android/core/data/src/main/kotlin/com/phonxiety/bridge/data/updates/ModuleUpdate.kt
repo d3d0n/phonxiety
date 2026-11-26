@@ -49,9 +49,14 @@ interface ModuleInstallGateway {
 /**
  * The Module row's state machine. A module update always ends in a reboot: the overlay carries a
  * new APK and possibly new privileged grants, and nothing applies it without a boot.
+ *
+ * Before the new zip is staged, the APK currently mounted on the system image is captured into
+ * `/data/adb/phonxiety` ([PreviousModuleCapture]): that archive is the only faithful previous
+ * payload, and a rollback needs it. A failed capture is reported and never claimed as available.
  */
 class ModuleUpdateCoordinator(
     private val gateway: ModuleInstallGateway,
+    private val previousModule: PreviousModuleCapture,
     private val onState: (ModuleInstallState) -> Unit
 ) {
     suspend fun install(manifest: UpdateManifest): ModuleInstallState {
@@ -61,19 +66,29 @@ class ModuleUpdateCoordinator(
         } catch (error: Exception) {
             return fail(ModuleInstallState.Failed(ModuleInstallFailure.BUILD_FAILED, error.message))
         }
+        val captureNote = when (val capture = previousModule.capture()) {
+            is CaptureResult.Failed ->
+                "The previous module could not be kept (${capture.detail}), " +
+                    "so a rollback to it is not offered."
+
+            CaptureResult.NothingToCapture, is CaptureResult.Captured -> null
+        }
         onState(ModuleInstallState.Installing)
         when (val installed = gateway.install(zip)) {
             is ProviderInstall.Failed -> return fail(ModuleInstallState.Failed(installed.code, installed.detail))
             ProviderInstall.Installed -> Unit
         }
-        onState(ModuleInstallState.RebootPending())
+        onState(ModuleInstallState.RebootPending(captureNote))
         return when (val reboot = gateway.reboot()) {
-            ProviderInstall.Installed -> ModuleInstallState.RebootPending()
+            ProviderInstall.Installed -> ModuleInstallState.RebootPending(captureNote)
 
             is ProviderInstall.Failed -> {
                 val state = ModuleInstallState.RebootPending(
-                    detail = "The update is installed but the reboot was not accepted: ${reboot.detail ?: "no output"}. " +
-                        "Reboot this phone to apply it."
+                    detail = listOfNotNull(
+                        captureNote,
+                        "The update is installed but the reboot was not accepted: ${reboot.detail ?: "no output"}. " +
+                            "Reboot this phone to apply it."
+                    ).joinToString(" ")
                 )
                 fail(state)
             }

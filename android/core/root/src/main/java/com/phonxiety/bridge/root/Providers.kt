@@ -14,6 +14,13 @@ sealed interface RootProvider {
 
     suspend fun capabilities(): RootCapabilities
     suspend fun installModule(zip: File): ProviderResult
+
+    /**
+     * Installs a zip that already lives in root-owned storage (`/data/adb`). `/data/adb` is
+     * readable by root only, so the app cannot stat that file: existence is decided by `su`'s own
+     * `cp`, which fails and says so when the path is not there.
+     */
+    suspend fun installPublishedModule(sourcePath: String): ProviderResult
     suspend fun enableModule(id: String): ProviderResult
     suspend fun disableModule(id: String): ProviderResult
     suspend fun removeModule(id: String): ProviderResult
@@ -146,8 +153,15 @@ internal const val EXIT_REFUSED: Int = 125
 
 internal suspend fun stageModuleZip(shell: RootShell, zip: File): ProviderResult {
     if (!zip.isFile) return ProviderResult.Failure("module zip does not exist: ${zip.path}", -1)
-    return shell.execSafely { RootCommand.copy(zip.absolutePath, MODULE_ZIP_NAME) }
+    return stageRootOwnedModuleZip(shell, zip.absolutePath)
 }
+
+/**
+ * Copies a module zip that already sits in root-owned storage into the staging directory. The
+ * existence check is `su`'s own `cp`: `/data/adb` is root-only (0700), so an app-side
+ * `File.isFile` on such a path answers "missing" for a file root can see and install.
+ */
+internal suspend fun stageRootOwnedModuleZip(shell: RootShell, sourcePath: String): ProviderResult = shell.execSafely { RootCommand.copy(sourcePath, MODULE_ZIP_NAME) }
 
 internal suspend fun rebootThrough(
     shell: RootShell,
@@ -189,6 +203,12 @@ class MagiskProvider(
 
     override suspend fun installModule(zip: File): ProviderResult {
         val staged = stageModuleZip(shell, zip)
+        if (!staged.isSuccess) return staged
+        return shell.execSafely { RootCommand.magiskInstallModule(STAGED_ZIP_PATH) }
+    }
+
+    override suspend fun installPublishedModule(sourcePath: String): ProviderResult {
+        val staged = stageRootOwnedModuleZip(shell, sourcePath)
         if (!staged.isSuccess) return staged
         return shell.execSafely { RootCommand.magiskInstallModule(STAGED_ZIP_PATH) }
     }
@@ -253,6 +273,12 @@ class KernelSuProvider(
 
     override suspend fun installModule(zip: File): ProviderResult {
         val staged = stageModuleZip(shell, zip)
+        if (!staged.isSuccess) return staged
+        return shell.execSafely { RootCommand.ksudModule(ModuleAction.INSTALL, STAGED_ZIP_PATH) }
+    }
+
+    override suspend fun installPublishedModule(sourcePath: String): ProviderResult {
+        val staged = stageRootOwnedModuleZip(shell, sourcePath)
         if (!staged.isSuccess) return staged
         return shell.execSafely { RootCommand.ksudModule(ModuleAction.INSTALL, STAGED_ZIP_PATH) }
     }
@@ -322,6 +348,12 @@ class ApatchProvider(
 
     override suspend fun installModule(zip: File): ProviderResult {
         val staged = stageModuleZip(shell, zip)
+        if (!staged.isSuccess) return staged
+        return shell.execSafely { RootCommand.apdModule(ModuleAction.INSTALL, STAGED_ZIP_PATH) }
+    }
+
+    override suspend fun installPublishedModule(sourcePath: String): ProviderResult {
+        val staged = stageRootOwnedModuleZip(shell, sourcePath)
         if (!staged.isSuccess) return staged
         return shell.execSafely { RootCommand.apdModule(ModuleAction.INSTALL, STAGED_ZIP_PATH) }
     }

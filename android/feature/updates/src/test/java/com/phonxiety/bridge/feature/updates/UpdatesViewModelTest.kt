@@ -1,7 +1,12 @@
 package com.phonxiety.bridge.feature.updates
 
 import com.phonxiety.bridge.data.updates.AppInstallState
+import com.phonxiety.bridge.data.updates.InstallFailure
 import com.phonxiety.bridge.data.updates.ModuleInstallState
+import com.phonxiety.bridge.data.updates.RollbackPendingReason
+import com.phonxiety.bridge.data.updates.RollbackPlan
+import com.phonxiety.bridge.data.updates.RollbackRecovery
+import com.phonxiety.bridge.data.updates.RollbackState
 import com.phonxiety.bridge.data.updates.UpdateCheck
 import com.phonxiety.bridge.data.updates.UpdateManifest
 import com.phonxiety.bridge.data.updates.UpdatesService
@@ -91,6 +96,110 @@ class UpdatesViewModelTest {
         assertTrue(viewModel.state.value.check?.verdict == null)
     }
 
+    @Test
+    fun `the combined rollback asks before it stages anything`() = runTest(testDispatcher.scheduler) {
+        val plan = UpdatesSamples.moduleRollback()
+        val service = FakeUpdatesService().apply { rollbackPlan.value = plan }
+        val viewModel = UpdatesViewModel(service)
+        backgroundScope.launch { viewModel.state.collect {} }
+        advanceUntilIdle()
+
+        viewModel.rollback()
+        advanceUntilIdle()
+
+        assertEquals(0, service.rollbackCalls)
+        assertEquals(plan, viewModel.state.value.rollbackConfirmation)
+
+        viewModel.confirmRollback()
+        advanceUntilIdle()
+
+        assertEquals(1, service.rollbackCalls)
+        assertEquals(null, viewModel.state.value.rollbackConfirmation)
+    }
+
+    @Test
+    fun `an app only rollback runs without a confirmation`() = runTest(testDispatcher.scheduler) {
+        val service = FakeUpdatesService().apply { rollbackPlan.value = UpdatesSamples.appOnlyRollback() }
+        val viewModel = UpdatesViewModel(service)
+        backgroundScope.launch { viewModel.state.collect {} }
+        advanceUntilIdle()
+
+        viewModel.rollback()
+        advanceUntilIdle()
+
+        assertEquals(1, service.rollbackCalls)
+        assertEquals(null, viewModel.state.value.rollbackConfirmation)
+    }
+
+    @Test
+    fun `an app only rollback failure stays in the rollback section`() = runTest(testDispatcher.scheduler) {
+        val service = FakeUpdatesService().apply { rollbackPlan.value = UpdatesSamples.appOnlyRollback() }
+        val viewModel = UpdatesViewModel(service)
+        backgroundScope.launch { viewModel.state.collect {} }
+        advanceUntilIdle()
+
+        viewModel.rollback()
+        advanceUntilIdle()
+        val failure = AppInstallState.Failed(InstallFailure.ROOT_UNAVAILABLE, "su: denied")
+        service.appInstall.value = failure
+        advanceUntilIdle()
+
+        assertEquals(failure, viewModel.state.value.rollbackAppInstall)
+    }
+
+    @Test
+    fun `an update install never lends its state to the rollback section`() = runTest(testDispatcher.scheduler) {
+        val service = FakeUpdatesService().apply { rollbackPlan.value = UpdatesSamples.appOnlyRollback() }
+        val viewModel = UpdatesViewModel(service)
+        backgroundScope.launch { viewModel.state.collect {} }
+        advanceUntilIdle()
+
+        viewModel.installApp()
+        advanceUntilIdle()
+        service.appInstall.value = AppInstallState.Failed(InstallFailure.INSTALL_FAILED, "the installer refused")
+        advanceUntilIdle()
+
+        assertEquals(AppInstallState.Idle, viewModel.state.value.rollbackAppInstall)
+        assertTrue(viewModel.state.value.appInstall is AppInstallState.Failed)
+    }
+
+    @Test
+    fun `a pending rollback retries without asking again`() = runTest(testDispatcher.scheduler) {
+        val service = FakeUpdatesService().apply {
+            rollbackPlan.value = UpdatesSamples.moduleRollback()
+            rollbackRecovery.value = RollbackRecovery.Pending(RollbackPendingReason.REMOVAL_FAILED, "Failure [X]")
+        }
+        val viewModel = UpdatesViewModel(service)
+        backgroundScope.launch { viewModel.state.collect {} }
+        advanceUntilIdle()
+
+        viewModel.rollback()
+        advanceUntilIdle()
+
+        assertEquals(1, service.rollbackCalls)
+        assertEquals(null, viewModel.state.value.rollbackConfirmation)
+    }
+
+    @Test
+    fun `the unfinished rollback block can be dismissed until the next check`() = runTest(testDispatcher.scheduler) {
+        val service = FakeUpdatesService().apply {
+            rollbackRecovery.value = RollbackRecovery.Pending(RollbackPendingReason.REMOVAL_NOT_STARTED, null)
+        }
+        val viewModel = UpdatesViewModel(service)
+        backgroundScope.launch { viewModel.state.collect {} }
+        advanceUntilIdle()
+        assertFalse(viewModel.state.value.rollbackRecoveryDismissed)
+
+        viewModel.dismissRollbackRecovery()
+        advanceUntilIdle()
+        assertTrue(viewModel.state.value.rollbackRecoveryDismissed)
+
+        viewModel.refresh()
+        advanceUntilIdle()
+        assertFalse(viewModel.state.value.rollbackRecoveryDismissed)
+        assertTrue(viewModel.state.value.rollbackRecovery is RollbackRecovery.Pending)
+    }
+
     private class FakeUpdatesService : UpdatesService {
         var result: UpdateCheck = UpdatesSamples.check()
         var checked = 0
@@ -98,7 +207,10 @@ class UpdatesViewModelTest {
 
         override val appInstall = MutableStateFlow<AppInstallState>(AppInstallState.Idle)
         override val moduleInstall = MutableStateFlow<ModuleInstallState>(ModuleInstallState.Idle)
-        override val rollbackAvailable = MutableStateFlow(false)
+        override val rollbackPlan = MutableStateFlow<RollbackPlan?>(null)
+        override val rollbackRecovery = MutableStateFlow<RollbackRecovery?>(null)
+        override val moduleRollback = MutableStateFlow<RollbackState>(RollbackState.Idle)
+        var rollbackCalls = 0
 
         override suspend fun check(channel: String?): UpdateCheck {
             checked++
@@ -111,7 +223,9 @@ class UpdatesViewModelTest {
 
         override suspend fun installModule(manifest: UpdateManifest) = Unit
 
-        override suspend fun rollbackApp() = Unit
+        override suspend fun rollbackApp() {
+            rollbackCalls++
+        }
 
         override fun dismiss() = Unit
     }

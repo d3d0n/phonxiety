@@ -146,6 +146,54 @@ class ProviderCommandsTest {
         assertTrue(runner.scripts.isEmpty())
     }
 
+    /**
+     * The published rollback archive lives under root-only `/data/adb`, where this process cannot
+     * even stat it. The staging must therefore ask `su`: a `cp` it can perform is the existence
+     * check, and this file — invisible here — must still install.
+     */
+    @Test
+    fun aZipOnlyRootCanSeeIsStagedThroughSu() = runTest {
+        val generation = RootCommand.rollbackGenerationName("a".repeat(64))!!
+        val archive = "/data/adb/phonxiety/$generation/module-previous.zip"
+        assertFalse(File(archive).isFile)
+
+        val expectedZip = "${RootCommand.STAGING_DIR}/${MODULE_ZIP_NAME}"
+        val factories: List<Pair<(RootShell) -> RootProvider, String>> = listOf(
+            { rootShell: RootShell -> MagiskProvider(magiskProvider(), rootShell, FakeEnvironment()) } to
+                "magisk --install-module $expectedZip",
+            { rootShell: RootShell -> KernelSuProvider(kernelSuProvider(), rootShell, FakeEnvironment()) } to
+                "ksud module install $expectedZip",
+            { rootShell: RootShell -> ApatchProvider(apatchProvider(), rootShell, FakeEnvironment()) } to
+                "apd module install $expectedZip"
+        )
+        for ((factory, installCommand) in factories) {
+            val (rootShell, runner) = shell()
+
+            val result = factory(rootShell).installPublishedModule(archive)
+
+            assertTrue(result.isSuccess)
+            assertEquals(listOf("cp -f $archive $expectedZip", installCommand), runner.scripts)
+        }
+    }
+
+    @Test
+    fun aRootCopyThatCannotFindTheArchiveReportsWhatSuSaid() = runTest {
+        val archive = "/data/adb/phonxiety/g-${"b".repeat(64)}/module-previous.zip"
+        val (rootShell, runner) = shell { script ->
+            if (script.startsWith("cp -f")) {
+                ShellOutput(stderr = "cp: $archive: No such file or directory", exitCode = 1)
+            } else {
+                ShellOutput()
+            }
+        }
+
+        val result = MagiskProvider(magiskProvider(), rootShell, FakeEnvironment()).installPublishedModule(archive)
+
+        assertFalse(result.isSuccess)
+        assertTrue(result.tail().joinToString(" ").contains("No such file"))
+        assertEquals(1, runner.scripts.size)
+    }
+
     @Test
     fun kernelSuWithoutMetamoduleCannotOverlaySystem() = runTest {
         val environment = FakeEnvironment().apply {
