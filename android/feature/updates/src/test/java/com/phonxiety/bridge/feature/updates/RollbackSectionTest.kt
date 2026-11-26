@@ -9,6 +9,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import com.phonxiety.bridge.data.updates.RollbackPendingReason
 import com.phonxiety.bridge.data.updates.RollbackRecovery
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
@@ -31,7 +32,11 @@ class RollbackSectionTest {
     @get:Rule
     val composeRule = createComposeRule()
 
-    private fun render(state: UpdatesUiState, onRollback: () -> Unit = {}) {
+    private fun render(
+        state: UpdatesUiState,
+        onConfirmRollback: () -> Unit = {},
+        onRollback: () -> Unit = {}
+    ) {
         composeRule.setContent {
             PhonxietyTheme(dynamicColor = false) {
                 Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
@@ -42,7 +47,7 @@ class RollbackSectionTest {
                         onInstallApp = {},
                         onInstallModule = {},
                         onRollback = onRollback,
-                        onConfirmRollback = {},
+                        onConfirmRollback = onConfirmRollback,
                         onDismissRollback = {},
                         onDismissRollbackRecovery = {},
                         onDismiss = {}
@@ -79,5 +84,21 @@ class RollbackSectionTest {
         composeRule.onNodeWithText("Reinstall the previous app").assertDoesNotExist()
         composeRule.onNodeWithText("The APK replaced by the last update is kept in app files.", substring = true)
             .assertDoesNotExist()
+    }
+
+    @Test
+    fun `the app only action only asks, it never starts the downgrade itself`() {
+        var asks = 0
+        var confirmations = 0
+        render(
+            UpdatesSamples.rollbackAppOnly(),
+            onConfirmRollback = { confirmations++ },
+            onRollback = { asks++ }
+        )
+
+        composeRule.onNodeWithText("Reinstall the previous app").performScrollTo().performClick()
+
+        assertEquals(1, asks)
+        assertEquals(0, confirmations)
     }
 }

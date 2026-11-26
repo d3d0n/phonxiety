@@ -208,6 +208,7 @@ class DefaultUpdatesService @Inject constructor(
                             RollbackBlocker.STORAGE_UNREADABLE -> RollbackFailure.STORAGE_UNREADABLE
                             RollbackBlocker.STALE_ARCHIVE -> RollbackFailure.STALE_ARCHIVE
                             RollbackBlocker.ARCHIVE_MISMATCH -> RollbackFailure.ARCHIVE_MISMATCH
+                            RollbackBlocker.APP_NOT_NEWER -> RollbackFailure.APP_NOT_NEWER
                         }
                     )
                 }
@@ -278,6 +279,7 @@ class DefaultUpdatesService @Inject constructor(
         keptApkExists = keeper.keptApk() != null,
         keptVersionName = keeper.keptVersionName(),
         keptVersionCode = keeper.keptVersionCode(),
+        runningVersionCode = installedVersionCode(),
         mounted = mountedApk.read(),
         archive = archives.read()
     )

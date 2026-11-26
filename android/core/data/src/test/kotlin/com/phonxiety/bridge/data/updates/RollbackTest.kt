@@ -44,6 +44,34 @@ class RollbackTest {
     }
 
     @Test
+    fun `an app that already runs the kept version offers no app only rollback`() {
+        // The device bug: after a completed rollback to 0.3.0 the kept APK is 0.3.0 and the app
+        // runs 0.3.0, so reinstalling the kept APK would repeat the downgrade already made.
+        val recovered = RollbackPlanner.plan(
+            facts(
+                runningVersionCode = 3,
+                mounted = MountedSystemApkVersion.Present("/system/priv-app/x.apk", "0.3.0", 3)
+            )
+        )
+        val olderThanKept = RollbackPlanner.plan(facts(runningVersionCode = 2, mounted = MountedSystemApkVersion.Absent))
+
+        assertEquals(RollbackPlan.Unavailable(RollbackBlocker.APP_NOT_NEWER, keptVersionName = "0.3.0", keptVersionCode = 3), recovered)
+        assertEquals(RollbackPlan.Unavailable(RollbackBlocker.APP_NOT_NEWER, keptVersionName = "0.3.0", keptVersionCode = 3), olderThanKept)
+    }
+
+    @Test
+    fun `a newer app over a not newer system image keeps the app only rollback`() {
+        val plan = RollbackPlanner.plan(
+            facts(
+                runningVersionCode = 4,
+                mounted = MountedSystemApkVersion.Present("/system/priv-app/x.apk", "0.3.0", 3)
+            )
+        )
+
+        assertEquals(RollbackPlan.AppOnly("0.3.0", 3), plan)
+    }
+
+    @Test
     fun `a newer system image without a kept module is explained, not offered`() {
         val plan = RollbackPlanner.plan(
             facts(
@@ -386,12 +414,14 @@ class RollbackTest {
 
     private fun facts(
         keptApk: Boolean = true,
+        runningVersionCode: Long = 4L,
         mounted: MountedSystemApkVersion = MountedSystemApkVersion.Present("/system/priv-app/x.apk", "0.4.0", 4),
         archive: RollbackArchiveState = RollbackArchiveState.Missing
     ) = RollbackFacts(
         keptApkExists = keptApk,
         keptVersionName = "0.3.0",
         keptVersionCode = 3,
+        runningVersionCode = runningVersionCode,
         mounted = mounted,
         archive = archive
     )

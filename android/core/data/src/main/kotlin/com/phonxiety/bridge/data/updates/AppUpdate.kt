@@ -165,7 +165,8 @@ class AppUpdateCoordinator(
                 return finish(
                     AppInstallState.Failed(
                         InstallFailure.SIGNING_CERT_MISMATCH,
-                        "installed ${verification.expected.joinToString()}, archive ${verification.found.joinToString()}"
+                        "installed certificate: ${verification.expected.joinToString()}\n" +
+                            "archive certificate: ${verification.found.joinToString()}"
                     )
                 )
             }

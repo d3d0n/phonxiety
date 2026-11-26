@@ -1,0 +1,244 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Updates. One word per concept: "computer" is where the daemon runs, "module" is the
+         privileged overlay, "bridge" is the service that carries calls. -->
+
+    <string name="updates_title">Updates</string>
+    <string name="updates_check_again">Check again</string>
+    <string name="updates_dismiss">Dismiss</string>
+    <string name="updates_cancel">Cancel</string>
+    <string name="updates_show_details">Show details</string>
+    <string name="updates_hide_details">Hide details</string>
+    <string name="updates_loading">Checking versions…</string>
+    <string name="updates_none">—</string>
+
+    <!-- Status -->
+    <string name="updates_status_checking">Checking</string>
+    <string name="updates_status_check_failed">Check failed</string>
+    <string name="updates_status_incompatible">Incompatible</string>
+    <string name="updates_status_update_available">Update available</string>
+    <string name="updates_status_up_to_date">Up to date</string>
+    <string name="updates_status_unknown">Unknown</string>
+
+    <!-- A call in progress blocks every action that would end it. -->
+    <string name="updates_call_active_summary">A call is running. Changes that would end it stay blocked until the call ends.</string>
+    <string name="updates_blocked_call_module">Not during a call: the module install reboots the phone.</string>
+    <string name="updates_blocked_call_app">Not during a call: the install restarts the bridge and ends the call.</string>
+    <string name="updates_blocked_call_rollback">Not during a call: the rollback restarts the bridge and can reboot the phone.</string>
+    <string name="updates_blocked_call_rollback_app">Not during a call: the reinstall restarts the bridge and ends the call.</string>
+
+    <!-- A failed check -->
+    <string name="updates_error_link_title">The daemon did not answer</string>
+    <string name="updates_error_link_message">The update document arrives over the device link. Check the dashboard, then try again.</string>
+    <string name="updates_error_no_manifest_title">No update document is published</string>
+    <string name="updates_error_no_manifest_message">On the computer, run this to publish the update document. Then check again.</string>
+    <string name="updates_command_publish">mise run phone:publish</string>
+    <string name="updates_error_channel_title">No release on this channel</string>
+    <string name="updates_error_channel_message">The document has no release under the channel this app asked for.</string>
+    <string name="updates_error_invalid_title">The update document cannot be used</string>
+    <string name="updates_error_invalid_message">A required field is missing or malformed, so nothing is offered. Details shows what the daemon sent.</string>
+    <string name="updates_error_unknown_title">The check failed</string>
+    <string name="updates_error_unknown_message">No reason was reported.</string>
+
+    <!-- Rows -->
+    <string name="updates_target_app">App</string>
+    <string name="updates_target_app_subtitle">The APK on this phone</string>
+    <string name="updates_target_module">Module</string>
+    <string name="updates_target_module_subtitle">The privileged module and its allowlist</string>
+    <string name="updates_target_daemon">Daemon</string>
+    <string name="updates_target_daemon_subtitle">Runs on your computer; this phone cannot install it</string>
+    <string name="updates_row_installed">Installed</string>
+    <string name="updates_row_available">Available</string>
+    <string name="updates_row_needs_at_least">Needs at least</string>
+    <string name="updates_module_state">Module</string>
+    <string name="updates_module_disabled">Disabled</string>
+
+    <!-- Compatibility -->
+    <string name="updates_compatibility_title">Compatibility</string>
+    <string name="updates_compatibility_subtitle">Protocol, app API and module schema</string>
+    <string name="updates_compatibility_ok">This phone, the module and the daemon agree on every version this release needs.</string>
+    <string name="updates_compatibility_ok_pill">Compatible</string>
+    <string name="updates_compatibility_bad_pill">Incompatible</string>
+
+    <!-- Why a version does not fit; every one names the next step. -->
+    <string name="updates_note_android_version">This release needs %1$s (API %2$d). This phone runs %3$s (API %4$d).</string>
+    <string name="updates_note_android_api">This release needs Android API %1$d. This phone is API %2$d.</string>
+    <string name="updates_note_module_schema">This module release uses payload schema %1$d; this app understands up to %2$d. Update the app first.</string>
+    <string name="updates_note_module_unknown">The module state could not be read; root access is needed to check it.</string>
+    <string name="updates_note_module_absent">The module is not installed, so this phone has no privileged copies.</string>
+    <string name="updates_note_module_disabled">The installed module is disabled; enable it in Doctor.</string>
+    <string name="updates_note_module_reboot">A reboot applies the module update.</string>
+    <plurals name="updates_note_privileged">
+        <item quantity="one">%1$d new privileged permission in this release. Reboot to apply it.</item>
+        <item quantity="other">%1$d new privileged permissions in this release. Reboot to apply them.</item>
+    </plurals>
+    <string name="updates_note_daemon_old">Update the daemon on your computer to %1$s or newer.</string>
+    <string name="updates_note_daemon_api">The daemon speaks app API %1$d; this app needs app API %2$d. Update the daemon on your computer.</string>
+    <string name="updates_note_daemon_protocol">The daemon accepts device protocol %1$s; this app speaks %2$d. Update the daemon on your computer.</string>
+    <string name="updates_note_daemon_unreachable">The daemon did not answer, so its version is unknown.</string>
+
+    <!-- Human titles for the privileged permissions a module release grants. -->
+    <string name="updates_permission_capture_audio">Capture audio output</string>
+    <string name="updates_permission_modify_phone_state">Modify phone state</string>
+    <string name="updates_permission_control_in_call">Control in-call experience</string>
+    <string name="updates_permission_install_updates">Install self updates</string>
+    <string name="updates_permission_reboot">Reboot</string>
+
+    <!-- App install -->
+    <string name="updates_install_app">Install %1$s</string>
+    <string name="updates_install_app_generic">Install the update</string>
+    <string name="updates_install_again">Install again</string>
+    <string name="updates_install_app_support">The SHA-256 and the signing certificate are checked before the install. Android may also ask to scan the file or confirm with your screen lock; that is expected for an app installed from a file.</string>
+    <string name="updates_downloading">Downloading…</string>
+    <string name="updates_downloading_percent">Downloading %1$s</string>
+    <string name="updates_verifying">Checking the download…</string>
+    <string name="updates_installing">Installing…</string>
+    <string name="updates_installing_version">Installing %1$s…</string>
+    <string name="updates_awaiting_pill">Finish in the system dialog</string>
+    <string name="updates_awaiting_text">The system installer is waiting for you.</string>
+    <string name="updates_installed_done">Installed %1$s. The service restarts by itself.</string>
+    <string name="updates_installed_done_unknown">The update is installed. The service restarts by itself.</string>
+
+    <!-- Module install -->
+    <string name="updates_install_module">Install module %1$s</string>
+    <string name="updates_install_module_generic">Install module</string>
+    <string name="updates_install_module_again">Install the module again</string>
+    <string name="updates_install_module_support_reboot">Installs the module as root, then reboots the phone.</string>
+    <string name="updates_install_module_support">Installs the module as root.</string>
+    <string name="updates_module_building">Rebuilding the module…</string>
+    <string name="updates_module_installing">Installing the module…</string>
+    <string name="updates_module_reboot_pill">Reboot needed</string>
+    <string name="updates_module_reboot_detail">The module is installed. Reboot this phone to mount the new overlay.</string>
+
+    <!-- The daemon runs on the computer, so its row holds the commands, never a button. -->
+    <string name="updates_daemon_instructions">On the computer, update the daemon, then restart it:</string>
+    <string name="updates_command_setup">mise run setup</string>
+    <string name="updates_command_daemon_install">mise run daemon:install</string>
+
+    <!-- Empty state -->
+    <string name="updates_empty_title">No update document</string>
+    <string name="updates_empty_message">The daemon answered without a release to compare against.</string>
+
+    <!-- Rollback -->
+    <string name="updates_rollback_title">Rollback</string>
+    <string name="updates_rollback_subtitle_one_step">One step, then a reboot</string>
+    <string name="updates_rollback_subtitle_app_only">The previous app is kept on this phone</string>
+    <string name="updates_rollback_subtitle_unavailable">Not available on this phone</string>
+    <string name="updates_rollback_subtitle_reading">Reading this phone</string>
+    <string name="updates_rollback_app_only_explanation">The APK replaced by the last update is kept in app files. Reinstalling it is a downgrade, which needs root.</string>
+    <string name="updates_rollback_with_module_explanation">Android refuses an app-only downgrade: the system image carries module %1$s, newer than %2$s. The rollback is one step: reinstall module %2$s as root, remove the app update that shadows it, then reboot this phone.</string>
+    <string name="updates_rollback_action_app">Reinstall the previous app</string>
+    <string name="updates_rollback_action_module">Roll back to %1$s</string>
+    <string name="updates_rollback_support_module">One step that ends with a reboot. The phone asks before starting it.</string>
+    <string name="updates_rollback_preparing">Writing the rollback files…</string>
+    <string name="updates_rollback_staging">Staging the previous module…</string>
+    <string name="updates_rollback_starting">Starting the removal…</string>
+    <string name="updates_rollback_started_pill">Rollback started</string>
+    <string name="updates_rollback_started_text">Module %1$s is staged. The app update is removed in the background and the phone reboots once that is verified. If the phone does not reboot, open Updates again to see what the script recorded.</string>
+    <string name="updates_rollback_started_previous">The previous module is staged. The app update is removed in the background and the phone reboots once that is verified. If the phone does not reboot, open Updates again to see what the script recorded.</string>
+    <string name="updates_rollback_previous_app">the previous app</string>
+    <string name="updates_rollback_previous_version">the previous version</string>
+    <string name="updates_rollback_newer_module">a newer version</string>
+    <string name="updates_rollback_reinstalling">Reinstalling the previous app…</string>
+    <string name="updates_rollback_done_pill">Rolled back</string>
+    <string name="updates_rollback_done">The phone runs %1$s again.</string>
+    <string name="updates_rollback_finish">Finish the rollback</string>
+    <string name="updates_rollback_again">Roll back again</string>
+    <string name="updates_reinstall_again">Reinstall again</string>
+    <string name="updates_rollback_unfinished_pill">Rollback unfinished</string>
+    <string name="updates_rollback_pending_warning">Finishing it repeats the removal this rollback recorded, by the version it targets. A reboot before that can leave the older module next to the newer app.</string>
+    <string name="updates_rollback_completed">The phone runs %1$s: the module and the selected app match the rollback target.</string>
+    <string name="updates_pending_removal_not_started">The previous module is staged, but the app update was not removed: the script never recorded a result.</string>
+    <string name="updates_pending_removal_failed">The previous module is staged, but removing the app update failed.</string>
+    <string name="updates_pending_removal_unverified">The previous module is staged, but the removal could not be verified, so nothing was rebooted.</string>
+    <string name="updates_pending_old_app">The removal was recorded, but the data-partition app copy is still what runs.</string>
+    <string name="updates_pending_version_mismatch">The removal was recorded, but the phone does not match the rollback target.</string>
+    <string name="updates_blocker_no_kept_apk">No previous APK is kept, so there is nothing to roll back to.</string>
+    <string name="updates_blocker_no_previous_module">The system image carries module %1$s, newer than the kept app %2$s. Android refuses an app-only downgrade below the system image, and this phone has no archive of the previous module to put back. Install the previous release\'s module from the update document, then check again.</string>
+    <string name="updates_blocker_storage_unreadable">The rollback archive could not be read. Grant root to Phonxiety, then check again.</string>
+    <string name="updates_blocker_system_version_unknown">The APK the module mounted on the system image could not be read, so the downgrade floor is unknown. Reinstall the module from the update document, then check again.</string>
+    <string name="updates_blocker_stale_archive">The kept module archive is not older than the system image\'s copy (%1$s), so reinstalling it would roll nothing back. Nothing is offered.</string>
+    <string name="updates_blocker_archive_mismatch">The kept module archive does not hash to the value recorded with it, so its bytes are not the previous module. Nothing is offered; install the module update again to keep a fresh copy.</string>
+    <string name="updates_blocker_app_not_newer">This phone already runs the kept version, so there is nothing to roll back to.</string>
+
+    <!-- Rollback confirmations: the object, the consequence, and only then the action. -->
+    <string name="updates_dialog_app_title">Reinstall the previous app?</string>
+    <string name="updates_dialog_app_body">This replaces the running app %1$s with the kept APK %2$s. It needs root, restarts the bridge, and ends a call in progress.</string>
+    <string name="updates_dialog_app_body_unknown">This installs the kept APK %1$s over the running app. It needs root, restarts the bridge, and ends a call in progress.</string>
+    <string name="updates_dialog_app_confirm">Reinstall</string>
+    <string name="updates_dialog_module_title">Roll back to %1$s?</string>
+    <string name="updates_dialog_module_body">Reinstalls module %1$s as root, removes the app update installed on this phone so the module\'s copy is used again, and reboots once the removal is verified.</string>
+    <string name="updates_dialog_module_return">To come back, install %1$s again from Updates.</string>
+    <string name="updates_dialog_module_data">Removing the app update can erase this app\'s data, which means pairing this phone again. Newer data is usually kept because the versions match, but a reset is possible.</string>
+    <string name="updates_dialog_module_call">The phone reboots, so a call in progress ends.</string>
+    <string name="updates_dialog_module_confirm">Roll back and reboot</string>
+    <string name="updates_dialog_call_blocked">A call is running. The rollback waits until it ends.</string>
+
+    <!-- App install failures: cause first, then the next step. -->
+    <string name="updates_install_failed_download_title">The download failed</string>
+    <string name="updates_install_failed_download_message">The release could not be downloaded. Check the device link, then try again.</string>
+    <string name="updates_install_failed_hash_title">The download is not the published file</string>
+    <string name="updates_install_failed_hash_message">The bytes on disk do not match the SHA-256 in the update document. Check again to download the release afresh.</string>
+    <string name="updates_install_failed_cert_title">The update is signed with a different key</string>
+    <string name="updates_install_failed_cert_message">The archive\'s signing certificate is not the one this app was installed with, so it is refused. Use the release published for this build.</string>
+    <string name="updates_install_failed_package_title">The file is a different app</string>
+    <string name="updates_install_failed_package_message">The archive\'s package name is not this app\'s.</string>
+    <string name="updates_install_failed_not_apk_title">The file is not a readable APK</string>
+    <string name="updates_install_failed_not_apk_message">The download is not a readable APK. Check again to download it afresh.</string>
+    <string name="updates_install_failed_downgrade_title">The file is older than the installed app</string>
+    <string name="updates_install_failed_downgrade_message">An older version is never installed over a newer one. Use the rollback to go back.</string>
+    <string name="updates_install_failed_blocked_title">The system blocked the install</string>
+    <string name="updates_install_failed_blocked_message">Another policy or the system installer refused this update. Allow installs from Phonxiety, then try again.</string>
+    <string name="updates_install_failed_aborted_title">The install was canceled</string>
+    <string name="updates_install_failed_aborted_message">The install was canceled before it finished. Try again.</string>
+    <string name="updates_install_failed_conflict_title">The install conflicted with the installed app</string>
+    <string name="updates_install_failed_conflict_message">The archive conflicts with data of the installed app. Uninstall is not an option here, so report this with the details.</string>
+    <string name="updates_install_failed_incompatible_title">The update does not fit this phone</string>
+    <string name="updates_install_failed_incompatible_message">The APK targets a phone or an Android version this one is not.</string>
+    <string name="updates_install_failed_storage_title">There is not enough free space</string>
+    <string name="updates_install_failed_storage_message">There is not enough free space. Free some space, then try again.</string>
+    <string name="updates_install_failed_timeout_title">The installer did not answer</string>
+    <string name="updates_install_failed_timeout_message">The installer did not answer. Try again; if it repeats, reboot the phone.</string>
+    <string name="updates_install_failed_install_title">The install failed</string>
+    <string name="updates_install_failed_install_message">The system installer reported a failure. Details holds its output.</string>
+    <string name="updates_install_failed_no_kept_title">No previous app is kept</string>
+    <string name="updates_install_failed_no_kept_message">No previous APK is kept, so there is nothing to roll back to.</string>
+    <string name="updates_install_failed_root_title">Root is not available</string>
+    <string name="updates_install_failed_root_message">Root access is needed to install an older version. Grant root to Phonxiety, then try again.</string>
+    <string name="updates_install_failed_rollback_title">The rollback failed</string>
+    <string name="updates_install_failed_rollback_message">The system installer refused the kept APK. Reboot, then try again.</string>
+
+    <!-- Rollback failure titles and sentences. -->
+    <string name="updates_rollback_failed_no_kept_title">No previous app is kept</string>
+    <string name="updates_rollback_failed_no_kept_message">No previous APK is kept, so there is nothing to roll back to.</string>
+    <string name="updates_rollback_failed_no_module_title">No previous module is kept</string>
+    <string name="updates_rollback_failed_no_module_message">The system image is newer than the kept app and no archive of the previous module is kept, so nothing can be put back. Nothing on the phone changed.</string>
+    <string name="updates_rollback_failed_system_title">The system image\'s version is unknown</string>
+    <string name="updates_rollback_failed_system_message">The APK mounted on the system image could not be read, so the downgrade floor is unknown. Nothing on the phone changed.</string>
+    <string name="updates_rollback_failed_storage_title">The rollback archive cannot be read</string>
+    <string name="updates_rollback_failed_storage_message">The rollback archive could not be read. Nothing on the phone changed.</string>
+    <string name="updates_rollback_failed_stale_title">The kept module is not older</string>
+    <string name="updates_rollback_failed_stale_message">The kept module archive is not older than the system image\'s copy, so it is not a rollback. Nothing on the phone changed.</string>
+    <string name="updates_rollback_failed_mismatch_title">The kept module changed since the check</string>
+    <string name="updates_rollback_failed_mismatch_message">The published archive is not the one this check planned for. Nothing on the phone changed; check again before rolling back.</string>
+    <string name="updates_rollback_failed_app_not_newer_title">Nothing to roll back to</string>
+    <string name="updates_rollback_failed_app_not_newer_message">This phone already runs the kept version, so there is nothing to roll back to.</string>
+    <string name="updates_rollback_failed_preparation_title">The rollback files could not be written</string>
+    <string name="updates_rollback_failed_preparation_message">The script and the journal could not be written on this phone, so nothing was staged and nothing on the phone changed. Free space in the app\'s storage, then try again.</string>
+    <string name="updates_rollback_failed_stage_title">The previous module was not staged</string>
+    <string name="updates_rollback_failed_stage_message">The module installer refused the previous zip, so nothing on the phone changed.</string>
+    <string name="updates_rollback_failed_removal_title">The removal script did not start</string>
+    <string name="updates_rollback_failed_removal_message">The previous module is staged, but the removal script could not start: the app update is still installed, and a reboot now can leave the older module next to the newer app. Retry the rollback before rebooting.</string>
+
+    <!-- Module install failure titles and sentences. -->
+    <string name="updates_module_failed_build_title">The module could not be rebuilt</string>
+    <string name="updates_module_failed_build_message">The APK or the module payload assets could not be read.</string>
+    <string name="updates_module_failed_root_title">Root is not available</string>
+    <string name="updates_module_failed_root_message">Grant root to Phonxiety in the manager, then try again.</string>
+    <string name="updates_module_failed_conflict_title">More than one root provider answered</string>
+    <string name="updates_module_failed_conflict_message">Magisk, KernelSU and APatch module systems conflict; keep one enabled before installing.</string>
+    <string name="updates_module_failed_install_title">The module install failed</string>
+    <string name="updates_module_failed_install_message">The provider\'s installer reported a failure. Details holds its output.</string>
+    <string name="updates_module_failed_reboot_title">The reboot was not accepted</string>
+    <string name="updates_module_failed_reboot_message">The module is installed; reboot this phone by hand to apply it.</string>
+</resources>
