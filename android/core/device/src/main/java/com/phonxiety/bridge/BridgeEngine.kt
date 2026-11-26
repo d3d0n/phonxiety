@@ -160,6 +160,16 @@ class BridgeEngine(
     private val admission = CallAdmission()
     private val lock = admission.lock
     private val dtmfMonitor = java.lang.Object()
+
+    /** Routine cancellation stops only action audio; teardown also stops the Lab tone. */
+    private val audioCancellation = CallAudioCancellation(
+        stopActionAudio = { call ->
+            synchronized(dtmfMonitor) { dtmfMonitor.notifyAll() }
+            val telecomCall = synchronized(lock) { call.call }
+            runCatching { telecomCall?.stopDtmfTone() }
+        },
+        stopLabTone = { call -> call.attached?.audio?.stopTone() }
+    )
     private val closeOnce = AtomicBoolean(false)
     private val json = Json {
         ignoreUnknownKeys = true
@@ -1351,8 +1361,9 @@ class BridgeEngine(
         if (!known) throw CommandException("not_owned")
         val cancelledCall = target
         if (cancelledCall != null) {
-            synchronized(dtmfMonitor) { dtmfMonitor.notifyAll() }
-            cancelToneFor(cancelledCall)
+            // Routine supervision cancels the DTMF tone an action started; the Lab test
+            // tone is owned by its own tone_start/tone_stop window and every teardown.
+            audioCancellation.cancelActions(cancelledCall)
         }
         replyOk(
             id,
@@ -2252,10 +2263,7 @@ class BridgeEngine(
     }
 
     private fun cancelToneFor(call: OwnedCall) {
-        synchronized(dtmfMonitor) { dtmfMonitor.notifyAll() }
-        val telecomCall = synchronized(lock) { call.call }
-        runCatching { telecomCall?.stopDtmfTone() }
-        call.attached?.audio?.stopTone()
+        audioCancellation.stopAll(call)
     }
 
     private fun reportState(call: OwnedCall, state: String, cause: DisconnectCause?) {
@@ -2500,6 +2508,30 @@ class BridgeEngine(
  * detached: a cleanup that finds nothing has nothing to reset.
  */
 internal class AttachedAudio(val audio: PhoneAudio, val stream: AudioStream)
+
+/**
+ * Which audio a command may stop.
+ *
+ * `cancel_actions` exists to interrupt what an action started — the DTMF tone of
+ * a keypress.  The Lab test tone is started and stopped by its own
+ * `tone_start`/`tone_stop` pair, so routine supervision must leave it running
+ * until its scheduled stop; an explicit stop or any teardown still stops both.
+ */
+internal class CallAudioCancellation(
+    private val stopActionAudio: (BridgeEngine.OwnedCall) -> Unit,
+    private val stopLabTone: (BridgeEngine.OwnedCall) -> Unit
+) {
+    /** A routine `cancel_actions`: only the tone the action itself started. */
+    fun cancelActions(call: BridgeEngine.OwnedCall) {
+        stopActionAudio(call)
+    }
+
+    /** An explicit stop or a teardown: the action's tone and the Lab tone. */
+    fun stopAll(call: BridgeEngine.OwnedCall) {
+        stopActionAudio(call)
+        stopLabTone(call)
+    }
+}
 
 /**
  * Closes a detached stream's audio and clears its numbers, after the engine lock is released.

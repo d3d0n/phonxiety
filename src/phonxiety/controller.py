@@ -108,6 +108,9 @@ class _Call:
     probe_hold_until: float | None = None
     # One finish is being started or held for the probes: repeats must not stack goodbyes.
     finish_armed: bool = False
+    # The task that ends the call once the probe deadline passes; cancelled when the
+    # hold is withdrawn, on hang-up and in finalization.
+    finish_hold_task: asyncio.Task[Any] | None = None
     loopback_on: bool = False
     tone_on: bool = False
     tone_stop_task: asyncio.Task[Any] | None = None
@@ -257,6 +260,7 @@ class CallController:
             call.output_open = False
             self._cancel(call.work_task)
             self._cancel(call.ending_task)
+            self._abort_finish_hold(call)
             if self.store.cancel_preparing(call_id):
                 self._cancel(call.prepare_task)
                 self._begin_finalize(call)
@@ -624,17 +628,33 @@ class CallController:
             with contextlib.suppress(Exception):
                 await self.device.command("tone_stop", call.call_id, timeout=5)
 
-    async def _wait_for_probes(self, call: _Call) -> None:
-        """Hold an agent-requested finish until the Lab probes have run their time."""
-        deadline = call.probe_hold_until
-        if deadline is None:
-            return
-        call.probe_hold_until = None
+    async def _hold_finish(self, call: _Call, farewell_pending: bool, deadline: float) -> None:
+        """Wait out the Lab probes, then end the call; runs as its own task.
+
+        The voice readers await delegation callbacks inline, so the wait must not
+        live there: speech, hang-ups and failure events are read only between
+        callbacks, and a sleep here would stall all of them.
+        """
         remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return
         log.info("call %s: holding the finish %.1f s for the audio probes", call.call_id, remaining)
-        await asyncio.sleep(remaining)
+        await asyncio.sleep(max(0.0, remaining))
+        if not self._owned(call) or call.finalizing or self.store.state(call.call_id) != CallState.ACTIVE:
+            return
+        await self._begin_finish(call, farewell_pending)
+
+    def _abort_finish_hold(self, call: _Call) -> None:
+        """Withdraw a finish that was waiting for the probes: the line moved on.
+
+        The probe deadline is kept as it is, so a later finish still waits for the
+        probes to run their full window instead of starting a new one.  The task
+        reference stays for `_finalize` to join.
+        """
+        task = call.finish_hold_task
+        if task is None or task.done():
+            return
+        self._cancel(task)
+        if not call.finalizing and self.store.state(call.call_id) != CallState.ENDING:
+            call.finish_armed = False
 
     async def on_device_event(self, event: dict[str, Any]) -> None:
         kind = event.get("type")
@@ -838,6 +858,7 @@ class CallController:
             return
         call.generation += 1
         self._cancel(call.work_task)
+        self._abort_finish_hold(call)
         generation = call.generation
         log.info(
             "call %s: delegation %s accepted as action generation %d: %r",
@@ -860,6 +881,9 @@ class CallController:
         if call.work_is_review and call.work_task is not None and not call.work_task.done():
             call.generation += 1
             self._cancel(call.work_task)
+        # The line is still alive: a finish waiting for the probes is withdrawn, and a
+        # later review asks again while the original probe deadline still stands.
+        self._abort_finish_hold(call)
 
     async def _supervise(self, call: _Call) -> None:
         """Review the line whenever it goes quiet, and after every assistant turn if asked to.
@@ -962,14 +986,27 @@ class CallController:
         return {"send_dtmf": send_dtmf, "finish_call": finish_call}
 
     async def _start_finish(self, call: _Call, farewell_pending: bool) -> None:
+        """Arm one finish; with Lab probes pending the hold is a task of its own.
+
+        The caller is a voice event reader (a review's tool handler or a delegation
+        callback), so it returns at once even while the probes hold the ending.
+        """
         if call.finish_armed:
             return
         call.finish_armed = True
         # A Lab test call with probes stays up until they have run, however early the
         # agent decides it is done; a hangup from the app is not held and still ends it.
-        await self._wait_for_probes(call)
-        if not self._owned(call) or call.finalizing or self.store.state(call.call_id) != CallState.ACTIVE:
+        deadline = call.probe_hold_until
+        if deadline is None or deadline <= time.monotonic():
+            if not self._owned(call) or call.finalizing or self.store.state(call.call_id) != CallState.ACTIVE:
+                return
+            await self._begin_finish(call, farewell_pending)
             return
+        call.finish_hold_task = self._spawn(
+            self._hold_finish(call, farewell_pending, deadline), f"finish-hold:{call.call_id}",
+        )
+
+    async def _begin_finish(self, call: _Call, farewell_pending: bool) -> None:
         self.store.begin_ending(call.call_id)
         call.finish_requested_at = time.monotonic()
         call.farewell_pending = farewell_pending
@@ -1143,6 +1180,7 @@ class CallController:
         call.audio_ready = False
         call.output_open = False
         call.generation += 1
+        self._cancel(call.finish_hold_task)
         self.device.stop_stream()
         call.finalize_task = self._spawn(self._finalize(call), f"finalize:{call.call_id}")
 
@@ -1150,7 +1188,7 @@ class CallController:
         current = asyncio.current_task()
         jobs = [
             call.prepare_task, call.work_task, call.ring_task, call.duration_task, call.ending_task,
-            call.watch_task, call.tone_stop_task,
+            call.watch_task, call.tone_stop_task, call.finish_hold_task,
         ]
         for job in jobs:
             if job is not current:

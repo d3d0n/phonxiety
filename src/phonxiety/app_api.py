@@ -877,13 +877,15 @@ class AppApi:
 
     def _test_audio(self, body: dict[str, Any]) -> TestAudioOptions | None:
         """The optional Lab probes in a test-call body, or None when the request has none."""
+        # Validate before deciding there is nothing to do: `loopback: 0`, null, "", []
+        # and {} are malformed requests, not an absent option.
         raw = {"loopback": body.get("loopback", False), "tone": body.get("tone")}
-        if raw["tone"] is None and not raw["loopback"]:
-            return None
         try:
             options = TestAudioOptions.model_validate(raw)
         except ValidationError as exc:
             raise ApiError(400, "invalid_argument", _validation_message(exc)) from None
+        if not options.loopback and options.tone is None:
+            return None
         if options.loopback and not self._supports("loopback_start"):
             raise ApiError(409, "unsupported_by_phone", "this phone build does not offer audio loopback")
         if options.tone is not None and not self._supports("tone_start"):

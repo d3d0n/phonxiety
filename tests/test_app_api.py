@@ -769,6 +769,13 @@ class TestCallProbeTests(_ApiCase):
         )
         self.assertEqual((status, body["code"]), (400, "invalid_argument"))
         self.assertIn("loopback", body["message"])
+        # Falsey is not the same as absent: these are malformed values, not "no probe".
+        for falsey in (0, None, "", [], {}):
+            status, body = await self.call(
+                "POST", "/app/v1/test-call", body={"destination": "+12025550123", "loopback": falsey},
+            )
+            self.assertEqual((status, body["code"]), (400, "invalid_argument"), falsey)
+            self.assertIn("loopback", body["message"])
         self.assertFalse(self.device.dialled.is_set())
 
     async def test_probes_need_the_phone_capabilities(self) -> None:

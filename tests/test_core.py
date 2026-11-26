@@ -598,20 +598,18 @@ class TestCallProbeTests(_ControllerCase):
         return call["call_id"]
 
     async def test_agent_finish_waits_until_the_probes_have_run(self) -> None:
-        with mock.patch.object(controller_module, "LOOPBACK_PROBE_S", 1.0):
+        with mock.patch.object(controller_module, "LOOPBACK_PROBE_S", 2.0):
             call_id = await self._answer(ProbeOptions(loopback=True))
         voice = self.voices[-1]
         self.assertIn("loopback_start", [command for command, _, _ in self.device.commands])
         self.device.allow_drain.set()
-        finishing = asyncio.create_task(voice.callbacks.delegation("d1", "END_CALL"))
-        await self._settle()
-        # The agent ends its task at once, but the call stays up while the probe runs.
+        # The agent's callback returns at once, but the call stays up while the probe runs.
+        await asyncio.wait_for(voice.callbacks.delegation("d1", "END_CALL"), 1.0)
         self.assertEqual(self.store.state(call_id), CallState.ACTIVE)
         self.assertFalse(self.device.disconnect_requested.is_set())
         began = time.monotonic()
-        await asyncio.wait_for(finishing, 5)
-        self.assertGreaterEqual(time.monotonic() - began, 0.8)
         result = await self.controller.wait_call_result(call_id, wait_s=5)
+        self.assertGreaterEqual(time.monotonic() - began, 1.8)
         self.assertEqual(result["state"], "ended")
         self.assertTrue(self.device.disconnect_requested.is_set())
         self.assertEqual([command for command, _, _ in self.device.commands].count("loopback_stop"), 1)
@@ -621,12 +619,106 @@ class TestCallProbeTests(_ControllerCase):
         names = [command for command, _, _ in self.device.commands]
         self.assertIn("loopback_start", names)
         self.assertIn("tone_start", names)
+        began = time.monotonic()
         await self.controller.hangup_call(call_id)
         result = await self.controller.wait_call_result(call_id, wait_s=5)
         self.assertEqual(result["state"], "ended")
+        # A hang-up is not held: the 10 s probe window does not delay the ending.
+        self.assertLess(time.monotonic() - began, 5)
         names = [command for command, _, _ in self.device.commands]
         self.assertEqual(names.count("loopback_stop"), 1)
         self.assertEqual(names.count("tone_stop"), 1)
+
+    async def test_cancel_actions_during_a_probe_does_not_stop_the_tone(self) -> None:
+        call_id = await self._answer(ProbeOptions(tone=ProbeTone(seconds=1)))
+        call = self.controller._calls[call_id]
+        self.assertTrue(call.tone_on)
+        self.assertIsNotNone(call.tone_stop_task)
+
+        async def review(transcript: list[dict], tools: dict) -> str:
+            return "WAIT"
+
+        self.tasks.review_handler = review
+        before = len(self.device.commands)
+        await self.controller._run_review(call, call.generation, 0.2)
+        sent = [command for command, _, _ in self.device.commands[before:]]
+        # Routine supervision cancelled the phone's action audio ...
+        self.assertIn("cancel_actions", sent)
+        # ... while the Lab tone keeps running until its own scheduled stop.
+        self.assertNotIn("tone_stop", sent)
+        self.assertTrue(call.tone_on)
+
+        await asyncio.sleep(1.1)
+        sent = [command for command, _, _ in self.device.commands[before:]]
+        self.assertEqual(sent.count("tone_stop"), 1)
+        self.assertFalse(call.tone_on)
+        await self.controller.hangup_call(call_id)
+        await self.controller.wait_call_result(call_id, wait_s=2)
+
+    async def test_speech_withdraws_a_held_finish_and_a_later_review_finishes(self) -> None:
+        with mock.patch.object(controller_module, "LOOPBACK_PROBE_S", 2.0):
+            call_id = await self._answer(ProbeOptions(loopback=True))
+        voice = self.voices[-1]
+        self.device.allow_drain.set()
+        call = self.controller._calls[call_id]
+        deadline = call.probe_hold_until
+        self.assertIsNotNone(deadline)
+
+        first = asyncio.Event()
+        finishes = 0
+
+        async def review(transcript: list[dict], tools: dict) -> str:
+            nonlocal finishes
+            finishes += 1
+            await tools["finish_call"]({
+                "outcome": "succeeded", "summary": "Heard both ways", "fields": {}, "farewell_pending": False,
+            })
+            if finishes == 1:
+                first.set()
+            return ""
+
+        self.tasks.review_handler = review
+        voice.review_at_turn_end = True
+        await voice.callbacks.transcript("assistant", "Hello? Can you hear me?", True)
+        await voice.callbacks.turn_done("assistant")
+        await asyncio.wait_for(first.wait(), 1)
+        self.assertTrue(call.finish_armed)
+        self.assertIsNotNone(call.finish_hold_task)
+        self.assertEqual(self.store.state(call_id), CallState.ACTIVE)
+
+        # The far end answers while the probes still run: the held finish is withdrawn.
+        await voice.callbacks.transcript("user", "Yes, I hear you.", True)
+        await self._settle()
+        self.assertFalse(call.finish_armed)
+        self.assertTrue(call.finish_hold_task.cancelled())
+        self.assertEqual(call.probe_hold_until, deadline)
+
+        # A later review asks again; the finish still waits for the original deadline.
+        await voice.callbacks.transcript("assistant", "Thank you, goodbye.", True)
+        await voice.callbacks.turn_done("assistant")
+        result = await self.controller.wait_call_result(call_id, wait_s=5)
+        self.assertEqual(result["state"], "ended")
+        self.assertEqual(finishes, 2)
+        self.assertTrue(self.device.disconnect_requested.is_set())
+
+    async def test_the_hold_does_not_block_voice_events(self) -> None:
+        with mock.patch.object(controller_module, "LOOPBACK_PROBE_S", 5.0):
+            call_id = await self._answer(ProbeOptions(loopback=True))
+        voice = self.voices[-1]
+        self.device.allow_drain.set()
+        call = self.controller._calls[call_id]
+        # The delegation callback is awaited inside the voice reader; it must return at once.
+        await asyncio.wait_for(voice.callbacks.delegation("d1", "END_CALL"), 1.0)
+        self.assertTrue(call.finish_armed)
+        self.assertIsNotNone(call.finish_hold_task)
+        self.assertEqual(self.store.state(call_id), CallState.ACTIVE)
+        # A transcript arriving during the hold is still consumed and recorded.
+        await asyncio.wait_for(voice.callbacks.transcript("user", "Still here", True), 1.0)
+        self.assertIn("Still here", [segment["text"] for segment in self.store.transcript(call_id)])
+        self.assertEqual(self.store.state(call_id), CallState.ACTIVE)
+        await self.controller.hangup_call(call_id)
+        result = await self.controller.wait_call_result(call_id, wait_s=2)
+        self.assertEqual(result["state"], "ended")
 
 
 class QuietLineTests(_ControllerCase):
