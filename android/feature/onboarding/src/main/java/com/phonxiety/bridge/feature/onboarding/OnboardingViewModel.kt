@@ -5,7 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.phonxiety.bridge.BridgeService
 import com.phonxiety.bridge.data.AppApi
-import com.phonxiety.bridge.data.PairingRepository
+import com.phonxiety.bridge.data.DevicePairingRepository
 import com.phonxiety.bridge.root.FileProgressStore
 import com.phonxiety.bridge.root.ProgressStore
 import com.phonxiety.bridge.root.WizardEvent
@@ -28,14 +28,27 @@ fun setupProgressStore(context: Context): ProgressStore = FileProgressStore(File
 
 private const val PROGRESS_FILE = "module-install.properties"
 
+/**
+ * The wizard's state holder. Every probe starts from a fresh read of the stored pairing — the file
+ * can change while the app runs (`mise run phone:pair`, the service rewriting it on start) and the
+ * repository serves a cache, so the read happens here, on the IO dispatcher, before the probe.
+ */
 @HiltViewModel
-class OnboardingViewModel
-@Inject
-constructor(
-    @ApplicationContext context: Context,
-    pairingRepository: PairingRepository,
-    appApi: AppApi
+class OnboardingViewModel internal constructor(
+    context: Context,
+    private val pairingRepository: DevicePairingRepository,
+    appApi: AppApi,
+    backend: RootBackend,
+    permissions: RuntimePermissionChecker = AndroidPermissionChecker(context)
 ) : ViewModel() {
+    /** The wired wizard: the app's root backend, its permissions and the process-wide service. */
+    @Inject
+    constructor(
+        @ApplicationContext context: Context,
+        pairingRepository: DevicePairingRepository,
+        appApi: AppApi
+    ) : this(context, pairingRepository, appApi, AndroidRootBackend(context))
+
     private val preferences = SetupPreferences(context)
 
     private val _requests = MutableSharedFlow<SetupHostRequest>(extraBufferCapacity = 32)
@@ -45,12 +58,12 @@ constructor(
     val pairingError: StateFlow<String?> = _pairingError.asStateFlow()
 
     private val coordinator = SetupCoordinator(
-        backend = AndroidRootBackend(context),
+        backend = backend,
         pairing = pairingRepository,
         appApi = appApi,
         progressStore = setupProgressStore(context),
         preferences = preferences,
-        permissions = AndroidPermissionChecker(context),
+        permissions = permissions,
         serviceStarter = { BridgeService.start(context) },
         host = { request ->
             if (request is SetupHostRequest.PairingRejected) {
@@ -63,7 +76,10 @@ constructor(
     val wizard: StateFlow<WizardState> = coordinator.wizard
 
     init {
-        viewModelScope.launch(Dispatchers.IO) { coordinator.start() }
+        viewModelScope.launch(Dispatchers.IO) {
+            pairingRepository.refresh()
+            coordinator.start()
+        }
     }
 
     /** The one button: install, retry, reboot, recheck — whatever the current state needs. */
@@ -83,7 +99,7 @@ constructor(
                 is WizardState.NeedsPairing, WizardState.Checking, is WizardState.Installing,
                 is WizardState.FirstLinkTest, WizardState.Ready -> Unit
 
-                else -> coordinator.dispatch(WizardEvent.RecheckRequested)
+                else -> recheck()
             }
         }
     }
@@ -142,8 +158,15 @@ constructor(
     }
 
     private fun launchRecheck() {
-        viewModelScope.launch(Dispatchers.IO) {
-            coordinator.dispatch(WizardEvent.RecheckRequested)
-        }
+        viewModelScope.launch(Dispatchers.IO) { recheck() }
+    }
+
+    /**
+     * The stored pairing can move while the app runs and the repository serves a cache, so the
+     * probe after a resume re-reads it first — on this dispatcher, never on the caller's thread.
+     */
+    private suspend fun recheck() {
+        pairingRepository.refresh()
+        coordinator.dispatch(WizardEvent.RecheckRequested)
     }
 }

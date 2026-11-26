@@ -14,10 +14,11 @@ import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -33,29 +34,43 @@ class RuntimeBridgeStateRepository @Inject constructor() : BridgeStateRepository
  *
  * The file is not written only by [pair]: `mise run phone:pair` drops it in through a root shell and
  * the service rewrites it on every start, so a flag captured in the constructor kept the wizard on
- * "Unpaired" until the process was killed. The flag is re-derived from storage whenever it is read,
- * when a collector subscribes, and when the bridge service publishes a new link state (the moment it
- * has reloaded the config). Nothing polls.
+ * "Unpaired" until the process was killed. [paired] is therefore an ordinary cached flow — reading
+ * it never touches storage — and the cache is re-read from storage on the IO dispatcher at the
+ * points where the file may have moved: on every [refresh] a caller asks for (the wizard's probe on
+ * start and after returning to the app) and when the bridge service publishes a new link state, the
+ * moment it has reloaded the config. Nothing polls.
  */
 @Singleton
-class DevicePairingRepository @Inject constructor(
-    @ApplicationContext private val context: Context
+class DevicePairingRepository internal constructor(
+    private val context: Context,
+    private val read: () -> Boolean
 ) : PairingRepository {
-    private val state = MutableStateFlow(stored())
+    @Inject
+    constructor(@ApplicationContext context: Context) : this(
+        context,
+        { BridgeConfigLoader.loadOrNull(context) != null }
+    )
+
+    private val state = MutableStateFlow(read())
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    override val paired: StateFlow<Boolean> = StoredPairing(state) { stored() }
+    override val paired: StateFlow<Boolean> = state.asStateFlow()
 
     init {
         scope.launch {
             // A service start reloads config.json and then attaches its engine, which is the only
-            // signal the app process gets about a config written by the host task.
+            // signal the app process gets about a config written by the host task. The first
+            // emission is the state the constructor has already read.
             BridgeRuntime.state
                 .map { it.link }
                 .distinctUntilChanged()
-                .collect { state.value = stored() }
+                .drop(1)
+                .collect { refresh() }
         }
     }
+
+    /** Re-reads the stored config on the IO dispatcher; the cached value moves only when it changed. */
+    suspend fun refresh() = withContext(Dispatchers.IO) { state.value = read() }
 
     override suspend fun pair(link: String): PairResult = withContext(Dispatchers.IO) {
         when (val parsed = PairingLink.parse(link)) {
@@ -83,27 +98,4 @@ class DevicePairingRepository @Inject constructor(
         BridgeService.stop(context)
         state.value = false
     }
-
-    private fun stored(): Boolean = BridgeConfigLoader.loadOrNull(context) != null
-}
-
-/**
- * The stored pairing as a [StateFlow] whose answer is read from disk at the moment it is asked for,
- * while [state] carries the emissions. Reads happen on the caller's dispatcher, so every reader is
- * an IO coroutine (the wizard probe, `Doctor`); collection refreshes once off the main thread.
- */
-private class StoredPairing(
-    private val state: MutableStateFlow<Boolean>,
-    private val read: () -> Boolean
-) : StateFlow<Boolean> {
-    override val value: Boolean get() = refresh()
-
-    override val replayCache: List<Boolean> get() = listOf(refresh())
-
-    override suspend fun collect(collector: FlowCollector<Boolean>): Nothing {
-        withContext(Dispatchers.IO) { refresh() }
-        return state.collect(collector)
-    }
-
-    private fun refresh(): Boolean = read().also { state.value = it }
 }
