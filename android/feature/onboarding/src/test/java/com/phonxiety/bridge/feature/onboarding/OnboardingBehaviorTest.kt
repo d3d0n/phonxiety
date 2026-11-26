@@ -34,12 +34,12 @@ import org.robolectric.annotation.GraphicsMode
 /**
  * The wizard's acceptance checks that a screenshot cannot prove: a rejected paste stays editable,
  * one action per screen, whole action labels at 200 %, the reboot copy that stays true when
- * notifications are denied, and a cancelled scanner that starts nothing else.
+ * notifications are denied, and a canceled scanner that starts nothing else.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "w411dp-h891dp-xxhdpi")
-class OnboardingBehaviourTest {
+class OnboardingBehaviorTest {
     @get:Rule
     val composeRule = createComposeRule()
 
@@ -182,7 +182,7 @@ class OnboardingBehaviourTest {
     }
 
     @Test
-    fun aCancelledScannerStartsNoCameraFallback() {
+    fun aCanceledScannerStartsNoCameraFallback() {
         var scans = 0
         var cameras = 0
         host(OnboardingCallbacks(onScanQr = { scans++ }, onCameraScan = { cameras++ }))

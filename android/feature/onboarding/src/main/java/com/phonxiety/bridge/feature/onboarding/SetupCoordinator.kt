@@ -192,7 +192,7 @@ class SetupCoordinator(
                 handle(WizardEvent.RebootNotConfirmed)
             }
         } finally {
-            // Cancelled before the window elapsed: the request is over and reports nothing, but the
+            // Canceled before the window elapsed: the request is over and reports nothing, but the
             // next tap must be able to start a fresh attempt.
             withContext(NonCancellable) {
                 mutex.withLock { if (attempt == rebootAttempt) rebootInFlight = false }
@@ -254,7 +254,7 @@ class SetupCoordinator(
 
             WizardEffect.StartPairing -> {
                 // One automatic scanner per visit to "Unpaired". A probe round trip, a resume or a
-                // recomposition must not reopen it (and reopening after a Cancelled scan would be
+                // recomposition must not reopen it (and reopening after a Canceled scan would be
                 // endless); the explicit Scan button bypasses this and always works. A request that
                 // arrives after the wizard advanced is dropped instead of covering the next step.
                 if (_wizard.value is WizardState.NeedsPairing && !autoPairingLaunched) {

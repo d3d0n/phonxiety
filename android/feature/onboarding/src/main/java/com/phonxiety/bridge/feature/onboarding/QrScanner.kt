@@ -27,8 +27,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 internal sealed interface PlayScan {
     data class Code(val value: String) : PlayScan
 
-    /** The person dismissed the scanner: Back, Close, or a cancelled scanning task. */
-    data object Cancelled : PlayScan
+    /** The person dismissed the scanner: Back, Close, or a canceled scanning task. */
+    data object Canceled : PlayScan
 
     /** Play services cannot provide the scanner: the host opens the in-app scanner instead. */
     data class Unavailable(val reason: String) : PlayScan
@@ -79,7 +79,7 @@ fun rememberQrScanner(
             scope.launch {
                 when (val result = scanWithPlayServices(context)) {
                     is PlayScan.Code -> onCode(result.value)
-                    PlayScan.Cancelled -> Unit
+                    PlayScan.Canceled -> Unit
                     is PlayScan.Unavailable -> onUnavailable(result.reason)
                     is PlayScan.Failed -> onFailed(result.reason)
                 }
@@ -108,8 +108,8 @@ internal suspend fun scanWithPlayServices(
     } else {
         scanner.scan()
     }
-} catch (cancelled: CancellationException) {
-    throw cancelled
+} catch (canceled: CancellationException) {
+    throw canceled
 } catch (error: Exception) {
     PlayScan.Unavailable(scanFailureReason(error))
 }
@@ -160,8 +160,8 @@ internal suspend fun startScan(scanner: GmsBarcodeScanner): PlayScan = suspendCa
             )
         }
         .addOnCanceledListener {
-            Log.i(SCANNER_LOG_TAG, "Google code scanner task cancelled")
-            settle(PlayScan.Cancelled)
+            Log.i(SCANNER_LOG_TAG, "Google code scanner task canceled")
+            settle(PlayScan.Canceled)
         }
         .addOnFailureListener { error -> settle(scanFailure(error)) }
 }
@@ -170,7 +170,7 @@ internal suspend fun startScan(scanner: GmsBarcodeScanner): PlayScan = suspendCa
  * One scanner failure, classified. The numeric ML Kit code and the platform message go to the log,
  * never the scanned value.
  *
- * Play services 16.1.0 answers an empty cancelled activity result — what Android Back produces
+ * Play services 16.1.0 answers an empty canceled activity result — what Android Back produces
  * when it dismisses the scanner without the Close button — with `INTERNAL` (13), "Failed to scan
  * code.". For the wizard that is a dismissal: the person gets the pairing sheet back, with Scan QR
  * code and Paste still available, instead of an install, a rescan or a camera permission prompt. A
@@ -181,7 +181,7 @@ internal fun scanFailure(error: Exception): PlayScan {
     Log.i(SCANNER_LOG_TAG, "Google code scanner failed: errorCode=$code message=${error.message}")
     return when (code) {
         MlKitException.CODE_SCANNER_CANCELLED,
-        MlKitException.INTERNAL -> PlayScan.Cancelled
+        MlKitException.INTERNAL -> PlayScan.Canceled
 
         MlKitException.CODE_SCANNER_UNAVAILABLE,
         MlKitException.CODE_SCANNER_GOOGLE_PLAY_SERVICES_VERSION_TOO_OLD ->
@@ -252,7 +252,7 @@ private class PlayServicesModuleDownload(
 
 /**
  * Waits for the module download inside [budgetMs]. The status listener is released in `finally`, so
- * a download that completes, fails, times out or is cancelled all unregister it.
+ * a download that completes, fails, times out or is canceled all unregister it.
  */
 internal suspend fun awaitModuleDownload(budgetMs: Long, download: ModuleDownload): Boolean {
     val installed = withTimeoutOrNull(budgetMs) {
