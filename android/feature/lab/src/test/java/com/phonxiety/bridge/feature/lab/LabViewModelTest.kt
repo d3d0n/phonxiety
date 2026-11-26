@@ -1,6 +1,7 @@
 package com.phonxiety.bridge.feature.lab
 
 import android.content.Context
+import androidx.lifecycle.viewModelScope
 import androidx.test.core.app.ApplicationProvider
 import com.phonxiety.bridge.BridgeConfig
 import com.phonxiety.bridge.BridgeConfigLoader
@@ -27,15 +28,23 @@ import com.phonxiety.bridge.model.ToneResult
 import com.phonxiety.bridge.model.VoiceControls
 import com.phonxiety.bridge.net.LanPathProbe
 import java.io.File
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -53,6 +62,15 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class LabViewModelTest {
+    /**
+     * A controlled scheduler: virtual time and queued dispatch make every step deterministic, and
+     * no test waits on a wall-clock moment for a transient state.
+     */
+    private val testDispatcher: TestDispatcher = StandardTestDispatcher()
+
+    /** Every view model this test made, cancelled when it ends. */
+    private val viewModels = mutableListOf<LabViewModel>()
+
     private lateinit var context: Context
     private lateinit var api: FakeDaemonApi
     private lateinit var prefs: FakePhonePreferences
@@ -61,7 +79,7 @@ class LabViewModelTest {
 
     @Before
     fun setUp() {
-        Dispatchers.setMain(Dispatchers.Unconfined)
+        Dispatchers.setMain(testDispatcher)
         context = ApplicationProvider.getApplicationContext()
         File(context.filesDir, "lab").deleteRecursively()
         BridgeLog.clear()
@@ -74,16 +92,29 @@ class LabViewModelTest {
 
     @After
     fun tearDown() {
+        // No read, collector or retry outlives the test that started it.
+        viewModels.forEach { it.viewModelScope.cancel() }
+        viewModels.clear()
         Dispatchers.resetMain()
     }
 
     private fun viewModel(): LabViewModel = LabViewModel(api, bridge, prefs, lanCheck, context).apply {
         // The record of a placed call is read on a one-second cadence in the app; tests do not wait.
         resultRetryDelayMs = 1
+        viewModels += this
+    }
+
+    /**
+     * Waits for a state the production code reaches through `Dispatchers.IO` (the link history
+     * file, the LAN handshake). Those run on real threads, which a virtual clock does not drive,
+     * so this one wait runs on real time; every other wait in this class is virtual.
+     */
+    private suspend fun LabViewModel.awaitIoState(predicate: (LabUiState) -> Boolean): LabUiState = withContext(Dispatchers.Default.limitedParallelism(1)) {
+        withTimeout(5_000) { state.first(predicate) }
     }
 
     @Test
-    fun `a finished link test is shown and kept across a new screen`() = runBlocking<Unit> {
+    fun `a finished link test is shown and kept across a new screen`() = runTest(testDispatcher) {
         api.linkTestHandler = { _, codec, transport, _ ->
             ApiOutcome.Ok(200, healthyLinkTest(p95 = 96, codec = codec ?: "opus"))
         }
@@ -92,7 +123,7 @@ class LabViewModelTest {
         vm.setLinkCodec("opus")
         vm.setLinkTransport("datagram")
         vm.runLinkTest()
-        withTimeout(5_000) { vm.state.first { it.link.last != null } }
+        vm.awaitIoState { it.link.last != null }
 
         val state = vm.state.value
         assertEquals(96L, state.link.last?.p95)
@@ -101,12 +132,12 @@ class LabViewModelTest {
 
         // A fresh screen loads the same run from disk: the history outlives the ViewModel.
         val reopened = viewModel()
-        withTimeout(5_000) { reopened.state.first { it.link.history.isNotEmpty() } }
+        reopened.awaitIoState { it.link.history.isNotEmpty() }
         assertEquals(96L, reopened.state.value.link.history.first().p95)
     }
 
     @Test
-    fun `loopback and a tone are refused until an owned call is active`() = runBlocking<Unit> {
+    fun `loopback and a tone are refused until an owned call is active`() = runTest(testDispatcher) {
         var loopbackCalls = 0
         api.loopbackHandler = { enabled, callId ->
             loopbackCalls += 1
@@ -127,7 +158,7 @@ class LabViewModelTest {
     }
 
     @Test
-    fun `the test call only uses the configured number`() = runBlocking<Unit> {
+    fun `the test call only uses the configured number`() = runTest(testDispatcher) {
         var requested: TestCallRequest? = null
         api.testCallHandler = { request ->
             requested = request
@@ -149,18 +180,32 @@ class LabViewModelTest {
     }
 
     @Test
-    fun `a slow store never replays an older number over a newer keystroke`() = runBlocking<Unit> {
-        // Every write takes a moment, like the disk: the stored value answers after later keystrokes.
-        prefs = SlowPhonePreferences(writeDelayMs = 40)
+    fun `a slow store never replays an older number over a newer keystroke`() = runTest(testDispatcher) {
+        // Every write is held until the test releases it, so an older value can land at an exact
+        // moment: while the next, newer write is still in flight.
+        val store = GatedPhonePreferences()
+        prefs = store
         val vm = viewModel()
-        val typed = "+998901234567"
-        // A fast typer, one character at a time.
-        for (length in 1..typed.length) {
-            vm.setTestNumber(typed.take(length))
-            delay(4)
-        }
-        withTimeout(5_000) { prefs.settings.first { it.testNumber == typed } }
-        assertEquals("the draft wins until the user changes it", typed, vm.state.value.testCall.number)
+
+        vm.setTestNumber("+99890123456")
+        assertEquals("the first write is the one the store took", "+99890123456", store.awaitWrite())
+
+        vm.setTestNumber("+998901234567")
+        // Release the older write: it lands now, and the newer one starts behind it.
+        store.releaseOne()
+        assertEquals("the newer write starts when the older one lands", "+998901234567", store.awaitWrite())
+        assertEquals("the older value is what the store now holds", "+99890123456", store.settings.value.testNumber)
+        assertEquals(
+            "the draft is the newest keystroke, not the emitted older value",
+            "+998901234567",
+            vm.state.value.testCall.number
+        )
+
+        store.releaseOne()
+        runCurrent()
+        assertEquals(listOf("+99890123456", "+998901234567"), store.written)
+        assertEquals("the stored number is the typed one", "+998901234567", store.settings.value.testNumber)
+        assertEquals("the draft survives the newest write", "+998901234567", vm.state.value.testCall.number)
 
         // The number that reaches the daemon is the one that was typed, to the digit.
         var dialed: String? = null
@@ -170,12 +215,30 @@ class LabViewModelTest {
         }
         vm.requestTestCall()
         vm.confirmTestCall()
-        withTimeout(5_000) { vm.state.first { it.testCall.callId != null } }
-        assertEquals(typed, dialed)
+        advanceUntilIdle()
+        assertEquals("+998901234567", dialed)
     }
 
     @Test
-    fun `the test call arms the return before it is placed and spends it on failure`() = runBlocking<Unit> {
+    fun `a stored seed that arrives after editing started leaves the draft alone`() = runTest(testDispatcher) {
+        val store = GatedPhonePreferences(initial = PhoneSettings(testNumber = "+12025550123"))
+        prefs = store
+        val vm = viewModel()
+
+        // The keystroke lands before the one-time seed coroutine has run: the seed then reads a
+        // value that is older than the draft, and must not write it back.
+        vm.setTestNumber("+998901234567")
+        runCurrent()
+        assertEquals("the seeded value never replaces the draft", "+998901234567", vm.state.value.testCall.number)
+
+        store.releaseOne()
+        runCurrent()
+        assertEquals("the draft is what the store kept", "+998901234567", store.settings.value.testNumber)
+        assertEquals("+998901234567", vm.state.value.testCall.number)
+    }
+
+    @Test
+    fun `the test call arms the return before it is placed and spends it on failure`() = runTest(testDispatcher) {
         var expectingDuringPlacement = false
         api.testCallHandler = {
             // The token has to be armed while the request is in flight: the daemon answers only
@@ -204,7 +267,7 @@ class LabViewModelTest {
     }
 
     @Test
-    fun `the probes travel only when the daemon advertises them`() = runBlocking<Unit> {
+    fun `the probes travel only when the daemon advertises them`() = runTest(testDispatcher) {
         var placed: TestCallRequest? = null
         api.testCallHandler = { request ->
             placed = request
@@ -235,7 +298,7 @@ class LabViewModelTest {
     }
 
     @Test
-    fun `a daemon without the probes gets the request it already understands`() = runBlocking<Unit> {
+    fun `a daemon without the probes gets the request it already understands`() = runTest(testDispatcher) {
         var placed: TestCallRequest? = null
         api.testCallHandler = { request ->
             placed = request
@@ -258,7 +321,7 @@ class LabViewModelTest {
     }
 
     @Test
-    fun `the result card reads the record until the summary is ready`() = runBlocking<Unit> {
+    fun `the result card reads the record until the summary is ready`() = runTest(testDispatcher) {
         api.testCallHandler = { ApiOutcome.Ok(200, CallSnapshot(callId = "call-9", profile = "test")) }
         api.callHandler = { callId ->
             if (api.callRequests.size < 3) {
@@ -310,7 +373,7 @@ class LabViewModelTest {
     }
 
     @Test
-    fun `a record whose summary never arrives stops waiting`() = runBlocking<Unit> {
+    fun `a record whose summary never arrives stops waiting`() = runTest(testDispatcher) {
         api.testCallHandler = { ApiOutcome.Ok(200, CallSnapshot(callId = "call-9", profile = "test")) }
         api.callHandler = { callId ->
             ApiOutcome.Ok(200, CallSnapshot(callId = callId, state = "ended", resultStatus = "pending"))
@@ -341,7 +404,7 @@ class LabViewModelTest {
     }
 
     @Test
-    fun `a call that ends before Telecom reports it still gets its result`() = runBlocking<Unit> {
+    fun `a call that ends before Telecom reports it still gets its result`() = runTest(testDispatcher) {
         api.testCallHandler = { ApiOutcome.Ok(200, CallSnapshot(callId = "call-voice", profile = "test")) }
         api.callHandler = { callId ->
             ApiOutcome.Ok(
@@ -373,7 +436,7 @@ class LabViewModelTest {
     }
 
     @Test
-    fun `each probe travels only when this phone has it`() = runBlocking<Unit> {
+    fun `each probe travels only when this phone has it`() = runTest(testDispatcher) {
         val placed = mutableListOf<TestCallRequest>()
         api.testCallHandler = { request ->
             placed += request
@@ -405,7 +468,7 @@ class LabViewModelTest {
     }
 
     @Test
-    fun `a phone without loopback is never asked for one`() = runBlocking<Unit> {
+    fun `a phone without loopback is never asked for one`() = runTest(testDispatcher) {
         var placed: TestCallRequest? = null
         api.testCallHandler = { request ->
             placed = request
@@ -433,7 +496,7 @@ class LabViewModelTest {
     }
 
     @Test
-    fun `the automatic tone takes the frequency and level set before dialing`() = runBlocking<Unit> {
+    fun `the automatic tone takes the frequency and level set before dialing`() = runTest(testDispatcher) {
         var placed: TestCallRequest? = null
         api.testCallHandler = { request ->
             placed = request
@@ -461,57 +524,71 @@ class LabViewModelTest {
     }
 
     @Test
-    fun `leaving the lab stops the read and coming back resumes it`() = runBlocking<Unit> {
+    fun `leaving the lab stops the read and coming back resumes it`() = runTest(testDispatcher) {
         api.testCallHandler = { ApiOutcome.Ok(200, CallSnapshot(callId = "call-hidden", profile = "test")) }
         api.callHandler = { callId ->
             ApiOutcome.Ok(200, CallSnapshot(callId = callId, state = "ended", resultStatus = "pending"))
         }
+        // The second read of the record is held: the card is already published and the read parked
+        // inside the fake, so "waiting" is a state the test stands on rather than races past.
+        val heldRead = CompletableDeferred<Unit>()
+        var reads = 0
+        api.callGate = { if (++reads == 2) heldRead.await() }
         val vm = viewModel()
         vm.setTestNumber("+12025550123")
-        withTimeout(5_000) { vm.state.first { it.testCall.number == "+12025550123" } }
         vm.requestTestCall()
         vm.confirmTestCall()
-        withTimeout(5_000) { vm.state.first { it.testCall.result?.waiting == true } }
+        advanceUntilIdle()
+
+        assertTrue("the card is waiting while the read is parked", vm.state.value.testCall.result?.waiting == true)
+        val left = api.callRequests.size
 
         vm.onLabHidden()
-        delay(20)
-        val left = api.callRequests.size
-        delay(50)
+        runCurrent()
+        advanceTimeBy(10_000)
+        runCurrent()
         assertEquals("a hidden lab reads nothing more", left, api.callRequests.size)
         assertTrue("what was read stays on screen", vm.state.value.testCall.result?.waiting == true)
 
+        heldRead.complete(Unit)
         vm.onLabShown()
-        withTimeout(5_000) { vm.state.first { it.testCall.result?.waiting == false } }
+        advanceUntilIdle()
+        assertFalse("the read finishes once the lab is back", vm.state.value.testCall.result?.waiting == true)
         assertTrue("the read is taken up again on return", api.callRequests.size > left)
         assertEquals("call-hidden", vm.state.value.testCall.result?.callId)
     }
 
     @Test
-    fun `a bridge update behind the call record starts no read`() = runBlocking<Unit> {
+    fun `a bridge update behind the call record starts no read`() = runTest(testDispatcher) {
         api.testCallHandler = { ApiOutcome.Ok(200, CallSnapshot(callId = "call-behind", profile = "test")) }
         api.callHandler = { callId ->
             ApiOutcome.Ok(200, CallSnapshot(callId = callId, state = "ended", resultStatus = "pending"))
         }
+        val heldRead = CompletableDeferred<Unit>()
+        var reads = 0
+        // Held and never released: the test only needs the read parked while the hints arrive.
+        api.callGate = { if (++reads == 2) heldRead.await() }
         val vm = viewModel()
         vm.setTestNumber("+12025550123")
-        withTimeout(5_000) { vm.state.first { it.testCall.number == "+12025550123" } }
         vm.requestTestCall()
         vm.confirmTestCall()
-        withTimeout(5_000) { vm.state.first { it.testCall.result?.waiting == true } }
+        advanceUntilIdle()
+        assertTrue(vm.state.value.testCall.result?.waiting == true)
 
         // Pushing the call record hides the Lab; the bridge keeps talking to the retained view model.
         vm.onLabHidden()
-        delay(20)
+        runCurrent()
         val left = api.callRequests.size
         bridge.flow.value = BridgeState(call = CallState("call-behind", "+12025550123", CallPhase.ENDED, 0L))
         bridge.flow.value = BridgeState(call = CallState("call-behind", "+12025550123", CallPhase.ENDED, 1L))
-        delay(50)
+        advanceTimeBy(10_000)
+        runCurrent()
         assertEquals("an ended hint behind the call record reads nothing", left, api.callRequests.size)
         assertTrue("what was read stays as it was", vm.state.value.testCall.result?.waiting == true)
     }
 
     @Test
-    fun `a record that never loads ends on an error and later hints leave it`() = runBlocking<Unit> {
+    fun `a record that never loads ends on an error and later hints leave it`() = runTest(testDispatcher) {
         api.testCallHandler = { ApiOutcome.Ok(200, CallSnapshot(callId = "call-lost", profile = "test")) }
         api.callHandler = { ApiOutcome.Failure(503, "link_down", "the bridge service is not running") }
         val vm = viewModel()
@@ -528,12 +605,13 @@ class LabViewModelTest {
 
         bridge.flow.value = BridgeState(call = CallState("call-lost", "+12025550123", CallPhase.ENDED, 0L))
         bridge.flow.value = BridgeState(call = CallState("call-lost", "+12025550123", CallPhase.ENDED, 1L))
-        delay(50)
+        advanceTimeBy(10_000)
+        runCurrent()
         assertEquals("the answer is final: repeated ended hints read nothing", 8, api.callRequests.size)
     }
 
     @Test
-    fun `a call the bridge never closes ends on an unfinished card`() = runBlocking<Unit> {
+    fun `a call the bridge never closes ends on an unfinished card`() = runTest(testDispatcher) {
         api.testCallHandler = { ApiOutcome.Ok(200, CallSnapshot(callId = "call-long", profile = "test")) }
         api.callHandler = { callId -> ApiOutcome.Ok(200, CallSnapshot(callId = callId, state = "active")) }
         val vm = viewModel()
@@ -550,7 +628,7 @@ class LabViewModelTest {
     }
 
     @Test
-    fun `a new placement never inherits the previous call's result`() = runBlocking<Unit> {
+    fun `a new placement never inherits the previous call's result`() = runTest(testDispatcher) {
         var placements = 0
         api.testCallHandler = { _ ->
             placements++
@@ -583,7 +661,7 @@ class LabViewModelTest {
         vm.requestTestCall()
         vm.confirmTestCall()
         withTimeout(5_000) { vm.state.first { it.testCall.result?.summary == "The second call." } }
-        delay(50)
+        advanceUntilIdle()
         assertEquals("call-2", vm.state.value.testCall.result?.callId)
         assertTrue(
             "the first call's read stopped instead of using its whole budget",
@@ -592,7 +670,7 @@ class LabViewModelTest {
     }
 
     @Test
-    fun `the codec trial keeps the richest healthy opus profile`() = runBlocking<Unit> {
+    fun `the codec trial keeps the richest healthy opus profile`() = runTest(testDispatcher) {
         api.linkTestHandler = { _, codec, _, bitrate ->
             val poor = codec == "pcm" || (bitrate ?: 0) >= 64_000
             ApiOutcome.Ok(
@@ -603,19 +681,19 @@ class LabViewModelTest {
         }
         val vm = viewModel()
         vm.runCodecTrial()
-        withTimeout(5_000) { vm.state.first { it.trial.recommendation != null } }
+        vm.awaitIoState { it.trial.recommendation != null }
         val best = vm.state.value.trial.recommendation
         assertEquals(32_000, best?.bitrate)
         assertEquals(4, vm.state.value.trial.runs.size)
 
         vm.applyTrialRecommendation()
-        withTimeout(5_000) { vm.state.first { prefs.settings.value.maxBitrate == 32_000 } }
+        advanceUntilIdle()
         assertEquals("opus", prefs.settings.value.preferredCodec)
         assertEquals(32_000, prefs.settings.value.maxBitrate)
     }
 
     @Test
-    fun `probe results replace the rows without losing the selection`() = runBlocking<Unit> {
+    fun `probe results replace the rows without losing the selection`() = runTest(testDispatcher) {
         api.probeHandler = { candidates ->
             ApiOutcome.Ok(
                 200,
@@ -637,7 +715,7 @@ class LabViewModelTest {
     }
 
     @Test
-    fun `the lan row shows the phone's own probe, not the daemon's listener check alone`() = runBlocking<Unit> {
+    fun `the lan row shows the phone's own probe, not the daemon's listener check alone`() = runTest(testDispatcher) {
         val url = "wss://192.0.2.10:18763/device"
         val pin = "cc".repeat(32)
         api.probeHandler = {
@@ -657,7 +735,7 @@ class LabViewModelTest {
         vm.toggleProbeCandidate("iroh")
         vm.toggleProbeCandidate("tailscale")
         vm.runProbe()
-        withTimeout(5_000) { vm.state.first { it.probe.rows.isNotEmpty() } }
+        vm.awaitIoState { it.probe.rows.isNotEmpty() }
         val row = vm.state.value.probe.rows.single()
         // The handshake is the measurement: the daemon's stale "no listener" is not repeated.
         assertEquals(ProbeVerdict.REACHED, row.verdict)
@@ -674,7 +752,7 @@ class LabViewModelTest {
     }
 
     @Test
-    fun `a phone that cannot reach the listener says so while the daemon still answers`() = runBlocking<Unit> {
+    fun `a phone that cannot reach the listener says so while the daemon still answers`() = runTest(testDispatcher) {
         val url = "wss://192.0.2.10:18763/device"
         val pin = "cc".repeat(32)
         api.probeHandler = {
@@ -695,7 +773,7 @@ class LabViewModelTest {
         vm.toggleProbeCandidate("iroh")
         vm.toggleProbeCandidate("tailscale")
         vm.runProbe()
-        withTimeout(5_000) { vm.state.first { it.probe.rows.isNotEmpty() } }
+        vm.awaitIoState { it.probe.rows.isNotEmpty() }
         val row = vm.state.value.probe.rows.single()
         assertEquals(ProbeVerdict.NOT_REACHED, row.verdict)
         assertNull(row.rttMs)
@@ -704,7 +782,7 @@ class LabViewModelTest {
     }
 
     @Test
-    fun `without a LAN address the row says it was not checked and why`() = runBlocking<Unit> {
+    fun `without a LAN address the row says it was not checked and why`() = runTest(testDispatcher) {
         api.probeHandler = {
             ApiOutcome.Ok(
                 200,
@@ -728,7 +806,7 @@ class LabViewModelTest {
     }
 
     @Test
-    fun `a daemon-reachable listener is not shown as reachable when the phone cannot check it`() = runBlocking<Unit> {
+    fun `a daemon-reachable listener is not shown as reachable when the phone cannot check it`() = runTest(testDispatcher) {
         api.probeHandler = {
             ApiOutcome.Ok(
                 200,
@@ -753,7 +831,7 @@ class LabViewModelTest {
     }
 
     @Test
-    fun `a path the bridge did not measure stays not checked`() = runBlocking<Unit> {
+    fun `a path the bridge did not measure stays not checked`() = runTest(testDispatcher) {
         api.probeHandler = {
             ApiOutcome.Ok(
                 200,
@@ -777,7 +855,7 @@ class LabViewModelTest {
     }
 
     @Test
-    fun `a missing tailscale is the computer's and the daemon's own words stay under details`() = runBlocking<Unit> {
+    fun `a missing tailscale is the computer's and the daemon's own words stay under details`() = runTest(testDispatcher) {
         api.probeHandler = {
             ApiOutcome.Ok(
                 200,
@@ -812,7 +890,7 @@ class LabViewModelTest {
     }
 
     @Test
-    fun `diagnostics text renders and the log view honours the filter`() = runBlocking<Unit> {
+    fun `diagnostics text renders and the log view honours the filter`() = runTest(testDispatcher) {
         api.diagnosticsHandler = {
             ApiOutcome.Ok(
                 200,
@@ -835,7 +913,7 @@ class LabViewModelTest {
     }
 
     @Test
-    fun `loopback support comes from the daemon info`() = runBlocking<Unit> {
+    fun `loopback support comes from the daemon info`() = runTest(testDispatcher) {
         api.infoHandler = { ApiOutcome.Ok(200, DaemonInfo(voiceControls = VoiceControls(loopback = false, tone = true))) }
         val vm = viewModel()
         withTimeout(5_000) { vm.state.first { it.loopbackSupported != null } }
@@ -873,13 +951,32 @@ open class FakePhonePreferences(initial: PhoneSettings = PhoneSettings()) : Phon
     }
 }
 
-/** A store whose writes take time, like the disk: an answer arrives after later keystrokes. */
-class SlowPhonePreferences(
-    private val writeDelayMs: Long = 40,
-    initial: PhoneSettings = PhoneSettings()
-) : FakePhonePreferences(initial) {
+/**
+ * A store whose writes the test releases by hand: [awaitWrite] says which value a write has just
+ * taken and [releaseOne] lets the oldest held write land. A value therefore lands at an exact
+ * moment the test chooses — including while the next write is still in flight.
+ */
+class GatedPhonePreferences(initial: PhoneSettings = PhoneSettings()) : FakePhonePreferences(initial) {
+    private val started = Channel<String>(Channel.UNLIMITED)
+    private val releases = Channel<Unit>(Channel.UNLIMITED)
+
+    /** The values the store has actually published, in order. */
+    val written = mutableListOf<String>()
+
+    /** Waits until a write starts and returns the value it will store. */
+    suspend fun awaitWrite(): String = started.receive()
+
+    /** Lets the oldest held write land. */
+    fun releaseOne() {
+        releases.trySend(Unit)
+    }
+
     override suspend fun update(block: (PhoneSettings) -> PhoneSettings): PhoneSettings {
-        delay(writeDelayMs)
-        return super.update(block)
+        val next = block(settings.value)
+        started.send(next.testNumber)
+        releases.receive()
+        settings.value = next
+        written += next.testNumber
+        return next
     }
 }

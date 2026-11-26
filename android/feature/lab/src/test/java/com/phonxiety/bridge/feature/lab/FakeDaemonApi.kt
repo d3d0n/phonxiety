@@ -50,6 +50,12 @@ open class FakeDaemonApi : DaemonApi {
 
     /** Every record the lab asked for, in order. */
     val callRequests = mutableListOf<String>()
+
+    /**
+     * Runs on each record read, before [callHandler]: a test parks a read at an exact point here
+     * instead of waiting a wall-clock moment for a state it may never catch.
+     */
+    var callGate: suspend (String) -> Unit = {}
     var diagnosticsHandler: suspend () -> ApiOutcome<JsonObject> = { unset("diagnostics") }
     var bundleHandler: suspend () -> ApiOutcome<DiagnosticsBundle> = { unset("bundle") }
     var downloadBundleHandler: suspend (String, OutputStream) -> ApiResult = { _, _ -> ApiResult.Failure(503, "unset", "downloadBundle") }
@@ -93,6 +99,7 @@ open class FakeDaemonApi : DaemonApi {
     override suspend fun validateCall(request: PlaceCallRequest): ApiOutcome<ValidationResult> = unset("validateCall")
     override suspend fun call(callId: String): ApiOutcome<CallSnapshot> {
         callRequests += callId
+        callGate(callId)
         return callHandler(callId)
     }
     override suspend fun transcript(callId: String, cursor: Long?, limit: Int?): ApiOutcome<TranscriptPage> = unset("transcript")
