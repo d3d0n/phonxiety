@@ -93,6 +93,74 @@ class ModuleControllerTest {
     }
 
     @Test
+    fun aHidingManagerMeansAPendingGrantNotAPhoneWithoutRoot() {
+        val state = probe(
+            snapshot(
+                detection = RootDetection(
+                    su = SuStatus.NOT_ROOTED,
+                    providers = listOf(kernelSu),
+                    suOutput = "Cannot run program \"su\""
+                )
+            )
+        ).state
+
+        // KernelSU hides su from a package it has not allowed: the wizard names the grant.
+        assertEquals(WizardState.RootDenied(kernelSu, "Cannot run program \"su\""), state)
+    }
+
+    @Test
+    fun twoHidingManagersListBothGrants() {
+        val apatch = apatchProvider()
+        val state = probe(
+            snapshot(detection = RootDetection(SuStatus.NOT_ROOTED, listOf(kernelSu, apatch)))
+        ).state
+
+        val denied = state as WizardState.RootDenied
+        assertEquals(kernelSu, denied.provider)
+        assertEquals(listOf(apatch), denied.coProviders)
+    }
+
+    @Test
+    fun magiskOnlyWithNoSuMeansMagiskIsNotActive() {
+        val state = probe(
+            snapshot(detection = RootDetection(SuStatus.NOT_ROOTED, listOf(magisk)))
+        ).state
+
+        assertEquals(WizardState.NoRoot(listOf(magisk)), state)
+    }
+
+    @Test
+    fun theProviderThatAnsweredSuIsTheActiveOneAndTheRestAreLeftovers() {
+        val state = probe(
+            snapshot(
+                detection = RootDetection(
+                    su = SuStatus.GRANTED,
+                    providers = listOf(magisk, kernelSu),
+                    active = RootId.KERNELSU
+                )
+            )
+        ).state
+
+        // Magisk's files remain from the migration; they do not block KernelSU.
+        assertEquals(WizardState.ReadyToInstall(kernelSu), state)
+    }
+
+    @Test
+    fun magiskActiveWithKernelSuLeftoversInstallsThroughMagisk() {
+        val state = probe(
+            snapshot(
+                detection = RootDetection(
+                    su = SuStatus.GRANTED,
+                    providers = listOf(magisk, kernelSu),
+                    active = RootId.MAGISK
+                )
+            )
+        ).state
+
+        assertEquals(WizardState.ReadyToInstall(magisk), state)
+    }
+
+    @Test
     fun conflictRefusesInstall() {
         val state = probe(
             snapshot(detection = RootDetection(SuStatus.GRANTED, listOf(magisk, kernelSu)))

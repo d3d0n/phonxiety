@@ -18,6 +18,13 @@ class RootCommand private constructor(
         /** `su -c id`, the root/denial probe. */
         fun id(): RootCommand = RootCommand(listOf("id"))
 
+        /**
+         * `su -v`, the answerer's own banner: `<version>:<SUFFIX>`, e.g. `31.1:MAGISKSU` (Magisk),
+         * `11282:APatch`, and the KernelSU family's own spelling. It is the only signal that names
+         * the provider without guessing from files another provider may have left behind.
+         */
+        fun suVersion(): RootCommand = RootCommand(listOf("su", "-v"))
+
         /** Magisk version name, e.g. `31.1:MAGISK`. */
         fun magiskVersionName(): RootCommand = RootCommand(listOf("magisk", "-v"))
 

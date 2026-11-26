@@ -10,6 +10,7 @@ import com.phonxiety.bridge.data.DevicePairingRepository
 import com.phonxiety.bridge.model.LinkState
 import com.phonxiety.bridge.root.FileProgressStore
 import com.phonxiety.bridge.root.ProgressStore
+import com.phonxiety.bridge.root.RootDetection
 import com.phonxiety.bridge.root.WizardEvent
 import com.phonxiety.bridge.root.WizardState
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -80,6 +81,9 @@ class OnboardingViewModel internal constructor(
     )
 
     val wizard: StateFlow<WizardState> = coordinator.wizard
+
+    /** The last detection: the wizard shows the leftovers of a provider the phone migrated away from. */
+    val detection: StateFlow<RootDetection?> = coordinator.rootDetection
 
     init {
         viewModelScope.launch(Dispatchers.IO) {

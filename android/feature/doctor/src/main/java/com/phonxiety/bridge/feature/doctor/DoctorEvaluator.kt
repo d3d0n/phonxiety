@@ -5,12 +5,23 @@ import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.model.DoctorReport
 import com.phonxiety.bridge.model.LinkState
 import com.phonxiety.bridge.model.PathKind
+import com.phonxiety.bridge.root.DetectedProvider
 import com.phonxiety.bridge.root.ModuleState
 import com.phonxiety.bridge.root.Overlay
 import com.phonxiety.bridge.root.PrivilegedPermissions
+import com.phonxiety.bridge.root.RootDetection
+import com.phonxiety.bridge.root.RootId
 import com.phonxiety.bridge.root.RootShell
 import com.phonxiety.bridge.root.RuntimePermission
 import com.phonxiety.bridge.root.SuStatus
+
+/** Managers that hide `su` from a package they have not allowed yet. */
+private fun RootDetection.hidingManagers(): List<DetectedProvider> = providers.filter { it.id != RootId.MAGISK }
+
+/** Leftovers of a provider that did not answer: reported so a migration makes sense. */
+private fun leftoversSuffix(root: RootDetection): String = root.leftovers.takeIf { it.isNotEmpty() }
+    ?.joinToString(prefix = " · inactive leftovers: ", separator = ", ") { "${it.id.doctorTitle()} ${it.version}" }
+    .orEmpty()
 
 /**
  * Turns one snapshot into the rows the screen shows. Pure: the same snapshot and bridge state always
@@ -43,18 +54,29 @@ object DoctorEvaluator {
             evidence = when {
                 root.su == SuStatus.GRANTED && root.conflict ->
                     root.providers.joinToString(" + ") { "${it.id.doctorTitle()} ${it.version}" } +
-                        " both answered; installing would be a guess"
+                        " are present but nothing said which one answers su; installing would be a guess"
 
                 root.su == SuStatus.GRANTED && provider == null ->
                     "root is granted but no supported provider was found"
 
                 root.su == SuStatus.GRANTED && provider != null ->
                     "${provider.id.doctorTitle()} ${provider.version}" +
-                        if (provider.managerInstalled) " · manager installed" else " · manager app not installed"
+                        (if (provider.managerInstalled) " · manager installed" else " · manager app not installed") +
+                        leftoversSuffix(root)
 
                 root.su == SuStatus.DENIED -> "su answered but the manager refused this app"
 
-                root.su == SuStatus.NOT_ROOTED -> "no su binary answered"
+                root.su == SuStatus.NOT_ROOTED && root.hidingManagers().isNotEmpty() ->
+                    "the ${root.hidingManagers().joinToString(" and ") { it.id.doctorTitle() }} manager is installed, " +
+                        "but su is hidden from this app until it is allowed in Superuser"
+
+                root.su == SuStatus.NOT_ROOTED ->
+                    "no su binary answered" +
+                        if (root.providers.any { it.id == RootId.MAGISK }) {
+                            " · the Magisk app is installed, so Magisk itself is not active"
+                        } else {
+                            ""
+                        }
 
                 else -> "su did not answer within ${RootShell.DEFAULT_TIMEOUT_MS / 1000} s"
             },

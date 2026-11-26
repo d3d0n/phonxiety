@@ -74,6 +74,13 @@ class SetupCoordinator(
     private var detection: RootDetection? = null
 
     /**
+     * The last detection, for the parts of the screen that are about the phone rather than about
+     * the step: the leftovers of a provider the phone migrated away from.
+     */
+    private val _detection = MutableStateFlow<RootDetection?>(null)
+    val rootDetection: StateFlow<RootDetection?> = _detection.asStateFlow()
+
+    /**
      * A scanner or paste attempt is running. Observations of the stored pairing must not advance the
      * wizard while the attempt's own outcome decides what the person is told.
      */
@@ -264,6 +271,7 @@ class SetupCoordinator(
     private suspend fun gatherSnapshot(): ProbeSnapshot {
         val detected = backend.detect()
         detection = detected
+        _detection.value = detected
         val provider = detected.provider
         val rooted = detected.su == SuStatus.GRANTED && provider != null
         val module = if (rooted) backend.moduleState(provider) else ModuleState.Unknown

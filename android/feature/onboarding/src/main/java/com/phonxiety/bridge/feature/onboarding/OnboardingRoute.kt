@@ -40,6 +40,7 @@ fun OnboardingRoute(
 ) {
     val wizard by viewModel.wizard.collectAsStateWithLifecycle()
     val pairingError by viewModel.pairingError.collectAsStateWithLifecycle()
+    val detection by viewModel.detection.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -106,7 +107,11 @@ fun OnboardingRoute(
 
     Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { padding ->
         OnboardingScreen(
-            state = OnboardingUiState(wizard = wizard, pairingError = pairingError),
+            state = OnboardingUiState(
+                wizard = wizard,
+                pairingError = pairingError,
+                leftovers = detection?.leftovers.orEmpty()
+            ),
             callbacks = OnboardingCallbacks(
                 onPrimary = viewModel::onPrimary,
                 onSecondary = viewModel::onSecondary,

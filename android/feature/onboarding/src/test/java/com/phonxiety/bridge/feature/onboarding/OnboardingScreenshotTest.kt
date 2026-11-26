@@ -108,5 +108,14 @@ class OnboardingScreenshotTest {
     @Test
     fun conflict() = capture("conflict", state("conflict"))
 
+    @Test
+    fun leftovers() = capture(
+        "leftovers",
+        OnboardingUiState(
+            wizard = WizardState.ReadyToInstall(OnboardingSamples.kernelSu),
+            leftovers = listOf(OnboardingSamples.magisk)
+        )
+    )
+
     private fun state(name: String): OnboardingUiState = OnboardingUiState(wizard = requireNotNull(OnboardingSamples.states[name]))
 }

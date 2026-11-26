@@ -111,6 +111,114 @@ class RootDetectorTest {
     }
 
     @Test
+    fun apatchNamesItselfByBannerEvenWithAMagiskContextAndMagiskLeftovers() = runTest {
+        val environment = FakeEnvironment().apply {
+            dirs[RootCommand.ADB_ROOT] = listOf("magisk", "modules")
+            packages += MagiskProvider.MANAGER_PACKAGE
+            packages += ApatchProvider.MANAGER_PACKAGE
+            packageVersions[ApatchProvider.MANAGER_PACKAGE] = "11282"
+        }
+        val detection = detect(environment) { script ->
+            when (script) {
+                "su -v" -> ShellOutput(stdout = "11282:APatch\n")
+                "magisk -v" -> ShellOutput(stdout = "31.1:MAGISK\n")
+                else -> ShellOutput(stdout = "uid=0(root) gid=0(root) context=u:r:magisk:s0")
+            }
+        }
+
+        // APatch keeps the app's su in a magisk-looking domain, so the context must not decide.
+        assertEquals(RootId.APATCH, detection.active)
+        assertEquals(RootId.APATCH, detection.provider?.id)
+        assertEquals(listOf(RootId.MAGISK), detection.leftovers.map { it.id })
+        assertTrue(!detection.conflict)
+    }
+
+    @Test
+    fun magiskNamesItselfByBanner() = runTest {
+        val environment = FakeEnvironment().apply {
+            dirs[RootCommand.ADB_ROOT] = listOf("magisk", "modules")
+            packages += MagiskProvider.MANAGER_PACKAGE
+        }
+        val detection = detect(environment) { script ->
+            when (script) {
+                "su -v" -> ShellOutput(stdout = "31.1:MAGISKSU\n")
+                "magisk -v" -> ShellOutput(stdout = "31.1:MAGISK:R\n")
+                else -> ShellOutput(stdout = "uid=0(root)")
+            }
+        }
+
+        assertEquals(RootId.MAGISK, detection.active)
+        assertEquals(RootId.MAGISK, detection.provider?.id)
+    }
+
+    @Test
+    fun kernelSuNextNamesItselfByBanner() = runTest {
+        val environment = FakeEnvironment().apply {
+            dirs[RootCommand.ADB_ROOT] = listOf("ksu", "ksud", "modules")
+            packages += KernelSuProvider.KERNELSU_NEXT_MANAGER_PACKAGE
+        }
+        val detection = detect(environment) { script ->
+            when (script) {
+                "su -v" -> ShellOutput(stdout = "1.2.3:KernelSU-Next\n")
+                "ksud -V" -> ShellOutput(stdout = "1.2.3\n")
+                else -> ShellOutput(stdout = "uid=0(root)")
+            }
+        }
+
+        assertEquals(RootId.KERNELSU_NEXT, detection.active)
+        assertEquals(RootId.KERNELSU_NEXT, detection.provider?.id)
+    }
+
+    @Test
+    fun kernelSuAnswersInItsOwnContextWhenTheBannerSaysNothing() = runTest {
+        val environment = FakeEnvironment().apply {
+            dirs[RootCommand.ADB_ROOT] = listOf("ksu", "ksud", "modules")
+            packages += KernelSuProvider.KERNELSU_MANAGER_PACKAGE
+        }
+        val detection = detect(environment) { script ->
+            when (script) {
+                "su -v" -> ShellOutput(stderr = "su: unknown option", exitCode = 1)
+                "ksud -V" -> ShellOutput(stdout = "3.3.1\n")
+                else -> ShellOutput(stdout = "uid=0(root) gid=0(root) context=u:r:ksu:s0 tcontext=u:r:ksu:s0")
+            }
+        }
+
+        assertEquals(RootId.KERNELSU, detection.active)
+        assertEquals(RootId.KERNELSU, detection.provider?.id)
+    }
+
+    @Test
+    fun aMagiskContextAloneNeverNamesMagisk() = runTest {
+        val environment = FakeEnvironment().apply {
+            dirs[RootCommand.ADB_ROOT] = listOf("magisk", "ksu", "modules")
+        }
+        val detection = detect(environment) { script ->
+            when (script) {
+                "su -v" -> ShellOutput(stdout = "9.9:SuperSU\n")
+                "magisk -v" -> ShellOutput(stdout = "31.1:MAGISK\n")
+                else -> ShellOutput(stdout = "uid=0(root) gid=0(root) context=u:r:magisk:s0")
+            }
+        }
+
+        // APatch grants an app exactly this context, so it proves nothing; the artefacts conflict.
+        assertEquals(null, detection.active)
+        assertTrue(detection.conflict)
+    }
+
+    @Test
+    fun aProviderThatAnswersIsNamedEvenWithNothingElseOnDisk() = runTest {
+        val detection = detect(FakeEnvironment()) { script ->
+            when (script) {
+                "su -v" -> ShellOutput(stdout = "11282:APatch\n")
+                else -> ShellOutput(stdout = "uid=0(root)")
+            }
+        }
+
+        assertEquals(RootId.APATCH, detection.provider?.id)
+        assertEquals("named by its own su version; nothing under /data/adb named it", detection.provider?.note)
+    }
+
+    @Test
     fun twoProvidersAreReportedAsConflict() = runTest {
         val environment = FakeEnvironment().apply {
             dirs[RootCommand.ADB_ROOT] = listOf("magisk", "ksu", "ksud", "modules")

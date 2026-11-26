@@ -117,7 +117,12 @@ sealed interface WizardState {
 
     data class RootDenied(
         val provider: DetectedProvider?,
-        val output: String? = null
+        val output: String? = null,
+        /**
+         * Other managers whose grant is also pending: a phone can carry two hiding managers, and
+         * each has its own Superuser screen.
+         */
+        val coProviders: List<DetectedProvider> = emptyList()
     ) : WizardState
 
     data class ProviderPrep(
@@ -273,8 +278,7 @@ object ModuleController {
         val detection = snapshot.detection
         val provider = detection.provider
         return when {
-            detection.su == SuStatus.NOT_ROOTED ->
-                Transition(WizardState.NoRoot(detection.providers))
+            detection.su == SuStatus.NOT_ROOTED -> onNotRooted(detection)
 
             detection.su == SuStatus.TIMED_OUT -> Transition(
                 WizardState.Indeterminate(
@@ -287,8 +291,7 @@ object ModuleController {
                 WizardState.RootDenied(detection.provider, tail(detection.suOutput))
             )
 
-            detection.providers.size > 1 ->
-                Transition(WizardState.Conflict(detection.providers))
+            detection.conflict -> Transition(WizardState.Conflict(detection.providers))
 
             provider == null -> Transition(
                 WizardState.Indeterminate(
@@ -299,6 +302,26 @@ object ModuleController {
 
             else -> route(checkNotNull(provider), snapshot)
         }
+    }
+
+    /**
+     * A missing `su` is not the same as a phone without root. KernelSU, KernelSU-Next and APatch
+     * hide `su` from a package they have not allowed yet, so a failing launch with one of their
+     * managers installed is a grant waiting for the person. Magisk always exposes `su`: an
+     * installed Magisk app here means Magisk is not active, and the installer guide is the answer.
+     */
+    private fun onNotRooted(detection: RootDetection): Transition {
+        val hiding = detection.providers.filter { it.id != RootId.MAGISK }
+        if (hiding.isEmpty()) {
+            return Transition(WizardState.NoRoot(detection.providers))
+        }
+        return Transition(
+            WizardState.RootDenied(
+                provider = hiding.first(),
+                output = tail(detection.suOutput),
+                coProviders = hiding.drop(1)
+            )
+        )
     }
 
     private fun route(provider: DetectedProvider, snapshot: ProbeSnapshot): Transition = when (val module = snapshot.module) {
