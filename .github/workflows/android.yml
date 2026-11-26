@@ -74,8 +74,11 @@ jobs:
           SDK_DIR="$GITHUB_WORKSPACE/.tools/android-sdk"
           mkdir -p "$SDK_DIR/cmdline-tools"
           ln -sfn "$ANDROID_SDK_ROOT/cmdline-tools/latest" "$SDK_DIR/cmdline-tools/latest"
-          yes | "$SDK_DIR/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK_DIR" \
-            "platforms;android-37.1" "build-tools;37.0.0" "platform-tools" "ndk;29.0.14206865" >/dev/null
+          # `yes` dies of a broken pipe when sdkmanager stops reading, and pipefail
+          # would report that instead of sdkmanager's own status.
+          { yes || true; } | "$SDK_DIR/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK_DIR" \
+            "platforms;android-37.1" "build-tools;37.0.0" "platform-tools" "ndk;29.0.14206865" \
+            > "$RUNNER_TEMP/sdkmanager.log" || { tail -n 40 "$RUNNER_TEMP/sdkmanager.log"; exit 1; }
 
       # Same steps as `mise run phone:iroh`: cross-compiles libiroh_ffi.so and
       # regenerates the uniffi Kotlin bindings into :core:device.
