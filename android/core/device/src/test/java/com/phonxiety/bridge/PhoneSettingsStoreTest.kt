@@ -145,14 +145,14 @@ class PhoneSettingsStoreTest {
 
         // The user changes a setting after the migration, then the next process starts while the
         // old file is still there: the file is a leftover now, and the newer choice stays.
-        first.update { it.copy(preferredCodec = PhoneCodec.OPUS, testNumber = "+998901234567") }
+        first.update { it.copy(preferredCodec = PhoneCodec.OPUS, testNumber = "+998935550101") }
         // One store per file: the first one closes before the next process's store opens it.
         scopes.forEach { it.coroutineContext[Job]?.cancelAndJoin() }
         val next = store()
 
         val loaded = next.read()
         assertEquals(PhoneCodec.OPUS, loaded.preferredCodec)
-        assertEquals("+998901234567", loaded.testNumber)
+        assertEquals("+998935550101", loaded.testNumber)
         assertTrue("the old copy is still there for a rollback", ceFile.isFile)
     }
 
