@@ -22,6 +22,7 @@ import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.unit.Density
@@ -165,6 +166,161 @@ class LabScreenScreenshotTest {
         composeRule.onAllNodes(isDialog()).onLast().assertAccessible()
         composeRule.onAllNodes(isDialog()).onLast()
             .captureRoboImage("src/test/screenshots/lab_dialog_411_light.png")
+    }
+
+    /** A finished test call: the probes were asked for and the bridge has the summary. */
+    private fun finishedTestCall(
+        result: TestCallResultUi = testCallResult()
+    ): LabUiState {
+        val base = previewLabState()
+        return base.copy(
+            testCall = base.testCall.copy(
+                probesSupported = true,
+                loopback = true,
+                tone = true,
+                toneSeconds = 5,
+                callId = "call-1",
+                result = result
+            )
+        )
+    }
+
+    private fun testCallResult(
+        resultStatus: String? = "ready",
+        summary: String? = "The far end answered, heard the tone and said the line was clear. They asked to be called again tomorrow morning.",
+        waiting: Boolean = false
+    ): TestCallResultUi = TestCallResultUi(
+        callId = "call-1",
+        outcome = "answered",
+        resultStatus = resultStatus,
+        summary = summary,
+        durationSeconds = 34,
+        codec = "opus",
+        waiting = waiting
+    )
+
+    @Test
+    fun theTestCallProbesAndTheirResult() = render(
+        "test_call_result_411_light",
+        beforeCapture = {
+            composeRule.onNodeWithText("Open the call record").performScrollTo()
+            composeRule.waitForIdle()
+        }
+    ) { setScreen(finishedTestCall()) }
+
+    @Test
+    fun theTestCallResultInDark() = render(
+        "test_call_result_411_dark",
+        beforeCapture = {
+            composeRule.onNodeWithText("Open the call record").performScrollTo()
+            composeRule.waitForIdle()
+        }
+    ) { setScreen(finishedTestCall(), dark = true) }
+
+    @Test
+    fun theTestCallResultInDynamicColor() = render(
+        "test_call_result_411_dynamic",
+        beforeCapture = {
+            composeRule.onNodeWithText("Open the call record").performScrollTo()
+            composeRule.waitForIdle()
+        }
+    ) { setScreen(finishedTestCall(), dynamicColor = true) }
+
+    @Test
+    fun theTestCallResultAtTwoHundredPercentInLight() = render(
+        "test_call_result_320_font200_light",
+        beforeCapture = {
+            composeRule.onNodeWithText("Open the call record").performScrollTo()
+            composeRule.waitForIdle()
+        }
+    ) { setScreen(finishedTestCall(), fontScale = 2f, width = 320.dp) }
+
+    @Test
+    fun theTestCallResultAtTwoHundredPercentInDark() = render(
+        "test_call_result_320_font200_dark",
+        beforeCapture = {
+            composeRule.onNodeWithText("Open the call record").performScrollTo()
+            composeRule.waitForIdle()
+        }
+    ) { setScreen(finishedTestCall(), dark = true, fontScale = 2f, width = 320.dp) }
+
+    @Test
+    fun theTestCallWhoseSummaryIsStillBeingWritten() = render(
+        "test_call_waiting_411_light",
+        beforeCapture = {
+            composeRule.onNodeWithText("Reading the call record…").performScrollTo()
+            composeRule.waitForIdle()
+        }
+    ) { setScreen(finishedTestCall(testCallResult(resultStatus = "pending", summary = null, waiting = true))) }
+
+    @Test
+    fun theProbeTogglesSayWhoHearsThem() {
+        setScreen(finishedTestCall())
+        composeRule.onNodeWithText("Loop the far end back").performScrollTo()
+        composeRule.onNodeWithText("The far end hears what they say, echoed back to them.").assertExists()
+        composeRule.onNodeWithText("Play a tone").assertExists()
+        composeRule.onNodeWithText("The far end hears the tone, at the frequency and level set above.").assertExists()
+    }
+
+    @Test
+    fun anOlderDaemonGetsNoProbeToggles() {
+        setScreen(previewLabState().copy(testCall = previewLabState().testCall.copy(probesSupported = false)))
+        composeRule.onNodeWithText("Loop the far end back").assertDoesNotExist()
+        composeRule.onNodeWithText("Play a tone").assertDoesNotExist()
+    }
+
+    @Test
+    fun theToneSecondsControlFollowsTheToneToggle() {
+        val base = previewLabState()
+        val state = mutableStateOf(
+            base.copy(testCall = base.testCall.copy(probesSupported = true, tone = false))
+        )
+        val callbacks = LabCallbacks(
+            onTestTone = { on -> state.value = state.value.copy(testCall = state.value.testCall.copy(tone = on)) },
+            onTestToneSeconds = { seconds ->
+                state.value = state.value.copy(testCall = state.value.testCall.copy(toneSeconds = seconds))
+            }
+        )
+        composeRule.setContent {
+            PhonxietyTheme(dynamicColor = false) {
+                Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                    LabScreen(state = state.value, callbacks = callbacks)
+                }
+            }
+        }
+        composeRule.onNodeWithContentDescription("Tone length").assertDoesNotExist()
+        composeRule.onNodeWithText("Play a tone").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        val length = composeRule.onNodeWithContentDescription("Tone length")
+        length.performScrollTo()
+        length.assert(hasStateDescription("5\u00A0s"))
+        // A screen reader moves the slider through its semantics action, not a drag.
+        length.performSemanticsAction(SemanticsActions.SetProgress) { it(3f) }
+        composeRule.waitForIdle()
+        assertEquals(3, state.value.testCall.toneSeconds)
+        composeRule.onNodeWithText("Tone length · 3\u00A0s").assertExists()
+    }
+
+    @Test
+    fun theResultCardOpensItsCallRecord() {
+        var opened: String? = null
+        setScreen(finishedTestCall(), callbacks = LabCallbacks(onOpenCall = { opened = it }))
+        composeRule.onNodeWithText("Open the call record").performScrollTo().performClick()
+        assertEquals("call-1", opened)
+    }
+
+    @Test
+    fun aPendingSummaryIsNotAMissingOne() {
+        setScreen(finishedTestCall(testCallResult(resultStatus = "pending", summary = null, waiting = false)))
+        composeRule.onNodeWithText("The bridge is still writing the summary.").performScrollTo().assertExists()
+        composeRule.onNodeWithText("The bridge has no summary for this call.").assertDoesNotExist()
+    }
+
+    @Test
+    fun aCallWithoutASummarySaysSoAndStillOpens() {
+        setScreen(finishedTestCall(testCallResult(resultStatus = null, summary = null, waiting = false)))
+        composeRule.onNodeWithText("The bridge has no summary for this call.").performScrollTo().assertExists()
+        composeRule.onNodeWithText("Answered").assertExists()
     }
 
     @Test

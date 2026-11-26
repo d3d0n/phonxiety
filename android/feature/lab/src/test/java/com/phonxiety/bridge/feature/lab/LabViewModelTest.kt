@@ -9,9 +9,11 @@ import com.phonxiety.bridge.PhonePreferences
 import com.phonxiety.bridge.PhoneSettings
 import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.BridgeStateRepository
+import com.phonxiety.bridge.data.LiveCallFront
 import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.model.CallPhase
+import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.CallState
 import com.phonxiety.bridge.model.ConnectionInfo
 import com.phonxiety.bridge.model.DaemonInfo
@@ -20,6 +22,7 @@ import com.phonxiety.bridge.model.LoopbackResult
 import com.phonxiety.bridge.model.ProbeCandidate
 import com.phonxiety.bridge.model.ProbeResult
 import com.phonxiety.bridge.model.TestCallRequest
+import com.phonxiety.bridge.model.TestCallTone
 import com.phonxiety.bridge.model.ToneResult
 import com.phonxiety.bridge.model.VoiceControls
 import com.phonxiety.bridge.net.LanPathProbe
@@ -65,6 +68,7 @@ class LabViewModelTest {
         prefs = FakePhonePreferences()
         bridge = FakeBridgeStateRepository()
         lanCheck = FakeLanPathCheck()
+        LiveCallFront.resetForTest()
     }
 
     @After
@@ -138,6 +142,153 @@ class LabViewModelTest {
         assertEquals("+12025550123", requested?.destination)
         assertEquals(30, requested?.maxDurationSeconds)
         assertEquals("+12025550123", prefs.settings.value.testNumber)
+    }
+
+    @Test
+    fun `the test call arms the return before it is placed and spends it on failure`() = runBlocking<Unit> {
+        var expectingDuringPlacement = false
+        api.testCallHandler = {
+            // The token has to be armed while the request is in flight: the daemon answers only
+            // after Telecom may already have drawn its in-call screen.
+            expectingDuringPlacement = LiveCallFront.awaitsCover()
+            ApiOutcome.Ok(200, CallSnapshot(callId = "call-7", profile = "test"))
+        }
+        val vm = viewModel()
+        vm.setTestNumber("+12025550123")
+        withTimeout(5_000) { vm.state.first { it.testCall.number == "+12025550123" } }
+        vm.requestTestCall()
+        vm.confirmTestCall()
+        withTimeout(5_000) { vm.state.first { it.testCall.callId != null } }
+        assertTrue("placement happens inside an open return opportunity", expectingDuringPlacement)
+        assertEquals("call-7", LiveCallFront.pendingCallId())
+        assertEquals("call-7", vm.state.value.testCall.callId)
+
+        // A placement the daemon refused covers nothing, so nothing may be pulled forward later.
+        LiveCallFront.resetForTest()
+        api.testCallHandler = { ApiOutcome.Failure(409, "unsupported_by_phone", "the phone cannot place calls") }
+        vm.requestTestCall()
+        vm.confirmTestCall()
+        withTimeout(5_000) { vm.state.first { it.testCall.error != null } }
+        assertFalse(LiveCallFront.awaitsCover())
+        assertNull(LiveCallFront.placedCallId())
+    }
+
+    @Test
+    fun `the probes travel only when the daemon advertises them`() = runBlocking<Unit> {
+        var placed: TestCallRequest? = null
+        api.testCallHandler = { request ->
+            placed = request
+            ApiOutcome.Ok(200, CallSnapshot(callId = "call-8", profile = "test"))
+        }
+        api.infoHandler = { ApiOutcome.Ok(200, DaemonInfo(voiceControls = VoiceControls(testCallProbes = true))) }
+        val vm = viewModel()
+        withTimeout(5_000) { vm.state.first { it.testCall.probesAvailable } }
+        vm.setTestNumber("+12025550123")
+        withTimeout(5_000) { vm.state.first { it.testCall.number == "+12025550123" } }
+        vm.setTestCallLoopback(true)
+        vm.setTestCallTone(true)
+        vm.setTestCallToneSeconds(3)
+        vm.requestTestCall()
+        vm.confirmTestCall()
+        withTimeout(5_000) { vm.state.first { it.testCall.callId != null } }
+        assertEquals(true, placed?.loopback)
+        assertEquals(TestCallTone(hz = 1_000, dbfs = -20.0, seconds = 3), placed?.tone)
+
+        // Seconds beyond the daemon's range are clamped rather than rejected by the daemon.
+        vm.setTestCallToneSeconds(30)
+        assertEquals(10, vm.state.value.testCall.toneSeconds)
+    }
+
+    @Test
+    fun `a daemon without the probes gets the request it already understands`() = runBlocking<Unit> {
+        var placed: TestCallRequest? = null
+        api.testCallHandler = { request ->
+            placed = request
+            ApiOutcome.Ok(200, CallSnapshot(callId = "call-9", profile = "test"))
+        }
+        api.infoHandler = { ApiOutcome.Ok(200, DaemonInfo(voiceControls = VoiceControls(testCallProbes = false))) }
+        val vm = viewModel()
+        withTimeout(5_000) { vm.state.first { it.testCall.probesSupported != null } }
+        assertFalse(vm.state.value.testCall.probesAvailable)
+        vm.setTestNumber("+12025550123")
+        withTimeout(5_000) { vm.state.first { it.testCall.number == "+12025550123" } }
+        // The toggles are not shown, but a state that still carries them must not add the keys.
+        vm.setTestCallLoopback(true)
+        vm.setTestCallTone(true)
+        vm.requestTestCall()
+        vm.confirmTestCall()
+        withTimeout(5_000) { vm.state.first { it.testCall.callId != null } }
+        assertNull(placed?.loopback)
+        assertNull(placed?.tone)
+    }
+
+    @Test
+    fun `the result card reads the record until the summary is ready`() = runBlocking<Unit> {
+        api.testCallHandler = { ApiOutcome.Ok(200, CallSnapshot(callId = "call-9", profile = "test")) }
+        api.callHandler = { callId ->
+            if (api.callRequests.size < 3) {
+                ApiOutcome.Ok(200, CallSnapshot(callId = callId, state = "ended", resultStatus = "pending"))
+            } else {
+                ApiOutcome.Ok(
+                    200,
+                    CallSnapshot(
+                        callId = callId,
+                        state = "ended",
+                        callOutcome = "answered",
+                        resultStatus = "ready",
+                        summary = "The line answered and the tone was heard.",
+                        connectedAt = 1_000.0,
+                        endedAt = 1_032.0,
+                        audioCodec = "opus"
+                    )
+                )
+            }
+        }
+        val vm = viewModel()
+        vm.resultRetryDelayMs = 1
+        vm.setTestNumber("+12025550123")
+        withTimeout(5_000) { vm.state.first { it.testCall.number == "+12025550123" } }
+        vm.requestTestCall()
+        vm.confirmTestCall()
+        withTimeout(5_000) { vm.state.first { it.testCall.callId != null } }
+
+        // The phone reports the call ended before the daemon has finished the record.
+        bridge.flow.value = BridgeState(call = CallState("call-9", "+12025550123", CallPhase.ENDED, 0L))
+        withTimeout(5_000) { vm.state.first { it.testCall.result?.summaryReady == true } }
+
+        val card = vm.state.value.testCall.result!!
+        assertEquals("call-9", card.callId)
+        assertEquals("answered", card.outcome)
+        assertEquals("opus", card.codec)
+        assertEquals(32L, card.durationSeconds)
+        assertEquals("The line answered and the tone was heard.", card.summary)
+        assertFalse(card.waiting)
+        assertEquals(3, api.callRequests.size)
+        // A further ended state is the same answer: the record is not read again.
+        bridge.flow.value = BridgeState(call = CallState("call-9", "+12025550123", CallPhase.ENDED, 0L))
+        assertEquals(3, api.callRequests.size)
+    }
+
+    @Test
+    fun `a record whose summary never arrives stops waiting`() = runBlocking<Unit> {
+        api.testCallHandler = { ApiOutcome.Ok(200, CallSnapshot(callId = "call-9", profile = "test")) }
+        api.callHandler = { callId ->
+            ApiOutcome.Ok(200, CallSnapshot(callId = callId, state = "ended", resultStatus = "pending"))
+        }
+        val vm = viewModel()
+        vm.resultRetryDelayMs = 1
+        vm.setTestNumber("+12025550123")
+        withTimeout(5_000) { vm.state.first { it.testCall.number == "+12025550123" } }
+        vm.requestTestCall()
+        vm.confirmTestCall()
+        withTimeout(5_000) { vm.state.first { it.testCall.callId != null } }
+        bridge.flow.value = BridgeState(call = CallState("call-9", "+12025550123", CallPhase.ENDED, 0L))
+        withTimeout(5_000) { vm.state.first { it.testCall.result?.waiting == false } }
+        val card = vm.state.value.testCall.result!!
+        assertEquals("pending", card.resultStatus)
+        assertFalse(card.summaryReady)
+        assertNull(card.error)
+        assertEquals(8, api.callRequests.size)
     }
 
     @Test

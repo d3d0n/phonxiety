@@ -185,7 +185,10 @@ fun PhonxietyNavigationHost(
                 }
                 entry<LabKey> {
                     // A top-level section's own back goes Home, not out of the app.
-                    LabRoute(onBack = { backStack.openSection(DashboardKey) })
+                    LabRoute(
+                        onBack = { backStack.openSection(DashboardKey) },
+                        onOpenCall = { callId -> backStack.push(CallDetailKey(callId)) }
+                    )
                 }
                 entry<SettingsKey> {
                     SettingsRoute(onBack = { backStack.openSection(DashboardKey) })

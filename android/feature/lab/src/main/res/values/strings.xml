@@ -112,7 +112,39 @@
     <string name="lab_test_dialog_body">Calls %1$s with the fixed test script. It ends on its own and is never retried.</string>
     <string name="lab_test_dialog_confirm">Place test call</string>
     <string name="lab_test_dialog_cancel">Cancel</string>
+    <string name="lab_test_dialog_body_probes">Calls %1$s with the fixed test script. The bridge starts the audio probes once the far end answers, and the call holds until they finish. It is never retried.</string>
     <string name="lab_test_placed_message">Test call placed</string>
+
+    <!-- Test call audio probes: the far end hears both of them -->
+    <string name="lab_test_probes_title">Audio probes</string>
+    <string name="lab_test_probes_subtitle">The bridge starts these once the far end answers and stops them when the call ends.</string>
+    <string name="lab_test_loopback">Loop the far end back</string>
+    <string name="lab_test_loopback_detail">The far end hears what they say, echoed back to them.</string>
+    <string name="lab_test_tone">Play a tone</string>
+    <string name="lab_test_tone_detail">The far end hears the tone, at the frequency and level set above.</string>
+    <string name="lab_test_tone_seconds">Tone length</string>
+    <string name="lab_test_tone_seconds_state">%1$d&#160;s</string>
+
+    <!-- Test call result -->
+    <string name="lab_test_result_title">Test call result</string>
+    <string name="lab_test_result_subtitle">The bridge\'s own record of the call it placed.</string>
+    <string name="lab_test_result_duration">Duration</string>
+    <string name="lab_test_result_codec">Codec</string>
+    <string name="lab_test_result_waiting">Reading the call record…</string>
+    <string name="lab_test_result_summary_pending">The bridge is still writing the summary.</string>
+    <string name="lab_test_result_summary_absent">The bridge has no summary for this call.</string>
+    <string name="lab_test_result_open">Open the call record</string>
+    <string name="lab_test_result_failed">The call record didn\'t load</string>
+    <string name="lab_test_outcome_answered">Answered</string>
+    <string name="lab_test_outcome_no_answer">No answer</string>
+    <string name="lab_test_outcome_busy">Busy</string>
+    <string name="lab_test_outcome_declined">Declined</string>
+    <string name="lab_test_outcome_disconnected">Disconnected</string>
+    <string name="lab_test_outcome_canceled">Canceled</string>
+    <string name="lab_test_outcome_failed">Failed</string>
+    <string name="lab_test_summary_ready">Summary ready</string>
+    <string name="lab_test_summary_pending">Summary pending</string>
+    <string name="lab_test_summary_failed">Summary failed</string>
 
     <!-- Codec trial -->
     <string name="lab_trial_title">Codec trial</string>

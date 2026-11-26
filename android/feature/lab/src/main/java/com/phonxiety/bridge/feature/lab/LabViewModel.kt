@@ -2,6 +2,7 @@ package com.phonxiety.bridge.feature.lab
 
 import android.content.Context
 import androidx.annotation.StringRes
+import androidx.annotation.VisibleForTesting
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.phonxiety.bridge.BridgeConfigLoader
@@ -12,11 +13,14 @@ import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.ApiResult
 import com.phonxiety.bridge.data.BridgeStateRepository
 import com.phonxiety.bridge.data.DaemonApi
+import com.phonxiety.bridge.data.LiveCallFront
 import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.BridgeState
+import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.LinkTestResult
 import com.phonxiety.bridge.model.ProbeCandidate
 import com.phonxiety.bridge.model.TestCallRequest
+import com.phonxiety.bridge.model.TestCallTone
 import com.phonxiety.bridge.net.LanPathProbe
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -25,6 +29,7 @@ import java.util.Locale
 import javax.inject.Inject
 import kotlin.math.roundToLong
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -48,6 +53,13 @@ class LabViewModel @Inject constructor(
     private val _state = MutableStateFlow(LabUiState())
     val state: StateFlow<LabUiState> = _state.asStateFlow()
 
+    /** The call whose record is already being read, so a repeated ended state does not start again. */
+    private var resultFetchedFor: String? = null
+
+    /** How long the record of a finished test call waits between refetches; tests shorten it. */
+    @VisibleForTesting
+    internal var resultRetryDelayMs: Long = RESULT_RETRY_MS
+
     init {
         viewModelScope.launch {
             _state.update { it.copy(link = it.link.copy(history = history.load())) }
@@ -68,7 +80,8 @@ class LabViewModel @Inject constructor(
                 is ApiOutcome.Ok -> _state.update {
                     it.copy(
                         loopbackSupported = outcome.value.voiceControls.loopback,
-                        toneSupported = outcome.value.voiceControls.tone
+                        toneSupported = outcome.value.voiceControls.tone,
+                        testCall = it.testCall.copy(probesSupported = outcome.value.voiceControls.testCallProbes)
                     )
                 }
 
@@ -81,6 +94,10 @@ class LabViewModel @Inject constructor(
         val phase = bridge.call?.phase?.name?.lowercase(Locale.US)
         val callId = bridge.call?.callId
         _state.update { it.copy(callPhase = phase, callId = callId) }
+        // The call this lab placed has ended: read its record until the daemon has the summary.
+        if (phase == PHASE_ENDED && callId != null && callId == _state.value.testCall.callId) {
+            loadTestCallResult(callId)
+        }
     }
 
     // -- link test ------------------------------------------------------
@@ -349,25 +366,118 @@ class LabViewModel @Inject constructor(
 
     fun dismissTestCall() = _state.update { it.copy(testCall = it.testCall.copy(confirming = false)) }
 
+    fun setTestCallLoopback(enabled: Boolean) = _state.update {
+        it.copy(testCall = it.testCall.copy(loopback = enabled))
+    }
+
+    fun setTestCallTone(enabled: Boolean) = _state.update {
+        it.copy(testCall = it.testCall.copy(tone = enabled))
+    }
+
+    /** The daemon accepts 1 to 10 s, and the call's own limit has to outlast the tone. */
+    fun setTestCallToneSeconds(seconds: Int) = _state.update {
+        it.copy(testCall = it.testCall.copy(toneSeconds = seconds.coerceIn(1, 10)))
+    }
+
     fun confirmTestCall() {
         val request = _state.value.testCall
         if (request.placing) return
-        _state.update { it.copy(testCall = request.copy(confirming = false, placing = true, error = null)) }
+        val payload = request.toRequest(_state.value.audio)
+        _state.update {
+            it.copy(
+                testCall = it.testCall.copy(confirming = false, placing = true, error = null, result = null)
+            )
+        }
+        // From this moment Telecom's in-call screen may cover the lab, and only this phone's own
+        // placement may pull it back over that screen.
+        LiveCallFront.expectPlacement()
         viewModelScope.launch {
-            val outcome = api.testCall(TestCallRequest(request.number, request.maxDurationSeconds))
-            when (outcome) {
-                is ApiOutcome.Ok -> _state.update {
-                    it.copy(
-                        testCall = it.testCall.copy(placing = false, callId = outcome.value.callId),
-                        message = UiText.Res(R.string.lab_test_placed_message)
-                    )
+            when (val outcome = api.testCall(payload)) {
+                is ApiOutcome.Ok -> {
+                    // This phone asked for this call: only then may the lab come back over Telecom's
+                    // in-call UI, and a second cover of the same call finds the token spent.
+                    LiveCallFront.remember(outcome.value.callId)
+                    _state.update {
+                        it.copy(
+                            testCall = it.testCall.copy(placing = false, callId = outcome.value.callId),
+                            message = UiText.Res(R.string.lab_test_placed_message)
+                        )
+                    }
                 }
 
-                is ApiOutcome.Failure -> _state.update {
-                    it.copy(testCall = it.testCall.copy(placing = false, error = outcome.failure()))
+                is ApiOutcome.Failure -> {
+                    LiveCallFront.cancelPlacement()
+                    _state.update {
+                        it.copy(testCall = it.testCall.copy(placing = false, error = outcome.failure()))
+                    }
                 }
             }
         }
+    }
+
+    /**
+     * The probes travel only when the daemon advertises them: an older daemon would read the extra
+     * keys as a validation error. The tone takes the frequency and level the lab's audio card
+     * shows, and the length chosen on the test-call card.
+     */
+    private fun TestCallUi.toRequest(audio: AudioUi): TestCallRequest {
+        val advertised = probesAvailable
+        return TestCallRequest(
+            destination = number,
+            maxDurationSeconds = maxDurationSeconds,
+            loopback = true.takeIf { advertised && loopback },
+            tone = if (advertised && tone) {
+                TestCallTone(hz = audio.toneHz, dbfs = audio.toneDbfs, seconds = toneSeconds.coerceIn(1, 10))
+            } else {
+                null
+            }
+        )
+    }
+
+    /**
+     * The phone reports the call ended before the daemon has finished the record, so the summary is
+     * read in a bounded number of attempts; [RESULT_ATTEMPTS] with the retry delay is the longest a
+     * person waits for it. An ended state is published repeatedly, hence [resultFetchedFor].
+     */
+    private fun loadTestCallResult(callId: String) {
+        if (resultFetchedFor == callId) return
+        resultFetchedFor = callId
+        _state.update { it.copy(testCall = it.testCall.copy(result = TestCallResultUi(callId = callId, waiting = true))) }
+        viewModelScope.launch {
+            var snapshot: CallSnapshot? = null
+            var failure: LabFailure? = null
+            var attempt = 0
+            while (true) {
+                attempt++
+                when (val outcome = api.call(callId)) {
+                    is ApiOutcome.Ok -> snapshot = outcome.value
+                    is ApiOutcome.Failure -> failure = outcome.failure()
+                }
+                if (snapshot?.resultStatus == RESULT_READY || attempt >= RESULT_ATTEMPTS) break
+                delay(resultRetryDelayMs)
+            }
+            val found = snapshot
+            val card = if (found == null) {
+                TestCallResultUi(callId = callId, waiting = false, error = failure)
+            } else {
+                TestCallResultUi(
+                    callId = callId,
+                    outcome = found.callOutcome,
+                    resultStatus = found.resultStatus,
+                    summary = found.summary,
+                    durationSeconds = found.durationSeconds(),
+                    codec = found.audioCodec,
+                    waiting = false
+                )
+            }
+            _state.update { it.copy(testCall = it.testCall.copy(result = card)) }
+        }
+    }
+
+    private fun CallSnapshot.durationSeconds(): Long? {
+        val connected = connectedAt ?: return null
+        val ended = endedAt ?: return null
+        return (ended - connected).roundToLong().coerceAtLeast(0L)
     }
 
     // -- codec trial ----------------------------------------------------
@@ -560,6 +670,12 @@ class LabViewModel @Inject constructor(
     private companion object {
         const val TONE_SECONDS = 5.0
         const val TRIAL_SECONDS = 3.0
+
+        /** Eight attempts is long enough for a summary and short enough to give up in view. */
+        const val RESULT_ATTEMPTS = 8
+        const val RESULT_RETRY_MS = 1_000L
+        const val RESULT_READY = "ready"
+        const val PHASE_ENDED = "ended"
     }
 }
 
