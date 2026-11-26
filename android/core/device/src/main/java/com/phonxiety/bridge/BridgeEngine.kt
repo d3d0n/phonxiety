@@ -141,6 +141,13 @@ class BridgeEngine(
 
         /** How often an idle link re-probes its candidates; the selector's hysteresis decides. */
         private const val SELECTION_INTERVAL_S = 900L
+
+        /**
+         * How often the link re-checks the call permissions its hello announced.
+         * Permission reads only: a change the daemon cannot see without a new
+         * handshake is picked up within this window while the link is up.
+         */
+        private const val CAPABILITY_WATCH_INTERVAL_S = 10L
         private val DESTINATION = Regex("^[+*#0-9]{1,32}$")
         private val LINK_TEST_MAGIC = "PXLT".encodeUtf8()
     }
@@ -162,6 +169,20 @@ class BridgeEngine(
     }
 
     private val stateStore = EngineStateStore()
+
+    /**
+     * What the last queued `hello` told the daemon.  Kept apart from the UI's
+     * [Capabilities], which [refreshCapabilities] also writes with the daemon's
+     * voice-control support.
+     */
+    private val capabilityWatch = CapabilityWatch()
+    private val capabilityRefresh = CapabilityRefresh(
+        watch = capabilityWatch,
+        admission = admission,
+        callOwned = { ownsCall() },
+        sample = { currentCapabilities() },
+        reconnect = { links.reconnect(it) }
+    )
 
     /** Everything the UI, tiles and widget observe. */
     val state: StateFlow<BridgeState> get() = stateStore.state
@@ -301,6 +322,12 @@ class BridgeEngine(
         scheduler.scheduleWithFixedDelay({ safe { links.tick() } }, 1, 1, TimeUnit.SECONDS)
         scheduler.scheduleWithFixedDelay({ safe { publishRoute() } }, 1, 1, TimeUnit.SECONDS)
         scheduler.scheduleWithFixedDelay({ safe { considerSwitch() } }, SELECTION_INTERVAL_S, SELECTION_INTERVAL_S, TimeUnit.SECONDS)
+        scheduler.scheduleWithFixedDelay(
+            { safe { refreshCapabilitiesOnChange() } },
+            CAPABILITY_WATCH_INTERVAL_S,
+            CAPABILITY_WATCH_INTERVAL_S,
+            TimeUnit.SECONDS
+        )
         scheduler.scheduleWithFixedDelay({ safe { emitPlayback() } }, 500, 500, TimeUnit.MILLISECONDS)
         scheduler.scheduleWithFixedDelay({ safe { emitAudioLevels() } }, AUDIO_LEVEL_INTERVAL_MS, AUDIO_LEVEL_INTERVAL_MS, TimeUnit.MILLISECONDS)
         scheduler.scheduleWithFixedDelay({ safe { expirePendingDial() } }, 5, 5, TimeUnit.SECONDS)
@@ -454,18 +481,22 @@ class BridgeEngine(
     }
 
     private fun publishRoute() {
+        // A frame refused by the hello gate must not be remembered as sent:
+        // the existing one-second tick retries it once the link can carry it.
+        if (!helloDelivered) return
         val route = links.route() ?: return
         val key = "${route.relay}|${route.rttMs}"
         if (key == lastRouteKey) return
-        lastRouteKey = key
-        stateStore.route(RouteSnapshot(route.relay, route.rttMs))
-        onLinkState(R.string.notification_link_connected)
-        send(
+        val sent = send(
             DeviceOutbound.LinkRoute(
                 path = if (route.relay) "relay" else "direct",
                 rttMs = route.rttMs
             )
         )
+        if (!sent) return
+        lastRouteKey = key
+        stateStore.route(RouteSnapshot(route.relay, route.rttMs))
+        onLinkState(R.string.notification_link_connected)
     }
 
     /**
@@ -507,9 +538,12 @@ class BridgeEngine(
                     is BridgeConfig.Iroh -> IrohSupport.shortEndpointId(config.ticket)
                 }
             )
-            engineScope.launch { refreshCapabilities() }
+            // Nothing else may reach this link before its hello: the daemon
+            // reads the first control frame as the handshake.
+            val hello = sendHello()
+            if (hello) engineScope.launch { refreshCapabilities() }
             applyWifiLock()
-            return sendHello()
+            return hello
         }
 
         override fun onLinkText(text: String) {
@@ -524,6 +558,7 @@ class BridgeEngine(
             onLinkState(R.string.notification_link_waiting)
             lastRouteKey = null
             helloDelivered = false
+            capabilityWatch.helloGone()
             applyWifiLock()
             stateStore.linkDown(LinkError(code = reason, message = linkMessage(reason), atEpochMs = System.currentTimeMillis()))
             failPendingApi("link_down", "the device link went down")
@@ -538,6 +573,7 @@ class BridgeEngine(
         "network_lost" -> "the network is gone"
         "connection_mode_changed" -> "the connection mode changed"
         "candidate_better" -> "a better path was measured"
+        "capabilities_changed" -> "the phone's call permissions changed"
         "closed", "closing" -> "the daemon closed the link"
         "protocol" -> "the daemon spoke an unknown protocol"
         "write_failed" -> "the link stopped accepting data"
@@ -587,42 +623,60 @@ class BridgeEngine(
 
     private fun sendHello(): Boolean {
         loadSettingsBeforeHello()
+        val capabilities = currentCapabilities()
         val busy = hasUnrelatedLiveCall()
-        val callControl = Permissions.granted(appContext, Permissions.CALL_PHONE) &&
-            Permissions.granted(appContext, Permissions.CONTROL_INCALL_EXPERIENCE)
-        val frameworkAudio = Permissions.granted(appContext, Permissions.CAPTURE_AUDIO_OUTPUT) &&
-            Permissions.granted(appContext, Permissions.MODIFY_PHONE_STATE) &&
-            Permissions.granted(appContext, Permissions.RECORD_AUDIO)
         val active: DeviceActiveCall? = synchronized(lock) {
             val current = owned
             if (current == null || current.finished) null else DeviceActiveCall(current.callId, current.state)
         }
-        val hello = DeviceOutbound.Hello(
+        val hello = helloFrame(
+            capabilities = capabilities,
             device = android.os.Build.DEVICE ?: "unknown",
             bootId = deviceBootId,
-            capabilities = DeviceCapabilities(
-                callControl = callControl,
-                frameworkAudio = frameworkAudio,
-                busy = busy,
-                linkTest = true,
-                adbTunnel = config is BridgeConfig.Iroh,
-                audioCodecs = listOf("pcm", "opus")
-            ),
+            busy = busy,
             activeCall = active,
             preferredCodec = preferredCodec,
-            maxBitrate = maxBitrate
+            maxBitrate = maxBitrate,
+            adbTunnel = config is BridgeConfig.Iroh
         )
-        val sent = send(hello)
+        // Through the supervisor's hello gate: the first control frame of the
+        // link, and the only one allowed before it is queued.
+        val sent = links.sendHello(DeviceProtocol.encode(hello))
         helloDelivered = sent
-        if (sent) applyWifiLock()
+        if (sent) {
+            capabilityWatch.helloSent(capabilities)
+            applyWifiLock()
+        }
         stateStore.capabilities(
             stateStore.state.value.capabilities.copy(
-                frameworkAudio = frameworkAudio,
-                callControl = callControl,
+                frameworkAudio = capabilities.frameworkAudio,
+                callControl = capabilities.callControl,
                 appApi = if (appToken != null) stateStore.state.value.capabilities.appApi else null
             )
         )
         return sent
+    }
+
+    /**
+     * The call permissions this hello must announce.  `checkSelfPermission`
+     * only: no I/O, cheap enough for the 10 s capability watch.
+     */
+    private fun currentCapabilities(): PhoneCapabilities = PhoneCapabilities(
+        callControl = Permissions.granted(appContext, Permissions.CALL_PHONE) &&
+            Permissions.granted(appContext, Permissions.CONTROL_INCALL_EXPERIENCE),
+        frameworkAudio = Permissions.granted(appContext, Permissions.CAPTURE_AUDIO_OUTPUT) &&
+            Permissions.granted(appContext, Permissions.MODIFY_PHONE_STATE) &&
+            Permissions.granted(appContext, Permissions.RECORD_AUDIO)
+    )
+
+    /**
+     * One capability sample while the link is up.  A difference from the last
+     * hello drops the link as `capabilities_changed`; the normal reconnect then
+     * sends a hello carrying what the phone can do now.
+     */
+    private fun refreshCapabilitiesOnChange() {
+        if (!running || !links.isUp()) return
+        capabilityRefresh.run()
     }
 
     private fun bootId(): String {
@@ -2458,3 +2512,126 @@ internal class CallAdmission {
     /** True while an action holds the door; the caller holds [lock] to reserve. */
     fun actionInFlightLocked(): Boolean = actionInFlight
 }
+
+/**
+ * What the phone can do inside a bridge call: exactly the two bits the daemon
+ * learns from `hello`.  Read from permissions, never from stored state.
+ */
+internal data class PhoneCapabilities(
+    val callControl: Boolean,
+    val frameworkAudio: Boolean
+)
+
+/**
+ * Remembers the capabilities the last queued `hello` announced.
+ *
+ * `callControl` and `frameworkAudio` reach the daemon only through `hello`, so
+ * a permission granted or revoked while the link is up stays invisible to it
+ * until the next handshake.  This watch compares permission samples against the
+ * last hello — never against the UI [Capabilities], which [BridgeEngine] also
+ * writes with the daemon's voice-control support — and only reports a change
+ * that two consecutive samples agree on.
+ */
+internal class CapabilityWatch {
+    private var announced: PhoneCapabilities? = null
+
+    /** The last sample that differed from [announced], waiting for the next one. */
+    private var candidate: PhoneCapabilities? = null
+
+    /** The transport accepted a hello carrying [capabilities]. */
+    @Synchronized
+    fun helloSent(capabilities: PhoneCapabilities) {
+        announced = capabilities
+        candidate = null
+    }
+
+    /** The link went down: the next hello announces whatever it finds then. */
+    @Synchronized
+    fun helloGone() {
+        announced = null
+        candidate = null
+    }
+
+    /**
+     * Records one permission sample and says whether the change is stable:
+     * true only when this sample and the one before it agree and both differ
+     * from the last hello.  A sample matching the last hello clears the
+     * candidate, so permissions alternating around the hello never admit a
+     * refresh.  False before the first hello.
+     */
+    @Synchronized
+    fun stableChange(current: PhoneCapabilities): Boolean {
+        if (announced == null || current == announced) {
+            candidate = null
+            return false
+        }
+        val previous = candidate
+        candidate = current
+        return previous == current
+    }
+}
+
+/**
+ * Turns a stable capability change into one link refresh.
+ *
+ * Two consecutive samples must agree and differ from the last hello before a
+ * refresh is admitted, so a permission flapping on and off never reconnects.
+ * The idle door is taken before the decision and held through the synchronous
+ * link-down publication, so a call reserved a moment earlier is never cut by a
+ * refresh decided on an older sample; the re-sample under the door re-checks
+ * the change has not reverted meanwhile.  A refused door defers: the candidate
+ * stays, and the next stable sample decides again.
+ */
+internal class CapabilityRefresh(
+    private val watch: CapabilityWatch,
+    private val admission: CallAdmission,
+    private val callOwned: () -> Boolean,
+    private val sample: () -> PhoneCapabilities,
+    private val reconnect: (reason: String) -> Boolean
+) {
+    /**
+     * One sample; true when the link was dropped so the next attempt sends a
+     * hello carrying what the phone can do now.
+     */
+    fun run(): Boolean {
+        if (!watch.stableChange(sample())) return false
+        val action = admission.tryBeginIdleLinkAction(callOwned) ?: return false
+        try {
+            if (!watch.stableChange(sample())) return false
+            return reconnect(CAPABILITIES_CHANGED)
+        } finally {
+            action.close()
+        }
+    }
+
+    companion object {
+        /** Link-down reason: only a fresh hello can tell the daemon otherwise. */
+        const val CAPABILITIES_CHANGED = "capabilities_changed"
+    }
+}
+
+/** The `hello` a link sends first: the phone's identity, call capabilities and preferences. */
+internal fun helloFrame(
+    capabilities: PhoneCapabilities,
+    device: String,
+    bootId: String,
+    busy: Boolean,
+    activeCall: DeviceActiveCall?,
+    preferredCodec: String,
+    maxBitrate: Int,
+    adbTunnel: Boolean
+): DeviceOutbound.Hello = DeviceOutbound.Hello(
+    device = device,
+    bootId = bootId,
+    capabilities = DeviceCapabilities(
+        callControl = capabilities.callControl,
+        frameworkAudio = capabilities.frameworkAudio,
+        busy = busy,
+        linkTest = true,
+        adbTunnel = adbTunnel,
+        audioCodecs = listOf("pcm", "opus")
+    ),
+    activeCall = activeCall,
+    preferredCodec = preferredCodec,
+    maxBitrate = maxBitrate
+)
