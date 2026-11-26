@@ -1,0 +1,26 @@
+Connections on the Pixel 6a, app 041d1ed, daemon 383f3df, 2026-11-26 (addresses redacted)
+
+Setup for the test:
+  computer: `tailscale switch` to the personal tailnet the phone is on; phone: Tailscale VPN on
+  `mise run phone:pair -- --serial <phone> --tailscale`  -> the phone gets an address pairing,
+      wss://[tailnet-ip]:18763/device, and no iroh ticket (iroh is not configured at all)
+  phone Settings -> Connection -> Transport: Tailscale only (pinned)
+
+`phonxiety status`:
+  phone     connected  bluejay via [tailnet-ip]
+  calling   ready  opus audio
+  path      tailscale
+
+`phonxiety link-test --seconds 5` over that link:
+  audio     250 of 250 opus frames (80 B) returned in 5.0 s
+  delay     median 13 ms, p95 134 ms, max 189 ms
+  control   median 15 ms, p95 218 ms, max 218 ms
+  verdict   good  the idle link carries call-rate audio
+
+Lab -> Path probe from the phone (07:05:50):
+  iroh       reachable  9 ms, the phone link arrives at the daemon's iroh endpoint
+  lan        reachable  tls+auth to wss://[lan-ip]:18763/device in 88 ms; the daemon's listener answers on its own LAN address
+  tailscale  reachable  9 ms
+
+Afterwards: Transport back to Automatic, re-paired over iroh, computer back on its usual tailnet,
+phone Tailscale VPN off.
