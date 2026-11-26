@@ -1,35 +1,62 @@
 package com.phonxiety.bridge.feature.onboarding
 
+import android.text.format.Formatter
+import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.paneTitle
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
+import com.phonxiety.bridge.designsystem.UiText
+import com.phonxiety.bridge.designsystem.asString
 import com.phonxiety.bridge.designsystem.component.EmptyState
 import com.phonxiety.bridge.designsystem.component.ErrorCard
 import com.phonxiety.bridge.designsystem.component.KeyValueRow
@@ -44,6 +71,8 @@ import com.phonxiety.bridge.designsystem.component.StatusTone
 import com.phonxiety.bridge.root.ApatchProvider
 import com.phonxiety.bridge.root.DetectedProvider
 import com.phonxiety.bridge.root.DoctorReason
+import com.phonxiety.bridge.root.IndeterminateReason
+import com.phonxiety.bridge.root.InstallOperation
 import com.phonxiety.bridge.root.KernelSuProvider
 import com.phonxiety.bridge.root.MagiskProvider
 import com.phonxiety.bridge.root.ModuleController
@@ -53,18 +82,26 @@ import com.phonxiety.bridge.root.RootId
 import com.phonxiety.bridge.root.RuntimePermission
 import com.phonxiety.bridge.root.VerifyCheck
 import com.phonxiety.bridge.root.VerifyOutcome
-import com.phonxiety.bridge.root.VerifyReport
 import com.phonxiety.bridge.root.WizardState
 
 /** What the wizard shows, plus the pairing rejection that belongs next to the scanner. */
 data class OnboardingUiState(
     val wizard: WizardState = WizardState.Checking,
+    /** The repository's rejection reason; the screen turns it into words and keeps it as evidence. */
     val pairingError: String? = null,
+    /**
+     * A stored pairing the repository can actually read. The paste sheet closes and clears only on
+     * this proof, never on the wizard merely leaving "Not paired": a resume probe passes through
+     * "Checking" while it re-reads the device, and the typed link has to survive that.
+     */
+    val pairingConfirmed: Boolean = false,
     /**
      * Providers that did not answer `su` but left files or a manager app behind. Reported so a
      * migration makes sense; this app never deletes them.
      */
-    val leftovers: List<DetectedProvider> = emptyList()
+    val leftovers: List<DetectedProvider> = emptyList(),
+    /** The metamodule download/install step while it runs. */
+    val installPhase: SetupInstallPhase? = null
 )
 
 /** Every callback the screen needs; the route wires them to the ViewModel and the app. */
@@ -84,113 +121,179 @@ data class OnboardingCallbacks(
 )
 
 /**
- * The one-button setup screen. It renders one [WizardState] and offers at most two actions; the
- * happy path is detect → install → reboot, and every deviation has its own card rather than a
- * generic spinner.
+ * The one-button setup screen. The answer comes first: the current state and its one action sit
+ * above the six-step plan, which is a one-line summary until it is opened. The action bar is pinned
+ * to the bottom, so no state ever pushes its own action below the fold.
+ *
+ * [pairingSheetVisible] is controlled by the host when the scanner needs to hand the person over to
+ * the paste field; when it is null the screen owns the sheet.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OnboardingScreen(
     state: OnboardingUiState,
     callbacks: OnboardingCallbacks,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    pairingSheetVisible: Boolean? = null,
+    onPairingSheetVisibleChange: (Boolean) -> Unit = {}
 ) {
-    var showPairing by rememberSaveable { mutableStateOf(false) }
+    var ownedSheet by rememberSaveable { mutableStateOf(false) }
     var pastedLink by rememberSaveable { mutableStateOf("") }
+    var stepsExpanded by rememberSaveable { mutableStateOf(false) }
+    val sheetVisible = pairingSheetVisible ?: ownedSheet
 
-    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
-        Column(
-            modifier = Modifier
-                .widthIn(max = 560.dp)
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            Column {
-                Text(text = "Set up phonxiety", style = MaterialTheme.typography.headlineMedium)
-                Text(
-                    text = "One button. You grant root once and accept the reboots your provider needs; everything else is derived.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            SetupStepList(steps = state.wizard.toSteps())
-            WizardCard(
-                state = state,
-                callbacks = callbacks,
-                onPasteLink = { showPairing = true }
-            )
-            ActionBar(
-                state = state,
-                callbacks = callbacks,
-                onScanQr = callbacks.onScanQr,
-                onPasteLink = { showPairing = true }
-            )
-            Text(
-                text = "Nothing leaves this phone: no analytics and no cloud. The daemon stays on your computer.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+    fun setSheetVisible(visible: Boolean) {
+        if (pairingSheetVisible == null) ownedSheet = visible
+        onPairingSheetVisibleChange(visible)
+    }
+
+    // Only a confirmed pairing closes and clears the sheet that produced it. Leaving "Not paired"
+    // is not proof: a resume probe shows "Checking" for a moment and then settles back, and the
+    // link someone pasted must still be there when they return from another app.
+    LaunchedEffect(state.pairingConfirmed) {
+        if (state.pairingConfirmed && sheetVisible) {
+            setSheetVisible(false)
+            pastedLink = ""
         }
     }
 
-    if (showPairing) {
-        ModalBottomSheet(onDismissRequest = { showPairing = false }) {
+    // The screen owns its background in tests and in the app: without this, text outside a Surface
+    // inherits the platform's black instead of the scheme's onSurface.
+    CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
+        Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
             Column(
                 modifier = Modifier
+                    .widthIn(max = 560.dp)
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp)
-                    .padding(bottom = 28.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text(text = "Pair with your computer", style = MaterialTheme.typography.titleLarge)
-                Text(
-                    text = "Scan the QR code the daemon prints, or paste the phonxiety://pair link it gives you.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 20.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    SetupHeader()
+                    // A rejection is inline next to the field at "Not paired". A deep link that
+                    // arrives while the wizard is at another step has no such place, so the note
+                    // stays here in the person's words instead of the feedback being dropped.
+                    state.pairingError?.takeIf { state.wizard !is WizardState.NeedsPairing }?.let { error ->
+                        PairingRejectionNote(error, callbacks.onDismissPairingError)
+                    }
+                    WizardCard(state = state, callbacks = callbacks)
+                    StepsSection(
+                        wizard = state.wizard,
+                        expanded = stepsExpanded,
+                        onToggle = { stepsExpanded = !stepsExpanded }
+                    )
+                    state.leftovers.forEach { leftover -> LeftoverRow(leftover) }
+                    Text(
+                        text = stringResource(R.string.onboarding_privacy_footer),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                ActionBar(
+                    state = state,
+                    callbacks = callbacks,
+                    onPasteLink = { setSheetVisible(true) }
                 )
-                Button(
-                    onClick = {
-                        showPairing = false
-                        callbacks.onScanQr()
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Scan QR code")
-                }
-                TextButton(
-                    onClick = {
-                        showPairing = false
-                        callbacks.onCameraScan()
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Use this phone's camera")
-                }
-                OutlinedTextField(
-                    value = pastedLink,
-                    onValueChange = { pastedLink = it },
-                    label = { Text("phonxiety://pair?…") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Button(
-                    onClick = {
-                        val link = pastedLink.trim()
-                        if (link.isNotEmpty()) {
-                            showPairing = false
-                            pastedLink = ""
-                            callbacks.onPairLink(link)
-                        }
-                    },
-                    enabled = pastedLink.isNotBlank(),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Pair with this link")
-                }
             }
+        }
+    }
+
+    if (sheetVisible) {
+        PairingSheet(
+            pastedLink = pastedLink,
+            onPastedLinkChange = { pastedLink = it },
+            pairingError = state.pairingError,
+            callbacks = callbacks,
+            onDismiss = { setSheetVisible(false) },
+            onScanQr = {
+                setSheetVisible(false)
+                callbacks.onScanQr()
+            }
+        )
+    }
+}
+
+/**
+ * The pairing rejection when no pairing surface is on screen. It carries the same localized words as
+ * the field's supporting text and stays until dismissed, so a deep link opened at another step is
+ * not silently dropped.
+ */
+@Composable
+private fun PairingRejectionNote(error: String, onDismiss: () -> Unit) {
+    ErrorCard(
+        title = stringResource(R.string.onboarding_pair_rejected_title),
+        message = pairingRejectionText(error).asString(),
+        dismissLabel = stringResource(R.string.onboarding_action_dismiss),
+        onDismiss = onDismiss
+    )
+}
+
+@Composable
+private fun SetupHeader() {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = stringResource(R.string.onboarding_title),
+            style = MaterialTheme.typography.headlineMedium,
+            modifier = Modifier.semantics { heading() }
+        )
+        Text(
+            text = stringResource(R.string.onboarding_intro),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun StepsSection(wizard: WizardState, expanded: Boolean, onToggle: () -> Unit) {
+    val steps = wizard.toSteps()
+    val completed = steps.count { it.state == SetupStepState.DONE }
+    val currentIndex = steps.indexOfFirst { it.state == SetupStepState.ACTIVE }
+        .takeIf { it >= 0 }
+        ?: steps.indexOfFirst { it.state == SetupStepState.FAILED }.takeIf { it >= 0 }
+        ?: completed.coerceAtMost(steps.lastIndex)
+    val summary = if (completed == steps.size) {
+        pluralStringResource(R.plurals.onboarding_steps_done, steps.size, steps.size)
+    } else {
+        stringResource(
+            R.string.onboarding_steps_summary,
+            (currentIndex + 1).coerceAtMost(steps.size),
+            steps.size,
+            steps[currentIndex.coerceIn(0, steps.lastIndex)].title
+        )
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        // The toggle drops under the summary when the fonts are large instead of squeezing it.
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            itemVerticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = summary,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            TextButton(onClick = onToggle) {
+                Text(
+                    stringResource(
+                        if (expanded) {
+                            R.string.onboarding_steps_hide
+                        } else {
+                            R.string.onboarding_steps_show
+                        }
+                    )
+                )
+            }
+        }
+        // The plan is history, not the answer: it opens on request and reads as states, not actions.
+        if (expanded) {
+            SetupStepList(steps = steps)
         }
     }
 }
@@ -199,56 +302,49 @@ fun OnboardingScreen(
 private fun ActionBar(
     state: OnboardingUiState,
     callbacks: OnboardingCallbacks,
-    onScanQr: () -> Unit,
     onPasteLink: () -> Unit
 ) {
     val wizard = state.wizard
+    if (wizard.isTransitional()) return
     val deniedManager = (wizard as? WizardState.RootDenied)?.provider?.let { provider ->
         provider.managerPackage ?: provider.id.managerPackage()
     }
-    val busy = wizard is WizardState.Checking ||
-        wizard is WizardState.Installing ||
-        wizard is WizardState.FirstLinkTest ||
-        (wizard is WizardState.Verify && wizard.report == null)
     val primaryLabel = when (wizard) {
-        WizardState.Checking -> "Checking…"
-
-        is WizardState.NoRoot -> "Recheck after rooting"
+        is WizardState.NoRoot -> stringResource(R.string.onboarding_action_check_again)
 
         is WizardState.RootDenied -> if (deniedManager != null) {
-            "Open ${wizard.provider?.id?.managerName() ?: "root manager"}"
+            stringResource(R.string.onboarding_action_open_manager)
         } else {
-            "Recheck root permission"
+            stringResource(R.string.onboarding_action_check_again)
         }
 
-        is WizardState.ProviderPrep -> "Install metamodule"
+        is WizardState.ProviderPrep -> stringResource(R.string.onboarding_action_install_metamodule)
 
-        is WizardState.ReadyToInstall -> "Install module"
+        is WizardState.ReadyToInstall -> if (wizard.update) {
+            stringResource(R.string.onboarding_action_update_module)
+        } else {
+            stringResource(R.string.onboarding_action_install_module)
+        }
 
-        is WizardState.Installing -> "Installing…"
+        is WizardState.InstallFailed -> stringResource(R.string.onboarding_action_retry)
 
-        is WizardState.InstallFailed -> "Retry"
+        is WizardState.RebootPending -> stringResource(R.string.onboarding_action_reboot_now)
 
-        is WizardState.RebootPending -> "Reboot now"
+        is WizardState.Verify -> stringResource(R.string.onboarding_action_verify_now)
 
-        is WizardState.Verify -> "Verify now"
+        is WizardState.NeedsRuntime -> stringResource(R.string.onboarding_action_grant_permissions)
 
-        is WizardState.NeedsRuntime -> "Grant permissions"
+        is WizardState.NeedsPairing -> stringResource(R.string.onboarding_action_scan)
 
-        is WizardState.NeedsPairing -> "Scan QR code"
+        WizardState.Ready -> stringResource(R.string.onboarding_action_open_dashboard)
 
-        is WizardState.FirstLinkTest -> "Testing the link…"
+        is WizardState.Doctor, is WizardState.Indeterminate, is WizardState.Conflict ->
+            stringResource(R.string.onboarding_action_check_again)
 
-        WizardState.Ready -> "Open dashboard"
-
-        is WizardState.Doctor -> "Recheck"
-
-        is WizardState.Indeterminate -> "Recheck"
-
-        is WizardState.Conflict -> "Recheck"
+        WizardState.Checking, is WizardState.Installing, is WizardState.FirstLinkTest -> ""
     }
-    val primary: () -> Unit = when (wizard) {
-        is WizardState.NeedsPairing -> onScanQr
+    val primary: (() -> Unit) = when (wizard) {
+        is WizardState.NeedsPairing -> callbacks.onScanQr
 
         is WizardState.RootDenied -> if (deniedManager != null) {
             { callbacks.onOpenManager(deniedManager) }
@@ -258,72 +354,201 @@ private fun ActionBar(
 
         WizardState.Ready -> callbacks.onFinished
 
-        WizardState.Checking, is WizardState.Installing, is WizardState.FirstLinkTest -> ({})
-
         else -> callbacks.onPrimary
     }
-    PrimaryActionButton(
-        label = primaryLabel,
-        onClick = primary,
-        enabled = !busy,
-        busy = busy
-    )
-    when (wizard) {
-        is WizardState.RebootPending -> SecondaryText("Later", callbacks.onRebootLater)
-        is WizardState.RootDenied -> SecondaryText("Recheck now", callbacks.onPrimary)
-        is WizardState.ProviderPrep -> SecondaryText("Install later", callbacks.onSecondary)
-        is WizardState.NeedsRuntime -> SecondaryText("Allow battery optimisation exemption", callbacks.onSecondary)
-        is WizardState.NeedsPairing -> SecondaryText("Paste the pairing link", onPasteLink)
-        is WizardState.Doctor -> SecondaryText("Open Doctor", callbacks.onOpenDoctor)
-        else -> Unit
+    val secondary: Pair<String, () -> Unit>? = when (wizard) {
+        is WizardState.RebootPending ->
+            stringResource(R.string.onboarding_action_later) to callbacks.onRebootLater
+
+        is WizardState.RootDenied ->
+            stringResource(R.string.onboarding_action_check_again) to callbacks.onPrimary
+
+        is WizardState.ProviderPrep ->
+            stringResource(R.string.onboarding_action_install_later) to callbacks.onSecondary
+
+        is WizardState.NeedsRuntime ->
+            stringResource(R.string.onboarding_action_allow_background) to callbacks.onSecondary
+
+        is WizardState.NeedsPairing ->
+            stringResource(R.string.onboarding_action_paste_link) to onPasteLink
+
+        is WizardState.Verify ->
+            if (wizard.report?.passed == false) {
+                stringResource(R.string.onboarding_action_open_doctor) to callbacks.onOpenDoctor
+            } else {
+                null
+            }
+
+        is WizardState.Doctor ->
+            stringResource(R.string.onboarding_action_open_doctor) to callbacks.onOpenDoctor
+
+        else -> null
+    }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        HorizontalDivider()
+        Surface(color = MaterialTheme.colorScheme.surface) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                PrimaryActionButton(label = primaryLabel, onClick = primary)
+                if (secondary != null) {
+                    TextButton(onClick = secondary.second) { Text(secondary.first) }
+                }
+            }
+        }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SecondaryText(label: String, onClick: () -> Unit) {
-    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-        TextButton(onClick = onClick) { Text(label) }
-    }
-}
-
-@Composable
-private fun WizardCard(
-    state: OnboardingUiState,
+private fun PairingSheet(
+    pastedLink: String,
+    onPastedLinkChange: (String) -> Unit,
+    pairingError: String?,
     callbacks: OnboardingCallbacks,
-    onPasteLink: () -> Unit
+    onDismiss: () -> Unit,
+    onScanQr: () -> Unit
 ) {
+    val title = stringResource(R.string.onboarding_pair_sheet_title)
+    var submitting by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(pairingError) {
+        if (pairingError != null) submitting = false
+    }
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp)
+                .semantics { paneTitle = title },
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.semantics { heading() }
+            )
+            Text(
+                text = stringResource(R.string.onboarding_pair_sheet_body),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            FilledTonalButton(
+                onClick = onScanQr,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(stringResource(R.string.onboarding_pair_scan))
+            }
+            TextButton(
+                onClick = {
+                    onDismiss()
+                    callbacks.onCameraScan()
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(stringResource(R.string.onboarding_pair_camera))
+            }
+            OutlinedTextField(
+                value = pastedLink,
+                onValueChange = { value ->
+                    onPastedLinkChange(value)
+                    submitting = false
+                    if (pairingError != null) callbacks.onDismissPairingError()
+                },
+                label = { Text(stringResource(R.string.onboarding_pair_field_label)) },
+                placeholder = { Text(stringResource(R.string.onboarding_pair_field_placeholder)) },
+                supportingText = {
+                    Text(
+                        text = if (pairingError != null) {
+                            pairingRejectionText(pairingError).asString()
+                        } else {
+                            stringResource(R.string.onboarding_pair_field_support)
+                        }
+                    )
+                },
+                isError = pairingError != null,
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                modifier = Modifier.fillMaxWidth()
+            )
+            PrimaryActionButton(
+                label = stringResource(R.string.onboarding_pair_commit),
+                onClick = {
+                    submitting = true
+                    callbacks.onPairLink(pastedLink.trim())
+                },
+                enabled = pastedLink.isNotBlank() && !submitting,
+                supportingText = if (submitting) {
+                    stringResource(R.string.onboarding_pair_checking)
+                } else {
+                    null
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun WizardCard(state: OnboardingUiState, callbacks: OnboardingCallbacks) {
     val wizard = state.wizard
     SectionCard(
         title = wizard.title(),
         subtitle = wizard.subtitle(),
-        status = { StatusPill(wizard.pillLabel(), wizard.pillTone(), pulse = wizard.isTransitional()) }
+        status = {
+            StatusPill(
+                label = wizard.pillLabel(),
+                tone = wizard.pillTone(),
+                pulse = wizard.isTransitional()
+            )
+        }
     ) {
         when (wizard) {
-            WizardState.Checking -> LoadingState("Reading /data/adb, su, package flags and permissions…")
+            WizardState.Checking ->
+                LoadingState(stringResource(R.string.onboarding_checking_body))
 
             is WizardState.NoRoot -> {
                 Text(
-                    text = "This phone has no root. The app still runs in diagnose-only mode; installing the module needs one of these managers.",
+                    text = stringResource(R.string.onboarding_no_root_body),
                     style = MaterialTheme.typography.bodyMedium
                 )
-                PROVIDER_GUIDES.forEach { (label, url) ->
-                    TextButton(onClick = { callbacks.onOpenUrl(url) }) { Text(label) }
+                PROVIDER_GUIDES.forEach { guide ->
+                    TextButton(onClick = { callbacks.onOpenUrl(guide.url) }) {
+                        Text(stringResource(guide.label))
+                    }
                 }
             }
 
             is WizardState.RootDenied -> {
                 val pending = listOfNotNull(wizard.provider) + wizard.coProviders
+                val grantLines = pending.map { provider ->
+                    stringResource(
+                        R.string.onboarding_grant_line,
+                        provider.id.managerName(),
+                        provider.id.grantInstruction()
+                    )
+                }
                 ErrorCard(
-                    title = "Root is not granted yet",
-                    message = if (pending.isEmpty()) {
-                        "Open the root manager's Superuser list, grant Phonxiety, then come back. The app probes again by itself."
+                    title = if (pending.isEmpty()) {
+                        stringResource(R.string.onboarding_grant_title_any)
                     } else {
-                        pending.joinToString("\n\n") { step -> "${step.id.managerName()}: ${step.id.grantInstruction()}" }
+                        stringResource(
+                            R.string.onboarding_grant_title,
+                            pending.first().id.managerName()
+                        )
+                    },
+                    message = if (pending.isEmpty()) {
+                        stringResource(R.string.onboarding_grant_any_manager)
+                    } else {
+                        grantLines.joinToString("\n\n")
                     },
                     output = wizard.output
                 )
                 Text(
-                    text = "The app probes again when it returns to the foreground; once su works it continues to the install step without another tap.",
+                    text = stringResource(R.string.onboarding_grant_resume_note),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -331,205 +556,400 @@ private fun WizardCard(
 
             is WizardState.ProviderPrep -> {
                 Text(
-                    text = "${wizard.provider.id.managerName()} mounts module system/ directories through a metamodule. Without one, an enabled module is silently not mounted and the privileged permissions never appear.",
+                    text = stringResource(
+                        R.string.onboarding_prep_body,
+                        wizard.provider.id.managerName()
+                    ),
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Text(
-                    text = "Install it here: the pinned meta-overlayfs 1.3.1 archive is downloaded, its SHA-256 checked, then installed on its own. The next boot activates the overlay; Phonxiety is installed after that boot.",
+                    text = stringResource(R.string.onboarding_prep_install, METAMODULE_VERSION),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                KeyValueRow(label = "Provider", value = "${wizard.provider.id.managerName()} ${wizard.provider.version}")
             }
 
             is WizardState.ReadyToInstall -> ReadyToInstallContent(wizard)
 
             is WizardState.Installing -> {
-                LoadingState("${wizard.provider.id.managerName()} is installing the module…")
-                Text(
-                    text = "The install journal is on disk, so a process death or a reboot resumes here instead of starting over.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            is WizardState.InstallFailed -> {
-                ErrorCard(
-                    title = "${wizard.operation.name.lowercase().replace('_', ' ')} failed",
-                    message = "The provider's own output is below. Retrying is safe: a module install is idempotent.",
-                    output = wizard.output(),
-                    actionLabel = "Retry",
-                    onAction = callbacks.onPrimary
-                )
-            }
-
-            is WizardState.RebootPending -> {
-                val metamodule = wizard.reason == RebootReason.METAMODULE_INSTALL
-                Text(
-                    text = if (metamodule) {
-                        "The metamodule activates on the next boot."
-                    } else {
-                        "One reboot, then everything else is automatic."
-                    },
-                    style = MaterialTheme.typography.titleMedium
-                )
-                Text(
-                    text = if (metamodule) {
-                        "Phonxiety is installed after the overlay is mounted, so this boot comes first. The wizard resumes here by itself and continues with the module install."
-                    } else {
-                        "The module's privileged allowlist and the priv-app APK only appear after a boot overlay. The wizard resumes here by itself when the phone comes back."
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                KeyValueRow(label = "Reason", value = wizard.reason.humanLabel())
-                if (wizard.failure != null) {
-                    ErrorCard(
-                        title = "The phone did not restart",
-                        message = "Restart it yourself (hold the power button, then Restart); setup continues after the boot.",
-                        output = wizard.failure
-                    )
-                }
-            }
-
-            is WizardState.Verify -> VerifyContent(wizard)
-
-            is WizardState.NeedsRuntime -> {
-                Text(
-                    text = "Each permission has one job. Denied ones stay visible on the dashboard instead of being hidden.",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                wizard.missing.forEach { permission -> PermissionRow(permission) }
-            }
-
-            is WizardState.NeedsPairing -> {
-                Text(
-                    text = "On your computer, run the pairing command and show the QR code. The link contains the daemon's endpoint, certificate and app token; nothing is typed by hand.",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                if (state.pairingError != null) {
-                    ErrorCard(
-                        title = "That pairing was rejected",
-                        message = state.pairingError,
-                        actionLabel = "Dismiss",
-                        onAction = callbacks.onDismissPairingError
-                    )
-                }
-                TextButton(onClick = onPasteLink) { Text("Paste the link instead") }
-            }
-
-            is WizardState.FirstLinkTest -> {
-                LoadingState("Probing the link for 5 s…")
-                wizard.detail?.let { detail ->
+                if (wizard.operation == InstallOperation.PREPARE_METAMODULE) {
+                    MetamoduleProgress(state.installPhase)
+                } else {
+                    LoadingState(stringResource(R.string.onboarding_installing_module))
                     Text(
-                        text = detail,
+                        text = stringResource(R.string.onboarding_installing_journal),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
 
+            is WizardState.InstallFailed -> {
+                ErrorCard(
+                    title = stringResource(installFailureTitle(wizard.operation)),
+                    message = stringResource(
+                        if (wizard.operation == InstallOperation.PREPARE_METAMODULE) {
+                            R.string.onboarding_failed_metamodule_message
+                        } else {
+                            R.string.onboarding_failed_module_message
+                        }
+                    ),
+                    output = wizard.output()
+                )
+            }
+
+            is WizardState.RebootPending -> RebootContent(wizard)
+
+            is WizardState.Verify -> VerifyContent(wizard)
+
+            is WizardState.NeedsRuntime -> {
+                Text(
+                    text = stringResource(R.string.onboarding_runtime_body),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                wizard.missing.forEach { permission -> PermissionRow(permission) }
+                Text(
+                    text = stringResource(R.string.onboarding_runtime_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            is WizardState.NeedsPairing -> {
+                Text(
+                    text = stringResource(R.string.onboarding_pair_body),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    text = stringResource(R.string.onboarding_pair_command),
+                    style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace)
+                )
+                Text(
+                    text = stringResource(R.string.onboarding_pair_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (state.pairingError != null) {
+                    ErrorCard(
+                        title = stringResource(R.string.onboarding_pair_rejected_title),
+                        message = pairingRejectionText(state.pairingError).asString(),
+                        output = state.pairingError,
+                        dismissLabel = stringResource(R.string.onboarding_action_dismiss),
+                        onDismiss = callbacks.onDismissPairingError
+                    )
+                }
+            }
+
+            is WizardState.FirstLinkTest -> {
+                LoadingState(stringResource(R.string.onboarding_link_test_body))
+                wizard.detail?.let { detail ->
+                    Text(
+                        text = detail,
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
             WizardState.Ready -> EmptyState(
-                title = "Everything is ready",
-                message = "The service is running and the dashboard shows the numbers behind the connection."
+                title = stringResource(R.string.onboarding_ready_title),
+                message = stringResource(R.string.onboarding_ready_body),
+                icon = Icons.Filled.Check
             )
 
             is WizardState.Doctor -> {
                 ErrorCard(
-                    title = wizard.reason.humanLabel(),
-                    message = "The wizard stopped instead of pretending everything is fine. Recheck after fixing, or open Doctor for the full self-check.",
-                    output = wizard.output(),
-                    actionLabel = "Open Doctor",
-                    onAction = callbacks.onOpenDoctor
+                    title = stringResource(doctorTitle(wizard.reason)),
+                    message = stringResource(doctorMessage(wizard.reason)),
+                    output = wizard.output()
                 )
             }
 
             is WizardState.Indeterminate -> {
                 ErrorCard(
-                    title = "Could not tell",
-                    message = wizard.message,
-                    output = wizard.output,
-                    actionLabel = "Recheck",
-                    onAction = callbacks.onPrimary
+                    title = stringResource(unknownTitle(wizard.reason)),
+                    message = stringResource(unknownMessage(wizard.reason)),
+                    output = listOfNotNull(wizard.detail, wizard.output).joinToString("\n")
+                        .ifEmpty { null }
                 )
             }
 
             is WizardState.Conflict -> {
                 ErrorCard(
-                    title = "More than one root provider",
-                    message = "Files of two root providers are present and neither answered su in a form this app can read, " +
-                        "so installing would be a guess. Present: " +
-                        wizard.providers.joinToString { "${it.id.managerName()} ${it.version}" } +
-                        ". Keep the one that answers su; leftovers of the other are reported below, not deleted.",
-                    actionLabel = "Recheck",
-                    onAction = callbacks.onPrimary
+                    title = stringResource(R.string.onboarding_conflict_title),
+                    message = stringResource(
+                        R.string.onboarding_conflict_message,
+                        wizard.providers.joinToString { it.providerLabel() }
+                    )
+                )
+                Text(
+                    text = stringResource(R.string.onboarding_conflict_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
-        state.leftovers.forEach { leftover ->
-            Text(
-                text = leftover.leftoverDescription(),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
     }
-}
-
-/** What an inactive provider left behind, in the card's words: files, then the manager app. */
-internal fun DetectedProvider.leftoverDescription(): String {
-    val parts = buildList {
-        addAll(artefacts)
-        add(if (managerInstalled) "${id.managerName()} app" else "${id.managerName()} app not found")
-    }
-    return "${id.managerName()} leftovers, inactive: ${parts.joinToString(", ")}"
 }
 
 @Composable
 private fun ReadyToInstallContent(state: WizardState.ReadyToInstall) {
     Text(
-        text = "Exactly this will happen:",
-        style = MaterialTheme.typography.titleSmall
+        text = stringResource(R.string.onboarding_changes_heading),
+        style = MaterialTheme.typography.titleSmall,
+        modifier = Modifier.semantics { heading() }
     )
-    KeyValueRow(label = "Module", value = "${ModuleController.MODULE_NAME} (${ModuleController.MODULE_ID})")
-    KeyValueRow(label = "Provider", value = "${state.provider.id.managerName()} ${state.provider.version}")
-    KeyValueRow(label = "Privileged grants", value = "5 permissions")
+    KeyValueRow(
+        label = stringResource(R.string.onboarding_row_module),
+        value = ModuleController.MODULE_NAME
+    )
+    KeyValueRow(
+        label = stringResource(R.string.onboarding_row_provider),
+        value = state.provider.providerLabel()
+    )
     PRIVILEGED_GRANTS.forEach { grant ->
-        KeyValueRow(label = grant.first, value = grant.second)
+        KeyValueRow(
+            label = stringResource(grant.label),
+            value = grant.permission,
+            mono = true,
+            valueMaxLines = 2
+        )
     }
     HorizontalDivider()
     Text(
-        text = "A reboot follows the install. Rollback is removal of the module: the provider restores the stock overlay on the next boot.",
+        text = stringResource(R.string.onboarding_install_footnote),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
 }
 
 @Composable
-private fun VerifyContent(state: WizardState.Verify) {
-    val report = state.report
-    if (report == null) {
-        LoadingState("Checking the module, the overlay and the privileged grants…")
-        return
+private fun MetamoduleProgress(phase: SetupInstallPhase?) {
+    val downloading = phase is SetupInstallPhase.Downloading
+    val installed = phase is SetupInstallPhase.Installing
+    val steps = listOf(
+        SetupStep(
+            title = stringResource(R.string.onboarding_downloading_metamodule),
+            state = when {
+                downloaded(phase) -> SetupStepState.DONE
+                downloading || phase == null -> SetupStepState.ACTIVE
+                else -> SetupStepState.DONE
+            }
+        ),
+        SetupStep(
+            title = stringResource(R.string.onboarding_installing_metamodule),
+            state = if (installed) SetupStepState.ACTIVE else SetupStepState.PENDING
+        )
+    )
+    SetupStepList(steps = steps)
+    if (phase is SetupInstallPhase.Downloading) {
+        val total = phase.total
+        if (total != null && total > 0) {
+            val fraction = (phase.bytes.toFloat() / total).coerceIn(0f, 1f)
+            val context = LocalContext.current
+            LinearProgressIndicator(
+                progress = { fraction },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics { progressBarRangeInfo = ProgressBarRangeInfo(fraction, 0f..1f) }
+            )
+            Text(
+                text = stringResource(
+                    R.string.onboarding_download_size,
+                    Formatter.formatFileSize(context, phase.bytes),
+                    Formatter.formatFileSize(context, total)
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            LinearProgressIndicator(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics { progressBarRangeInfo = ProgressBarRangeInfo.Indeterminate }
+            )
+        }
     }
-    report.checks.forEach { (check, outcome) ->
-        KeyValueRow(label = check.label(), value = outcome.label())
+    Text(
+        text = stringResource(R.string.onboarding_metamodule_checked),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+}
+
+private fun downloaded(phase: SetupInstallPhase?): Boolean = phase is SetupInstallPhase.Downloading && phase.bytes > 0 && phase.total != null &&
+    phase.bytes >= phase.total
+
+@Composable
+private fun RebootContent(state: WizardState.RebootPending) {
+    val metamodule = state.reason == RebootReason.METAMODULE_INSTALL
+    Text(
+        text = stringResource(
+            if (metamodule) {
+                R.string.onboarding_reboot_metamodule_title
+            } else {
+                R.string.onboarding_reboot_module_title
+            }
+        ),
+        style = MaterialTheme.typography.titleMedium
+    )
+    Text(
+        text = stringResource(
+            if (metamodule) {
+                R.string.onboarding_reboot_metamodule_body
+            } else {
+                R.string.onboarding_reboot_module_body
+            }
+        ),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    if (state.reason != RebootReason.MODULE_INSTALL &&
+        state.reason != RebootReason.METAMODULE_INSTALL
+    ) {
+        KeyValueRow(
+            label = stringResource(R.string.onboarding_reboot_why),
+            value = stringResource(state.reason.humanLabel())
+        )
     }
-    if (!report.passed) {
-        Text(
-            text = "Failing checks are named above; the Doctor walks the recovery for each one.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.error
+    if (state.failure != null) {
+        ErrorCard(
+            title = stringResource(R.string.onboarding_reboot_failed_title),
+            message = stringResource(R.string.onboarding_reboot_failed_message),
+            output = state.failure
         )
     }
 }
 
 @Composable
+private fun VerifyContent(state: WizardState.Verify) {
+    val report = state.report
+    if (report == null) {
+        LoadingState(stringResource(R.string.onboarding_verify_body))
+        return
+    }
+    var showPassing by rememberSaveable(state) { mutableStateOf(false) }
+    val ordered = report.checks.entries.sortedBy { outcomeRank(it.value) }
+    val failed = ordered.filter { it.value != VerifyOutcome.PASS }
+    val passing = ordered.filter { it.value == VerifyOutcome.PASS }
+    failed.forEach { (check, outcome) -> CheckRow(check = check, outcome = outcome) }
+    if (passing.isNotEmpty()) {
+        TextButton(onClick = { showPassing = !showPassing }) {
+            Text(
+                text = if (showPassing) {
+                    stringResource(R.string.onboarding_verify_hide_passing)
+                } else {
+                    pluralStringResource(
+                        R.plurals.onboarding_verify_show_passing,
+                        passing.size,
+                        passing.size
+                    )
+                }
+            )
+        }
+        if (showPassing) {
+            passing.forEach { (check, outcome) -> CheckRow(check = check, outcome = outcome) }
+        }
+    }
+    if (!report.passed) {
+        Text(
+            text = stringResource(R.string.onboarding_verify_failed_note),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/**
+ * One check with its result as a word. The word sits under the name, never beside it: at 200 % a
+ * trailing word squeezes the name into five characters and breaks it mid-word.
+ */
+@Composable
+private fun CheckRow(check: VerifyCheck, outcome: VerifyOutcome) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics(mergeDescendants = true) {},
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        val icon = when (outcome) {
+            VerifyOutcome.PASS -> Icons.Filled.Check
+            VerifyOutcome.FAIL -> Icons.Filled.Close
+            VerifyOutcome.UNKNOWN -> Icons.Filled.Info
+        }
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = when (outcome) {
+                VerifyOutcome.PASS -> MaterialTheme.colorScheme.onSurfaceVariant
+                VerifyOutcome.FAIL -> MaterialTheme.colorScheme.error
+                VerifyOutcome.UNKNOWN -> MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            modifier = Modifier
+                .padding(top = 2.dp)
+                .size(18.dp)
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = stringResource(check.label()),
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Text(
+                text = stringResource(outcome.label()),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (outcome == VerifyOutcome.FAIL) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
+            )
+        }
+    }
+}
+
+private fun outcomeRank(outcome: VerifyOutcome): Int = when (outcome) {
+    VerifyOutcome.FAIL -> 0
+    VerifyOutcome.UNKNOWN -> 1
+    VerifyOutcome.PASS -> 2
+}
+
+@Composable
 private fun PermissionRow(permission: RuntimePermission) {
     Column {
-        Text(text = permission.humanLabel(), style = MaterialTheme.typography.bodyLarge)
+        Text(text = stringResource(permission.humanLabel()), style = MaterialTheme.typography.bodyLarge)
         Text(
-            text = permission.reason(),
+            text = stringResource(permission.reason()),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun LeftoverRow(provider: DetectedProvider) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            text = stringResource(R.string.onboarding_leftovers_title, provider.id.managerName()),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        provider.artefacts.forEach { artefact ->
+            Text(
+                text = artefact,
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Text(
+            text = stringResource(
+                if (provider.managerInstalled) {
+                    R.string.onboarding_leftovers_app
+                } else {
+                    R.string.onboarding_leftovers_app_missing
+                },
+                provider.id.managerName()
+            ),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -540,19 +960,23 @@ private fun PermissionRow(permission: RuntimePermission) {
 // Wizard state → labels
 // ---------------------------------------------------------------------------------------------
 
+private data class ProviderGuide(val label: Int, val url: String)
+
 private val PROVIDER_GUIDES = listOf(
-    "Magisk install guide" to "https://topjohnwu.github.io/Magisk/install.html",
-    "KernelSU guide" to "https://kernelsu.org/guide/installation.html",
-    "KernelSU-Next" to "https://github.com/KernelSU-Next/KernelSU-Next",
-    "APatch install" to "https://apatch.dev/install.html"
+    ProviderGuide(R.string.onboarding_guide_magisk, "https://topjohnwu.github.io/Magisk/install.html"),
+    ProviderGuide(R.string.onboarding_guide_kernelsu, "https://kernelsu.org/guide/installation.html"),
+    ProviderGuide(R.string.onboarding_guide_kernelsu_next, "https://github.com/KernelSU-Next/KernelSU-Next"),
+    ProviderGuide(R.string.onboarding_guide_apatch, "https://apatch.dev/install.html")
 )
 
+private data class PrivilegedGrant(val label: Int, val permission: String)
+
 private val PRIVILEGED_GRANTS = listOf(
-    "Audio capture" to "CAPTURE_AUDIO_OUTPUT",
-    "Call state" to "MODIFY_PHONE_STATE",
-    "In-call control" to "CONTROL_INCALL_EXPERIENCE",
-    "Self updates" to "INSTALL_SELF_UPDATES",
-    "Reboot" to "REBOOT"
+    PrivilegedGrant(R.string.onboarding_grant_audio_capture, "CAPTURE_AUDIO_OUTPUT"),
+    PrivilegedGrant(R.string.onboarding_grant_call_state, "MODIFY_PHONE_STATE"),
+    PrivilegedGrant(R.string.onboarding_grant_in_call_control, "CONTROL_INCALL_EXPERIENCE"),
+    PrivilegedGrant(R.string.onboarding_grant_self_updates, "INSTALL_SELF_UPDATES"),
+    PrivilegedGrant(R.string.onboarding_grant_reboot, "REBOOT")
 )
 
 internal fun RootId.managerName(): String = when (this) {
@@ -571,88 +995,187 @@ internal fun RootId.managerPackage(): String = when (this) {
 }
 
 /** Where the grant lives per manager, in the manager's own vocabulary. */
-internal fun RootId.grantInstruction(): String = when (this) {
-    RootId.MAGISK ->
-        "Open Magisk → Superuser → + → Phonxiety and enable it. Magisk 31.1 grants root ahead of time; there is no prompt to answer."
+@Composable
+internal fun RootId.grantInstruction(): String = stringResource(
+    when (this) {
+        RootId.MAGISK -> R.string.onboarding_grant_magisk
+        RootId.KERNELSU -> R.string.onboarding_grant_kernelsu
+        RootId.KERNELSU_NEXT -> R.string.onboarding_grant_kernelsu_next
+        RootId.APATCH -> R.string.onboarding_grant_apatch
+    }
+)
 
-    RootId.KERNELSU ->
-        "Open KernelSU → Superuser → Phonxiety → the Superuser switch. If Phonxiety is missing from the list, force-close the manager and reopen it: it caches its app list."
+/**
+ * The provider's own version in the shape a person checks. The APatch binary answers with a build
+ * hash and a build code; the code is the version people know, so the hash is dropped here:
+ * `APatch 11282`, not `APatch e8e4651 (11282)`.
+ */
+private val VERSION_WITH_CODE = Regex("""(.*)\s+\((\d+)\)$""")
+private val BUILD_HASH = Regex("[0-9a-f]{7,40}")
 
-    RootId.KERNELSU_NEXT ->
-        "Open KernelSU-Next → Superuser → Phonxiety → the Superuser switch. If Phonxiety is missing from the list, force-close the manager and reopen it: it caches its app list."
-
-    RootId.APATCH ->
-        "Open APatch → Superuser → Phonxiety → allow. If Phonxiety is missing from the list, force-close the manager and reopen it: it caches its app list."
+internal fun DetectedProvider.versionLabel(): String? {
+    val raw = version.trim()
+    if (raw.isEmpty() || raw.equals("unknown", ignoreCase = true)) return null
+    val match = VERSION_WITH_CODE.matchEntire(raw)
+    val name = match?.groupValues?.get(1)?.trim() ?: raw
+    val code = match?.groupValues?.get(2)
+    val nameIsHash = BUILD_HASH.matches(name)
+    return when {
+        nameIsHash && code != null -> code
+        nameIsHash -> null
+        code != null -> "$name ($code)"
+        else -> name
+    }
 }
 
-internal fun WizardState.title(): String = when (this) {
-    WizardState.Checking -> "Checking this phone"
-    is WizardState.NoRoot -> "No root on this phone"
-    is WizardState.RootDenied -> "Root is not granted yet"
-    is WizardState.ProviderPrep -> "The provider needs a metamodule first"
-    is WizardState.ReadyToInstall -> "Ready to install"
-    is WizardState.Installing -> "Installing the module"
-    is WizardState.InstallFailed -> "The install did not finish"
-    is WizardState.RebootPending -> "Reboot pending"
-    is WizardState.Verify -> "Verifying after the boot"
-    is WizardState.NeedsRuntime -> "Runtime permissions"
-    is WizardState.NeedsPairing -> "Pair with your computer"
-    is WizardState.FirstLinkTest -> "First link test"
-    WizardState.Ready -> "Ready"
-    is WizardState.Doctor -> "Needs a repair"
-    is WizardState.Indeterminate -> "Could not tell"
-    is WizardState.Conflict -> "Two root providers found"
+/** `Magisk 31.1`, `APatch 11282`, or just `APatch` when the device printed no version. */
+internal fun DetectedProvider.providerLabel(): String {
+    val version = versionLabel()
+    return if (version == null) id.managerName() else "${id.managerName()} $version"
 }
 
-internal fun WizardState.subtitle(): String? = when (this) {
-    is WizardState.RootDenied -> provider?.let { "${it.id.managerName()} ${it.version}" }
-    is WizardState.ProviderPrep -> provider.id.managerName()
-    is WizardState.ReadyToInstall -> "${provider.id.managerName()} ${provider.version}"
-    is WizardState.RebootPending -> provider.id.managerName()
-    is WizardState.NeedsPairing -> provider?.id?.managerName()
-    is WizardState.Doctor -> provider?.id?.managerName()
-    else -> null
+@Composable
+internal fun WizardState.title(): String = stringResource(
+    when (this) {
+        WizardState.Checking -> R.string.onboarding_card_checking
+
+        is WizardState.NoRoot -> R.string.onboarding_card_no_root
+
+        is WizardState.RootDenied -> R.string.onboarding_card_root_denied
+
+        is WizardState.ProviderPrep -> R.string.onboarding_card_provider_prep
+
+        is WizardState.ReadyToInstall -> if (update) {
+            R.string.onboarding_card_ready_to_update
+        } else {
+            R.string.onboarding_card_ready_to_install
+        }
+
+        is WizardState.Installing -> R.string.onboarding_card_installing
+
+        is WizardState.InstallFailed -> R.string.onboarding_card_install_failed
+
+        is WizardState.RebootPending -> R.string.onboarding_card_reboot_pending
+
+        is WizardState.Verify -> R.string.onboarding_card_verify
+
+        is WizardState.NeedsRuntime -> R.string.onboarding_card_needs_runtime
+
+        is WizardState.NeedsPairing -> R.string.onboarding_card_needs_pairing
+
+        is WizardState.FirstLinkTest -> R.string.onboarding_card_first_link_test
+
+        WizardState.Ready -> R.string.onboarding_card_ready
+
+        is WizardState.Doctor -> R.string.onboarding_card_doctor
+
+        is WizardState.Indeterminate -> R.string.onboarding_card_indeterminate
+
+        is WizardState.Conflict -> R.string.onboarding_card_conflict
+    }
+)
+
+@Composable
+internal fun WizardState.subtitle(): String? {
+    val provider = when (this) {
+        is WizardState.RootDenied -> this.provider
+        is WizardState.ProviderPrep -> this.provider
+        is WizardState.ReadyToInstall -> this.provider
+        is WizardState.RebootPending -> this.provider
+        is WizardState.NeedsPairing -> this.provider
+        is WizardState.Doctor -> this.provider
+        else -> null
+    }
+    return provider?.providerLabel()
 }
 
+@Composable
 internal fun WizardState.pillLabel(): String = when (this) {
-    WizardState.Checking -> "Checking"
-    is WizardState.NoRoot -> "No root"
-    is WizardState.RootDenied -> "Denied"
-    is WizardState.ProviderPrep -> "Prep"
-    is WizardState.ReadyToInstall -> "Ready"
-    is WizardState.Installing -> "Installing"
-    is WizardState.InstallFailed -> "Failed"
-    is WizardState.RebootPending -> "Reboot"
-    is WizardState.Verify -> "Verify"
-    is WizardState.NeedsRuntime -> "${missing.size} missing"
-    is WizardState.NeedsPairing -> "Unpaired"
-    is WizardState.FirstLinkTest -> "Testing"
-    WizardState.Ready -> "Ready"
-    is WizardState.Doctor -> "Doctor"
-    is WizardState.Indeterminate -> "Unknown"
-    is WizardState.Conflict -> "Conflict"
+    WizardState.Checking -> stringResource(R.string.onboarding_pill_checking)
+
+    is WizardState.NoRoot -> stringResource(R.string.onboarding_pill_no_root)
+
+    is WizardState.RootDenied -> stringResource(R.string.onboarding_pill_root_denied)
+
+    is WizardState.ProviderPrep -> stringResource(R.string.onboarding_pill_provider_prep)
+
+    is WizardState.ReadyToInstall -> stringResource(R.string.onboarding_pill_ready)
+
+    is WizardState.Installing -> stringResource(R.string.onboarding_pill_installing)
+
+    is WizardState.InstallFailed -> stringResource(R.string.onboarding_pill_failed)
+
+    is WizardState.RebootPending -> stringResource(R.string.onboarding_pill_reboot_needed)
+
+    is WizardState.Verify -> {
+        val verified = report
+        when {
+            verified == null -> stringResource(R.string.onboarding_pill_checking)
+            verified.passed -> stringResource(R.string.onboarding_pill_verified)
+            else -> stringResource(R.string.onboarding_pill_failed)
+        }
+    }
+
+    is WizardState.NeedsRuntime -> pluralStringResource(
+        R.plurals.onboarding_pill_permissions,
+        missing.size,
+        missing.size
+    )
+
+    is WizardState.NeedsPairing -> stringResource(R.string.onboarding_pill_not_paired)
+
+    is WizardState.FirstLinkTest -> stringResource(R.string.onboarding_pill_testing)
+
+    WizardState.Ready -> stringResource(R.string.onboarding_pill_ready)
+
+    is WizardState.Doctor -> stringResource(R.string.onboarding_pill_doctor)
+
+    is WizardState.Indeterminate -> stringResource(R.string.onboarding_pill_unknown)
+
+    is WizardState.Conflict -> stringResource(R.string.onboarding_pill_conflict)
 }
 
 internal fun WizardState.pillTone(): StatusTone = when (this) {
-    WizardState.Ready, is WizardState.ReadyToInstall, is WizardState.FirstLinkTest -> StatusTone.POSITIVE
+    is WizardState.ReadyToInstall -> StatusTone.POSITIVE
+
+    is WizardState.Verify -> if (report?.passed == true) StatusTone.POSITIVE else StatusTone.WARNING
+
+    WizardState.Ready -> StatusTone.POSITIVE
 
     is WizardState.InstallFailed, is WizardState.NoRoot, is WizardState.RootDenied, is WizardState.Doctor,
     is WizardState.Conflict -> StatusTone.NEGATIVE
 
     is WizardState.Indeterminate -> StatusTone.NEUTRAL
 
-    is WizardState.NeedsRuntime, is WizardState.Verify -> StatusTone.WARNING
+    is WizardState.NeedsRuntime -> StatusTone.WARNING
 
     else -> StatusTone.ACCENT
 }
 
+/** A state where the screen is already showing what is happening and offers no action. */
 internal fun WizardState.isTransitional(): Boolean = this is WizardState.Checking ||
     this is WizardState.Installing ||
-    this is WizardState.FirstLinkTest
+    this is WizardState.FirstLinkTest ||
+    (this is WizardState.Verify && report == null)
 
+@Composable
 internal fun WizardState.toSteps(): List<SetupStep> {
-    val titles = listOf("Detect root", "Install module", "Reboot", "Permissions", "Pair with your computer", "Link test")
-    val detectDetail = (this as? WizardState.RebootPending)?.provider?.id?.managerName()
+    val needsMetamodule = this is WizardState.ProviderPrep ||
+        (this is WizardState.RebootPending && reason == RebootReason.METAMODULE_INSTALL) ||
+        (this is WizardState.Installing && operation == InstallOperation.PREPARE_METAMODULE) ||
+        (this is WizardState.InstallFailed && operation == InstallOperation.PREPARE_METAMODULE)
+    // Noun phrases only: a step title must not read like the button beside it.
+    val titles = listOf(
+        stringResource(R.string.onboarding_step_root),
+        stringResource(
+            if (needsMetamodule) R.string.onboarding_step_metamodule else R.string.onboarding_step_module
+        ),
+        stringResource(R.string.onboarding_step_reboot),
+        stringResource(R.string.onboarding_step_permissions),
+        stringResource(R.string.onboarding_step_pairing),
+        stringResource(R.string.onboarding_step_link_test)
+    )
+    val detectDetail = (this as? WizardState.RebootPending)?.provider?.providerLabel()
     val provider = when (this) {
         is WizardState.ReadyToInstall -> this.provider
         is WizardState.Installing -> this.provider
@@ -662,11 +1185,15 @@ internal fun WizardState.toSteps(): List<SetupStep> {
         is WizardState.RootDenied -> this.provider
         else -> null
     }
-    // Before the metamodule's boot Phonxiety itself is not installed yet: only the overlay is staged.
     val metamoduleReboot = (this as? WizardState.RebootPending)?.reason == RebootReason.METAMODULE_INSTALL
     val moduleDetail = when {
-        this is WizardState.InstallFailed -> "failed"
-        metamoduleReboot -> "metamodule staged"
+        this is WizardState.InstallFailed && operation == InstallOperation.PREPARE_METAMODULE ->
+            stringResource(R.string.onboarding_step_failed)
+
+        this is WizardState.InstallFailed -> stringResource(R.string.onboarding_step_failed)
+
+        metamoduleReboot -> stringResource(R.string.onboarding_step_overlay_staged)
+
         else -> null
     }
     val doneBefore: Int
@@ -704,7 +1231,7 @@ internal fun WizardState.toSteps(): List<SetupStep> {
         }
 
         is WizardState.RebootPending -> {
-            doneBefore = if (metamoduleReboot) 1 else 2
+            doneBefore = 2
             active = 2
             failed = null
         }
@@ -754,74 +1281,152 @@ internal fun WizardState.toSteps(): List<SetupStep> {
                 else -> SetupStepState.PENDING
             },
             detail = when {
-                index == 0 && failed != 0 -> detectDetail ?: provider?.let { "${it.id.managerName()} ${it.version}" }
+                index == 0 && this is WizardState.Conflict ->
+                    stringResource(R.string.onboarding_step_two_managers)
+
+                index == 0 && failed != 0 ->
+                    detectDetail ?: provider?.providerLabel()
+
                 index == 1 && moduleDetail != null -> moduleDetail
-                index == 1 && doneBefore > 1 -> "installed"
-                index == 4 && doneBefore > 4 -> "paired"
+
+                index == 1 && doneBefore > 1 && !needsMetamodule ->
+                    stringResource(R.string.onboarding_step_installed)
+
+                index == 4 && doneBefore > 4 -> stringResource(R.string.onboarding_step_paired)
+
                 else -> null
             }
         )
     }
 }
 
-private fun ProviderResult.output(): String = tail(lines = 20).joinToString("\n").ifEmpty { "the provider printed nothing" }
-
 private fun WizardState.InstallFailed.output(): String = result.output()
 
 private fun WizardState.Doctor.output(): String {
     val reportText = report?.let { report ->
-        report.checks.entries.joinToString("\n") { (check, outcome) -> "${check.label()}: ${outcome.label()}" }
+        report.checks.entries.joinToString("\n") { (check, outcome) ->
+            "${check.debugLabel()}: ${outcome.debugLabel()}"
+        }
     }
     return listOfNotNull(detail, reportText).joinToString("\n").ifEmpty { "no captured output" }
 }
 
-internal fun VerifyCheck.label(): String = when (this) {
-    VerifyCheck.MODULE_PRESENT -> "Module directory"
+private fun ProviderResult.output(): String = tail(lines = 20).joinToString("\n").ifEmpty { "the provider printed nothing" }
+
+@StringRes
+private fun installFailureTitle(operation: InstallOperation): Int = when (operation) {
+    InstallOperation.INSTALL -> R.string.onboarding_failed_install
+    InstallOperation.UPDATE -> R.string.onboarding_failed_update
+    InstallOperation.ROLLBACK -> R.string.onboarding_failed_rollback
+    InstallOperation.PREPARE_METAMODULE -> R.string.onboarding_failed_metamodule
+}
+
+/** The pairing repository answers with a code; the sheet and the card say what it means. */
+internal fun pairingRejectionText(code: String): UiText = when (code) {
+    "pair_link_invalid" -> UiText.Res(R.string.onboarding_pair_code_invalid)
+    "pair_url_missing" -> UiText.Res(R.string.onboarding_pair_code_url_missing)
+    "pair_iroh_missing", "pair_iroh_invalid" -> UiText.Res(R.string.onboarding_pair_code_iroh)
+    "pair_token_missing" -> UiText.Res(R.string.onboarding_pair_code_token_missing)
+    "pairing_store_failed" -> UiText.Res(R.string.onboarding_pair_code_store_failed)
+    else -> UiText.Res(R.string.onboarding_pair_code_unknown)
+}
+
+@StringRes
+private fun VerifyCheck.label(): Int = when (this) {
+    VerifyCheck.MODULE_PRESENT -> R.string.onboarding_check_module_present
+    VerifyCheck.MODULE_ENABLED -> R.string.onboarding_check_module_enabled
+    VerifyCheck.NO_DISABLE_FLAG -> R.string.onboarding_check_no_disable_flag
+    VerifyCheck.NO_REMOVE_FLAG -> R.string.onboarding_check_no_remove_flag
+    VerifyCheck.PACKAGE_IS_SYSTEM -> R.string.onboarding_check_package_is_system
+    VerifyCheck.APK_IN_PRIV_APP -> R.string.onboarding_check_apk_in_priv_app
+    VerifyCheck.PRIVILEGED_PERMISSIONS_GRANTED -> R.string.onboarding_check_privileged_grants
+}
+
+/** The details pane is evidence, not prose: its words stay stable in every locale. */
+private fun VerifyCheck.debugLabel(): String = when (this) {
+    VerifyCheck.MODULE_PRESENT -> "Module folder"
     VerifyCheck.MODULE_ENABLED -> "Module enabled"
     VerifyCheck.NO_DISABLE_FLAG -> "No disable flag"
     VerifyCheck.NO_REMOVE_FLAG -> "No remove flag"
-    VerifyCheck.PACKAGE_IS_SYSTEM -> "Package is a system app"
+    VerifyCheck.PACKAGE_IS_SYSTEM -> "System app"
     VerifyCheck.APK_IN_PRIV_APP -> "APK under /system/priv-app"
     VerifyCheck.PRIVILEGED_PERMISSIONS_GRANTED -> "Privileged grants"
 }
 
-private fun VerifyOutcome.label(): String = when (this) {
+@StringRes
+private fun VerifyOutcome.label(): Int = when (this) {
+    VerifyOutcome.PASS -> R.string.onboarding_check_passed
+    VerifyOutcome.FAIL -> R.string.onboarding_check_failed
+    VerifyOutcome.UNKNOWN -> R.string.onboarding_check_not_checked
+}
+
+private fun VerifyOutcome.debugLabel(): String = when (this) {
     VerifyOutcome.PASS -> "pass"
     VerifyOutcome.FAIL -> "fail"
     VerifyOutcome.UNKNOWN -> "unknown"
 }
 
-private fun RebootReason.humanLabel(): String = when (this) {
-    RebootReason.MODULE_INSTALL -> "module install"
-    RebootReason.METAMODULE_INSTALL -> "metamodule install"
-    RebootReason.MODULE_UPDATE -> "module update"
-    RebootReason.MODULE_ROLLBACK -> "module rollback"
-    RebootReason.USER_REQUEST -> "user request"
+@StringRes
+private fun RebootReason.humanLabel(): Int = when (this) {
+    RebootReason.MODULE_INSTALL -> R.string.onboarding_reason_module_install
+    RebootReason.METAMODULE_INSTALL -> R.string.onboarding_reason_metamodule_install
+    RebootReason.MODULE_UPDATE -> R.string.onboarding_reason_module_update
+    RebootReason.MODULE_ROLLBACK -> R.string.onboarding_reason_module_rollback
+    RebootReason.USER_REQUEST -> R.string.onboarding_reason_user_request
 }
 
-private fun DoctorReason.humanLabel(): String = when (this) {
-    DoctorReason.VERIFY_FAILED -> "A post-boot check failed"
-    DoctorReason.MODULE_DISABLED -> "The module is disabled"
-    DoctorReason.MODULE_PENDING_REMOVAL -> "The module is queued for removal"
-    DoctorReason.LINK_TEST_FAILED -> "The first link test failed"
+@StringRes
+private fun doctorTitle(reason: DoctorReason): Int = when (reason) {
+    DoctorReason.VERIFY_FAILED -> R.string.onboarding_doctor_verify_failed
+    DoctorReason.MODULE_DISABLED -> R.string.onboarding_doctor_module_disabled
+    DoctorReason.MODULE_PENDING_REMOVAL -> R.string.onboarding_doctor_module_pending_removal
+    DoctorReason.LINK_TEST_FAILED -> R.string.onboarding_doctor_link_test_failed
 }
 
-internal fun RuntimePermission.humanLabel(): String = when (this) {
-    RuntimePermission.RECORD_AUDIO -> "Microphone"
-    RuntimePermission.CALL_PHONE -> "Phone calls"
-    RuntimePermission.READ_PHONE_STATE -> "Phone state"
-    RuntimePermission.MODIFY_AUDIO_SETTINGS -> "Audio settings"
-    RuntimePermission.POST_NOTIFICATIONS -> "Notifications"
-    RuntimePermission.ACCESS_LOCAL_NETWORK -> "Local network"
+@StringRes
+private fun doctorMessage(reason: DoctorReason): Int = when (reason) {
+    DoctorReason.VERIFY_FAILED -> R.string.onboarding_doctor_verify_failed_message
+    DoctorReason.MODULE_DISABLED -> R.string.onboarding_doctor_module_disabled_message
+    DoctorReason.MODULE_PENDING_REMOVAL -> R.string.onboarding_doctor_module_pending_removal_message
+    DoctorReason.LINK_TEST_FAILED -> R.string.onboarding_doctor_link_test_failed_message
 }
 
-internal fun RuntimePermission.reason(): String = when (this) {
-    RuntimePermission.RECORD_AUDIO -> "The agent's voice and yours travel through this app."
-    RuntimePermission.CALL_PHONE -> "The agent places and ends the call."
-    RuntimePermission.READ_PHONE_STATE -> "To know when the call is ringing, active or gone."
-    RuntimePermission.MODIFY_AUDIO_SETTINGS -> "To route call audio between the handset and the link."
-    RuntimePermission.POST_NOTIFICATIONS -> "The foreground service must stay visible."
-    RuntimePermission.ACCESS_LOCAL_NETWORK -> "Without it, the same-Wi-Fi path times out silently and looks like a network fault."
+@StringRes
+private fun unknownTitle(reason: IndeterminateReason): Int = when (reason) {
+    IndeterminateReason.SHELL_TIMED_OUT -> R.string.onboarding_unknown_shell_title
+    IndeterminateReason.NO_PROVIDER -> R.string.onboarding_unknown_no_provider_title
+    IndeterminateReason.MODULE_UNREADABLE -> R.string.onboarding_unknown_module_title
+    IndeterminateReason.OVERLAY_PROBE_FAILED -> R.string.onboarding_unknown_overlay_title
+    IndeterminateReason.PROBE_FAILED -> R.string.onboarding_unknown_probe_title
+}
+
+@StringRes
+private fun unknownMessage(reason: IndeterminateReason): Int = when (reason) {
+    IndeterminateReason.SHELL_TIMED_OUT -> R.string.onboarding_unknown_shell_message
+    IndeterminateReason.NO_PROVIDER -> R.string.onboarding_unknown_no_provider_message
+    IndeterminateReason.MODULE_UNREADABLE -> R.string.onboarding_unknown_module_message
+    IndeterminateReason.OVERLAY_PROBE_FAILED -> R.string.onboarding_unknown_overlay_message
+    IndeterminateReason.PROBE_FAILED -> R.string.onboarding_unknown_probe_message
+}
+
+@StringRes
+internal fun RuntimePermission.humanLabel(): Int = when (this) {
+    RuntimePermission.RECORD_AUDIO -> R.string.onboarding_permission_microphone
+    RuntimePermission.CALL_PHONE -> R.string.onboarding_permission_calls
+    RuntimePermission.READ_PHONE_STATE -> R.string.onboarding_permission_phone_state
+    RuntimePermission.MODIFY_AUDIO_SETTINGS -> R.string.onboarding_permission_audio_settings
+    RuntimePermission.POST_NOTIFICATIONS -> R.string.onboarding_permission_notifications
+    RuntimePermission.ACCESS_LOCAL_NETWORK -> R.string.onboarding_permission_local_network
+}
+
+@StringRes
+internal fun RuntimePermission.reason(): Int = when (this) {
+    RuntimePermission.RECORD_AUDIO -> R.string.onboarding_permission_microphone_reason
+    RuntimePermission.CALL_PHONE -> R.string.onboarding_permission_calls_reason
+    RuntimePermission.READ_PHONE_STATE -> R.string.onboarding_permission_phone_state_reason
+    RuntimePermission.MODIFY_AUDIO_SETTINGS -> R.string.onboarding_permission_audio_settings_reason
+    RuntimePermission.POST_NOTIFICATIONS -> R.string.onboarding_permission_notifications_reason
+    RuntimePermission.ACCESS_LOCAL_NETWORK -> R.string.onboarding_permission_local_network_reason
 }
 
 // ---------------------------------------------------------------------------------------------

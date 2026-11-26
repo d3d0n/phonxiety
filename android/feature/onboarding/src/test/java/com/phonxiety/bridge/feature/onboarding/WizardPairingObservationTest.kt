@@ -399,7 +399,7 @@ class WizardPairingObservationTest {
         assertEquals(WizardState.NeedsPairing(MAGISK), coordinator.wizard.value)
         assertEquals(1, startRequests())
 
-        // A resume, and the scanner's Cancelled result, do not relaunch the automatic scan.
+        // A resume, and the scanner's Canceled result, do not relaunch the automatic scan.
         coordinator.dispatch(WizardEvent.RecheckRequested)
         coordinator.onPairingObserved()
         assertEquals(WizardState.NeedsPairing(MAGISK), coordinator.wizard.value)

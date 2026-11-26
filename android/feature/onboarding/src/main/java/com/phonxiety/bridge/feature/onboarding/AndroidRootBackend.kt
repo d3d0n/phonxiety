@@ -25,6 +25,9 @@ import com.phonxiety.bridge.root.VerifyChecker
 import com.phonxiety.bridge.root.VerifyReport
 import com.phonxiety.bridge.root.moduleZipBuilder
 import java.io.File
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * The production [RootBackend]: one `su`-backed shell, the detector and providers from `:core:root`,
@@ -41,8 +44,15 @@ class AndroidRootBackend(
             outputFile = File(context.cacheDir, "phonxiety_bridge.zip")
         ).build()
     },
-    private val metamoduleSource: MetamoduleSource = HttpMetamoduleSource(File(context.cacheDir, "metamodules"))
+    metamoduleSource: MetamoduleSource? = null
 ) : RootBackend {
+    private val _installPhase = MutableStateFlow<SetupInstallPhase?>(null)
+    override val installPhase: StateFlow<SetupInstallPhase?> = _installPhase.asStateFlow()
+
+    private val metamoduleSource: MetamoduleSource = metamoduleSource
+        ?: HttpMetamoduleSource(File(context.cacheDir, "metamodules")) { bytes, total ->
+            _installPhase.value = SetupInstallPhase.Downloading(bytes, total)
+        }
     private val detector = RootDetector(shell, environment)
     private val rebooter = PowerManagerRebooter(context)
     private val verifyChecker = VerifyChecker(AndroidAppFactsProbe(context))
@@ -57,16 +67,20 @@ class AndroidRootBackend(
 
     override suspend fun install(provider: DetectedProvider, operation: InstallOperation): ProviderResult {
         val rootProvider = provider(provider)
-        return when (operation) {
-            InstallOperation.INSTALL, InstallOperation.UPDATE -> rootProvider.installModule(zipBuilder())
+        try {
+            return when (operation) {
+                InstallOperation.INSTALL, InstallOperation.UPDATE -> rootProvider.installModule(zipBuilder())
 
-            // There is no provider-level "previous version": rolling back an install means removing
-            // the module and letting the next boot restore the stock overlay.
-            InstallOperation.ROLLBACK -> rootProvider.removeModule(ModuleController.MODULE_ID)
+                // There is no provider-level "previous version": rolling back an install means removing
+                // the module and letting the next boot restore the stock overlay.
+                InstallOperation.ROLLBACK -> rootProvider.removeModule(ModuleController.MODULE_ID)
 
-            // The metamodule mounts on the next boot; Phonxiety is installed after that boot, because
-            // ksud refuses a module install while a metamodule is still staged.
-            InstallOperation.PREPARE_METAMODULE -> prepareMetamodule(rootProvider)
+                // The metamodule mounts on the next boot; Phonxiety is installed after that boot, because
+                // ksud refuses a module install while a metamodule is still staged.
+                InstallOperation.PREPARE_METAMODULE -> prepareMetamodule(rootProvider)
+            }
+        } finally {
+            _installPhase.value = null
         }
     }
 
@@ -74,10 +88,13 @@ class AndroidRootBackend(
 
     /** Exactly one module: the pinned metamodule. The app zip is not built and not installed here. */
     private suspend fun prepareMetamodule(rootProvider: RootProvider): ProviderResult {
+        // Two named steps: the archive is fetched and verified first, then handed to the manager.
+        _installPhase.value = SetupInstallPhase.Downloading(0, null)
         val metamodule = when (val result = metamoduleSource.zip()) {
             is MetamoduleResult.Ready -> result.file
             is MetamoduleResult.Failed -> return ProviderResult.Failure(result.reason, exitCode = METAMODULE_EXIT)
         }
+        _installPhase.value = SetupInstallPhase.Installing
         val meta = rootProvider.installModule(metamodule)
         return if (meta.isSuccess) {
             ProviderResult.Success("meta-overlayfs: ${meta.outputText()}")

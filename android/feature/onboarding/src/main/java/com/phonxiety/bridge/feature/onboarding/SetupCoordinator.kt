@@ -5,7 +5,9 @@ import com.phonxiety.bridge.data.ApiResult
 import com.phonxiety.bridge.data.AppApi
 import com.phonxiety.bridge.data.PairResult
 import com.phonxiety.bridge.data.PairingRepository
+import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.LinkState
+import com.phonxiety.bridge.root.IndeterminateReason
 import com.phonxiety.bridge.root.ModuleController
 import com.phonxiety.bridge.root.ModuleState
 import com.phonxiety.bridge.root.Overlay
@@ -17,6 +19,7 @@ import com.phonxiety.bridge.root.SuStatus
 import com.phonxiety.bridge.root.WizardEffect
 import com.phonxiety.bridge.root.WizardEvent
 import com.phonxiety.bridge.root.WizardState
+import java.text.NumberFormat
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -33,6 +36,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
@@ -46,7 +50,7 @@ sealed interface SetupHostRequest {
 
     data class PairingRejected(val reason: String) : SetupHostRequest
 
-    data class Message(val text: String) : SetupHostRequest
+    data class Message(val text: UiText) : SetupHostRequest
 
     /** The wizard is Ready and the service has been started. */
     data object Finished : SetupHostRequest
@@ -149,7 +153,7 @@ class SetupCoordinator(
                     }
                 when (result) {
                     PairResult.Paired -> {
-                        host(SetupHostRequest.Message("Paired with the computer"))
+                        host(SetupHostRequest.Message(UiText.Res(R.string.onboarding_pair_paired_message)))
                         if (_wizard.value is WizardState.NeedsPairing) {
                             handle(WizardEvent.PairingCompleted)
                         }
@@ -190,7 +194,7 @@ class SetupCoordinator(
                 handle(WizardEvent.RebootNotConfirmed)
             }
         } finally {
-            // Cancelled before the window elapsed: the request is over and reports nothing, but the
+            // Canceled before the window elapsed: the request is over and reports nothing, but the
             // next tap must be able to start a fresh attempt.
             withContext(NonCancellable) {
                 mutex.withLock { if (attempt == rebootAttempt) rebootInFlight = false }
@@ -252,7 +256,7 @@ class SetupCoordinator(
 
             WizardEffect.StartPairing -> {
                 // One automatic scanner per visit to "Unpaired". A probe round trip, a resume or a
-                // recomposition must not reopen it (and reopening after a Cancelled scan would be
+                // recomposition must not reopen it (and reopening after a Canceled scan would be
                 // endless); the explicit Scan button bypasses this and always works. A request that
                 // arrives after the wizard advanced is dropped instead of covering the next step.
                 if (_wizard.value is WizardState.NeedsPairing && !autoPairingLaunched) {
@@ -272,7 +276,11 @@ class SetupCoordinator(
             is WizardEffect.Reboot -> {
                 val provider = detection?.provider
                 if (provider == null) {
-                    host(SetupHostRequest.Message("no root provider was found; reboot from the power menu"))
+                    host(
+                        SetupHostRequest.Message(
+                            UiText.Res(R.string.onboarding_reboot_no_manager_message)
+                        )
+                    )
                 } else {
                     val result = runCatching { backend.reboot(provider, effect.reason) }
                         .getOrElse { ProviderResult.Failure(it.message ?: "the reboot request threw", 1) }
@@ -288,7 +296,8 @@ class SetupCoordinator(
             gatherSnapshot()
         } catch (error: Throwable) {
             _wizard.value = WizardState.Indeterminate(
-                message = error.message ?: "the device could not be read",
+                reason = IndeterminateReason.PROBE_FAILED,
+                detail = error.message,
                 output = error.stackTraceToString().lineSequence().take(20).joinToString("\n")
             )
             return
@@ -394,18 +403,28 @@ class SetupCoordinator(
         handle(event)
     }
 
+    /**
+     * The measurement, in the units a person reads: a median and a loss percentage. The server
+     * reports the loss as a fraction, so it is formatted, not suffixed: 0.2 reads "20 %". A missing
+     * figure stays "—" instead of a fabricated zero, and the units are joined by a no-break space.
+     */
     private fun describeLinkTest(record: JsonObject?): String {
         if (record == null) return "the daemon returned no link-test record"
-        val verdict = record["verdict"]?.jsonPrimitive?.contentOrNull ?: "unknown"
-        val p50 = record["p50"]?.jsonPrimitive?.contentOrNull ?: "—"
-        val loss = record["loss"]?.jsonPrimitive?.contentOrNull ?: "—"
-        return "verdict $verdict · p50 $p50 ms · loss $loss"
+        val p50 = record["p50"]?.jsonPrimitive?.contentOrNull ?: MISSING
+        val loss = record["loss"]?.jsonPrimitive?.doubleOrNull?.let(::formatLoss) ?: MISSING
+        return "$p50\u00A0ms median · $loss loss"
     }
+
+    /** [fraction] is `1 - echoed / sent`, as the daemon reports it. */
+    private fun formatLoss(fraction: Double): String = NumberFormat.getPercentInstance().format(fraction)
 
     private companion object {
         const val LINK_READY_TIMEOUT_MS = 30_000L
         const val REBOOT_SURVIVAL_WINDOW_MS = ModuleController.REBOOT_SURVIVAL_WINDOW_SECONDS * 1000L
         const val LINK_TEST_SECONDS = 5
         const val LINK_TEST_TIMEOUT_MS = 25_000L
+
+        /** A figure the device did not report: never a fabricated zero. */
+        const val MISSING = "\u2014"
     }
 }
