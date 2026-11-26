@@ -39,8 +39,4 @@
     <string name="notification_public_bridge_text">Связь с устройством работает</string>
     <string name="notification_public_call_text">Идёт вызов</string>
     <string name="notification_public_setup_text">Нужно завершить настройку</string>
-
-    <!-- Обратный вызов состояния связи в движке по-прежнему называет эти две строки. -->
-    <string name="notification_link_waiting">ожидание хоста</string>
-    <string name="notification_link_connected">подключено к хосту</string>
 </resources>

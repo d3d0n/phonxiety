@@ -39,8 +39,4 @@
     <string name="notification_public_bridge_text">Device link is running</string>
     <string name="notification_public_call_text">Call in progress</string>
     <string name="notification_public_setup_text">Setup needs finishing</string>
-
-    <!-- The engine's link-state callback still names these two; the card follows the state. -->
-    <string name="notification_link_waiting">waiting for host</string>
-    <string name="notification_link_connected">connected to host</string>
 </resources>

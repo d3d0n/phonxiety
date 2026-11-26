@@ -104,13 +104,12 @@ import okio.ByteString.Companion.encodeUtf8
  *
  * The link is a TLS WebSocket to the paired daemon or an iroh stream; see
  * [LinkSupervisor] and [DeviceLink].  The engine keeps the protocol and call
- * control, the supervisor keeps the link lifecycle.  [onLinkState] receives a
- * string resource id for the foreground-service notification.
+ * control, the supervisor keeps the link lifecycle.  The foreground-service
+ * notification follows [state].
  */
 class BridgeEngine(
     context: Context,
-    private val config: BridgeConfig,
-    private val onLinkState: (Int) -> Unit
+    private val config: BridgeConfig
 ) : AppGateway {
     companion object {
         private const val TAG = "PhonxietyBridge"
@@ -295,7 +294,6 @@ class BridgeEngine(
         }
         stateStore.linkConnecting(linkKind)
         runCatching { wakeLock?.acquire() }
-        onLinkState(R.string.notification_link_waiting)
         telemetryJob = engineScope.launch {
             while (isActive && running) {
                 runCatching { sampleDeviceState() }.getOrNull()?.let { stateStore.device(it) }
@@ -496,7 +494,6 @@ class BridgeEngine(
         if (!sent) return
         lastRouteKey = key
         stateStore.route(RouteSnapshot(route.relay, route.rttMs))
-        onLinkState(R.string.notification_link_connected)
     }
 
     /**
@@ -525,7 +522,6 @@ class BridgeEngine(
      */
     private inner class LinkCallbacks : LinkSupervisor.Callbacks {
         override fun onLinkOpened(): Boolean {
-            onLinkState(R.string.notification_link_connected)
             val chosen = links.selectedCandidate()
             if (chosen != null) linkKind = chosen.kind
             stateStore.linkUp(
@@ -555,7 +551,6 @@ class BridgeEngine(
         }
 
         override fun onLinkDown(reason: String) {
-            onLinkState(R.string.notification_link_waiting)
             lastRouteKey = null
             helloDelivered = false
             capabilityWatch.helloGone()

@@ -100,9 +100,8 @@ class BridgeService : Service() {
         }
 
         BridgeRuntime.rememberPairing(config.kind)
-        // The card follows the state, which carries the path, the latency and the call; the
-        // engine's per-link callback only names a string and would lose two of the three.
-        val created = BridgeEngine(applicationContext, config) { }
+        // The card follows the state, which carries the path, the latency and the call.
+        val created = BridgeEngine(applicationContext, config)
         engine = created
         BridgeRuntime.attach(created)
         card = slot.follow(created.state.map(BridgeNotice::of), scope) { notice ->
