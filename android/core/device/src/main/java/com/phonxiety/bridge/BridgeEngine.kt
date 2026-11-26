@@ -612,7 +612,7 @@ class BridgeEngine(
 
     private fun onBinary(bytes: ByteString) {
         if (bytes.size < 16 || bytes.size > MAX_BINARY_BYTES) return
-        val audio = synchronized(lock) { owned?.audio }
+        val audio = synchronized(lock) { owned?.attached?.audio }
         if (audio != null) {
             audio.offerFrame(bytes)
         } else if (bytes.startsWith(LINK_TEST_MAGIC)) {
@@ -712,7 +712,7 @@ class BridgeEngine(
     private fun emitPlayback() {
         val state: Triple<PhoneAudio, String, Long> = synchronized(lock) {
             val current = owned
-            val audio = current?.audio
+            val audio = current?.attached?.audio
             if (current == null || audio == null) return
             Triple(audio, current.callId, current.epoch)
         }
@@ -729,36 +729,44 @@ class BridgeEngine(
     }
 
     private fun emitAudioLevels() {
-        val target: Pair<PhoneAudio, String> = synchronized(lock) {
-            val current = owned
-            if (current == null || current.finished) return
-            val audio = current.audio ?: return
-            audio to current.callId
+        val target: AudioLevelTarget = synchronized(lock) {
+            val current = owned ?: return
+            val attached = current.audioToPublish() ?: return
+            AudioLevelTarget(attached, current.callId)
         }
-        val levels = target.first.levels()
+        // Both calls below can block behind the playback write and the send, so
+        // the stream may be torn down by the time they return.  The store
+        // accepts numbers only from the stream it still considers live, so this
+        // publish can never land after that teardown's reset.
+        val levels = target.attached.audio.levels()
         send(
             DeviceOutbound.AudioLevels(
-                callId = target.second,
+                callId = target.callId,
                 rxDbfs = levels.rxDbfs,
                 txDbfs = levels.txDbfs,
                 queued = levels.queuedSamples / 960
             )
         )
-        stateStore.audioLevels(levels.rxDbfs, levels.txDbfs)
-        val diagnostics = target.first.diagnostics()
-        // The phone's own live screen reads the codec and the bitrate from this state. Keep them
-        // in step with the stream, so a start that only re-attached an existing epoch cannot leave
-        // the meter blank for the rest of the call.
-        val published = stateStore.state.value.audio
-        if (published.codec != diagnostics.codec || published.bitrate != diagnostics.bitrate) {
-            stateStore.audio(diagnostics.codec, diagnostics.bitrate)
-        }
-        stateStore.audioFrames(
-            framesOut = diagnostics.capturedFrames,
-            framesIn = diagnostics.hostFrames,
-            drops = diagnostics.overflowSamples
+        val diagnostics = target.attached.audio.diagnostics()
+        stateStore.audioStats(
+            target.attached.stream,
+            AudioStats(
+                codec = diagnostics.codec,
+                bitrate = diagnostics.bitrate,
+                rxDbfs = levels.rxDbfs,
+                txDbfs = levels.txDbfs,
+                framesOut = diagnostics.capturedFrames,
+                framesIn = diagnostics.hostFrames,
+                drops = diagnostics.overflowSamples
+            )
         )
     }
+
+    /** One 100 ms publish, captured under [lock] together with the stream that owns it. */
+    private class AudioLevelTarget(
+        val attached: AttachedAudio,
+        val callId: String
+    )
 
     // ------------------------------------------------------------------
     // Commands
@@ -829,7 +837,7 @@ class BridgeEngine(
             val current = owned
             if (current == null || current.finished) throw CommandException("not_owned")
             if (callId != null && current.callId != callId) throw CommandException("not_owned")
-            val active = current.audio ?: throw CommandException("audio_not_started")
+            val active = current.attached?.audio ?: throw CommandException("audio_not_started")
             active to current.callId
         }
         val applied = audio.setLoopback(enabled)
@@ -847,7 +855,7 @@ class BridgeEngine(
             val current = owned
             if (current == null || current.finished) throw CommandException("not_owned")
             if (command.callId != null && current.callId != command.callId) throw CommandException("not_owned")
-            val active = current.audio ?: throw CommandException("audio_not_started")
+            val active = current.attached?.audio ?: throw CommandException("audio_not_started")
             active to current.callId
         }
         if (command.hz !in 100..4_000) throw CommandException("hz_invalid")
@@ -869,7 +877,7 @@ class BridgeEngine(
             val current = owned
             if (current == null || current.finished) throw CommandException("not_owned")
             if (command.callId != null && current.callId != command.callId) throw CommandException("not_owned")
-            val active = current.audio ?: throw CommandException("audio_not_started")
+            val active = current.attached?.audio ?: throw CommandException("audio_not_started")
             active to current.callId
         }
         audio.stopTone()
@@ -893,7 +901,7 @@ class BridgeEngine(
                 callId = current.callId
                 callState = current.state
                 epoch = current.epoch
-                audioState = current.audio
+                audioState = current.attached?.audio
             }
         }
         val diagnostics = DiagnosticsSnapshot(
@@ -1074,6 +1082,7 @@ class BridgeEngine(
     private fun handleHangup(id: String, command: DeviceCommand.Hangup) {
         val callId = command.callId.ifEmpty { throw CommandException("call_id_required") }
         var audio: PhoneAudio? = null
+        var stream: AudioStream? = null
         var call: Call? = null
         var toneOwner: OwnedCall? = null
         var terminalState: String? = null
@@ -1111,8 +1120,10 @@ class BridgeEngine(
                 }
                 current.cancelled = true
                 current.generation.set(Long.MAX_VALUE)
-                audio = current.audio
-                current.audio = null
+                current.detachAudio()?.let {
+                    audio = it.audio
+                    stream = it.stream
+                }
                 current.epoch = -1
                 call = current.call
                 pendingOnly = call == null
@@ -1142,6 +1153,10 @@ class BridgeEngine(
         }
         toneOwner?.let { cancelToneFor(it) }
         closeAudioAsync(audio)
+        // The hang-up clears the stream's numbers itself.  Telecom's terminal
+        // callback may never arrive (or this hang-up may reach a call Telecom
+        // already dropped), and the last stream's drops must not outlive it.
+        stream?.let { stateStore.audioReset(it) }
         call?.let { telecomCall ->
             try {
                 telecomCall.disconnect()
@@ -1197,7 +1212,7 @@ class BridgeEngine(
             else -> throw CommandException("codec_unsupported")
         }
         var target: OwnedCall? = null
-        var previousAudio: PhoneAudio? = null
+        var previous: AttachedAudio? = null
 
         synchronized(lock) {
             val current = owned
@@ -1205,29 +1220,32 @@ class BridgeEngine(
             if (!links.isUp()) throw CommandException("link_down")
             if (current.call == null || current.telecomState != Call.STATE_ACTIVE) throw CommandException("not_active")
             if (epoch < current.lastEpoch) throw CommandException("stale_epoch")
-            if (current.audio != null && current.epoch == epoch) {
+            val existing = current.attached
+            if (existing != null && current.epoch == epoch) {
                 replyOk(
                     id,
                     buildJsonObject {
                         put("call_id", callId)
                         put("epoch", epoch)
                         put("state", "started")
-                        put("codec", current.audio!!.codec)
+                        put("codec", existing.audio.codec)
                     }
                 )
                 return
             }
-            if (current.audio != null) {
-                previousAudio = current.audio
-                current.audio = null
+            if (existing != null) {
+                previous = existing
+                current.attached = null
                 current.epoch = -1
             }
             target = current
         }
-        // A new epoch supersedes the old session.  Close it before the new
-        // stream starts so leftover RX frames and queued TX audio from the
-        // previous epoch cannot overlap the new one.
-        previousAudio?.close()
+        // A new epoch supersedes the old session.  Close it and clear its
+        // numbers before the new stream starts so leftover RX frames and queued
+        // TX audio from the previous epoch cannot overlap the new one, and a
+        // start that fails cannot leave the dead epoch's stats on the dashboard.
+        previous?.audio?.close()
+        previous?.let { stateStore.audioReset(it.stream) }
 
         val current = target ?: throw CommandException("not_owned")
         val audio = PhoneAudio(
@@ -1249,22 +1267,27 @@ class BridgeEngine(
             throw CommandException("audio_start_failed")
         }
 
-        var attached = false
+        var started: AttachedAudio? = null
         synchronized(lock) {
             if (running && links.isUp() && owned === current && !current.finished &&
-                current.telecomState == Call.STATE_ACTIVE && current.audio == null
+                current.telecomState == Call.STATE_ACTIVE && current.attached == null
             ) {
-                current.audio = audio
+                val session = AttachedAudio(audio, stateStore.audioStreamStart())
+                current.attached = session
                 current.epoch = epoch
                 current.lastEpoch = epoch
-                attached = true
+                started = session
             }
         }
-        if (!attached) {
+        val live = started
+        if (live == null) {
             audio.close()
             throw CommandException("not_active")
         }
-        stateStore.audio(audio.codec, opusBitrate)
+        // Codec first, but only for the stream that just attached: a teardown
+        // that beat this line has already reset the block and must not see the
+        // codec reappear.
+        stateStore.audio(live.stream, live.audio.codec, opusBitrate)
         replyOk(
             id,
             buildJsonObject {
@@ -1284,7 +1307,7 @@ class BridgeEngine(
             val current = owned
             if (current == null || current.callId != callId) throw CommandException("not_owned")
             if (current.telecomState != Call.STATE_ACTIVE) throw CommandException("not_active")
-            val activeAudio = current.audio ?: throw CommandException("audio_not_started")
+            val activeAudio = current.attached?.audio ?: throw CommandException("audio_not_started")
             if (epoch < current.epoch) {
                 replyOk(
                     id,
@@ -1488,25 +1511,21 @@ class BridgeEngine(
     }
 
     private fun onAudioFatal(callId: String, epoch: Long, reason: String) {
-        var audio: PhoneAudio? = null
-        var report = false
+        var detached: AttachedAudio? = null
         synchronized(lock) {
             val current = owned
-            if (current != null && current.callId == callId &&
-                current.audio != null && current.epoch == epoch
-            ) {
-                audio = current.audio
-                current.audio = null
-                current.epoch = -1
-                report = true
+            if (current != null && current.callId == callId) {
+                detached = current.detachAudioAt(epoch)
             }
         }
-        if (report) {
-            send(DeviceOutbound.AudioError(callId = callId, error = reason))
-            stateStore.error("audio_error", "the call audio failed: $reason")
-        }
-        audio?.close()
-        stateStore.audioReset()
+        val attached = detached ?: return
+        send(DeviceOutbound.AudioError(callId = callId, error = reason))
+        stateStore.error("audio_error", "the call audio failed: $reason")
+        attached.audio.close()
+        // Only the stream this callback owned: a fatal callback queued behind a
+        // replacement `start_audio` is obsolete and must leave the replacement
+        // publishing.
+        stateStore.audioReset(attached.stream)
     }
 
     // ------------------------------------------------------------------
@@ -1624,7 +1643,7 @@ class BridgeEngine(
 
     private fun onCallStateChanged(call: Call, state: Int) {
         if (!running) return
-        var audio: PhoneAudio? = null
+        var detached: AttachedAudio? = null
         var toneOwner: OwnedCall? = null
         var finish = false
         var cause: DisconnectCause? = null
@@ -1636,22 +1655,21 @@ class BridgeEngine(
             val mapped = mapState(state)
             if (mapped == "ending" || mapped == "ended") {
                 current.generation.set(Long.MAX_VALUE)
-                audio = current.audio
-                current.audio = null
+                detached = current.detachAudio()
                 current.epoch = -1
                 toneOwner = current
             }
             reportState(current, mapped, cause)
             finish = mapped == "ended"
         }
-        closeAudioAsync(audio)
+        releaseDetachedAudio(stateStore, detached, ::closeAudioAsync)
         toneOwner?.let { cancelToneFor(it) }
         if (finish) finishOwned(call, cause)
     }
 
     private fun onCallDetailsChanged(call: Call, details: Call.Details) {
         if (!running) return
-        var audio: PhoneAudio? = null
+        var detached: AttachedAudio? = null
         var toneOwner: OwnedCall? = null
         var finish = false
         var cause: DisconnectCause? = null
@@ -1663,15 +1681,14 @@ class BridgeEngine(
             val mapped = mapState(details.state)
             if (mapped == "ending" || mapped == "ended") {
                 current.generation.set(Long.MAX_VALUE)
-                audio = current.audio
-                current.audio = null
+                detached = current.detachAudio()
                 current.epoch = -1
                 toneOwner = current
             }
             reportState(current, mapped, cause)
             finish = mapped == "ended"
         }
-        closeAudioAsync(audio)
+        releaseDetachedAudio(stateStore, detached, ::closeAudioAsync)
         toneOwner?.let { cancelToneFor(it) }
         if (finish) finishOwned(call, cause)
     }
@@ -1682,6 +1699,7 @@ class BridgeEngine(
 
     private fun finishOwned(call: Call, cause: DisconnectCause?) {
         var audio: PhoneAudio? = null
+        var stream: AudioStream? = null
         var callback: Call.Callback? = null
         var finished: OwnedCall? = null
         synchronized(lock) {
@@ -1689,8 +1707,10 @@ class BridgeEngine(
             if (current == null || current.call !== call || current.finished) return
             current.finished = true
             current.state = "ended"
-            audio = current.audio
-            current.audio = null
+            current.detachAudio()?.let {
+                audio = it.audio
+                stream = it.stream
+            }
             current.epoch = -1
             callback = current.callback
             current.callback = null
@@ -1709,7 +1729,10 @@ class BridgeEngine(
         callback?.let { cb -> runCatching { call.unregisterCallback(cb) } }
         cancelToneFor(target)
         restoreMuteForCall(target.callId, call)
-        stateStore.audioReset()
+        // Stream-scoped, and only when this call still had audio: a hang-up
+        // already detached and reset it, and a call that started while this one
+        // was finishing keeps the stats its own stream is already publishing.
+        stream?.let { stateStore.audioReset(it) }
     }
 
     private fun matchesPending(current: OwnedCall, call: Call): Boolean {
@@ -1805,7 +1828,7 @@ class BridgeEngine(
     }
 
     private fun abortOwnedForLinkLoss() {
-        var audio: PhoneAudio? = null
+        var attached: AttachedAudio? = null
         var call: Call? = null
         var toneOwner: OwnedCall? = null
         var pendingOnly = false
@@ -1828,8 +1851,7 @@ class BridgeEngine(
             }
             current.cancelled = true
             current.generation.set(Long.MAX_VALUE)
-            audio = current.audio
-            current.audio = null
+            attached = current.detachAudio()
             current.epoch = -1
             call = current.call
             toneOwner = current
@@ -1840,13 +1862,15 @@ class BridgeEngine(
                 addOrphanLocked(current)
             }
         }
-        closeAudioAsync(audio)
+        closeAudioAsync(attached?.audio)
         toneOwner?.let { cancelToneFor(it) }
         call?.let { runCatching { it.disconnect() } }
         if (pendingOnly) {
             BridgeLog.w(TAG, "link lost before the telecom call appeared; cancellation retained as an orphan")
         }
-        stateStore.audioReset()
+        // Scoped to the stream this abort detached: the successor of a link-loss
+        // abort must be able to publish the moment it attaches.
+        attached?.let { stateStore.audioReset(it.stream) }
     }
 
     private fun abortOwnedOnShutdown() {
@@ -1870,8 +1894,7 @@ class BridgeEngine(
             current.generation.set(Long.MAX_VALUE)
             current.finished = true
             current.state = "ended"
-            audio = current.audio
-            current.audio = null
+            audio = current.detachAudio()?.audio
             current.epoch = -1
             call = current.call
             callback = current.callback
@@ -1886,7 +1909,8 @@ class BridgeEngine(
         call?.let { runCatching { it.disconnect() } }
         toneOwner?.let { cancelToneFor(it) }
         stateStore.callEnded()
-        stateStore.audioReset()
+        // Whole-engine shutdown: nothing may publish after this.
+        stateStore.resetAllAudio()
     }
 
     private fun expirePendingDial() {
@@ -2236,7 +2260,7 @@ class BridgeEngine(
         synchronized(dtmfMonitor) { dtmfMonitor.notifyAll() }
         val telecomCall = synchronized(lock) { call.call }
         runCatching { telecomCall?.stopDtmfTone() }
-        call.audio?.stopTone()
+        call.attached?.audio?.stopTone()
     }
 
     private fun reportState(call: OwnedCall, state: String, cause: DisconnectCause?) {
@@ -2336,11 +2360,14 @@ class BridgeEngine(
     }
 
     private fun clearFailedDial(callId: String) {
+        var cleared = false
+        var attached: AttachedAudio? = null
         synchronized(lock) {
             val current = owned
             if (current != null && current.callId == callId &&
                 current.call == null && !current.finished
             ) {
+                attached = current.detachAudio()
                 owned = null
                 rememberLocked(callId, current.destination, "failed")
                 try {
@@ -2348,10 +2375,20 @@ class BridgeEngine(
                 } catch (e: CallLedgerException) {
                     BridgeLog.e(TAG, "dial failure not durable: ${e.message}")
                 }
+                cleared = true
             }
         }
+        if (!cleared) return
         stateStore.callPhase(CallPhase.ENDED)
-        stateStore.audioReset()
+        // A dial that never got its Call cannot have audio of its own; any
+        // numbers still live belong to no call, so they are cleared wholesale
+        // only after this failure took the owned call away.
+        val detached = attached
+        if (detached != null) {
+            stateStore.audioReset(detached.stream)
+        } else {
+            stateStore.resetAllAudio()
+        }
     }
 
     private fun rememberLocked(callId: String, destination: String, state: String) {
@@ -2407,7 +2444,7 @@ class BridgeEngine(
         throw CommandException("phone_account_unavailable")
     }
 
-    private class OwnedCall(
+    internal class OwnedCall(
         val callId: String,
         val destination: String,
         val dialStartedWall: Long = System.currentTimeMillis(),
@@ -2418,13 +2455,36 @@ class BridgeEngine(
         var callback: Call.Callback? = null
         var state: String = "dialing"
         var telecomState: Int = -1
-        var audio: PhoneAudio? = null
+
+        /** The audio and the store stream it publishes into; the two never travel apart. */
+        var attached: AttachedAudio? = null
         var epoch: Long = -1
         var lastEpoch: Long = -1
         var cancelled: Boolean = false
         var finished: Boolean = false
         var reportedState: String? = null
         var reportedCauseKey: String? = null
+
+        /**
+         * Takes the audio out of this call.  The caller resets exactly
+         * [AttachedAudio.stream] and nothing else, so a cleanup that runs after
+         * a successor attached cannot clear the successor's numbers.
+         */
+        fun detachAudio(): AttachedAudio? = attached.also { attached = null }
+
+        /**
+         * Takes the audio of the callback at [epoch], or returns null when that
+         * callback is obsolete (another epoch, or nothing attached).  An
+         * obsolete fatal callback must change nothing, including the store.
+         */
+        fun detachAudioAt(epoch: Long): AttachedAudio? {
+            if (attached == null || this.epoch != epoch) return null
+            this.epoch = -1
+            return detachAudio()
+        }
+
+        /** The stream to publish from, or null once this call has finished. */
+        fun audioToPublish(): AttachedAudio? = if (finished) null else attached
     }
 
     private data class RecentCall(val destination: String, val state: String)
@@ -2437,6 +2497,27 @@ class BridgeEngine(
     )
 
     private class CommandException(val code: String) : Exception(code)
+}
+
+/**
+ * The audio of the owned call together with the store stream its stats belong
+ * to.  They are one value so every teardown can name the stream it actually
+ * detached: a cleanup that finds nothing has nothing to reset.
+ */
+internal class AttachedAudio(val audio: PhoneAudio, val stream: AudioStream)
+
+/**
+ * Closes a detached stream's audio and clears its numbers, after the engine lock is released.
+ * The stream is gone for good: a later cleanup of the same call finds nothing to reset, and a
+ * publish still in flight for it is refused by the store.
+ */
+internal fun releaseDetachedAudio(
+    store: EngineStateStore,
+    detached: AttachedAudio?,
+    close: (PhoneAudio?) -> Unit
+) {
+    close(detached?.audio)
+    detached?.let { store.audioReset(it.stream) }
 }
 
 /**
