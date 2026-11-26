@@ -237,6 +237,7 @@ document = {
             "android.permission.CONTROL_INCALL_EXPERIENCE",
             "android.permission.INSTALL_SELF_UPDATES",
             "android.permission.REBOOT",
+            "android.permission.START_FOREGROUND_SERVICES_FROM_BACKGROUND",
         ],
     },
     "daemon": {

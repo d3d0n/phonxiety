@@ -976,7 +976,11 @@ private val PRIVILEGED_GRANTS = listOf(
     PrivilegedGrant(R.string.onboarding_grant_call_state, "MODIFY_PHONE_STATE"),
     PrivilegedGrant(R.string.onboarding_grant_in_call_control, "CONTROL_INCALL_EXPERIENCE"),
     PrivilegedGrant(R.string.onboarding_grant_self_updates, "INSTALL_SELF_UPDATES"),
-    PrivilegedGrant(R.string.onboarding_grant_reboot, "REBOOT")
+    PrivilegedGrant(R.string.onboarding_grant_reboot, "REBOOT"),
+    PrivilegedGrant(
+        R.string.onboarding_grant_start_after_boot,
+        "START_FOREGROUND_SERVICES_FROM_BACKGROUND"
+    )
 )
 
 internal fun RootId.managerName(): String = when (this) {

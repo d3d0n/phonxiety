@@ -205,6 +205,8 @@ fun privilegedTitle(permission: String): UiText = when (permission) {
     "android.permission.CONTROL_INCALL_EXPERIENCE" -> UiText.Res(R.string.doctor_privileged_control_in_call)
     "android.permission.INSTALL_SELF_UPDATES" -> UiText.Res(R.string.doctor_privileged_install_updates)
     "android.permission.REBOOT" -> UiText.Res(R.string.doctor_privileged_reboot)
+    "android.permission.START_FOREGROUND_SERVICES_FROM_BACKGROUND" ->
+        UiText.Res(R.string.doctor_privileged_start_after_boot)
     else -> UiText.Literal(permission.substringAfterLast('.'))
 }
 

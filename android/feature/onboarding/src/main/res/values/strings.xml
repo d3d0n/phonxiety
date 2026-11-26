@@ -102,6 +102,7 @@
     <string name="onboarding_grant_in_call_control">In-call control</string>
     <string name="onboarding_grant_self_updates">Self updates</string>
     <string name="onboarding_grant_reboot">Reboot</string>
+    <string name="onboarding_grant_start_after_boot">Start after boot</string>
     <string name="onboarding_install_footnote">A reboot follows the install. To remove the module later, the root manager restores the stock overlay on the next boot.</string>
 
     <!-- Installing. -->

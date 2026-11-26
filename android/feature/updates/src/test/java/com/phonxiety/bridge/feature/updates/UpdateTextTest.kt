@@ -84,6 +84,14 @@ class UpdateTextTest {
     }
 
     @Test
+    fun `the background start grant gets a human title`() {
+        assertEquals(
+            UiText.Res(R.string.updates_permission_start_after_boot),
+            privilegedTitle("android.permission.START_FOREGROUND_SERVICES_FROM_BACKGROUND")
+        )
+    }
+
+    @Test
     fun `an unknown privileged permission keeps its own name`() {
         assertEquals(
             UiText.Literal("SOME_FUTURE_PERMISSION"),
