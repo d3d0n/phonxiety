@@ -51,6 +51,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -410,7 +411,10 @@ private fun CallText(call: CallSummary, modifier: Modifier = Modifier) {
             text = call.summary ?: call.goal ?: stringResource(R.string.calls_no_summary),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 2
+            maxLines = 2,
+            // A preview that stops mid-word looks broken; the ellipsis says the rest is one tap
+            // away on the call's own screen.
+            overflow = TextOverflow.Ellipsis
         )
         val marks = call.marks
         Text(

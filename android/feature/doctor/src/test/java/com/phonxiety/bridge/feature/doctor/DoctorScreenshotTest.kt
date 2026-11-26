@@ -12,8 +12,12 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
@@ -116,6 +120,12 @@ class DoctorScreenshotTest(private val matrixCase: MatrixCase) {
         composeRule.onNodeWithTag(CAPTURE_TAG).assertAccessible()
         composeRule.onNodeWithTag(CAPTURE_TAG)
             .captureRoboImage("src/test/screenshots/doctor_lower_changes_${variant.slug}.png")
+    }
+
+    /** A capture must not depend on a ripple or an unfinished scroll: let both settle first. */
+    private fun settle() {
+        composeRule.mainClock.advanceTimeBy(1_000)
+        composeRule.waitForIdle()
     }
 
     /** Robolectric's window must be the variant's phone, with its resource font scale. */

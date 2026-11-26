@@ -1,5 +1,6 @@
 package com.phonxiety.bridge.feature.doctor
 
+import com.phonxiety.bridge.CrashReports
 import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.ApiResult
 import com.phonxiety.bridge.data.BridgeStateRepository
@@ -92,7 +93,8 @@ object TestData {
         facts: AppFacts? = facts(),
         runtimeMissing: Set<RuntimePermission> = emptySet(),
         notifications: Boolean = true,
-        battery: Boolean? = true
+        battery: Boolean? = true,
+        lastCrash: CrashReports.Report? = null
     ) = DoctorSnapshot(
         root = root,
         module = module,
@@ -101,6 +103,7 @@ object TestData {
         runtimeMissing = runtimeMissing,
         notificationsEnabled = notifications,
         batteryExempt = battery,
+        lastCrash = lastCrash,
         checkedAtEpochMs = 1_796_500_000_000L
     )
 

@@ -253,7 +253,7 @@ private fun DetailHeader(state: CallDetailUiState, onBack: () -> Unit) {
     val number = snapshot?.destination?.let(::formatPhoneNumber)
         ?: stringResource(R.string.call_detail_fallback_title)
     val subtitle = listOfNotNull(
-        snapshot?.farEnd?.takeIf { it.isNotBlank() },
+        snapshot?.farEnd?.takeIf { it.isNotBlank() }?.let { farEndLabel(it) },
         stateLabel(snapshot?.state)
     ).joinToString(" · ")
     val live = state.live
@@ -531,18 +531,13 @@ private fun RecordingCard(
     val failure = state.audio.error
     SectionCard(
         title = stringResource(R.string.call_detail_recording_title),
-        subtitle = stringResource(R.string.call_detail_recording_subtitle),
+        subtitle = stringResource(recordingSubtitle(state.audio)),
         status = {
             if (failure != null) StatusPill(stringResource(R.string.call_detail_failed_pill), StatusTone.NEGATIVE)
         }
     ) {
         if (state.audio.downloading) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-            Text(
-                text = stringResource(R.string.call_detail_recording_downloading),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
         } else if (state.audio.filePath == null) {
             FilledTonalButton(onClick = onDownload) { Text(stringResource(R.string.call_detail_recording_download)) }
         } else {

@@ -60,7 +60,7 @@ object DoctorEvaluator {
                 root.su == SuStatus.NOT_ROOTED -> DoctorSeverity.FAIL
                 else -> DoctorSeverity.UNKNOWN
             },
-            evidence = when {
+            summary = when {
                 root.su == SuStatus.GRANTED && root.conflict -> listOf(
                     UiText.Res(
                         R.string.doctor_evidence_root_conflict,
@@ -136,7 +136,7 @@ object DoctorEvaluator {
                     granted -> DoctorSeverity.OK
                     else -> DoctorSeverity.FAIL
                 },
-                evidence = listOf(
+                summary = listOf(
                     UiText.Res(
                         when {
                             facts == null -> R.string.doctor_evidence_overlay_no_package_manager
@@ -159,7 +159,7 @@ object DoctorEvaluator {
                     kind = DoctorItemKind.RUNTIME_PERMISSION,
                     title = permission.doctorTitle(),
                     severity = if (missing) DoctorSeverity.FAIL else DoctorSeverity.OK,
-                    evidence = listOf(
+                    summary = listOf(
                         UiText.Res(
                             when {
                                 !missing -> R.string.doctor_evidence_granted
@@ -186,7 +186,7 @@ object DoctorEvaluator {
             } else {
                 DoctorSeverity.OK
             },
-            evidence = listOf(
+            summary = listOf(
                 UiText.Res(
                     when {
                         notificationsMissing -> R.string.doctor_evidence_notifications_permission
@@ -212,7 +212,7 @@ object DoctorEvaluator {
                 false -> DoctorSeverity.WARN
                 null -> DoctorSeverity.UNKNOWN
             },
-            evidence = listOf(
+            summary = listOf(
                 UiText.Res(
                     when (snapshot.batteryExempt) {
                         true -> R.string.doctor_evidence_battery_allowed
@@ -229,7 +229,7 @@ object DoctorEvaluator {
             kind = DoctorItemKind.PAIRING,
             title = UiText.Res(R.string.doctor_row_pairing),
             severity = if (paired) DoctorSeverity.OK else DoctorSeverity.FAIL,
-            evidence = listOf(
+            summary = listOf(
                 UiText.Res(
                     if (paired) R.string.doctor_evidence_pairing_stored else R.string.doctor_evidence_pairing_missing
                 )
@@ -251,20 +251,12 @@ object DoctorEvaluator {
                     crash.kind == CrashReports.Kind.CRASH -> DoctorSeverity.WARN
                     else -> DoctorSeverity.OK
                 },
-                evidence = listOf(
-                    when {
-                        crash.memoryLimiter -> UiText.Res(
-                            R.string.doctor_evidence_crash_memory,
-                            listOf(crash.summary())
-                        )
-
-                        crash.kind == CrashReports.Kind.ANR -> UiText.Res(
-                            R.string.doctor_evidence_crash_trace,
-                            listOf(crash.summary())
-                        )
-
-                        else -> UiText.Literal(crash.summary())
-                    }
+                // The system's reason in words, then when: the code itself stays under Details.
+                summary = listOf(UiText.Res(exitReasonLabel(crash.reason))),
+                summaryAtEpochMs = crash.atEpochMs,
+                details = listOfNotNull(
+                    UiText.Literal(crash.summary()),
+                    crash.description?.takeIf { it.isNotBlank() }?.let(UiText::Literal)
                 ),
                 plan = DoctorPolicy.planFor(DoctorItemKind.LAST_CRASH, context)
             )
@@ -292,7 +284,7 @@ object DoctorEvaluator {
                 is ModuleState.Staged -> DoctorSeverity.WARN
                 else -> DoctorSeverity.OK
             },
-            evidence = listOf(
+            summary = listOf(
                 UiText.Res(
                     when (module) {
                         null -> R.string.doctor_evidence_module_not_asked
@@ -340,7 +332,7 @@ object DoctorEvaluator {
                 is ModuleState.Disabled, ModuleState.Absent, ModuleState.RemovePending -> DoctorSeverity.FAIL
                 else -> DoctorSeverity.UNKNOWN
             },
-            evidence = listOf(
+            summary = listOf(
                 UiText.Res(
                     when (module) {
                         null, ModuleState.Unknown -> R.string.doctor_evidence_module_unknown
@@ -370,7 +362,7 @@ object DoctorEvaluator {
                 underPrivApp || updatedSystem -> DoctorSeverity.OK
                 else -> DoctorSeverity.FAIL
             },
-            evidence = listOf(
+            summary = listOf(
                 when {
                     facts == null -> UiText.Res(R.string.doctor_evidence_overlay_no_package_manager)
 
@@ -395,13 +387,12 @@ object DoctorEvaluator {
             is LinkState.Connecting -> DoctorSeverity.WARN
             LinkState.Offline -> DoctorSeverity.FAIL
         }
-        val evidence = when (link) {
+        val summary = when (link) {
             is LinkState.Up -> buildList<UiText> {
                 add(UiText.Res(pathLabel(link.path)))
                 add(UiText.Res(kindLabel(link.kind)))
                 add(UiText.Plural(R.plurals.doctor_evidence_reconnects, link.reconnects))
                 link.rttMs?.let { add(UiText.Res(R.string.doctor_evidence_rtt, listOf(it))) }
-                link.address?.let { add(UiText.Literal(it)) }
             }
 
             is LinkState.Connecting -> listOf(
@@ -409,17 +400,26 @@ object DoctorEvaluator {
                 UiText.Res(kindLabel(link.candidate))
             )
 
-            LinkState.Offline -> buildList<UiText> {
-                add(UiText.Res(R.string.doctor_evidence_link_offline))
-                bridge.lastError?.let { add(UiText.Literal("${it.message} (${it.code})")) }
-            }
+            LinkState.Offline -> listOf(UiText.Res(R.string.doctor_evidence_link_offline))
+        }
+        // The endpoint id and the link failure are the daemon's own words; they belong under
+        // Details, in monospace, not in the sentence.
+        val details = when (link) {
+            is LinkState.Up -> listOfNotNull(link.address?.let(UiText::Literal))
+
+            is LinkState.Connecting -> emptyList()
+
+            LinkState.Offline -> listOfNotNull(
+                bridge.lastError?.let { UiText.Literal("${it.code}: ${it.message}") }
+            )
         }
         return DoctorRow(
             id = ID_LINK,
             kind = DoctorItemKind.LINK,
             title = UiText.Res(R.string.doctor_row_link),
             severity = severity,
-            evidence = evidence,
+            summary = summary,
+            details = details,
             plan = DoctorPolicy.planFor(DoctorItemKind.LINK)
         )
     }
@@ -437,18 +437,25 @@ object DoctorEvaluator {
                     "fail" -> DoctorSeverity.FAIL
                     else -> DoctorSeverity.UNKNOWN
                 },
-                evidence = buildList {
+                summary = buildList {
                     add(
                         when (status) {
                             "ok" -> UiText.Res(R.string.doctor_evidence_daemon_status_clear)
+
                             "warn" -> UiText.Res(R.string.doctor_evidence_daemon_status_warnings)
+
                             "fail" -> UiText.Res(R.string.doctor_evidence_daemon_status_failures)
-                            else -> UiText.Literal(daemon.report.status ?: "—")
+
+                            // A status this build does not know is the daemon's word, not ours.
+                            else -> UiText.Res(R.string.doctor_evidence_daemon_status_unknown)
                         }
                     )
                     add(UiText.Plural(R.plurals.doctor_evidence_daemon_checks, daemon.report.checks.size))
-                    daemon.report.checkedAt?.let { add(UiText.Literal(it)) }
-                }
+                },
+                details = listOfNotNull(
+                    daemon.report.status?.takeIf { status !in KNOWN_DAEMON_STATUSES }?.let(UiText::Literal),
+                    daemon.report.checkedAt?.let(UiText::Literal)
+                )
             )
         }
 
@@ -457,7 +464,8 @@ object DoctorEvaluator {
             kind = DoctorItemKind.DAEMON,
             title = UiText.Res(R.string.doctor_row_daemon),
             severity = DoctorSeverity.FAIL,
-            evidence = listOf(UiText.Literal("${daemon.code}: ${daemon.message}"))
+            summary = listOf(UiText.Res(R.string.doctor_evidence_daemon_unreachable)),
+            details = listOf(UiText.Literal("${daemon.code}: ${daemon.message}"))
         )
     }.let { it.copy(plan = DoctorPolicy.planFor(DoctorItemKind.DAEMON)) }
 
@@ -470,11 +478,10 @@ object DoctorEvaluator {
             kind = DoctorItemKind.RELAY,
             title = UiText.Res(R.string.doctor_row_relay),
             severity = worst ?: DoctorSeverity.UNKNOWN,
-            evidence = if (checks.isEmpty()) {
-                listOf(UiText.Res(R.string.doctor_evidence_relay_missing))
-            } else {
-                listOf(UiText.Literal(checks.joinToString(" · ") { "${it.name}: ${it.detail ?: it.status ?: "unknown"}" }))
-            },
+            // The relay check names and their details are the daemon's own report: the row claims
+            // only that there was no report to read, and Details keeps the rest verbatim.
+            summary = if (checks.isEmpty()) listOf(UiText.Res(R.string.doctor_evidence_relay_missing)) else emptyList(),
+            details = checks.map { UiText.Literal("${it.name}: ${it.detail ?: it.status ?: "unknown"}") },
             plan = DoctorPolicy.planFor(DoctorItemKind.RELAY)
         )
     }
@@ -489,7 +496,9 @@ object DoctorEvaluator {
                     kind = DoctorItemKind.DAEMON_CHECK,
                     title = daemonCheckTitle(check.name),
                     severity = severityOf(check.status),
-                    evidence = listOf(
+                    // No plain sentence is known for a check the app did not write, so the row keeps
+                    // its title and status and the daemon's detail stays under Details.
+                    details = listOf(
                         check.detail?.let(UiText::Literal)
                             ?: check.status?.let(UiText::Literal)
                             ?: UiText.Res(R.string.doctor_evidence_daemon_no_detail)
@@ -566,6 +575,9 @@ object DoctorEvaluator {
     private const val PREFIX_PRIV_APP = "/system/priv-app/"
 
     private val RELAY_CHECKS = setOf("relays", "iroh_relay")
+
+    /** Daemon statuses the app states in its own words; anything else stays verbatim. */
+    private val KNOWN_DAEMON_STATUSES = setOf("ok", "warn", "fail")
 
     private val DAEMON_CHECK_TITLES: Map<String, Int> = mapOf(
         "daemon" to R.string.doctor_check_daemon,

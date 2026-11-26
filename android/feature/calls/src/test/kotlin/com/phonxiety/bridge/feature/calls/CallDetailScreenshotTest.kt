@@ -287,6 +287,65 @@ class CallDetailScreenshotTest {
     }
 
     @Test
+    fun theHeaderNamesTheFarEndTheWayTheListDoes() {
+        setScreen(
+            CallDetailUiState(
+                callId = "call-1",
+                snapshot = detailSnapshot(callId = "call-1").copy(farEnd = "person"),
+                loading = false
+            )
+        )
+        // One mapping for the far end: the header reads "Person", never the daemon's key.
+        composeRule.onNodeWithText("Person · Ended").assertExists()
+        composeRule.onNodeWithText("person · Ended").assertDoesNotExist()
+    }
+
+    @Test
+    fun theRecordingCardOffersTheDownloadWhileTheFileIsOnTheBridge() = render(
+        "recording_remote_411_light",
+        beforeCapture = { scrollToNode("Recording") }
+    ) { setScreen(finished().copy(audio = CallAudioUiState())) }
+
+    @Test
+    fun theRecordingCardReportsTheTransferWhileItRuns() = render(
+        "recording_downloading_411_light",
+        beforeCapture = { scrollToNode("Recording") }
+    ) { setScreen(finished()) }
+
+    @Test
+    fun theRecordingCardSaysSavedOnlyOnceTheFileIsHere() = render(
+        "recording_saved_411_light",
+        beforeCapture = { scrollToNode("Recording") }
+    ) { setScreen(savedRecording()) }
+
+    @Test
+    fun theRecordingSubtitleFollowsTheDownload() {
+        setScreen(finished().copy(audio = CallAudioUiState()))
+        scrollToNode("Recording")
+        composeRule.onNodeWithText("Download the recording to play or share it.").assertExists()
+        composeRule.onNodeWithText("Saved on this phone.").assertDoesNotExist()
+        composeRule.onNodeWithText("Download the recording").assertExists()
+    }
+
+    @Test
+    fun aRunningDownloadSaysSoInsteadOfClaimingTheFile() {
+        setScreen(finished())
+        scrollToNode("Recording")
+        composeRule.onNodeWithText("Downloading from the bridge…").assertExists()
+        composeRule.onNodeWithText("Saved on this phone.").assertDoesNotExist()
+        composeRule.onNodeWithText("Download the recording to play or share it.").assertDoesNotExist()
+    }
+
+    @Test
+    fun aSavedRecordingSaysTheFileIsOnThisPhone() {
+        setScreen(finished().copy(audio = CallAudioUiState(filePath = "/tmp/call-1.m4a", prepared = true)))
+        scrollToNode("Recording")
+        composeRule.onNodeWithText("Saved on this phone.").assertExists()
+        composeRule.onNodeWithText("Download the recording to play or share it.").assertDoesNotExist()
+        composeRule.onNodeWithText("Download the recording").assertDoesNotExist()
+    }
+
+    @Test
     fun theRecordingSliderIsNamedAndSeekableWithoutDragging() {
         setScreen(
             CallDetailUiState(
@@ -353,6 +412,11 @@ class CallDetailScreenshotTest {
             loading = false,
             hasMoreTranscript = true,
             audio = CallAudioUiState(downloading = true)
+        )
+
+        /** The same call once its recording is on this phone, with the playhead where the user left it. */
+        fun savedRecording(): CallDetailUiState = finished().copy(
+            audio = CallAudioUiState(filePath = "/tmp/call-1.m4a", prepared = true, positionMs = 12_000, durationMs = 180_000)
         )
     }
 }

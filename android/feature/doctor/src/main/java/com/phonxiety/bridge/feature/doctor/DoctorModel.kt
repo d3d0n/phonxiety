@@ -1,5 +1,6 @@
 package com.phonxiety.bridge.feature.doctor
 
+import android.app.ApplicationExitInfo
 import androidx.annotation.StringRes
 import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.root.Overlay
@@ -90,19 +91,89 @@ data class FixContext(
     val needsMetamodule: Boolean get() = overlay == Overlay.METAMODULE_MISSING
 }
 
-/** One self-check row: state, the evidence behind it, and the repair when it fails. */
+/** One self-check row: state, the plain sentence, the evidence behind it, and the repair. */
 data class DoctorRow(
     val id: String,
     val kind: DoctorItemKind,
     val title: UiText,
     val severity: DoctorSeverity,
-    /** Localised parts joined with " · " by the screen; a part may be a raw daemon value. */
-    val evidence: List<UiText>,
+    /** The plain words the list reads, joined with " · " by the screen; authored copy only. */
+    val summary: List<UiText> = emptyList(),
+    /** A moment the sentence ends with, formatted on the phone in its own locale and zone. */
+    val summaryAtEpochMs: Long? = null,
+    /** The verbatim evidence — daemon text, codes and paths — behind the row's Details. */
+    val details: List<UiText> = emptyList(),
     val subject: String? = null,
     val plan: FixPlan? = null
 ) {
     val needsFix: Boolean
         get() = severity == DoctorSeverity.FAIL || severity == DoctorSeverity.WARN
+}
+
+/**
+ * A process death's reason as one short phrase a person reads. [CrashReports][com.phonxiety.bridge.CrashReports]
+ * stores the `ApplicationExitInfo` name when it knows one and `reason_<n>` for anything newer, so
+ * both forms are read against the SDK's documented values. A reason this build cannot explain
+ * reads "Reason unavailable": a number in prose tells the reader nothing.
+ */
+@StringRes
+fun exitReasonLabel(reason: String?): Int = when (exitReasonName(reason)) {
+    "anr" -> R.string.doctor_exit_not_responding
+
+    "crash" -> R.string.doctor_exit_crashed
+
+    "crash_native" -> R.string.doctor_exit_crashed_native
+
+    "low_memory" -> R.string.doctor_exit_memory
+
+    "signaled" -> R.string.doctor_exit_signaled
+
+    "exit_self" -> R.string.doctor_exit_self
+
+    "initialization_failure" -> R.string.doctor_exit_startup
+
+    "permission_change" -> R.string.doctor_exit_permission
+
+    "excessive_resource_usage" -> R.string.doctor_exit_resources
+
+    "user_requested" -> R.string.doctor_exit_user
+
+    "user_stopped" -> R.string.doctor_exit_user_stopped
+
+    "dependency_died" -> R.string.doctor_exit_dependency
+
+    "freezer" -> R.string.doctor_exit_frozen
+
+    "package_state_change" -> R.string.doctor_exit_package
+
+    "package_updated" -> R.string.doctor_exit_updated
+
+    // REASON_UNKNOWN and REASON_OTHER name no cause, and so does a value newer than this build.
+    else -> R.string.doctor_exit_unavailable
+}
+
+/** The recorder's name for a death, or the SDK's name for a numeric `reason_<n>`, or null. */
+private fun exitReasonName(reason: String?): String? {
+    val key = reason?.trim()?.lowercase().orEmpty()
+    if (!key.startsWith("reason_")) return key.ifEmpty { null }
+    return when (key.removePrefix("reason_").toIntOrNull()) {
+        ApplicationExitInfo.REASON_EXIT_SELF -> "exit_self"
+        ApplicationExitInfo.REASON_SIGNALED -> "signaled"
+        ApplicationExitInfo.REASON_LOW_MEMORY -> "low_memory"
+        ApplicationExitInfo.REASON_CRASH -> "crash"
+        ApplicationExitInfo.REASON_CRASH_NATIVE -> "crash_native"
+        ApplicationExitInfo.REASON_ANR -> "anr"
+        ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> "initialization_failure"
+        ApplicationExitInfo.REASON_PERMISSION_CHANGE -> "permission_change"
+        ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> "excessive_resource_usage"
+        ApplicationExitInfo.REASON_USER_REQUESTED -> "user_requested"
+        ApplicationExitInfo.REASON_USER_STOPPED -> "user_stopped"
+        ApplicationExitInfo.REASON_DEPENDENCY_DIED -> "dependency_died"
+        ApplicationExitInfo.REASON_FREEZER -> "freezer"
+        ApplicationExitInfo.REASON_PACKAGE_STATE_CHANGE -> "package_state_change"
+        ApplicationExitInfo.REASON_PACKAGE_UPDATED -> "package_updated"
+        else -> null
+    }
 }
 
 /** A fix the daemon offers in its own report; the phone classifies and runs it. */

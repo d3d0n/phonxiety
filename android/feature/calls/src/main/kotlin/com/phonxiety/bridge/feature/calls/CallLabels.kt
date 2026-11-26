@@ -1,5 +1,6 @@
 package com.phonxiety.bridge.feature.calls
 
+import androidx.annotation.StringRes
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.stringResource
 import com.phonxiety.bridge.designsystem.UiText
@@ -73,6 +74,18 @@ internal fun farEndLabel(farEnd: String): String = when (farEnd.lowercase()) {
     "ivr" -> stringResource(R.string.calls_far_end_ivr)
     "voicemail" -> stringResource(R.string.calls_far_end_voicemail)
     else -> humanize(farEnd)
+}
+
+/**
+ * The recording card's subtitle follows the download: it offers the download while only the bridge
+ * has the file, reports the transfer while it runs, and claims the file on this phone only once one
+ * is here.
+ */
+@StringRes
+internal fun recordingSubtitle(audio: CallAudioUiState): Int = when {
+    audio.filePath != null -> R.string.call_detail_recording_subtitle_saved
+    audio.downloading -> R.string.call_detail_recording_downloading
+    else -> R.string.call_detail_recording_subtitle_remote
 }
 
 /** A mark's kind in words; the stored key stays "follow-up". */

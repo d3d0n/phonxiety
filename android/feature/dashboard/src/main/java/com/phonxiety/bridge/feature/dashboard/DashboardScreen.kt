@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -32,6 +33,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -452,10 +454,11 @@ private fun LinkCard(
                 link.address?.let { address ->
                     KeyValueRow(
                         label = stringResource(R.string.dashboard_endpoint),
-                        value = address,
+                        value = shortEndpoint(address),
                         mono = true,
                         valueMaxLines = 2
                     )
+                    EndpointDisclosure(address)
                 }
             }
 
@@ -483,6 +486,29 @@ private fun LinkCard(
                     Text(stringResource(R.string.dashboard_link_test))
                 }
             }
+        }
+    }
+}
+
+/**
+ * The whole endpoint id on request. The card keeps the short form so the row stays a row; a reader
+ * who needs the key — to pair, or to compare with the computer — opens it here, selectable and
+ * wrapped, in monospace.
+ */
+@Composable
+private fun EndpointDisclosure(address: String) {
+    var shown by rememberSaveable(address) { mutableStateOf(false) }
+    TextButton(onClick = { shown = !shown }) {
+        Text(stringResource(if (shown) R.string.dashboard_endpoint_hide else R.string.dashboard_endpoint_show))
+    }
+    if (shown) {
+        SelectionContainer {
+            Text(
+                text = address,
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
         }
     }
 }
@@ -900,11 +926,14 @@ private fun OfflinePreview() {
 object DashboardSamples {
     val now = 1_764_000_000_000L
 
+    /** A public endpoint id as the engine publishes it: the whole key, never a shortened one. */
+    const val ENDPOINT_ID = "864b90b7d1f2a5c6e93b47f80a1c2d3e4f5061728394a5b6c7d8e9f0a1b2cc62"
+
     val direct = BridgeState(
         link = LinkState.Up(
             kind = LinkKind.IROH,
             path = PathKind.DIRECT,
-            address = "6c3a1f9b",
+            address = ENDPOINT_ID,
             rttMs = 41,
             sinceEpochMs = now - TimeUnit.MINUTES.toMillis(12),
             reconnects = 0
