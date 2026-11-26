@@ -1,5 +1,12 @@
 name: Android
 
+# Two tiers share the same path filters:
+#   build — every pull request, every push to main and workflow_dispatch: iroh
+#           bindings, release APK, unit tests, lint, Roborazzi screenshot
+#           verification and the module zip.
+#   quick — every push to feat/**: iroh bindings, debug APK and unit tests
+#           with the screenshot classes skipped (-PskipScreenshots); no
+#           release build, lint, Roborazzi verify or module zip.
 on:
   push:
     branches: [main, "feat/**"]
@@ -14,13 +21,16 @@ on:
       - "mise-tasks/phone/**"
       - "mise.toml"
       - ".github/workflows/android.yml"
+  workflow_dispatch:
 
 concurrency:
   group: android-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # Full tier: pull requests, main and manual runs.
   build:
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -155,6 +165,84 @@ jobs:
           name: phonxiety-android-reports
           path: |
             android/**/build/reports/lint-results*.html
+            android/**/build/reports/tests/**
+            android/**/build/test-results/**
+          if-no-files-found: ignore
+
+  # Quick tier: pushes to feat/** only.  The app still compiles against the
+  # iroh bindings, so the SDK preparation and the bindings build are repeated;
+  # only the debug variant and the unit tests run, with -PskipScreenshots
+  # leaving the Roborazzi-capturing classes out of the test run.
+  quick:
+    if: github.event_name == 'push' && github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .tools/iroh-ffi
+            .tools/iroh-build
+            .tools/cargo
+            .tools/android-sdk/ndk
+          key: iroh-${{ runner.os }}-${{ hashFiles('mise-tasks/phone/iroh', 'mise.toml') }}
+          restore-keys: |
+            iroh-${{ runner.os }}-
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.kts', 'android/gradle/libs.versions.toml', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - uses: jdx/mise-action@v3
+        with:
+          install: true
+          cache: true
+
+      - name: Prepare Android SDK
+        run: |
+          set -euo pipefail
+          SDK_DIR="$GITHUB_WORKSPACE/.tools/android-sdk"
+          mkdir -p "$SDK_DIR/cmdline-tools"
+          ln -sfn "$ANDROID_SDK_ROOT/cmdline-tools/latest" "$SDK_DIR/cmdline-tools/latest"
+          { yes || true; } | "$SDK_DIR/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK_DIR" \
+            "platforms;android-37.1" "build-tools;37.0.0" "platform-tools" "ndk;29.0.14206865" \
+            > "$RUNNER_TEMP/sdkmanager.log" || { tail -n 40 "$RUNNER_TEMP/sdkmanager.log"; exit 1; }
+          echo "ANDROID_SDK_ROOT=$SDK_DIR" >> "$GITHUB_ENV"
+
+      - name: Build iroh bindings
+        run: mise run phone:iroh
+
+      # Debug APK and unit tests only: the screenshot classes are excluded by
+      # -PskipScreenshots, so neither Roborazzi nor lint runs here.
+      - name: Debug build and unit tests
+        working-directory: android
+        run: |
+          mise exec -- ./gradlew --no-daemon --console=plain \
+            :app:assembleDebug \
+            testDebugUnitTest \
+            -PskipScreenshots
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phonxiety-android-reports
+          path: |
             android/**/build/reports/tests/**
             android/**/build/test-results/**
           if-no-files-found: ignore
