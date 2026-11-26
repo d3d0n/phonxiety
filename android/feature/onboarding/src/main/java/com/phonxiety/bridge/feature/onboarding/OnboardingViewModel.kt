@@ -116,7 +116,7 @@ class OnboardingViewModel internal constructor(
 
                 is WizardState.InstallFailed -> coordinator.dispatch(WizardEvent.RetryRequested)
 
-                is WizardState.RebootPending -> coordinator.dispatch(WizardEvent.RebootRequested)
+                is WizardState.RebootPending -> coordinator.requestReboot()
 
                 is WizardState.ProviderPrep -> coordinator.dispatch(WizardEvent.PrepareProviderRequested)
 

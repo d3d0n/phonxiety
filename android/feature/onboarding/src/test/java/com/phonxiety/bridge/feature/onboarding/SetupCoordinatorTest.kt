@@ -26,8 +26,12 @@ import com.phonxiety.bridge.root.VerifyReport
 import com.phonxiety.bridge.root.WizardEvent
 import com.phonxiety.bridge.root.WizardState
 import java.io.OutputStream
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -36,6 +40,8 @@ import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -49,6 +55,7 @@ import org.robolectric.annotation.Config
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
+@OptIn(ExperimentalCoroutinesApi::class)
 class SetupCoordinatorTest {
     private lateinit var backend: FakeBackend
     private lateinit var pairing: FakePairing
@@ -222,6 +229,64 @@ class SetupCoordinatorTest {
 
         coordinator.pair("phonxiety://pair?token=old")
         assertTrue(hosts.any { it == SetupHostRequest.PairingRejected("the ticket expired") })
+    }
+
+    @Test
+    fun theRebootCommandThatFailedIsShownNotSwallowed() = runTest {
+        backend.detection = RootDetection(SuStatus.GRANTED, listOf(MAGISK))
+        backend.module = ModuleState.Absent
+        backend.rebootResult = ProviderResult.Failure(
+            "svc: Unable to set property \"sys.powerctl\": PROP_ERROR_PERMISSION_DENIED",
+            exitCode = 1
+        )
+        coordinator.start()
+        coordinator.dispatch(WizardEvent.InstallRequested)
+        assertTrue(coordinator.wizard.value is WizardState.RebootPending)
+
+        coordinator.requestReboot()
+
+        val pending = coordinator.wizard.value as WizardState.RebootPending
+        assertNotNull("the failure must be visible on the step", pending.failure)
+        assertTrue(pending.failure!!.contains("PROP_ERROR_PERMISSION_DENIED"))
+        assertEquals(1, backend.reboots.size)
+        assertTrue(hosts.none { it is SetupHostRequest.Message })
+    }
+
+    @Test
+    fun aRebootThatReportedSuccessButDidNotRestartIsShown() = runTest {
+        backend.detection = RootDetection(SuStatus.GRANTED, listOf(MAGISK))
+        backend.module = ModuleState.Absent
+        coordinator.start()
+        coordinator.dispatch(WizardEvent.InstallRequested)
+
+        // Still here after the window: the app never went down, so the phone did not restart.
+        coordinator.requestReboot()
+
+        val pending = coordinator.wizard.value as WizardState.RebootPending
+        assertNotNull(pending.failure)
+        assertTrue(pending.failure!!.contains("still running 20 s after the reboot request"))
+        assertEquals(1, backend.reboots.size)
+    }
+
+    @Test
+    fun aRebootOnItsWayIsNotCalledAFailure() = runTest {
+        backend.detection = RootDetection(SuStatus.GRANTED, listOf(MAGISK))
+        backend.module = ModuleState.Absent
+        coordinator.start()
+        coordinator.dispatch(WizardEvent.InstallRequested)
+
+        val request = launch { coordinator.requestReboot() }
+        runCurrent()
+        assertNull((coordinator.wizard.value as WizardState.RebootPending).failure)
+
+        advanceTimeBy(19_000)
+        runCurrent()
+        assertNull((coordinator.wizard.value as WizardState.RebootPending).failure)
+
+        advanceTimeBy(1_001)
+        runCurrent()
+        request.join()
+        assertNotNull((coordinator.wizard.value as WizardState.RebootPending).failure)
     }
 
     private companion object {

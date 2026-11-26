@@ -153,7 +153,12 @@ sealed interface WizardState {
     data class RebootPending(
         val provider: DetectedProvider,
         val reason: RebootReason,
-        val module: ModuleState = ModuleState.Unknown
+        val module: ModuleState = ModuleState.Unknown,
+        /**
+         * Why the phone is still running: the reboot command's own error, or the fact that this
+         * app is still here after the request said it went through. Null while nothing failed.
+         */
+        val failure: String? = null
     ) : WizardState
 
     data class Verify(
@@ -221,6 +226,12 @@ sealed interface WizardEvent {
 
     data class LinkTestCompleted(val passed: Boolean, val detail: String? = null) : WizardEvent
 
+    /** The reboot command ran and failed: the person has to restart the phone themselves. */
+    data class RebootFailed(val output: String) : WizardEvent
+
+    /** The reboot was requested and the app is still running: the phone did not restart. */
+    data object RebootNotConfirmed : WizardEvent
+
     data object Repaired : WizardEvent
 }
 
@@ -258,6 +269,9 @@ object ModuleController {
     const val MODULE_ID: String = "phonxiety_bridge"
     const val MODULE_NAME: String = "Phonxiety"
 
+    /** How long a requested reboot has to take this app down before it counts as not happening. */
+    const val REBOOT_SURVIVAL_WINDOW_SECONDS: Int = 20
+
     fun reduce(state: WizardState, event: WizardEvent): Transition = when (event) {
         is WizardEvent.ProbeCompleted -> onProbe(event.snapshot)
         WizardEvent.InstallRequested -> onInstallRequested(state)
@@ -271,6 +285,8 @@ object ModuleController {
         is WizardEvent.RuntimePermissionsChanged -> onRuntimePermissions(state, event.missing)
         WizardEvent.PairingCompleted -> onPaired(state)
         is WizardEvent.LinkTestCompleted -> onLinkTest(state, event)
+        is WizardEvent.RebootFailed -> onRebootFailed(state, event.output)
+        WizardEvent.RebootNotConfirmed -> onRebootNotConfirmed(state)
         WizardEvent.Repaired -> onRepaired(state)
     }
 
@@ -478,10 +494,32 @@ object ModuleController {
         )
     }
 
+    /**
+     * The reboot that did not happen. It stays on "Reboot pending" and says why: a silent stay is
+     * how a phone that never restarted looked like one that did.
+     */
+    private fun onRebootFailed(state: WizardState, output: String): Transition = if (state is WizardState.RebootPending) {
+        Transition(state.copy(failure = output))
+    } else {
+        Transition(state)
+    }
+
+    /** The request reported success and this app is still here: the phone did not restart. */
+    private fun onRebootNotConfirmed(state: WizardState): Transition {
+        if (state !is WizardState.RebootPending || state.failure != null) return Transition(state)
+        return Transition(
+            state.copy(
+                failure = "the app was still running " +
+                    "${ModuleController.REBOOT_SURVIVAL_WINDOW_SECONDS} s after the reboot request"
+            )
+        )
+    }
+
     private fun onReboot(state: WizardState): Transition {
         if (state !is WizardState.RebootPending) return Transition(state)
+        // A new request clears the last "it did not restart" note: the retry is the answer to it.
         return Transition(
-            state,
+            state.copy(failure = null),
             listOf(
                 WizardEffect.Reboot(state.reason),
                 WizardEffect.PersistProgress(

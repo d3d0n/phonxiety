@@ -383,6 +383,13 @@ private fun WizardCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 KeyValueRow(label = "Reason", value = wizard.reason.humanLabel())
+                if (wizard.failure != null) {
+                    ErrorCard(
+                        title = "The phone did not restart",
+                        message = "Restart it yourself (hold the power button, then Restart); setup continues after the boot.",
+                        output = wizard.failure
+                    )
+                }
             }
 
             is WizardState.Verify -> VerifyContent(wizard)

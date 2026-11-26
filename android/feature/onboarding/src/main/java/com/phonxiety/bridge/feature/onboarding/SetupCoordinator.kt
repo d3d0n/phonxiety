@@ -17,6 +17,7 @@ import com.phonxiety.bridge.root.SuStatus
 import com.phonxiety.bridge.root.WizardEffect
 import com.phonxiety.bridge.root.WizardEvent
 import com.phonxiety.bridge.root.WizardState
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -190,6 +191,23 @@ class SetupCoordinator(
         host(SetupHostRequest.RequestBatteryExemption)
     }
 
+    /**
+     * "Reboot now". A real reboot takes this process down, so still being here after the survival
+     * window means the phone did not restart, whichever way the command exited. The wait runs on
+     * the caller's coroutine, outside the lock: a resume must not queue behind it.
+     */
+    suspend fun requestReboot() {
+        dispatch(WizardEvent.RebootRequested)
+        val pending = _wizard.value as? WizardState.RebootPending ?: return
+        if (pending.failure != null) return
+        delay(REBOOT_SURVIVAL_WINDOW_MS)
+        dispatch(WizardEvent.RebootNotConfirmed)
+    }
+
+    private fun rebootDetail(result: ProviderResult): String = result.tail(lines = 6)
+        .joinToString("\n")
+        .ifEmpty { "the provider printed nothing" }
+
     /** Called after the system dialog returns, so the wizard moves on the device's answer. */
     suspend fun onPermissionsChanged() {
         dispatch(WizardEvent.RuntimePermissionsChanged(permissions.missing()))
@@ -248,8 +266,10 @@ class SetupCoordinator(
                 if (provider == null) {
                     host(SetupHostRequest.Message("no root provider was found; reboot from the power menu"))
                 } else {
-                    runCatching { backend.reboot(provider, effect.reason) }
-                        .onFailure { host(SetupHostRequest.Message(it.message ?: "the reboot request failed")) }
+                    val result = runCatching { backend.reboot(provider, effect.reason) }
+                        .getOrElse { ProviderResult.Failure(it.message ?: "the reboot request threw", 1) }
+                    // Never silent: a reboot that did not happen must not look like one that did.
+                    if (!result.isSuccess) handle(WizardEvent.RebootFailed(rebootDetail(result)))
                 }
             }
         }
@@ -374,6 +394,7 @@ class SetupCoordinator(
 
     private companion object {
         const val LINK_READY_TIMEOUT_MS = 30_000L
+        const val REBOOT_SURVIVAL_WINDOW_MS = ModuleController.REBOOT_SURVIVAL_WINDOW_SECONDS * 1000L
         const val LINK_TEST_SECONDS = 5
         const val LINK_TEST_TIMEOUT_MS = 25_000L
     }

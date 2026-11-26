@@ -526,6 +526,51 @@ class ModuleControllerTest {
     }
 
     @Test
+    fun aRebootThatFailedKeepsTheStepAndSaysWhy() {
+        val pending = WizardState.RebootPending(magisk, RebootReason.MODULE_INSTALL, ModuleState.Absent)
+
+        val failed = ModuleController.reduce(
+            pending,
+            WizardEvent.RebootFailed("svc: Unable to set property \"sys.powerctl\": PROP_ERROR_PERMISSION_DENIED")
+        ).state
+
+        assertEquals(
+            WizardState.RebootPending(
+                magisk,
+                RebootReason.MODULE_INSTALL,
+                ModuleState.Absent,
+                "svc: Unable to set property \"sys.powerctl\": PROP_ERROR_PERMISSION_DENIED"
+            ),
+            failed
+        )
+    }
+
+    @Test
+    fun aRebootThatDidNotHappenIsNotReportedAsDone() {
+        val pending = WizardState.RebootPending(magisk, RebootReason.MODULE_INSTALL, ModuleState.Absent)
+
+        val unconfirmed = ModuleController.reduce(pending, WizardEvent.RebootNotConfirmed).state
+
+        val failure = (unconfirmed as WizardState.RebootPending).failure.orEmpty()
+        assertTrue(failure, failure.contains("still running 20 s after the reboot request"))
+    }
+
+    @Test
+    fun retryingTheRebootClearsTheLastFailure() {
+        val failed = WizardState.RebootPending(
+            magisk,
+            RebootReason.MODULE_INSTALL,
+            ModuleState.Absent,
+            "PROP_ERROR_PERMISSION_DENIED"
+        )
+
+        val retry = ModuleController.reduce(failed, WizardEvent.RebootRequested)
+
+        assertEquals(WizardState.RebootPending(magisk, RebootReason.MODULE_INSTALL, ModuleState.Absent), retry.state)
+        assertEquals(WizardEffect.Reboot(RebootReason.MODULE_INSTALL), retry.effects.first())
+    }
+
+    @Test
     fun installFailureShowsTheProviderOutputTail() {
         val installing = WizardState.Installing(kernelSu, InstallOperation.INSTALL, ModuleState.Absent)
         val result = ProviderResult.Failure("line 1\nline 2\nline 3", 1)

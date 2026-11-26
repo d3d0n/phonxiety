@@ -94,8 +94,18 @@ class RootCommand private constructor(
             return RootCommand(argv)
         }
 
-        /** `reboot`, the fallback when `android.permission.REBOOT` is not granted. */
-        fun reboot(): RootCommand = RootCommand(listOf("reboot"))
+        /**
+         * The reboot the managers use, for when `android.permission.REBOOT` is not granted:
+         * `/system/bin/svc power reboot <reason>` asks PowerManager over binder, which uid 0 passes
+         * without writing `sys.powerctl` — a plain `reboot` from a shell context is refused with
+         * PROP_ERROR_PERMISSION_DENIED. The plain binary stays as the fallback.
+         */
+        fun reboot(reason: String): RootCommand {
+            require(SAFE_NAME.matches(reason)) { "reboot reason is not a safe token: $reason" }
+            return RootCommand(
+                listOf("/system/bin/svc", "power", "reboot", reason, "||", "/system/bin/reboot", reason)
+            )
+        }
 
         const val ADB_ROOT: String = "/data/adb"
         const val MODULES_DIR: String = "$ADB_ROOT/modules"
