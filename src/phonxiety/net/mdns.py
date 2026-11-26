@@ -22,6 +22,8 @@ LOGGER = logging.getLogger(__name__)
 SERVICE_TYPE = "_phonxiety._tcp.local."
 TXT_CERT = "cert"
 TXT_PROTOCOL = "proto"
+# The instance name is one DNS label, and zeroconf refuses a longer one with an exception.
+INSTANCE_LABEL_OCTETS = 63
 
 
 class Backend(Protocol):
@@ -60,7 +62,11 @@ def service_info(port: int, certificate: str, protocol: int, host: str | None = 
     """
     from zeroconf import ServiceInfo  # noqa: PLC0415 - optional dependency
 
-    name = f"phonxiety-{socket.gethostname().split('.')[0] or 'daemon'}.{SERVICE_TYPE}"
+    # A long host name (managed computers, CI runners) is cut to fit: a refused name would
+    # cost the phone the whole advertisement.
+    instance = f"phonxiety-{socket.gethostname().split('.')[0] or 'daemon'}"
+    instance = instance.encode()[:INSTANCE_LABEL_OCTETS].decode(errors="ignore")
+    name = f"{instance}.{SERVICE_TYPE}"
     addresses: list[bytes] = []
     if host:
         try:

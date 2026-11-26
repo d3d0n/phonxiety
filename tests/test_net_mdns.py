@@ -111,6 +111,16 @@ class AdvertisementTests(unittest.TestCase):
         self.assertIn("192.168.1.10", info.parsed_addresses())
         self.assertEqual(18763, info.port)
 
+    def test_a_long_host_name_is_cut_to_one_dns_label(self) -> None:
+        backend = FakeZeroconf()
+        host = "build-agent-" + "0" * 48
+        with mock.patch("phonxiety.net.mdns.socket.gethostname", return_value=f"{host}.example"):
+            self.assertTrue(self.advertiser(backend).start())
+        (info,) = backend.registered
+        instance = info.name.removesuffix(f".{SERVICE_TYPE}")
+        self.assertEqual(63, len(instance.encode()))
+        self.assertTrue(instance.startswith("phonxiety-build-agent-"))
+
 
 class MissingPackageTests(unittest.TestCase):
     def test_start_reports_false_when_the_responder_is_missing(self) -> None:
