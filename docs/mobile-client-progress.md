@@ -18,6 +18,30 @@ What each phase of [`mobile-client-plan.md`](mobile-client-plan.md) produced on 
 | 11 Doctor and surfaces | Deliberately broken install repaired from the phone; tile hangs up a call | partial 2026-11-26 | app 5650466, daemon 383f3df | Broke the install on purpose: module disable flag set and RECORD_AUDIO revoked. Doctor reported 23 of 25 checks passing. Re-enable the module (confirm dialog with effect and rollback) cleared the flag and rebooted the phone; the daemon saw it connected 28 s after `sys.boot_completed`. Grant again showed the system dialog, after which Record audio passed and all 25 checks passed (`doctor-repair.txt`, `doctor-reenable-confirm.png`, `doctor-record-audio-failed.png`, `doctor-record-audio-fixed.png`). Gap: the daemon kept `calling unavailable` until the link was re-established, because capabilities travel only in hello; the fix is in progress. Open: the tile hanging up a call |
 | 12 Hardening | Signed release passes the smoke run, survives 24 h idle plus three calls | pending | app a56cd39, daemon 547ea37 | Done so far, without the release key and without calls. The module now grants `START_FOREGROUND_SERVICES_FROM_BACKGROUND`: after a reboot the boot start's recorded reason is `BACKGROUND_FGS_PERMISSION` (before: `SYSTEM_ALLOW_LISTED`, which held only while battery optimization stayed off), the service is foreground, and the phone is `connected` 7.8 s after `sys.boot_completed` (`boot-fgs-permission.txt`). An endpoint bound with no network is recreated after three failed attempts: exactly one recycle line, `connected` 9.0 s after the network came back (`endpoint-fresh.txt`). Still open: the release keystore, the 24 h idle run and the three calls. |
 
+## UX/UI pass
+
+- **Scope.** The app's screens plus the persistent and live-call notifications; tiles and the widget are out of scope.
+- **Rules.**
+  - Copy: US English, sentence case, status colors as fixed tokens, units with a no-break space, numbers and dates in the phone's locale.
+  - Raw daemon text appears only under Details, verbatim and selectable.
+  - Layout: a card's status moves under its title from 150% text; chip rows wrap instead of scrolling off the edge.
+- **Gate.** Every captured state is rendered at 411 dp in light, dark and dynamic color, and at 320 dp with 200% text. Every capture passes one shared accessibility check: Roborazzi with the Accessibility Test Framework at Warning, in `core/designsystem` test fixtures. Its only exemption is text inside a disabled control (WCAG 1.4.3).
+- **Phone pass at 556a9d2.** 25 screens were captured on the Pixel and compared with the pre-pass build. The findings were fixed in 7e69aa0:
+  - call previews lost their ellipsis;
+  - Doctor showed raw diagnostics and exit codes;
+  - the endpoint had no way to show the whole key;
+  - the recording player lost its seek bar at 200%;
+  - two spellings were mixed.
+- **Consolidation at 2d7abce.**
+  - 134 changed goldens were found by pixel diff and reviewed sheet by sheet. Doctor, Settings and Updates came out pixel-identical.
+  - Then the Lab and Calls chips wrap, the Lab latency tiles stack, and the setup step line holds at large text.
+- **Aggregate check at 2d7abce.**
+  - `./gradlew assembleDebug assembleRelease testDebugUnitTest lint ktlintCheck verifyRoborazziDebug :app:testReleaseUnitTest` exit 0.
+  - `uv run pytest -q` 237 passed.
+- **Open.**
+  - A final phone pass at 2d7abce: the phone is off USB and the home network is down.
+  - The lock-screen view of the live-call notification needs a call.
+
 ## Setup kept on the daemon host
 
 - Boot images before any root change: `~/.local/share/phonxiety/boot-backup/20261126-*/` — `boot_a/b`, `vendor_boot_a/b` (Magisk-patched, slot `_b` active), `stock_boot.img` (Magisk's own backup, SHA-1 `9199bf97…`), build fingerprint `google/bluejay_beta/bluejay:17/DP11.261030.003/16847878`.
