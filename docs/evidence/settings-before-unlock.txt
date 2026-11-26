@@ -17,5 +17,14 @@ After the fix (settings in device-protected storage, the old file migrated once 
   Lab:      Test number shows the stored number
   typing "+998..." key by key into the emptied field keeps the leading "+"
 
+Second boot, settings already in device-protected storage:
+  Settings -> Codec -> PCM; `phonxiety status`: "calling ready pcm audio"
+  23:39:37  sys.boot_completed; 23:39:46 connected (+8.5 s)
+            keyguard still showing: "calling ready pcm audio", the engine used the stored codec
+            before unlock
+  unlock:   still "pcm audio"; the bridge's settings file unchanged (written at the PCM choice), the
+            kept credential-protected file unchanged: its older "auto" was not applied again
+  Codec set back to Auto afterwards: "calling ready opus audio"
+
 Unit tests: PhoneSettingsStoreTest (locked start then unlock, a write before the migration, the
 marker against the kept file, a fresh install), PhoneSettingsTest, LabViewModelTest.
