@@ -1,0 +1,38 @@
+Phonxiety update and rollback from the app, Pixel 6a, Magisk 31.1, 2026-11-26
+Base: app and module 0.3.0 (versionCode 3) built from b3bf831; the module's priv-app copy mounted,
+the same APK installed over it. Update: 0.3.1 (versionCode 4), the same code with the version
+bumped, published with `mise run phone:publish -- --serve` (the daemon serves
+GET /app/v1/update/manifest with daemon: artifact sources).
+
+Updates screen before: Compatibility "Compatible"; App installed 0.3.0, available 0.3.1
+("Install 0.3.1"); Module installed 0.3.0, available 0.3.1; Daemon up to date.
+
+09:03:07 Install 0.3.1 (app). Play Protect verified it ("Verification finished for
+         com.phonxiety.bridge. Result: Pass"); installed silently at 09:03:27 (versionCode 4).
+09:04:41 Install module 0.3.1. Before staging, the app published the previous module as a root-owned
+         generation: /data/adb/phonxiety/g-10c03e98…7166/module-previous.zip (12.6 MB, built from
+         the mounted 0.3.0 APK) and module-previous.json
+         {"version":"0.3.0","version_code":3,"sha256":"10c03e98…7166"}, then switched
+         /data/adb/phonxiety/current to it. "Installing the module…" → "Restarting…" (09:04:51).
+09:05:41 after the boot: app 0.3.1 over a system copy 0.3.1; module 0.3.1; phone connected.
+
+Rollback
+09:06:18 Updates → Rollback: "The system image carries module 0.3.1, newer than the version this
+         rollback returns to (0.3.0), so Android refuses an app-only downgrade. The rollback is one
+         step …" → Roll back to 0.3.0 → dialog "Roll back to 0.3.0?" naming the effect, how to
+         return (install 0.3.1 again from Updates), the possible data reset and that a call ends.
+09:06:28 Roll back and reboot. The app staged module 0.3.0 from the generation, wrote the journal,
+         and handed over to /data/adb/phonxiety/rollback.sh, which ran
+         `pm uninstall-system-updates com.phonxiety.bridge` (log: "Uninstalling updates to
+         com.phonxiety.bridge... Success"), recorded step "removed" and rebooted (offline 09:06:43).
+09:07:05 booted: com.phonxiety.bridge only at /system/priv-app/phonxiety-bridge, versionName
+         0.3.0; module 0.3.0; the 5 privileged permissions granted; pairing kept: `phonxiety
+         status` phone connected without pairing again.
+         Opening Updates verified the target and cleared the journal: "Rollback — Rolled back —
+         The phone runs 0.3.0: the module and the selected app match the rollback target."
+
+Not verified: Magisk offering the module update. Its updateJson must be an https URL with a public
+certificate (Magisk 31.1 targets SDK 37 without cleartext); the default points at the GitHub
+release, which does not carry this test build.
+Found: after the rollback the screen still offers "Reinstall the previous app" (the kept 0.3.0 APK)
+although the phone already runs 0.3.0.
