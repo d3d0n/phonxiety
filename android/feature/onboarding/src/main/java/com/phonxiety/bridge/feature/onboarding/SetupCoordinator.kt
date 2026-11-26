@@ -317,7 +317,9 @@ class SetupCoordinator(
             // probe after one runs the test again instead of parking the wizard on the old result.
             linkTestPassed = if (paired && preferences.linkTestPassed == true) true else null,
             progress = runCatching { progressStore.read() }.getOrNull(),
-            metamodulePending = capabilities?.metamodulePending ?: false
+            metamodulePending = capabilities?.metamodulePending ?: false,
+            metamoduleInterrupted = capabilities?.metamoduleInterrupted ?: false,
+            overlayProbeError = capabilities?.overlayProbeError
         )
     }
 

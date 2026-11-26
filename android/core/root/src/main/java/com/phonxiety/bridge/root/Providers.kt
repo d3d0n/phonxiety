@@ -102,9 +102,11 @@ suspend fun findMetamodule(environment: RootEnvironment, dir: String = RootComma
 }
 
 /**
- * The marker `ksud` leaves in `/data/adb/modules/<id>` while a module is staged for the next boot
- * (`userspace/ksud/src/module.rs`: `ensure_file_exists(modules/<id>/update)`; the boot handler
- * renames `modules_update/<id>` over `modules/<id>` and drops the marker).
+ * The marker in `/data/adb/modules/<id>` that says an install staged for the next boot. `ksud`
+ * writes it for KernelSU and KernelSU-Next (`userspace/ksud/src/module.rs`:
+ * `ensure_file_exists(modules/<id>/update)`); APatch writes it from `apd/assets/installer.sh:406`
+ * in boot mode. The boot handler renames `modules_update/<id>` over `modules/<id>`, and that
+ * rename replaces the tree the marker was in.
  */
 internal const val MODULE_UPDATE_MARKER: String = "update"
 
@@ -118,7 +120,13 @@ suspend fun metamoduleIsPending(environment: RootEnvironment, moduleId: String):
 }
 
 /** What a provider that delegates `system/` mounting to a metamodule reports. */
-internal data class MetamoduleCapability(val overlay: Overlay, val pending: Boolean)
+internal data class MetamoduleCapability(
+    val overlay: Overlay,
+    /** The install finished and waits for the boot that activates it. */
+    val pending: Boolean = false,
+    /** The install stopped before its completion evidence; it has to run again, not be rebooted into. */
+    val interrupted: Boolean = false
+)
 
 /**
  * KernelSU/Next: an active metamodule mounts `system/`, and `ksud` marks a staged one with the
@@ -139,18 +147,43 @@ internal suspend fun kernelSuMetamoduleCapability(environment: RootEnvironment):
  * `apd/src/event.rs` `handle_updated_modules`); its `update` flag is one file for the whole install,
  * `/data/adb/ap/update` (`apd/src/module.rs` `mark_update`), not the per-module marker `ksud` writes.
  * `apd module install` also creates `/data/adb/metamodule` right away, pointing at the still empty
- * `modules/<id>` (`apd/src/module.rs` `ensure_symlink`), so the symlink alone proves nothing: the
- * staged copy under `modules_update` is what makes a metamodule pending.
+ * `modules/<id>` (`apd/src/module.rs` `ensure_symlink`), so the symlink alone proves nothing.
  */
 internal suspend fun apatchMetamoduleCapability(environment: RootEnvironment): MetamoduleCapability {
-    if (findMetamodule(environment, RootCommand.MODULES_UPDATE_DIR) != null) {
-        return MetamoduleCapability(Overlay.METAMODULE_MISSING, pending = true)
+    val staged = findMetamodule(environment, RootCommand.MODULES_UPDATE_DIR)
+    if (staged != null) {
+        // The staged copy is never the whole story: see [apatchInstallCompleted].
+        val completed = apatchInstallCompleted(environment, staged)
+        return MetamoduleCapability(
+            overlay = Overlay.METAMODULE_MISSING,
+            pending = completed,
+            interrupted = !completed
+        )
     }
     val active = findMetamodule(environment)
     return MetamoduleCapability(
-        overlay = if (active != null) Overlay.METAMODULE_PRESENT else Overlay.METAMODULE_MISSING,
-        pending = false
+        overlay = if (active != null) Overlay.METAMODULE_PRESENT else Overlay.METAMODULE_MISSING
     )
+}
+
+/**
+ * APatch 11282's install completion, read from what the installer left behind. `apd module install`
+ * first unpacks the zip into `modules_update/<id>` (`apd/src/module.rs` `_install_module`:
+ * `archive.extract(&_module_update_dir)`) and then runs `apd/assets/installer.sh`, whose boot-mode
+ * block near the end writes the evidence:
+ * `mktouch $NVBASE/modules/$MODID/update` and `cp -af $MODPATH/module.prop
+ * $NVBASE/modules/$MODID/module.prop` (tag 11282, `apd/assets/installer.sh:405-410`). Both writes
+ * come after extraction and the customize script, so a run killed in between leaves a staged
+ * directory that looks installed but is not. The next boot promotes whatever `modules_update/<id>`
+ * holds (`apd/src/event.rs`: `handle_updated_modules` renames it over `modules/<id>`, then the
+ * staged tree is removed), and `handle_updated_modules` deletes the previous `modules/<id>` first,
+ * so the marker cannot survive a boot: both files together mean the installer finished.
+ */
+internal suspend fun apatchInstallCompleted(environment: RootEnvironment, moduleId: String): Boolean {
+    val staged = environment.listDir("${RootCommand.MODULES_UPDATE_DIR}/$moduleId") ?: return false
+    if ("module.prop" !in staged) return false
+    val installed = environment.listDir("${RootCommand.MODULES_DIR}/$moduleId") ?: return false
+    return MODULE_UPDATE_MARKER in installed && "module.prop" in installed
 }
 
 internal suspend fun readModuleProp(environment: RootEnvironment, dir: String): ModuleProp? = environment.readFile("$dir/module.prop")?.let(::parseModuleProp)
@@ -172,6 +205,27 @@ internal val APATCH_COEXISTENCE_WARNING: String =
 
 /** Last-resort denial detection: `su` policy and provider daemons both phrase it this way. */
 private val DENIAL = Regex("(?i)(permission denied|not allowed|operation not permitted|denied)")
+
+/**
+ * The capability probe's answer. Only a process that ran to completion speaks: `grep` exits 0 for a
+ * match and 1 for none, while 2 (the binary could not be read), 127 (no `grep`), a failed launch and
+ * a timeout all mean the question was never answered.
+ */
+internal enum class MetamoduleProbe { SUPPORTED, UNSUPPORTED, INDETERMINATE }
+
+internal fun ShellOutput.metamoduleProbe(): MetamoduleProbe = when {
+    launchFailed || timedOut -> MetamoduleProbe.INDETERMINATE
+    exitCode == 0 -> MetamoduleProbe.SUPPORTED
+    exitCode == 1 -> MetamoduleProbe.UNSUPPORTED
+    else -> MetamoduleProbe.INDETERMINATE
+}
+
+/** Why an indeterminate probe did not answer, worded for the wizard instead of a bare "failed". */
+internal fun ShellOutput.probeFailure(): String = when {
+    launchFailed -> "the probe did not start (exit $exitCode)" + combined.takeIf { it.isNotEmpty() }?.let { ": $it" }.orEmpty()
+    timedOut -> "the probe did not answer within ${timeoutMs / 1000} s"
+    else -> "the probe exited $exitCode" + combined.takeIf { it.isNotEmpty() }?.let { ": $it" }.orEmpty()
+}
 
 internal fun ShellOutput.toProviderResult(): ProviderResult = when {
     launchFailed -> ProviderResult.Failure(combined.ifEmpty { "su is not available" }, exitCode)
@@ -367,9 +421,21 @@ class ApatchProvider(
     private val rebooter: SystemRebooter? = null
 ) : RootProvider {
     override suspend fun capabilities(): RootCapabilities {
-        val metamodule = if (supportsMetamodules()) apatchMetamoduleCapability(environment) else null
+        val probe = shell.exec(RootCommand.apdSupportsMetamodules())
+        // The binary's own literal, not a version table: see [RootCommand.apdSupportsMetamodules].
+        val support = probe.metamoduleProbe()
+        // An apd without the literal overlays `system/` itself, and an unanswered probe is no fact.
+        val metamodule = if (support == MetamoduleProbe.SUPPORTED) apatchMetamoduleCapability(environment) else null
         return RootCapabilities(
-            systemOverlay = metamodule?.overlay ?: Overlay.BUILT_IN,
+            systemOverlay = when {
+                metamodule != null -> metamodule.overlay
+
+                // Never BUILT_IN on an unanswered probe: that would skip the metamodule step on an
+                // apd that needs one, which is the silent unmounted install this probe exists for.
+                support == MetamoduleProbe.INDETERMINATE -> Overlay.METAMODULE_MISSING
+
+                else -> Overlay.BUILT_IN
+            },
             hotInstall = false,
             updateJson = false,
             webUi = true,
@@ -382,12 +448,11 @@ class ApatchProvider(
             ),
             managerPackage = detected.managerPackage ?: MANAGER_PACKAGE,
             coexistenceWarning = APATCH_COEXISTENCE_WARNING,
-            metamodulePending = metamodule?.pending == true
+            metamodulePending = metamodule?.pending == true,
+            metamoduleInterrupted = metamodule?.interrupted == true,
+            overlayProbeError = if (support == MetamoduleProbe.INDETERMINATE) probe.probeFailure() else null
         )
     }
-
-    /** The binary's own literal, not a version table: see [RootCommand.apdSupportsMetamodules]. */
-    private suspend fun supportsMetamodules(): Boolean = shell.exec(RootCommand.apdSupportsMetamodules()).ok
 
     override suspend fun installModule(zip: File): ProviderResult {
         val staged = stageModuleZip(shell, zip)

@@ -102,11 +102,24 @@ data class RootCapabilities(
     val managerPackage: String?,
     val coexistenceWarning: String?,
     /**
-     * A metamodule is staged but not mounted yet: KernelSU's `ksud` writes an `update` marker, APatch's
-     * `apd` keeps the whole staged copy under `modules_update`, and either way the metamodule becomes
-     * active on the next boot. Reported by KernelSU, KernelSU-Next and a metamodule-era `apd`.
+     * A metamodule's install completed and waits for the boot that activates it: KernelSU's `ksud`
+     * writes an `update` marker, APatch's `apd` keeps the staged copy under `modules_update` and its
+     * installer writes `modules/<id>/update` plus `module.prop`. Reported by KernelSU, KernelSU-Next
+     * and a metamodule-era `apd`.
      */
-    val metamodulePending: Boolean = false
+    val metamodulePending: Boolean = false,
+    /**
+     * A metamodule is staged but its installer never finished: the staged copy exists without the
+     * completion evidence the manager writes at the end. A boot would promote the incomplete copy, so
+     * the install has to run again instead. Reported by APatch only.
+     */
+    val metamoduleInterrupted: Boolean = false,
+    /**
+     * The provider's overlay capability probe did not answer: it could not start, timed out, or exited
+     * with a status that is neither `grep`'s 0 (match) nor 1 (no match). [systemOverlay] is then
+     * provisional, and the wizard refuses to install rather than guess whether a metamodule is needed.
+     */
+    val overlayProbeError: String? = null
 )
 
 /** Result of probing `su -c id`. */

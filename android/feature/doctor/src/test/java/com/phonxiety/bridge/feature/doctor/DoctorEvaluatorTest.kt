@@ -129,6 +129,23 @@ class DoctorEvaluatorTest {
     }
 
     @Test
+    fun anOverlayThatIsNotMountedDoesNotBlameAMetamoduleOnABuiltInProvider() {
+        // Magisk and an older apd overlay system/ themselves: a metamodule is not their fix.
+        val rows = TestData.rows(
+            snapshot = TestData.snapshot(
+                overlay = Overlay.BUILT_IN,
+                facts = TestData.facts(
+                    apkPath = "/data/app/~~8Kd0/base.apk",
+                    system = false
+                )
+            )
+        )
+        val overlay = TestData.row(rows, DoctorEvaluator.ID_OVERLAY)
+        assertEquals(DoctorSeverity.FAIL, overlay.severity)
+        assertFalse(overlay.evidence.contains("metamodule"))
+    }
+
+    @Test
     fun aPrivappPathOrAnUpdatedSystemAppCountsAsApplied() {
         listOf(
             TestData.facts(apkPath = "/system/priv-app/phonxiety-bridge/base.apk"),

@@ -308,14 +308,15 @@ class ProviderCommandsTest {
 
     @Test
     fun apatchStagedMetamoduleIsMissingAndPending() = runTest {
-        // `apd module install` extracts into modules_update/<id> and creates the symlink over the
-        // still empty modules/<id>: the staged copy is the pending signal, not the `update` marker.
+        // `apd module install` extracts into modules_update/<id>, and only at the end of its
+        // installer.sh writes modules/<id>/update and module.prop (tag 11282, lines 405-410).
         val environment = FakeEnvironment().apply {
             dirs[RootCommand.MODULES_DIR] = listOf("meta-overlayfs")
-            dirs["${RootCommand.MODULES_DIR}/meta-overlayfs"] = emptyList()
+            dirs["${RootCommand.MODULES_DIR}/meta-overlayfs"] = listOf("module.prop", "update")
+            files["${RootCommand.MODULES_DIR}/meta-overlayfs/module.prop"] = META_PROP
             dirs[RootCommand.MODULES_UPDATE_DIR] = listOf("meta-overlayfs")
-            files["${RootCommand.MODULES_UPDATE_DIR}/meta-overlayfs/module.prop"] =
-                "id=meta-overlayfs\nname=OverlayFS MetaModule\nmetamodule=1\nversion=1.3.1\n"
+            dirs["${RootCommand.MODULES_UPDATE_DIR}/meta-overlayfs"] = listOf("module.prop")
+            files["${RootCommand.MODULES_UPDATE_DIR}/meta-overlayfs/module.prop"] = META_PROP
         }
         val apatch = ApatchProvider(apatchProvider(), shell(apdProbe(supported = true)).first, environment)
 
@@ -323,6 +324,49 @@ class ProviderCommandsTest {
 
         assertEquals(Overlay.METAMODULE_MISSING, capabilities.systemOverlay)
         assertTrue(capabilities.metamodulePending)
+        assertFalse(capabilities.metamoduleInterrupted)
+    }
+
+    @Test
+    fun apatchPartialMetamoduleExtractionIsInterruptedNotPending() = runTest {
+        // The zip is unpacked before the installer runs, so a killed install leaves this exact tree.
+        val environment = FakeEnvironment().apply {
+            dirs[RootCommand.MODULES_DIR] = listOf("meta-overlayfs")
+            dirs["${RootCommand.MODULES_DIR}/meta-overlayfs"] = emptyList()
+            dirs[RootCommand.MODULES_UPDATE_DIR] = listOf("meta-overlayfs")
+            dirs["${RootCommand.MODULES_UPDATE_DIR}/meta-overlayfs"] = listOf("module.prop")
+            files["${RootCommand.MODULES_UPDATE_DIR}/meta-overlayfs/module.prop"] = META_PROP
+        }
+        val apatch = ApatchProvider(apatchProvider(), shell(apdProbe(supported = true)).first, environment)
+
+        val capabilities = apatch.capabilities()
+
+        assertEquals(Overlay.METAMODULE_MISSING, capabilities.systemOverlay)
+        assertFalse(capabilities.metamodulePending)
+        assertTrue(capabilities.metamoduleInterrupted)
+    }
+
+    @Test
+    fun apatchUnansweredProbeIsNotReportedAsBuiltIn() = runTest {
+        // grep's 2 (unreadable apd), 127 (no grep), a failed launch and a timeout answer nothing.
+        listOf(
+            ShellOutput(exitCode = 2),
+            ShellOutput(exitCode = 127),
+            ShellOutput(exitCode = ProcessBuilderProcessRunner.EXIT_NOT_STARTED, launchFailed = true),
+            ShellOutput(timedOut = true, timeoutMs = RootShell.DEFAULT_TIMEOUT_MS)
+        ).forEach { probe ->
+            val apatch = ApatchProvider(
+                apatchProvider(),
+                shell { if (it == RootCommand.apdSupportsMetamodules().script) probe else ShellOutput() }.first,
+                FakeEnvironment()
+            )
+
+            val capabilities = apatch.capabilities()
+
+            assertTrue("exit ${probe.exitCode}", capabilities.overlayProbeError != null)
+            assertEquals(Overlay.METAMODULE_MISSING, capabilities.systemOverlay)
+            assertFalse(capabilities.metamodulePending)
+        }
     }
 
     @Test
@@ -409,5 +453,9 @@ class ProviderCommandsTest {
             reasons += reason
             return true
         }
+    }
+
+    private companion object {
+        const val META_PROP: String = "id=meta-overlayfs\nname=OverlayFS MetaModule\nmetamodule=1\nversion=1.3.1\n"
     }
 }

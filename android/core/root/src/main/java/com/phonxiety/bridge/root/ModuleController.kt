@@ -105,7 +105,11 @@ data class ProbeSnapshot(
     val linkTestPassed: Boolean? = null,
     val progress: ProgressRecord? = null,
     /** A metamodule is staged but not active yet; see [RootCapabilities.metamodulePending]. */
-    val metamodulePending: Boolean = false
+    val metamodulePending: Boolean = false,
+    /** A metamodule's installer stopped before its completion evidence; see [RootCapabilities.metamoduleInterrupted]. */
+    val metamoduleInterrupted: Boolean = false,
+    /** The provider's overlay probe did not answer; see [RootCapabilities.overlayProbeError]. */
+    val overlayProbeError: String? = null
 )
 
 /** The install/verify wizard state machine. The UI renders it; it holds no Android types. */
@@ -346,6 +350,37 @@ object ModuleController {
         )
 
         ModuleState.Absent -> when {
+            // The overlay probe did not answer, so whether a metamodule is needed is unknown. Falling
+            // through to an install would skip the metamodule step on an apd that needs one; the
+            // answer may be different on the next probe, so this state only asks for a recheck.
+            snapshot.overlayProbeError != null -> Transition(
+                WizardState.Indeterminate(
+                    "the overlay capability probe did not answer, so the wizard cannot tell whether a " +
+                        "metamodule has to be installed first",
+                    tail(snapshot.overlayProbeError)
+                )
+            )
+
+            // A staged copy without its installer's completion evidence is an interrupted install:
+            // the next boot would promote it, so offer the preparation again instead of a reboot.
+            snapshot.metamoduleInterrupted -> {
+                val interrupted = ProviderResult.Failure(
+                    "the metamodule install stopped before it finished: /data/adb/modules/<id>/$MODULE_UPDATE_MARKER " +
+                        "and module.prop, the two files APatch writes at the end of its installer, are not both there. " +
+                        "Installing the metamodule again is safe.",
+                    1
+                )
+                Transition(
+                    WizardState.InstallFailed(
+                        provider = provider,
+                        operation = InstallOperation.PREPARE_METAMODULE,
+                        module = module,
+                        result = interrupted,
+                        outputTail = interrupted.tail()
+                    )
+                )
+            }
+
             snapshot.overlay == Overlay.METAMODULE_MISSING && snapshot.metamodulePending ->
                 // The metamodule is staged: its overlay mounts on the next boot. Installing Phonxiety
                 // before that boot is refused by ksud, so the wizard only asks for the reboot.
