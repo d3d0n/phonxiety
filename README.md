@@ -154,7 +154,7 @@ Settings:
 - `PHONXIETY_CODEX_VOICE` — the Codex voice, `sol` by default. `PHONXIETY_CODEX_AUTH_FILE` — the daemon's own Codex login file.
 - `PHONXIETY_AUDIO_CODEC` — call audio on the phone link: `opus` by default, or `pcm`. Opus is used only when the phone app offers it.
 - `PHONXIETY_OPUS_BITRATE` — Opus bitrate in bit/s, `32000` by default, 6000 to 128000.
-- `PHONXIETY_IROH_RELAYS` — comma-separated iroh relay URLs that replace n0's public relays, e.g. your own `iroh-relay` behind HTTPS. Without the variable the daemon reads `iroh-relays` in the state directory, one URL per line, so the setting holds however the daemon is started. Public relays are rate-limited and may not carry PCM call audio.
+- `PHONXIETY_IROH_RELAYS` — comma-separated iroh relay URLs that replace n0's public relays, e.g. your own `iroh-relay` behind HTTPS. Without the variable the daemon reads `iroh-relays` in the state directory, one URL per line, so the setting holds however the daemon is started. Public relays are rate-limited and may not carry PCM call audio. Leave your relay's access open, or allow new endpoints as they appear: every fresh app install, cleared app data or new computer key makes a new endpoint id, and a relay `access.allowlist` that still lists the old id answers "not authorized", so the phone and computer cannot meet through it.
 - `PHONXIETY_STATE_DIR` — calls, keys and logs; `~/.local/share/phonxiety` by default.
 - `PHONXIETY_PORT` — MCP and health on loopback, `18762` by default.
 
