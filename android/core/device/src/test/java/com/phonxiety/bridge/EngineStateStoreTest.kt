@@ -46,9 +46,23 @@ class EngineStateStoreTest {
             assertEquals("opus", audio.codec)
             assertEquals(24_000, audio.bitrate)
 
-            store.audioLevels(-20.5f, -31.0f)
+            val stream = store.audioStreamStart()
+            assertTrue(
+                store.audioStats(
+                    stream,
+                    AudioStats(
+                        codec = "opus",
+                        bitrate = 24_000,
+                        rxDbfs = -20.5f,
+                        txDbfs = -31.0f,
+                        framesOut = 0,
+                        framesIn = 0,
+                        drops = 0
+                    )
+                )
+            )
             assertEquals(-20.5f, awaitItem().audio.rxLevelDbfs)
-
+            assertEquals(-31.0f, store.state.value.audio.txLevelDbfs)
             store.device(DeviceState(batteryPercent = 74, network = "wifi", wifiRssi = -55))
             val device = awaitItem().device
             assertEquals(74, device.batteryPercent)

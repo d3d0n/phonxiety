@@ -19,6 +19,36 @@ import kotlinx.coroutines.flow.update
 data class RouteSnapshot(val relay: Boolean, val rttMs: Long?)
 
 /**
+ * Identity of one live audio stream: one `start_audio` epoch and its
+ * [PhoneAudio].  Audio stats belong to the stream that produced them, so the
+ * store accepts a publish only while its stream is the live one and a stream
+ * that has been torn down can never show its numbers as current.
+ */
+internal class AudioStream internal constructor(private val id: Long) {
+    override fun toString(): String = "audio-stream#$id"
+}
+
+/**
+ * One publish of a live audio stream's stats.  Everything goes in together so
+ * a teardown cannot interleave between the counters and the level meters.
+ *
+ * [drops] counts playback-ring overflow only: samples the phone's 500 ms
+ * playback buffer discarded because the sink fell behind.  A barge-in flush
+ * (`PhoneAudio.flush()`) drops the queued tail without counting it, so
+ * barge-in loss is deliberately excluded — the tile says "Playback drops", not
+ * "all audio lost".
+ */
+internal data class AudioStats(
+    val codec: String?,
+    val bitrate: Int?,
+    val rxDbfs: Float?,
+    val txDbfs: Float?,
+    val framesOut: Long,
+    val framesIn: Long,
+    val drops: Long
+)
+
+/**
  * The engine's one state machine.  Everything that changes [BridgeState] goes
  * through here, so surfaces see a single ordered stream regardless of which
  * callback or thread produced the event.
@@ -28,7 +58,13 @@ class EngineStateStore {
 
     val state: StateFlow<BridgeState> = mutable.asStateFlow()
 
+    /** Guards [liveAudioStream] with the writes it gates; never held across foreign calls. */
+    private val audioLock = Any()
+    private var liveAudioStream: AudioStream? = null
+    private var audioStreamIds = 0L
+
     fun reset() {
+        synchronized(audioLock) { liveAudioStream = null }
         mutable.value = BridgeState()
     }
 
@@ -117,18 +153,47 @@ class EngineStateStore {
         mutable.update { it.copy(audio = it.audio.copy(codec = codec, bitrate = bitrate)) }
     }
 
-    fun audioLevels(rxDbfs: Float?, txDbfs: Float?) {
-        mutable.update { it.copy(audio = it.audio.copy(rxLevelDbfs = rxDbfs, txLevelDbfs = txDbfs)) }
+    /** Starts a new live audio stream; the previous stream's numbers stop being publishable. */
+    internal fun audioStreamStart(): AudioStream = synchronized(audioLock) {
+        AudioStream(++audioStreamIds).also { liveAudioStream = it }
     }
 
-    fun audioFrames(framesOut: Long, framesIn: Long, drops: Long) {
+    /**
+     * Publishes a live stream's stats in one step.  Returns false, writing
+     * nothing, when [stream] is no longer the live one: a publish that was in
+     * flight while the stream was torn down must never land after
+     * [audioReset], or the last call's drops would sit on the dashboard with
+     * no call running and nothing left to overwrite them.
+     */
+    internal fun audioStats(stream: AudioStream, stats: AudioStats): Boolean = synchronized(audioLock) {
+        if (liveAudioStream !== stream) return@synchronized false
         mutable.update {
-            it.copy(audio = it.audio.copy(framesOut = framesOut, framesIn = framesIn, drops = drops))
+            it.copy(
+                audio = it.audio.copy(
+                    codec = stats.codec,
+                    bitrate = stats.bitrate,
+                    rxLevelDbfs = stats.rxDbfs,
+                    txLevelDbfs = stats.txDbfs,
+                    framesOut = stats.framesOut,
+                    framesIn = stats.framesIn,
+                    drops = stats.drops
+                )
+            )
         }
+        true
     }
 
-    fun audioReset() {
-        mutable.update { it.copy(audio = AudioState()) }
+    /**
+     * Clears the audio block.  With [stream], only that stream's numbers are
+     * cleared, so a teardown cannot wipe a stream that replaced it; without
+     * one, whatever is live is cleared.
+     */
+    internal fun audioReset(stream: AudioStream? = null) {
+        synchronized(audioLock) {
+            if (stream != null && liveAudioStream !== stream) return@synchronized
+            liveAudioStream = null
+            mutable.update { it.copy(audio = AudioState()) }
+        }
     }
 
     fun device(state: DeviceState) {

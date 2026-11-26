@@ -729,36 +729,47 @@ class BridgeEngine(
     }
 
     private fun emitAudioLevels() {
-        val target: Pair<PhoneAudio, String> = synchronized(lock) {
+        val target: AudioLevelTarget = synchronized(lock) {
             val current = owned
             if (current == null || current.finished) return
             val audio = current.audio ?: return
-            audio to current.callId
+            val stream = current.audioStream ?: return
+            AudioLevelTarget(audio, current.callId, stream)
         }
-        val levels = target.first.levels()
+        // Both calls below can block behind the playback write and the send, so
+        // the stream may be torn down by the time they return.  The store
+        // accepts numbers only from the stream it still considers live, so this
+        // publish can never land after that teardown's reset.
+        val levels = target.audio.levels()
         send(
             DeviceOutbound.AudioLevels(
-                callId = target.second,
+                callId = target.callId,
                 rxDbfs = levels.rxDbfs,
                 txDbfs = levels.txDbfs,
                 queued = levels.queuedSamples / 960
             )
         )
-        stateStore.audioLevels(levels.rxDbfs, levels.txDbfs)
-        val diagnostics = target.first.diagnostics()
-        // The phone's own live screen reads the codec and the bitrate from this state. Keep them
-        // in step with the stream, so a start that only re-attached an existing epoch cannot leave
-        // the meter blank for the rest of the call.
-        val published = stateStore.state.value.audio
-        if (published.codec != diagnostics.codec || published.bitrate != diagnostics.bitrate) {
-            stateStore.audio(diagnostics.codec, diagnostics.bitrate)
-        }
-        stateStore.audioFrames(
-            framesOut = diagnostics.capturedFrames,
-            framesIn = diagnostics.hostFrames,
-            drops = diagnostics.overflowSamples
+        val diagnostics = target.audio.diagnostics()
+        stateStore.audioStats(
+            target.stream,
+            AudioStats(
+                codec = diagnostics.codec,
+                bitrate = diagnostics.bitrate,
+                rxDbfs = levels.rxDbfs,
+                txDbfs = levels.txDbfs,
+                framesOut = diagnostics.capturedFrames,
+                framesIn = diagnostics.hostFrames,
+                drops = diagnostics.overflowSamples
+            )
         )
     }
+
+    /** One 100 ms publish, captured under [lock] together with the stream that owns it. */
+    private class AudioLevelTarget(
+        val audio: PhoneAudio,
+        val callId: String,
+        val stream: AudioStream
+    )
 
     // ------------------------------------------------------------------
     // Commands
@@ -1074,6 +1085,7 @@ class BridgeEngine(
     private fun handleHangup(id: String, command: DeviceCommand.Hangup) {
         val callId = command.callId.ifEmpty { throw CommandException("call_id_required") }
         var audio: PhoneAudio? = null
+        var stream: AudioStream? = null
         var call: Call? = null
         var toneOwner: OwnedCall? = null
         var terminalState: String? = null
@@ -1112,7 +1124,9 @@ class BridgeEngine(
                 current.cancelled = true
                 current.generation.set(Long.MAX_VALUE)
                 audio = current.audio
+                stream = current.audioStream
                 current.audio = null
+                current.audioStream = null
                 current.epoch = -1
                 call = current.call
                 pendingOnly = call == null
@@ -1142,6 +1156,10 @@ class BridgeEngine(
         }
         toneOwner?.let { cancelToneFor(it) }
         closeAudioAsync(audio)
+        // The hang-up clears the stream's numbers itself.  Telecom's terminal
+        // callback may never arrive (or this hang-up may reach a call Telecom
+        // already dropped), and the last stream's drops must not outlive it.
+        stream?.let { stateStore.audioReset(it) }
         call?.let { telecomCall ->
             try {
                 telecomCall.disconnect()
@@ -1255,6 +1273,7 @@ class BridgeEngine(
                 current.telecomState == Call.STATE_ACTIVE && current.audio == null
             ) {
                 current.audio = audio
+                current.audioStream = stateStore.audioStreamStart()
                 current.epoch = epoch
                 current.lastEpoch = epoch
                 attached = true
@@ -1682,6 +1701,7 @@ class BridgeEngine(
 
     private fun finishOwned(call: Call, cause: DisconnectCause?) {
         var audio: PhoneAudio? = null
+        var stream: AudioStream? = null
         var callback: Call.Callback? = null
         var finished: OwnedCall? = null
         synchronized(lock) {
@@ -1690,7 +1710,9 @@ class BridgeEngine(
             current.finished = true
             current.state = "ended"
             audio = current.audio
+            stream = current.audioStream
             current.audio = null
+            current.audioStream = null
             current.epoch = -1
             callback = current.callback
             current.callback = null
@@ -1709,7 +1731,9 @@ class BridgeEngine(
         callback?.let { cb -> runCatching { call.unregisterCallback(cb) } }
         cancelToneFor(target)
         restoreMuteForCall(target.callId, call)
-        stateStore.audioReset()
+        // Stream-scoped: a call that started while this one was finishing keeps
+        // the stats its own stream is already publishing.
+        stateStore.audioReset(stream)
     }
 
     private fun matchesPending(current: OwnedCall, call: Call): Boolean {
@@ -2419,6 +2443,9 @@ class BridgeEngine(
         var state: String = "dialing"
         var telecomState: Int = -1
         var audio: PhoneAudio? = null
+
+        /** Set with [audio]; the store takes stats only from the live stream. */
+        var audioStream: AudioStream? = null
         var epoch: Long = -1
         var lastEpoch: Long = -1
         var cancelled: Boolean = false
