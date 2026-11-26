@@ -17,6 +17,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -25,6 +26,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.phonxiety.bridge.designsystem.LocalStatusColors
+import java.text.NumberFormat
+import java.util.Locale
 
 /** Emphasis of a [StatTile] value; colour is semantic, never decorative. */
 enum class StatTone { NEUTRAL, POSITIVE, WARNING, NEGATIVE }
@@ -96,6 +99,7 @@ fun StatTile(
     unit: String? = null
 ) {
     val status = LocalStatusColors.current
+    val locale = LocalConfiguration.current.locales[0]
     val valueStyle = MaterialTheme.typography.titleMedium.let { style ->
         if (mono) style.copy(fontFamily = FontFamily.Monospace, fontFeatureSettings = "tnum") else style
     }
@@ -107,7 +111,7 @@ fun StatTile(
         )
         Spacer(Modifier.height(2.dp))
         Text(
-            text = formatMeasure(value, unit),
+            text = formatMeasure(value, unit, locale),
             style = valueStyle,
             color = when (tone) {
                 StatTone.NEUTRAL -> MaterialTheme.colorScheme.onSurface
@@ -192,11 +196,21 @@ fun KeyValueRow(
 private const val STACK_AT_FONT_SCALE = 1.5f
 
 /**
- * Joins a value and its unit the way the writing rules ask: no space before a percent sign, a
- * no-break space before every other unit.
+ * Joins a value and its unit the way the writing rules ask. A percent goes through the locale's own
+ * percent format ("78%" in English, "78 %" in French and German); every other unit is joined with a
+ * no-break space. A value that is not a number is shown as it is: a missing value never grows a
+ * unit.
  */
-internal fun formatMeasure(value: String, unit: String?): String = when {
+internal fun formatMeasure(value: String, unit: String?, locale: Locale = Locale.getDefault()): String = when {
     unit == null -> value
-    unit == "%" -> "$value%"
+    unit == "%" -> formatPercent(value, locale)
     else -> "$value\u00A0$unit"
+}
+
+private fun formatPercent(value: String, locale: Locale): String {
+    val number = value.toDoubleOrNull() ?: return value
+    val format = NumberFormat.getPercentInstance(locale).apply {
+        maximumFractionDigits = value.substringAfter('.', "").length
+    }
+    return format.format(number / 100)
 }

@@ -8,6 +8,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.test.core.app.ApplicationProvider
 import com.phonxiety.bridge.designsystem.component.formatDbfs
 import com.phonxiety.bridge.designsystem.component.formatMeasure
+import java.util.Locale
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -43,12 +44,21 @@ class FormattersTest {
 
     @Test
     fun unitsJoinTheWayTheWritingRulesAsk() {
-        assertEquals("78%", formatMeasure("78", "%"))
-        assertEquals("41\u00A0ms", formatMeasure("41", "ms"))
-        assertEquals("64\u00A0kbit/s", formatMeasure("64", "kbit/s"))
-        assertEquals("—", formatMeasure("—", null))
+        assertEquals("78%", formatMeasure("78", "%", Locale.ENGLISH))
+        assertEquals("41\u00A0ms", formatMeasure("41", "ms", Locale.ENGLISH))
+        assertEquals("64\u00A0kbit/s", formatMeasure("64", "kbit/s", Locale.ENGLISH))
+        assertEquals("—", formatMeasure("—", null, Locale.ENGLISH))
         assertEquals("−21\u00A0dBFS", formatDbfs(-21f))
         assertEquals("0\u00A0dBFS", formatDbfs(0f))
+    }
+
+    @Test
+    fun percentUsesTheLocalesOwnSpacing() {
+        assertEquals("78%", formatMeasure("78", "%", Locale.ENGLISH))
+        assertEquals("78\u00A0%", formatMeasure("78", "%", Locale.FRENCH))
+        assertEquals("78\u00A0%", formatMeasure("78", "%", Locale.GERMAN))
+        assertEquals("—", formatMeasure("—", "%", Locale.FRENCH))
+        assertEquals("41\u00A0ms", formatMeasure("41", "ms", Locale.FRENCH))
     }
 
     @Test

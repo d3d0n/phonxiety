@@ -39,7 +39,59 @@ import com.phonxiety.bridge.designsystem.R
  * screenshot. The card sits on a neutral surface; the icon and the error semantics carry the
  * failure, so a long error page does not read as a wall of red.
  */
-@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun ErrorCard(
+    title: String,
+    message: String,
+    modifier: Modifier = Modifier,
+    output: String? = null,
+    initiallyExpanded: Boolean = false
+) {
+    ErrorCardContent(
+        title = title,
+        message = message,
+        modifier = modifier,
+        output = output,
+        initiallyExpanded = initiallyExpanded,
+        actionLabel = null,
+        onAction = null,
+        dismissLabel = null,
+        onDismiss = null
+    )
+}
+
+/**
+ * The action shape. [onAction] is the last parameter so the older
+ * `ErrorCard(title, message, actionLabel = "Retry") { retry() }` call keeps binding its trailing
+ * lambda to the action.
+ */
+@Composable
+fun ErrorCard(
+    title: String,
+    message: String,
+    modifier: Modifier = Modifier,
+    output: String? = null,
+    initiallyExpanded: Boolean = false,
+    actionLabel: String? = null,
+    onAction: () -> Unit
+) {
+    ErrorCardContent(
+        title = title,
+        message = message,
+        modifier = modifier,
+        output = output,
+        initiallyExpanded = initiallyExpanded,
+        actionLabel = actionLabel,
+        onAction = onAction,
+        dismissLabel = null,
+        onDismiss = null
+    )
+}
+
+/**
+ * The extended shape with a secondary dismiss. [dismissLabel] has no default, so this shape never
+ * competes with the action overload for a plain trailing lambda.
+ */
 @Composable
 fun ErrorCard(
     title: String,
@@ -49,8 +101,34 @@ fun ErrorCard(
     initiallyExpanded: Boolean = false,
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null,
-    dismissLabel: String? = null,
-    onDismiss: (() -> Unit)? = null
+    dismissLabel: String,
+    onDismiss: () -> Unit
+) {
+    ErrorCardContent(
+        title = title,
+        message = message,
+        modifier = modifier,
+        output = output,
+        initiallyExpanded = initiallyExpanded,
+        actionLabel = actionLabel,
+        onAction = onAction,
+        dismissLabel = dismissLabel,
+        onDismiss = onDismiss
+    )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ErrorCardContent(
+    title: String,
+    message: String,
+    modifier: Modifier,
+    output: String?,
+    initiallyExpanded: Boolean,
+    actionLabel: String?,
+    onAction: (() -> Unit)?,
+    dismissLabel: String?,
+    onDismiss: (() -> Unit)?
 ) {
     var expanded by rememberSaveable(output) { mutableStateOf(initiallyExpanded) }
     val status = LocalStatusColors.current

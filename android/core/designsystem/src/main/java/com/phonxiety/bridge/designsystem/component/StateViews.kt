@@ -32,8 +32,33 @@ fun EmptyState(
     title: String,
     modifier: Modifier = Modifier,
     message: String? = null,
-    action: (@Composable () -> Unit)? = null,
-    icon: ImageVector? = null
+    action: (@Composable () -> Unit)? = null
+) {
+    EmptyStateContent(title = title, modifier = modifier, message = message, icon = null, action = action)
+}
+
+/**
+ * The extended shape with a decorative icon. [icon] has no default, so `EmptyState("Empty") { … }`
+ * keeps binding its trailing lambda to [action] instead of matching this overload.
+ */
+@Composable
+fun EmptyState(
+    title: String,
+    modifier: Modifier = Modifier,
+    message: String? = null,
+    icon: ImageVector,
+    action: (@Composable () -> Unit)? = null
+) {
+    EmptyStateContent(title = title, modifier = modifier, message = message, icon = icon, action = action)
+}
+
+@Composable
+private fun EmptyStateContent(
+    title: String,
+    modifier: Modifier,
+    message: String?,
+    icon: ImageVector?,
+    action: (@Composable () -> Unit)?
 ) {
     Column(
         modifier = modifier

@@ -16,6 +16,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import com.phonxiety.bridge.designsystem.component.ActionEmphasis
+import com.phonxiety.bridge.designsystem.component.EmptyState
 import com.phonxiety.bridge.designsystem.component.ErrorCard
 import com.phonxiety.bridge.designsystem.component.LinkPath
 import com.phonxiety.bridge.designsystem.component.LinkPathPill
@@ -138,6 +139,40 @@ class DesignSystemBehaviourTest {
                 ProgressBarRangeInfo(0.4f, 0f..1f)
             )
         ).assertExists()
+    }
+
+    @Test
+    fun legacyErrorCardTrailingLambdaIsTheAction() {
+        var retries = 0
+        composeRule.setContent {
+            PhonxietyTheme(dynamicColor = false) {
+                ErrorCard(
+                    title = "The update failed",
+                    message = "The installer refused the package.",
+                    actionLabel = "Retry"
+                ) { retries++ }
+            }
+        }
+        composeRule.onNodeWithText("Retry").performClick()
+        composeRule.runOnIdle {
+            assertEquals(1, retries)
+        }
+    }
+
+    @Test
+    fun legacyEmptyStateTrailingLambdaIsItsAction() {
+        var starts = 0
+        composeRule.setContent {
+            PhonxietyTheme(dynamicColor = false) {
+                EmptyState("No calls yet") {
+                    PrimaryActionButton(label = "Start call", onClick = { starts++ })
+                }
+            }
+        }
+        composeRule.onNodeWithText("Start call").performClick()
+        composeRule.runOnIdle {
+            assertEquals(1, starts)
+        }
     }
 
     @Test

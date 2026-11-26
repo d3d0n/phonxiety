@@ -90,6 +90,76 @@ class ScreenScaffoldScreenshotTest {
     }
 
     @Test
+    fun widePhoneInDark() {
+        composeRule.setContent {
+            PhonxietyTheme(darkTheme = true, dynamicColor = false) {
+                ScreenScaffold(title = "Settings", onBack = {}) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        SectionCard(title = "Bridge", subtitle = "The service that keeps the link open.") {
+                            KeyValueRow(label = "State", value = "Connected")
+                            KeyValueRow(label = "Path", value = "Direct")
+                        }
+                        SectionCard(title = "Audio") {
+                            KeyValueRow(label = "Codec", value = "Opus")
+                        }
+                    }
+                }
+            }
+        }
+        composeRule.onRoot().assertAccessible()
+        composeRule.onRoot().captureRoboImage("src/test/screenshots/designsystem_scaffold_411_dark.png")
+    }
+
+    @Test
+    fun widePhoneInDynamicColour() {
+        composeRule.setContent {
+            PhonxietyTheme(dynamicColor = true) {
+                ScreenScaffold(title = "Settings", onBack = {}) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        SectionCard(title = "Bridge", subtitle = "The service that keeps the link open.") {
+                            KeyValueRow(label = "State", value = "Connected")
+                            KeyValueRow(label = "Path", value = "Direct")
+                        }
+                        SectionCard(title = "Audio") {
+                            KeyValueRow(label = "Codec", value = "Opus")
+                        }
+                    }
+                }
+            }
+        }
+        composeRule.onRoot().assertAccessible()
+        composeRule.onRoot().captureRoboImage("src/test/screenshots/designsystem_scaffold_411_dynamic.png")
+    }
+
+    @Test
+    fun smallScreenAtTwoHundredPercentInLight() {
+        composeRule.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(
+                LocalDensity provides Density(density.density, fontScale = 2f)
+            ) {
+                PhonxietyTheme(darkTheme = false, dynamicColor = false) {
+                    Box(
+                        modifier = Modifier
+                            .testTag(SCAFFOLD_TAG)
+                            .width(320.dp)
+                            .fillMaxSize()
+                    ) {
+                        ScreenScaffold(title = "Settings", onBack = {}) {
+                            SectionCard(title = "Bridge", subtitle = "The service that keeps the link open.") {
+                                KeyValueRow(label = "State", value = "Connected")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        composeRule.onNodeWithTag(SCAFFOLD_TAG).assertAccessible()
+        composeRule.onNodeWithTag(SCAFFOLD_TAG)
+            .captureRoboImage("src/test/screenshots/designsystem_scaffold_320_font200_light.png")
+    }
+
+    @Test
     fun lowerSectionAfterScrolling() {
         composeRule.setContent {
             PhonxietyTheme(dynamicColor = false) {
