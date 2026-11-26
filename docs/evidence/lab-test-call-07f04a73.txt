@@ -1,0 +1,22 @@
+call 07f04a73-72cf-4a06-bdd7-22928f5d76a4
+Lab 30 s test call placed from the phone (Test lab -> Place a 30 s test call), phone codec preference PCM
+state: "ended"
+call_outcome: "answered"
+task_outcome: "succeeded"
+result_status: "ready"
+audio_codec: "pcm"
+disconnect_cause: {"code": 2, "label": "", "reason": "LOCAL"}
+summary: "Connected; the other party answered yes when asked if they could hear the agent clearly. The agent thanked them and ended the exchange."
+
+transcript:
+  assistant: Hi, this is ChatGPT from the Phonxiety test lab. Can you hear me clearly?
+  user: [far-end speech omitted]
+  assistant: Thanks! Have a great day.
+
+daemon log:
+  phonxiety.controller: call 07f04a73-72cf-4a06-bdd7-22928f5d76a4: phone reports dialing (cause {'code': 0, 'label': '', 'reason': ''})
+  phonxiety.controller: call 07f04a73-72cf-4a06-bdd7-22928f5d76a4: phone reports active (cause {'code': 0, 'label': '', 'reason': ''})
+  phonxiety.device: call 07f04a73-72cf-4a06-bdd7-22928f5d76a4: pcm audio at no encoder; requested pcm; phone link at audio start: *direct [ipv6] rtt 39 ms, sent 1199, received 1099,
+  phonxiety.controller: call 07f04a73-72cf-4a06-bdd7-22928f5d76a4: hangup accepted by the phone
+  phonxiety.controller: call 07f04a73-72cf-4a06-bdd7-22928f5d76a4: phone reports ending (cause {'code': 0, 'label': '', 'reason': ''})
+  phonxiety.controller: call 07f04a73-72cf-4a06-bdd7-22928f5d76a4: phone reports ended (cause {'code': 2, 'label': '', 'reason': 'LOCAL'})

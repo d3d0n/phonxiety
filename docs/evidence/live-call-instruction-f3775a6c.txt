@@ -1,0 +1,39 @@
+call f3775a6c-0fcc-402d-a84b-1c0137fae2f8
+Composer call; at 06:25:00 the instruction 'Ask the person what they plan to do on Thursday.' was sent from Tell the agent
+state: "ended"
+call_outcome: "answered"
+task_outcome: "succeeded"
+result_status: "ready"
+audio_codec: "pcm"
+disconnect_cause: {"code": 2, "label": "", "reason": "LOCAL"}
+summary: "Chatted about the person's day and their work on the mobile app; the agent asked about Thursday as instructed and said goodbye." [paraphrased: personal details omitted]
+
+transcript:
+  assistant: Hi, this is ChatGPT. I'm calling just to chat about your day. How's it going?
+  user: [far-end speech omitted]
+  assistant: Pretty good. Thanks for asking. What's been the best part of your day so far?
+  user: [far-end speech omitted]
+  assistant: Nice. What's been the most fun or surprising part of building it?
+  user: [far-end speech omitted]
+  assistant: Uh-huh. That sounds really satisfying. What's
+  user: [far-end speech omitted]
+  assistant: okay. Do you have anything you're looking forward to on Thursday?
+  user: [far-end speech omitted]
+  assistant: That's fair. Anything you'd like to make time for that day, even something small?
+  user: [far-end speech omitted]
+  assistant: Got it. Then what's the last thing you want to wrap up before bed?
+  user: [far-end speech omitted]
+  assistant: Mm-hmm. Nice.
+  user: [far-end speech omitted]
+  assistant: That sounds like a solid wind-down. Before you crash, anything on Thursday you'd want to feel ready for?
+  user: [far-end speech omitted]
+  assistant: Okay, then I hope you get to bed soon. Anything else on your mind before we wrap up?
+  assistant: Goodbye.
+
+daemon log:
+  phonxiety.controller: call f3775a6c-0fcc-402d-a84b-1c0137fae2f8: phone reports dialing (cause {'code': 0, 'label': '', 'reason': ''})
+  phonxiety.controller: call f3775a6c-0fcc-402d-a84b-1c0137fae2f8: phone reports active (cause {'code': 0, 'label': '', 'reason': ''})
+  phonxiety.device: call f3775a6c-0fcc-402d-a84b-1c0137fae2f8: pcm audio at no encoder; requested pcm; phone link at audio start: *direct [ipv6] rtt 28 ms, sent 77, received 42, los
+  phonxiety.controller: call f3775a6c-0fcc-402d-a84b-1c0137fae2f8: hangup accepted by the phone
+  phonxiety.controller: call f3775a6c-0fcc-402d-a84b-1c0137fae2f8: phone reports ending (cause {'code': 0, 'label': '', 'reason': ''})
+  phonxiety.controller: call f3775a6c-0fcc-402d-a84b-1c0137fae2f8: phone reports ended (cause {'code': 2, 'label': '', 'reason': 'LOCAL'})

@@ -1,0 +1,25 @@
+call 83aefaca-a874-4963-9880-47c6dfb62823
+Composer call; Lab loopback 5 s (06:28:14-06:28:22) and tone 5 s (06:28:25) ran inside it, Summarise now at 06:29:14, Hang up from the app at 06:31:28
+state: "ended"
+call_outcome: "answered"
+task_outcome: "succeeded"
+result_status: "ready"
+audio_codec: "pcm"
+disconnect_cause: {"code": 2, "label": "", "reason": "LOCAL"}
+summary: "The person said their evening was fine and that they had been building an app involving ChatGPT from scratch. They described adding connection-checking functionality, support for multiple managers and KernelSU alongside existing Magisk support. The agent asked what was hardest; the transcript ends before the person answered."
+
+transcript:
+  assistant: Hi, this is ChatGPT calling via the phonxiety app. I'm just checking in to chat about your evening. How's tonight going?
+  user: [far-end speech omitted]
+  assistant: Хорошо, а что у тебя сегодня было — чем занимался вечером?
+  user: [far-end speech omitted]
+  [remaining turns omitted for privacy]
+
+daemon log:
+  phonxiety.controller: call 83aefaca-a874-4963-9880-47c6dfb62823: phone reports dialing (cause {'code': 0, 'label': '', 'reason': ''})
+  phonxiety.controller: call 83aefaca-a874-4963-9880-47c6dfb62823: phone reports active (cause {'code': 0, 'label': '', 'reason': ''})
+  phonxiety.device: call 83aefaca-a874-4963-9880-47c6dfb62823: pcm audio at no encoder; requested pcm; phone link at audio start: *direct [ipv6] rtt 55 ms, sent 252, received 197, l
+  phonxiety.controller: call 83aefaca-a874-4963-9880-47c6dfb62823: hangup requested (app_requested)
+  phonxiety.controller: call 83aefaca-a874-4963-9880-47c6dfb62823: hangup accepted by the phone
+  phonxiety.controller: call 83aefaca-a874-4963-9880-47c6dfb62823: phone reports ending (cause {'code': 0, 'label': '', 'reason': ''})
+  phonxiety.controller: call 83aefaca-a874-4963-9880-47c6dfb62823: phone reports ended (cause {'code': 2, 'label': '', 'reason': 'LOCAL'})
