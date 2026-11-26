@@ -33,26 +33,38 @@ internal class CoroutineLinkScheduler(private val scope: CoroutineScope) : LinkS
  * Push updates arrive through [start]'s [IrohPathSource]; the link's 1 s sample
  * loop also calls [observe].  Every observation (re)arms one cancellable
  * deadline, so a link that stays on the relay escalates even if no further
- * event ever arrives.  Once the policy escalates or [cancel] runs the monitor
- * is finished: it stops its subscription, cancels the deadline and ignores
- * every callback that arrives afterwards.
+ * event ever arrives.
+ *
+ * A monitor owns one connection: [start] opens a generation in the policy and
+ * [cancel] retires it, each clearing that connection's relay residence without
+ * touching the endpoint's escalation history.  Once the link delivers an
+ * escalation the monitor is finished; if the link refuses it (a call was
+ * reserved in the race, or the link is gone) the watch is revived so the
+ * sample loop and the policy's cooldown can escalate later — the link never
+ * stays on the relay because of one lost race.
  */
 internal class IrohPathMonitor(
     private val policy: IrohEscalationPolicy,
     private val scheduler: LinkScheduler,
     private val ownsCall: () -> Boolean,
-    private val onEscalate: (IrohEscalation) -> Unit
+    private val onEscalate: (IrohEscalation) -> Boolean
 ) {
     private val lock = Any()
     private var finished = false
+    private var cancelled = false
     private var armed: LinkTask? = null
     private var watch: IrohPathWatch? = null
+    private var generation = 0L
 
     /** Subscribes to the connection's path changes; a subscription arriving after the end is stopped at once. */
     fun start(source: IrohPathSource) {
+        synchronized(lock) {
+            if (cancelled || generation != 0L) return
+            generation = policy.beginConnection()
+        }
         val subscription = source.subscribe { kind -> observe(kind) }
         val keep = synchronized(lock) {
-            if (finished) {
+            if (finished || cancelled) {
                 false
             } else {
                 watch = subscription
@@ -65,64 +77,84 @@ internal class IrohPathMonitor(
     /** One observation of the selected path; safe from any thread. */
     fun observe(kind: IrohPathKind) {
         var escalation: IrohEscalation? = null
-        var stopped: IrohPathWatch? = null
         synchronized(lock) {
-            if (finished) return
+            if (finished || cancelled) return
             policy.observePath(kind, ownsCall())
             escalation = policy.evaluate(ownsCall())
-            if (escalation != null) {
-                stopped = finishLocked()
-            } else {
-                scheduleLocked()
-            }
+            if (escalation == null) scheduleLocked()
         }
-        stopped?.stop()
-        escalation?.let(onEscalate)
+        deliver(escalation)
     }
 
-    /** A network change restarts the cooldown and drops stale relay evidence. */
-    fun networkChanged() {
-        var escalation: IrohEscalation? = null
-        var stopped: IrohPathWatch? = null
+    /** Drops the connection's stale relay evidence after a network change. */
+    fun noteNetworkChange() {
         synchronized(lock) {
-            if (finished) return
-            policy.observeNetworkChange()
-            escalation = policy.evaluate(ownsCall())
-            if (escalation != null) stopped = finishLocked() else scheduleLocked()
+            if (finished || cancelled) return
+            policy.noteNetworkChange()
         }
-        stopped?.stop()
-        escalation?.let(onEscalate)
     }
 
-    /** Stops for good: the deadline is cancelled and the subscription unregistered. */
+    /** Whether the policy admits a network-triggered endpoint recycle right now. */
+    fun admitNetworkRecycle(): IrohNetworkDecision = synchronized(lock) {
+        if (finished || cancelled) return IrohNetworkDecision.HELD
+        policy.admitNetworkRecycle(ownsCall())
+    }
+
+    /** Stops for good: the deadline is cancelled, the subscription unregistered and the generation retired. */
     fun cancel() {
-        val (task, subscription) = synchronized(lock) {
+        val (task, subscription, retired) = synchronized(lock) {
+            if (cancelled) return
+            cancelled = true
             val armedNow = if (finished) null else armed
             val watched = if (finished) null else watch
             finished = true
             armed = null
             watch = null
-            armedNow to watched
+            val current = generation.takeIf { it != 0L }
+            generation = 0L
+            Triple(armedNow, watched, current)
         }
         task?.cancel()
         subscription?.stop()
+        retired?.let { policy.endConnection(it) }
     }
 
     private fun onDeadline() {
         var escalation: IrohEscalation? = null
-        var stopped: IrohPathWatch? = null
         synchronized(lock) {
             armed = null
-            if (finished) return
+            if (finished || cancelled) return
             escalation = policy.evaluate(ownsCall())
-            if (escalation != null) {
-                stopped = finishLocked()
-            } else {
+            if (escalation == null) scheduleLocked()
+        }
+        deliver(escalation)
+    }
+
+    /**
+     * Hands one escalation to the link.  A refusal means the link could not
+     * act (a call took ownership in the race); the monitor stays alive and the
+     * policy's cooldown plus the 1 s sample re-arm it.
+     */
+    private fun deliver(escalation: IrohEscalation?) {
+        if (escalation == null) return
+        if (!finishAndDeliver(escalation)) {
+            synchronized(lock) {
+                if (cancelled) return
+                finished = false
+                armed = null
                 scheduleLocked()
             }
         }
+    }
+
+    /** Ends the watch and runs the callback; false when the link refused it. */
+    private fun finishAndDeliver(escalation: IrohEscalation): Boolean {
+        val stopped = synchronized(lock) {
+            if (finished || cancelled) return true
+            finishLocked()
+        }
         stopped?.stop()
-        escalation?.let(onEscalate)
+        return onEscalate(escalation)
     }
 
     /** Caller holds [lock]. */
@@ -139,6 +171,7 @@ internal class IrohPathMonitor(
     private fun scheduleLocked() {
         armed?.cancel()
         armed = null
+        if (finished || cancelled) return
         val delayMs = policy.nextCheckMs(ownsCall()) ?: return
         armed = try {
             scheduler.after(delayMs.coerceAtLeast(1L)) { onDeadline() }

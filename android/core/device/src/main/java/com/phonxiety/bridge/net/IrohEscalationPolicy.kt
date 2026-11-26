@@ -22,6 +22,18 @@ internal data class IrohEscalation(
     val recycleEndpoint: Boolean
 )
 
+/** What the policy admitted for a network change; only [RECYCLE] may act. */
+internal enum class IrohNetworkDecision {
+    /** No call and no cooldown: recycle the endpoint and report the link down. */
+    RECYCLE,
+
+    /** A bridge call owns the link: iroh keeps migrating the connection. */
+    DURING_CALL,
+
+    /** A recent escalation or recycle still holds the cooldown: keep this link. */
+    HELD
+}
+
 /**
  * The relay-only escalation rule as a pure state machine over an injected
  * monotonic clock.
@@ -33,10 +45,17 @@ internal data class IrohEscalation(
  * - a selected direct path clears the relay residence time and any pending work;
  * - an unknown path is not a relay and does not count as one;
  * - relay-only for [RELAY_LIMIT_MS] outside a call escalates at once, unless a
- *   previous escalation or network change still holds the cooldown;
+ *   previous escalation or network recycle still holds the cooldown;
  * - during a call the escalation is recorded as pending and released only by a
  *   fresh relay observation after the call ends and after the cooldown;
- * - a second escalation within [ESCALATION_WINDOW_MS] recycles the endpoint.
+ * - a second escalation within [ESCALATION_WINDOW_MS] recycles the endpoint;
+ * - a network change drops the connection's relay evidence and recycles the
+ *   endpoint only when no call is owned and the cooldown allows it, so the
+ *   same window holds whether the action came from the relay rule or the
+ *   network;
+ * - retiring or starting a monitor resets that connection's residence and
+ *   pending work (the disconnect never counts as relay residence), while the
+ *   escalation timestamps and the cooldown stay with the paired endpoint.
  */
 internal class IrohEscalationPolicy(
     private val clock: () -> Long,
@@ -71,6 +90,32 @@ internal class IrohEscalationPolicy(
 
     /** Escalations that happened, oldest first, for the rolling recycle window. */
     private val escalations = ArrayDeque<Long>()
+
+    /** Identifies the monitor currently watching this paired endpoint's paths. */
+    private var connectionGeneration = 0L
+
+    /**
+     * A monitor starts watching a connection: its relay residence begins fresh,
+     * and nothing recorded before the (re)connect can escalate it early.
+     */
+    @Synchronized
+    fun beginConnection(): Long {
+        connectionGeneration += 1
+        clearConnectionEvidence()
+        return connectionGeneration
+    }
+
+    /**
+     * A monitor stops watching.  Its residence and pending work are dropped so
+     * the disconnect time is never counted as relay residence; a retired
+     * generation cannot wipe the connection that replaced it.  Escalation
+     * timestamps and the cooldown stay: they belong to the endpoint.
+     */
+    @Synchronized
+    fun endConnection(generation: Long) {
+        if (generation != connectionGeneration) return
+        clearConnectionEvidence()
+    }
 
     /** Feeds one observation of the selected path and the call state into the rule. */
     @Synchronized
@@ -141,17 +186,30 @@ internal class IrohEscalationPolicy(
     }
 
     /**
-     * A network change was reported (Android or iroh): restart the cooldown and
-     * forget stale relay evidence, so the re-dialled link is judged afresh.
+     * A network change was reported (Android or iroh): the connection's relay
+     * evidence is stale and never survives the move.  This is not an action by
+     * itself: [admitNetworkRecycle] decides whether the endpoint may be
+     * recycled, under the same cooldown and call rule as the relay escalation.
      */
     @Synchronized
-    fun observeNetworkChange() {
+    fun noteNetworkChange() {
+        clearConnectionEvidence()
+    }
+
+    /**
+     * Admits or refuses a network-triggered recycle.  Only [RECYCLE] may act;
+     * it consumes the same cooldown and counts as an escalation for the rolling
+     * recycle window, so a network move right after a relay escalation can
+     * never recycle (or report down) again inside the window.
+     */
+    @Synchronized
+    fun admitNetworkRecycle(callOwned: Boolean): IrohNetworkDecision {
         val now = clock()
-        val until = now + cooldownMs
-        if (until > cooldownUntil) cooldownUntil = until
-        relaySince = null
-        pending = false
-        pendingFreshRelay = false
+        noteCallState(callOwned)
+        if (callOwned) return IrohNetworkDecision.DURING_CALL
+        if (now < cooldownUntil) return IrohNetworkDecision.HELD
+        recordAction(now)
+        return IrohNetworkDecision.RECYCLE
     }
 
     /**
@@ -163,17 +221,28 @@ internal class IrohEscalationPolicy(
         owned = callOwned
     }
 
-    private fun escalate(now: Long): IrohEscalation {
+    private fun clearConnectionEvidence() {
+        relaySince = null
+        pending = false
+        pendingFreshRelay = false
+    }
+
+    private fun escalate(now: Long): IrohEscalation = IrohEscalation(recycleEndpoint = recordAction(now))
+
+    /**
+     * Records one destructive action: it holds the cooldown, counts towards the
+     * rolling recycle window and drops the evidence it just acted on.  Returns
+     * whether another action already happened inside that window.
+     */
+    private fun recordAction(now: Long): Boolean {
         while (escalations.isNotEmpty() && now - escalations.first() >= escalationWindowMs) {
             escalations.removeFirst()
         }
-        val recycle = escalations.isNotEmpty()
+        val repeated = escalations.isNotEmpty()
         escalations.addLast(now)
-        pending = false
-        pendingFreshRelay = false
-        relaySince = null
+        clearConnectionEvidence()
         cooldownUntil = now + cooldownMs
-        return IrohEscalation(recycleEndpoint = recycle)
+        return repeated
     }
 
     private fun remaining(now: Long): Long = if (now >= cooldownUntil) 0L else cooldownUntil - now

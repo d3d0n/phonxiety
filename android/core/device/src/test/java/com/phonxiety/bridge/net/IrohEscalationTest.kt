@@ -18,10 +18,14 @@ class IrohEscalationTest {
     private val scheduler = ManualScheduler(clock)
     private val policy = IrohEscalationPolicy({ clock.now })
     private var owned = false
+    private var refuse = false
     private val escalations = mutableListOf<IrohEscalation>()
     private val source = FakeSource()
 
-    private fun monitor() = IrohPathMonitor(policy, scheduler, { owned }) { escalations += it }
+    private fun monitor() = IrohPathMonitor(policy, scheduler, { owned }) { escalation ->
+        escalations += escalation
+        !refuse
+    }
 
     // ------------------------------------------------------------------
     // Policy
@@ -159,19 +163,108 @@ class IrohEscalationTest {
     }
 
     @Test
-    fun aNetworkChangeSharesTheCooldown() {
+    fun aNetworkChangeInsideTheCooldownIsNotAdmitted() {
         policy.observePath(IrohPathKind.RELAY, callOwned = false)
         clock.now = 20_000
         assertNotNull(policy.evaluate(callOwned = false))
 
-        clock.now = 30_000
-        policy.observeNetworkChange()
-        policy.observePath(IrohPathKind.RELAY, callOwned = false)
+        // A network notification right after the escalation must not recycle
+        // again: only an admitted action may act.
+        clock.now = 25_000
+        policy.noteNetworkChange()
+        assertEquals(IrohNetworkDecision.HELD, policy.admitNetworkRecycle(callOwned = false))
 
-        clock.now = 89_999
+        clock.now = 79_999
+        assertEquals(IrohNetworkDecision.HELD, policy.admitNetworkRecycle(callOwned = false))
+        clock.now = 80_000
+        assertEquals(IrohNetworkDecision.RECYCLE, policy.admitNetworkRecycle(callOwned = false))
+    }
+
+    @Test
+    fun aNetworkChangeDuringACallTakesNoActionAndNoCooldown() {
+        policy.observePath(IrohPathKind.RELAY, callOwned = true)
+        clock.now = 25_000
+        policy.noteNetworkChange()
+        assertEquals(IrohNetworkDecision.DURING_CALL, policy.admitNetworkRecycle(callOwned = true))
+
+        // The move during the call must not poison the next escalation.
+        clock.now = 30_000
+        assertEquals(IrohNetworkDecision.RECYCLE, policy.admitNetworkRecycle(callOwned = false))
+    }
+
+    @Test
+    fun aNetworkRecycleHoldsTheCooldownForTheNextEscalation() {
+        clock.now = 10_000
+        assertEquals(IrohNetworkDecision.RECYCLE, policy.admitNetworkRecycle(callOwned = false))
+
+        // Relay again at 11 s; due at 31 s, but the network recycle is a
+        // recent action, so nothing happens before the cooldown at 70 s.
+        policy.observePath(IrohPathKind.RELAY, callOwned = false)
+        clock.now = 40_000
         assertNull(policy.evaluate(callOwned = false))
-        clock.now = 90_000
+        assertEquals(30_000L, policy.nextCheckMs(callOwned = false))
+
+        clock.now = 70_000
+        val escalation = policy.evaluate(callOwned = false)
+        assertNotNull(escalation)
+        // The network recycle counts as the first action of the window.
+        assertTrue(escalation!!.recycleEndpoint)
+    }
+
+    @Test
+    fun aReconnectAfterNineteenSecondsOfRelayGetsTheFullTwentySecondsAgain() {
+        policy.beginConnection()
+        policy.observePath(IrohPathKind.RELAY, callOwned = false)
+        clock.now = 19_000
+        // The link drops: the monitor retires before the replacement starts.
+        policy.endConnection(1L)
+
+        // The reconnect starts at 21 s and counts only its own relay
+        // residence, never the disconnect time.
+        clock.now = 21_000
+        policy.beginConnection()
+        policy.observePath(IrohPathKind.RELAY, callOwned = false)
+        clock.now = 40_999
+        assertNull(policy.evaluate(callOwned = false))
+        clock.now = 41_000
         assertNotNull(policy.evaluate(callOwned = false))
+    }
+
+    @Test
+    fun aRetiredConnectionDropsRelayResidenceAndKeepsTheCooldown() {
+        policy.beginConnection()
+        policy.observePath(IrohPathKind.RELAY, callOwned = false)
+        clock.now = 20_000
+        assertNotNull(policy.evaluate(callOwned = false)) // cooldown until 80 s
+        policy.endConnection(1L)
+
+        // The replacement connection starts relay-only at 30 s; its own
+        // residence is due at 50 s, but the previous action still holds.
+        clock.now = 30_000
+        policy.beginConnection()
+        policy.observePath(IrohPathKind.RELAY, callOwned = false)
+        assertEquals(20_000L, policy.nextCheckMs(callOwned = false))
+        clock.now = 50_000
+        assertNull(policy.evaluate(callOwned = false))
+        assertEquals(30_000L, policy.nextCheckMs(callOwned = false))
+        clock.now = 80_000
+        assertNotNull(policy.evaluate(callOwned = false))
+    }
+
+    @Test
+    fun aRetiredMonitorForgetsAPendingEscalation() {
+        policy.beginConnection()
+        policy.observePath(IrohPathKind.RELAY, callOwned = true)
+        clock.now = 25_000
+        assertNull(policy.evaluate(callOwned = true)) // pending during the call
+
+        policy.endConnection(1L)
+        clock.now = 30_000
+        policy.beginConnection()
+        policy.observePath(IrohPathKind.RELAY, callOwned = false)
+        // The stale pending escalation is gone: only fresh residence counts.
+        assertNull(policy.evaluate(callOwned = false))
+        assertEquals(20_000L, policy.nextCheckMs(callOwned = false))
     }
 
     // ------------------------------------------------------------------
@@ -259,29 +352,65 @@ class IrohEscalationTest {
     }
 
     @Test
-    fun aNetworkChangeRestartsTheCooldownAtTheMonitor() {
+    fun theMonitorRefusesARecycleInsideTheCooldown() {
         val monitor = monitor()
         monitor.start(source)
         source.path(IrohPathKind.RELAY)
         scheduler.advance(20_000)
         assertEquals(1, escalations.size)
 
-        // A replacement link, then a network change right after it sees relay.
+        // A replacement link sees the relay and the network moves right after.
         clock.now = 21_000
         val second = monitor()
         second.start(source)
         source.path(IrohPathKind.RELAY)
         clock.now = 22_000
-        second.networkChanged()
+        second.noteNetworkChange()
+        assertEquals(IrohNetworkDecision.HELD, second.admitNetworkRecycle())
+
+        // The cooldown from the first escalation holds until 80 s.
+        clock.now = 79_999
+        assertEquals(IrohNetworkDecision.HELD, second.admitNetworkRecycle())
+        clock.now = 80_000
+        assertEquals(IrohNetworkDecision.RECYCLE, second.admitNetworkRecycle())
+    }
+
+    @Test
+    fun aRefusedEscalationStaysArmedAndIsDeliveredAfterTheCooldown() {
+        refuse = true
+        val monitor = monitor()
+        monitor.start(source)
+        source.path(IrohPathKind.RELAY)
+        scheduler.advance(20_000)
+        assertEquals(1, escalations.size)
+        assertEquals(1, source.stops)
+
+        // The link refused (a call took the link in the race): the sample loop
+        // keeps the watch alive, so the escalation comes back after the cooldown.
+        refuse = false
+        clock.now = 21_000
+        monitor.observe(IrohPathKind.RELAY)
+        scheduler.advance(59_000)
+        assertEquals(2, escalations.size)
+    }
+
+    @Test
+    fun aStaleMonitorRetirementDoesNotWipeTheReplacementGeneration() {
+        val first = monitor()
+        first.start(source)
+        clock.now = 5_000
+        val second = monitor()
+        second.start(source)
         source.path(IrohPathKind.RELAY)
 
-        // The relay residence that began at 22 s is due at 42 s, but the
-        // network change moved the cooldown to 82 s.
-        scheduler.advance(57_999)
+        // The old generation retires after the new one started: its reset must
+        // not touch the new connection's residence.
+        clock.now = 10_000
+        first.cancel()
+        clock.now = 24_999
+        assertTrue(escalations.isEmpty())
+        scheduler.advance(1)
         assertEquals(1, escalations.size)
-        scheduler.advance(2_001)
-        assertEquals(2, escalations.size)
-        assertTrue(escalations[1].recycleEndpoint)
     }
 
     // ------------------------------------------------------------------
