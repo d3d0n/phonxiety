@@ -1,16 +1,27 @@
 package com.phonxiety.bridge.feature.settings
 
+import android.content.Context
+import android.content.res.Resources
+import androidx.test.core.app.ApplicationProvider
 import com.phonxiety.bridge.PhoneCodec
 import com.phonxiety.bridge.PhoneSettings
+import com.phonxiety.bridge.designsystem.asString
 import com.phonxiety.bridge.model.LinkTestFrames
 import com.phonxiety.bridge.model.LinkTestResult
 import com.phonxiety.bridge.model.PathKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /** The measured, reversible rules: each one fires on its own evidence and on nothing else. */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
 class AutoTuneTest {
+    private val resources: Resources = ApplicationProvider.getApplicationContext<Context>().resources
+
     private fun poor(p95: Long = 512, loss: Double = 0.04) = LinkTestResult(
         codec = "opus",
         p50 = 210,
@@ -46,7 +57,7 @@ class AutoTuneTest {
         assertEquals(PhoneCodec.OPUS, action.changes[0].to)
         assertEquals(TuneKey.MAX_BITRATE, action.changes[1].key)
         assertEquals("16000", action.changes[1].to)
-        assertTrue(action.changes[1].reason.contains("p95 512 ms"))
+        assertTrue(action.changes[1].reasonText().asString(resources).contains("p95 512"))
         assertTrue(action.suggestions.isEmpty())
     }
 
@@ -98,7 +109,7 @@ class AutoTuneTest {
         assertEquals(1, action.changes.size)
         assertEquals(TuneKey.WIFI_LOW_LATENCY, action.changes[0].key)
         assertEquals("false", action.changes[0].to)
-        assertTrue(action.changes[0].reason.contains("SEVERE"))
+        assertTrue(action.changes[0].reasonText().asString(resources).contains("SEVERE"))
     }
 
     @Test
@@ -140,8 +151,8 @@ class AutoTuneTest {
         )
         assertTrue(action.changes.isEmpty())
         assertEquals(2, action.suggestions.size)
-        assertTrue(action.suggestions[0].contains("Relay-only for 40 s"))
-        assertTrue(action.suggestions[1].contains("permission"))
+        assertTrue(action.suggestions[0].asString(resources).contains("Relay-only for 40"))
+        assertTrue(action.suggestions[1].asString(resources).contains("permission"))
     }
 
     @Test

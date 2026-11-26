@@ -7,6 +7,8 @@ import com.phonxiety.bridge.PhonePreferences
 import com.phonxiety.bridge.PhoneSettings
 import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.BridgeStateRepository
+import com.phonxiety.bridge.designsystem.UiText
+import com.phonxiety.bridge.designsystem.asString
 import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.model.ConnectionInfo
 import com.phonxiety.bridge.model.DaemonInfo
@@ -116,6 +118,46 @@ class SettingsViewModelTest {
     }
 
     @Test
+    fun `a save the daemon refuses keeps the edits and is not a read failure`() = runBlocking<Unit> {
+        api.putSettingsHandler = {
+            ApiOutcome.Failure(400, "invalid_argument", "ring_timeout_s must be between 5 and 180")
+        }
+        val vm = viewModel()
+        withTimeout(5_000) { vm.state.first { !it.daemon.loading } }
+
+        vm.updateForm { it.copy(ringTimeout = "1") }
+        vm.saveDaemonSettings()
+        withTimeout(5_000) { vm.state.first { !it.daemon.saving && it.daemon.error != null } }
+
+        val daemon = vm.state.value.daemon
+        assertTrue("a refused save is reported as a save", daemon.errorOnSave)
+        assertEquals("the edit stays in the form", "1", daemon.form.ringTimeout)
+        assertTrue("the edit is still pending", daemon.dirty)
+        val details = requireNotNull(daemon.error).asString(context.resources)
+        assertTrue("the daemon's reason stays available", details.contains("between 5 and 180"))
+    }
+
+    @Test
+    fun `an invalid number is never sent and never reported as saved`() = runBlocking<Unit> {
+        val vm = viewModel()
+        withTimeout(5_000) { vm.state.first { !it.daemon.loading } }
+
+        vm.updateForm { it.copy(ringTimeout = "soon") }
+        assertTrue("the edit is visible to the user", vm.state.value.daemon.dirty)
+        assertTrue("the field blocks the save", DaemonNumericField.RING_TIMEOUT in vm.state.value.daemon.invalidFields)
+        assertEquals(null, vm.state.value.daemon.form.toValuesOrNull())
+
+        vm.saveDaemonSettings()
+        withTimeout(5_000) { vm.state.first { it.message != null } }
+
+        assertTrue("nothing may reach the daemon", api.putSettingsBodies.isEmpty())
+        val message = requireNotNull(vm.state.value.message).asString(context.resources)
+        assertTrue(message.contains("Not saved"))
+        assertFalse(message.contains("Saved."))
+        assertEquals("60", vm.state.value.daemon.values.ringTimeout.toString())
+    }
+
+    @Test
     fun `phone preferences are written where the engine reads them`() = runBlocking<Unit> {
         val vm = viewModel()
         vm.setCodec("opus")
@@ -165,7 +207,7 @@ class SettingsViewModelTest {
     }
 
     @Test
-    fun `auto-tune applies measured changes, logs them and reverts them all`() = runBlocking<Unit> {
+    fun `auto-tune applies measured changes, logs them, reverts them all and offers an undo`() = runBlocking<Unit> {
         prefs.settings.value = PhoneSettings(
             preferredCodec = PhoneCodec.PCM,
             maxBitrate = 32_000,
@@ -203,7 +245,8 @@ class SettingsViewModelTest {
         assertEquals(16_000, prefs.settings.value.maxBitrate)
         assertFalse(prefs.settings.value.wifiLowLatency)
         val entries = vm.state.value.autoTune.changes
-        assertTrue(entries.all { it.reason.isNotBlank() })
+        val resources = context.resources
+        assertTrue(entries.all { it.reasonText().asString(resources).isNotBlank() })
         assertTrue(entries.any { it.key == TuneKey.WIFI_LOW_LATENCY.key })
 
         // A second evaluation over the same evidence must not double-log anything.
@@ -216,6 +259,60 @@ class SettingsViewModelTest {
         assertEquals("pcm", prefs.settings.value.preferredCodec)
         assertEquals(32_000, prefs.settings.value.maxBitrate)
         assertTrue(prefs.settings.value.wifiLowLatency)
+        assertTrue("the snackbar can put the changes back", vm.state.value.undoAvailable)
+
+        // The bulk revert is undoable from its snackbar instead of being confirmed up front.
+        vm.undoRevertEverything()
+        withTimeout(5_000) { vm.state.first { state -> state.autoTune.changes.none { it.reverted } } }
+        assertEquals("opus", prefs.settings.value.preferredCodec)
+        assertEquals(16_000, prefs.settings.value.maxBitrate)
+        assertFalse(prefs.settings.value.wifiLowLatency)
+        assertFalse(vm.state.value.undoAvailable)
+    }
+
+    @Test
+    fun `a bulk revert of repeated changes to one key ends at the value auto-tune first found`() = runBlocking<Unit> {
+        prefs.settings.value = PhoneSettings(maxBitrate = 32_000)
+        val log = AutoTuneLogStore(File(context.filesDir, "settings/auto-tune.json"))
+        log.append(
+            AutoTuneLogEntry(id = "first", atMs = 1, key = TuneKey.MAX_BITRATE.key, from = "32000", to = "16000")
+        )
+        log.append(
+            AutoTuneLogEntry(id = "second", atMs = 2, key = TuneKey.MAX_BITRATE.key, from = "16000", to = "64000")
+        )
+        prefs.settings.value = PhoneSettings(maxBitrate = 64_000)
+        val vm = viewModel()
+        withTimeout(5_000) { vm.state.first { it.autoTune.changes.size == 2 } }
+
+        vm.revertEverything()
+        withTimeout(5_000) { vm.state.first { state -> state.autoTune.changes.all { it.reverted } } }
+        assertEquals("the newest entry is not the value to restore", 32_000, prefs.settings.value.maxBitrate)
+
+        vm.undoRevertEverything()
+        withTimeout(5_000) { vm.state.first { state -> state.autoTune.changes.none { it.reverted } } }
+        assertEquals(64_000, prefs.settings.value.maxBitrate)
+    }
+
+    @Test
+    fun `undo restores a manual adjustment made before the bulk revert`() = runBlocking<Unit> {
+        prefs.settings.value = PhoneSettings(maxBitrate = 32_000)
+        val log = AutoTuneLogStore(File(context.filesDir, "settings/auto-tune.json"))
+        log.append(
+            AutoTuneLogEntry(id = "only", atMs = 1, key = TuneKey.MAX_BITRATE.key, from = "32000", to = "64000")
+        )
+        prefs.settings.value = PhoneSettings(maxBitrate = 64_000)
+        val vm = viewModel()
+        withTimeout(5_000) { vm.state.first { it.autoTune.changes.size == 1 } }
+
+        // The user moves the value by hand after auto-tune; the revert and its undo must respect it.
+        prefs.update { it.copy(maxBitrate = 48_000) }
+        vm.revertEverything()
+        withTimeout(5_000) { vm.state.first { state -> state.autoTune.changes.all { it.reverted } } }
+        assertEquals(32_000, prefs.settings.value.maxBitrate)
+
+        vm.undoRevertEverything()
+        withTimeout(5_000) { vm.state.first { state -> state.autoTune.changes.none { it.reverted } } }
+        assertEquals(48_000, prefs.settings.value.maxBitrate)
     }
 
     @Test

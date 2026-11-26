@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Screen -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_action_save_daemon">Save daemon settings</string>
+    <string name="settings_action_saving">Saving…</string>
+
+    <!-- Messages -->
+    <string name="settings_message_nothing_changed">Nothing changed</string>
+    <string name="settings_message_saved">Saved</string>
+    <plurals name="settings_message_saved_restart">
+        <item quantity="one">Saved. Restart the daemon to apply %1$d change</item>
+        <item quantity="other">Saved. Restart the daemon to apply %1$d changes</item>
+    </plurals>
+    <string name="settings_message_connection_auto">Connection: Automatic</string>
+    <string name="settings_message_connection_iroh">Connection: iroh only</string>
+    <string name="settings_message_connection_lan">Connection: LAN only</string>
+    <string name="settings_message_connection_tailscale">Connection: Tailscale only</string>
+    <string name="settings_message_unsaved_invalid">Not saved. Enter a whole number for the highlighted fields.</string>
+    <plurals name="settings_message_reverted">
+        <item quantity="one">Reverted %1$d change</item>
+        <item quantity="other">Reverted %1$d changes</item>
+    </plurals>
+    <string name="settings_message_nothing_to_revert">Nothing to revert</string>
+    <string name="settings_message_changes_restored">Changes restored</string>
+    <string name="settings_autotune_undo">Undo</string>
+    <string name="settings_error_whole_number">Enter a whole number</string>
+
+    <!-- Connection card -->
+    <string name="settings_card_connection_title">Connection</string>
+    <string name="settings_card_connection_subtitle">Which transport reaches the daemon, and which relays the phone\'s iroh endpoint uses</string>
+    <string name="settings_connection_transport">Transport</string>
+    <string name="settings_connection_help">Automatic probes every known address and keeps the best one. A pinned mode uses only that transport, and the link never moves during a call.</string>
+    <string name="settings_connection_relays">iroh relays</string>
+    <string name="settings_connection_relays_custom">This phone\'s relay URLs, one per line</string>
+    <string name="settings_connection_relays_none">The daemon lists no relays; its endpoint uses the defaults.</string>
+    <string name="settings_connection_relays_from_daemon">From the daemon: %1$s</string>
+    <string name="settings_connection_addresses">Known addresses</string>
+    <string name="settings_connection_addresses_none">None yet. The daemon reports its LAN and tailnet addresses when it is reachable.</string>
+    <plurals name="settings_connection_addresses_count">
+        <item quantity="one">%1$d address</item>
+        <item quantity="other">%1$d addresses</item>
+    </plurals>
+    <string name="settings_connection_addresses_split">%1$d on the LAN, %2$d in the tailnet</string>
+    <string name="settings_connection_addresses_error_title">Addresses</string>
+    <string name="settings_connection_addresses_error_message">The app could not read the daemon\'s other addresses. Check that it is running, then reload.</string>
+    <string name="settings_connection_reload">Reload from the daemon</string>
+    <string name="settings_connection_reading">Reading…</string>
+
+    <string name="settings_mode_auto">Automatic</string>
+    <string name="settings_mode_iroh">iroh only</string>
+    <string name="settings_mode_lan">LAN only</string>
+    <string name="settings_mode_tailscale">Tailscale only</string>
+    <string name="settings_relay_default">Default relays</string>
+    <string name="settings_relay_daemon">The daemon\'s relays</string>
+    <string name="settings_relay_custom">Custom URLs</string>
+    <string name="settings_relay_disabled">No relays</string>
+
+    <!-- Audio card -->
+    <string name="settings_card_audio_title">Audio</string>
+    <string name="settings_card_audio_subtitle">The phone sends this preference to the daemon. It takes effect on the next call.</string>
+    <string name="settings_audio_codec">Codec</string>
+    <string name="settings_codec_auto">Auto</string>
+    <string name="settings_codec_opus">Opus</string>
+    <string name="settings_codec_pcm">PCM</string>
+    <string name="settings_audio_bitrate_value">Max bitrate %1$s</string>
+    <string name="settings_audio_bitrate_range">%1$s to %2$s</string>
+    <string name="settings_audio_bitrate_caption">Bitrate</string>
+    <string name="settings_audio_lower_bitrate">Lower bitrate</string>
+    <string name="settings_audio_raise_bitrate">Raise bitrate</string>
+    <string name="settings_toggle_wifi_title">Wi-Fi low-latency lock</string>
+    <string name="settings_toggle_wifi_detail">Held while the link is up; released when auto-tune sees heat or a low battery.</string>
+    <string name="settings_toggle_thermal_title">Watch thermal status</string>
+    <string name="settings_toggle_thermal_detail">Lets auto-tune release the Wi-Fi lock on a hot phone.</string>
+    <string name="settings_toggle_battery_title">Watch the battery</string>
+    <string name="settings_toggle_battery_detail">Lets auto-tune release the Wi-Fi lock below %1$d%%.</string>
+
+    <!-- Device card -->
+    <string name="settings_card_device_title">Device</string>
+    <string name="settings_card_device_subtitle">How much this phone records for the log viewer</string>
+    <string name="settings_device_log_level">Log level</string>
+    <string name="settings_loglevel_debug">Debug</string>
+    <string name="settings_loglevel_info">Info</string>
+    <string name="settings_loglevel_warn">Warning</string>
+    <string name="settings_loglevel_error">Error</string>
+    <string name="settings_device_help">The log viewer in the test lab keeps lines at or above this level. The system log always gets everything.</string>
+
+    <!-- Daemon card -->
+    <string name="settings_card_daemon_title">Daemon settings</string>
+    <string name="settings_card_daemon_subtitle">Read from the daemon. A save sends only the keys that changed.</string>
+    <string name="settings_daemon_status_saving">Saving</string>
+    <string name="settings_daemon_status_edited">Edited</string>
+    <string name="settings_daemon_status_loaded">Loaded</string>
+    <string name="settings_daemon_error_title">The daemon did not answer</string>
+    <string name="settings_daemon_error_message">Check that the daemon is running on the computer, then reload.</string>
+    <string name="settings_daemon_save_error_title">The daemon did not save the changes</string>
+    <string name="settings_daemon_save_error_message">Your edits are kept. Open Details to see what the daemon refused.</string>
+    <string name="settings_daemon_applied">Applied changes</string>
+    <plurals name="settings_daemon_restart_needed">
+        <item quantity="one">Restart the daemon to apply %1$d change</item>
+        <item quantity="other">Restart the daemon to apply %1$d changes</item>
+    </plurals>
+    <string name="settings_daemon_group_connection">Connection</string>
+    <string name="settings_daemon_group_audio">Daemon audio default</string>
+    <string name="settings_daemon_group_audio_hint">Used when the phone says Auto</string>
+    <string name="settings_daemon_group_calls">Calls</string>
+    <string name="settings_daemon_group_voice">Voice</string>
+    <string name="settings_daemon_relays">Daemon relay URLs, one per line</string>
+    <string name="settings_daemon_opus_bitrate">Opus bitrate</string>
+    <string name="settings_daemon_ring_timeout">Ring timeout</string>
+    <string name="settings_daemon_max_call_length">Max call length</string>
+    <string name="settings_daemon_result_fields">Default result fields</string>
+    <string name="settings_daemon_result_fields_support">Comma separated</string>
+    <string name="settings_daemon_constraints">Default constraints</string>
+    <string name="settings_daemon_language_hint">Language hint</string>
+    <string name="settings_daemon_language_hint_support">For example en or ru-RU</string>
+    <string name="settings_daemon_codex_voice">Codex voice</string>
+    <string name="settings_daemon_codex_model">Codex task model</string>
+    <string name="settings_daemon_gemini_voice">Gemini voice</string>
+    <string name="settings_daemon_gemini_model">Gemini model</string>
+    <string name="settings_daemon_units_bits">Bits per second</string>
+    <string name="settings_daemon_units_seconds">Seconds</string>
+    <string name="settings_daemon_backend_codex">Codex</string>
+    <string name="settings_daemon_backend_gemini">Gemini</string>
+    <string name="settings_daemon_backend_deepgram">Deepgram</string>
+    <string name="settings_daemon_reload">Reload from the daemon</string>
+
+    <!-- Auto-tune card -->
+    <string name="settings_card_autotune_title">Auto-tune</string>
+    <string name="settings_card_autotune_subtitle">Measured changes only, each with its reason and a revert.</string>
+    <string name="settings_autotune_on">On</string>
+    <string name="settings_autotune_off">Off</string>
+    <string name="settings_autotune_toggle_title">Auto-tune</string>
+    <string name="settings_autotune_toggle_detail">Off by default. Changes the codec, bitrate and Wi-Fi lock only when a measurement asks for it.</string>
+    <string name="settings_autotune_evaluate">Evaluate now</string>
+    <string name="settings_autotune_revert_all">Revert everything</string>
+    <string name="settings_autotune_checked_at">Checked at %1$s</string>
+    <string name="settings_autotune_none">No automatic changes yet.</string>
+    <string name="settings_autotune_reverted">Reverted</string>
+    <string name="settings_autotune_revert">Revert</string>
+    <string name="settings_autotune_change_line">%1$s · %2$s</string>
+
+    <string name="settings_change_codec_opus">Codec → Opus</string>
+    <string name="settings_change_codec_pcm">Codec → PCM</string>
+    <string name="settings_change_codec_auto">Codec → Auto</string>
+    <string name="settings_change_codec_other">Codec → %1$s</string>
+    <string name="settings_change_bitrate">Max bitrate → %1$s</string>
+    <string name="settings_change_wifi_on">Wi-Fi low-latency lock → On</string>
+    <string name="settings_change_wifi_off">Wi-Fi low-latency lock → Off</string>
+
+    <!-- Auto-tune reasons and suggestions -->
+    <string name="settings_reason_lock_thermal_battery">Thermal status %1$s and %2$s battery: released the Wi-Fi low-latency lock. The call keeps running.</string>
+    <string name="settings_reason_lock_thermal">Thermal status %1$s: released the Wi-Fi low-latency lock. The call keeps running.</string>
+    <string name="settings_reason_lock_battery">Battery at %1$s and not charging: released the Wi-Fi low-latency lock. The call keeps running.</string>
+    <string name="settings_reason_codec_lower_p95_loss">Link test p95 %1$s, loss %2$s: a lower-rate codec keeps speech ahead of the queue.</string>
+    <string name="settings_reason_codec_lower_p95">Link test p95 %1$s: a lower-rate codec keeps speech ahead of the queue.</string>
+    <string name="settings_reason_codec_lower_loss">Link test loss %1$s: a lower-rate codec keeps speech ahead of the queue.</string>
+    <string name="settings_reason_bitrate_lower_p95_loss">Link test p95 %1$s, loss %2$s: dropped to Opus %3$s.</string>
+    <string name="settings_reason_bitrate_lower_p95">Link test p95 %1$s: dropped to Opus %2$s.</string>
+    <string name="settings_reason_bitrate_lower_loss">Link test loss %1$s: dropped to Opus %2$s.</string>
+    <string name="settings_reason_bitrate_richer">Link test p95 %1$s at %2$s: Opus %3$s is affordable.</string>
+    <string name="settings_reason_codec_cellular">Cellular with loss: PCM costs %1$s on a mobile link.</string>
+    <string name="settings_suggestion_relay_only">Relay-only for %1$s. Point the app at your own relay, or run a link test to see what the relay carries.</string>
+    <string name="settings_suggestion_local_network">The local-network permission is missing. The LAN path fails because of the permission, not the network.</string>
+
+    <!-- Units -->
+</resources>

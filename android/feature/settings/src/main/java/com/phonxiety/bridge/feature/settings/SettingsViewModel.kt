@@ -9,6 +9,7 @@ import com.phonxiety.bridge.PhoneSettings
 import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.BridgeStateRepository
 import com.phonxiety.bridge.data.DaemonApi
+import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.ConnectionInfo
 import com.phonxiety.bridge.model.LinkState
 import com.phonxiety.bridge.model.PathKind
@@ -63,6 +64,19 @@ class SettingsViewModel @Inject constructor(
     private var latestLinkTest: com.phonxiety.bridge.model.LinkTestResult? = null
     private val evaluateLock = Mutex()
 
+    /** The entries a bulk revert just undid, so its snackbar can put them back. */
+    private var lastReverted: List<AutoTuneLogEntry> = emptyList()
+
+    /** The affected preferences as they were just before a bulk revert; Undo restores them as is. */
+    private var lastRevertedSnapshot: RevertSnapshot? = null
+
+    /** Only the keys the bulk revert touched; a null value means that key is untouched. */
+    private data class RevertSnapshot(
+        val codec: String?,
+        val maxBitrate: Int?,
+        val wifiLowLatency: Boolean?
+    )
+
     init {
         viewModelScope.launch {
             phonePreferences.settings.collect { settings ->
@@ -112,7 +126,13 @@ class SettingsViewModel @Inject constructor(
             }
 
             is ApiOutcome.Failure -> _state.update {
-                it.copy(daemon = it.daemon.copy(loading = false, error = outcome.describe()))
+                it.copy(
+                    daemon = it.daemon.copy(
+                        loading = false,
+                        error = UiText.Literal(outcome.describe()),
+                        errorOnSave = false
+                    )
+                )
             }
         }
     }
@@ -125,10 +145,15 @@ class SettingsViewModel @Inject constructor(
     fun saveDaemonSettings() {
         val daemon = _state.value.daemon
         if (daemon.saving) return
-        val edited = daemon.form.toValues(daemon.values)
+        val edited = daemon.form.toValuesOrNull()
+        if (edited == null) {
+            // A numeric field that is not a whole number is never replaced by the old value.
+            _state.update { it.copy(message = UiText.Res(R.string.settings_message_unsaved_invalid)) }
+            return
+        }
         val changes = diff(daemon.values, edited)
         if (changes.isEmpty()) {
-            _state.update { it.copy(message = "Nothing changed") }
+            _state.update { it.copy(message = UiText.Res(R.string.settings_message_nothing_changed)) }
             return
         }
         _state.update { it.copy(daemon = it.daemon.copy(saving = true, error = null)) }
@@ -147,16 +172,25 @@ class SettingsViewModel @Inject constructor(
                                 error = null
                             ),
                             message = if (outcome.value.restartRequired) {
-                                "Saved; the daemon needs a restart for ${outcome.value.restartRequiredFields.joinToString()}"
+                                UiText.Plural(
+                                    R.plurals.settings_message_saved_restart,
+                                    outcome.value.restartRequiredFields.size
+                                )
                             } else {
-                                "Saved"
+                                UiText.Res(R.string.settings_message_saved)
                             }
                         )
                     }
                 }
 
                 is ApiOutcome.Failure -> _state.update {
-                    it.copy(daemon = it.daemon.copy(saving = false, error = outcome.describe()))
+                    it.copy(
+                        daemon = it.daemon.copy(
+                            saving = false,
+                            error = UiText.Literal(outcome.describe()),
+                            errorOnSave = true
+                        )
+                    )
                 }
             }
         }
@@ -207,7 +241,13 @@ class SettingsViewModel @Inject constructor(
         val chosen = ConnectionMode.of(mode)
         viewModelScope.launch {
             phonePreferences.update { it.copy(connectionMode = chosen.wire) }
-            _state.update { it.copy(message = "Connection: ${chosen.label}") }
+            val message = when (chosen) {
+                ConnectionMode.AUTO -> R.string.settings_message_connection_auto
+                ConnectionMode.IROH_ONLY -> R.string.settings_message_connection_iroh
+                ConnectionMode.LAN_ONLY -> R.string.settings_message_connection_lan
+                ConnectionMode.TAILSCALE_ONLY -> R.string.settings_message_connection_tailscale
+            }
+            _state.update { it.copy(message = UiText.Res(message)) }
         }
     }
 
@@ -245,7 +285,12 @@ class SettingsViewModel @Inject constructor(
                 }
 
                 is ApiOutcome.Failure -> _state.update {
-                    it.copy(connection = it.connection.copy(refreshing = false, error = outcome.describe()))
+                    it.copy(
+                        connection = it.connection.copy(
+                            refreshing = false,
+                            error = UiText.Literal(outcome.describe())
+                        )
+                    )
                 }
             }
         }
@@ -332,7 +377,8 @@ class SettingsViewModel @Inject constructor(
                     key = change.key.key,
                     from = change.from,
                     to = change.to,
-                    reason = change.reason
+                    reasonId = change.reason.name,
+                    reasonArgs = change.reasonArgs
                 )
             }
         }
@@ -376,7 +422,10 @@ class SettingsViewModel @Inject constructor(
             revert(entry)
             val log = changeLog.markReverted(setOf(entry.id))
             _state.update {
-                it.copy(autoTune = it.autoTune.copy(changes = log), message = "Reverted ${entry.title}")
+                it.copy(
+                    autoTune = it.autoTune.copy(changes = log),
+                    message = UiText.Plural(R.plurals.settings_message_reverted, 1)
+                )
             }
         }
     }
@@ -384,15 +433,70 @@ class SettingsViewModel @Inject constructor(
     fun revertEverything() {
         viewModelScope.launch {
             val pending = _state.value.autoTune.changes.filterNot { it.reverted }
-            for (entry in pending.asReversed()) revert(entry)
+            if (pending.isEmpty()) {
+                _state.update {
+                    it.copy(
+                        autoTune = it.autoTune.copy(changes = _state.value.autoTune.changes),
+                        message = UiText.Res(R.string.settings_message_nothing_to_revert),
+                        undoAvailable = false
+                    )
+                }
+                return@launch
+            }
+            // The values just before the revert are what Undo puts back: replaying the log would
+            // guess the order of repeated changes and lose a manual adjustment made meanwhile.
+            val snapshot = snapshotFor(pending)
+            // One write per key, back to the `from` of its oldest pending change, so a key that
+            // changed twice in a row ends at the value auto-tune first found.
+            val targets = TuneKey.entries.mapNotNull { key -> pending.lastOrNull { TuneKey.of(it.key) == key } }
+            for (entry in targets) revert(entry)
             val log = changeLog.markReverted(pending.map { it.id }.toSet())
+            lastReverted = pending
+            lastRevertedSnapshot = snapshot
             _state.update {
                 it.copy(
                     autoTune = it.autoTune.copy(changes = log),
-                    message = if (pending.isEmpty()) "Nothing to revert" else "Reverted ${pending.size} change(s)"
+                    message = UiText.Plural(R.plurals.settings_message_reverted, pending.size),
+                    undoAvailable = true
                 )
             }
         }
+    }
+
+    /** Puts back what a bulk revert undid; the snackbar offers this instead of a confirmation. */
+    fun undoRevertEverything() {
+        viewModelScope.launch {
+            val undone = lastReverted
+            val snapshot = lastRevertedSnapshot
+            if (undone.isEmpty() || snapshot == null) return@launch
+            phonePreferences.update { settings ->
+                settings.copy(
+                    preferredCodec = snapshot.codec ?: settings.preferredCodec,
+                    maxBitrate = snapshot.maxBitrate ?: settings.maxBitrate,
+                    wifiLowLatency = snapshot.wifiLowLatency ?: settings.wifiLowLatency
+                )
+            }
+            val log = changeLog.markReverted(undone.map { it.id }.toSet(), reverted = false)
+            lastReverted = emptyList()
+            lastRevertedSnapshot = null
+            _state.update {
+                it.copy(
+                    autoTune = it.autoTune.copy(changes = log),
+                    message = UiText.Res(R.string.settings_message_changes_restored),
+                    undoAvailable = false
+                )
+            }
+        }
+    }
+
+    private suspend fun snapshotFor(entries: List<AutoTuneLogEntry>): RevertSnapshot {
+        val keys = entries.mapNotNull { TuneKey.of(it.key) }.toSet()
+        val current = phonePreferences.settings.first()
+        return RevertSnapshot(
+            codec = current.preferredCodec.takeIf { TuneKey.CODEC in keys },
+            maxBitrate = current.maxBitrate.takeIf { TuneKey.MAX_BITRATE in keys },
+            wifiLowLatency = current.wifiLowLatency.takeIf { TuneKey.WIFI_LOW_LATENCY in keys }
+        )
     }
 
     private suspend fun revert(entry: AutoTuneLogEntry) {
@@ -409,7 +513,7 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun consumeMessage() = _state.update { it.copy(message = null) }
+    fun consumeMessage() = _state.update { it.copy(message = null, undoAvailable = false) }
 
     private fun ApiOutcome.Failure.describe(): String = "$code: $message"
 }

@@ -1,8 +1,11 @@
 package com.phonxiety.bridge.feature.doctor
 
+import androidx.annotation.StringRes
 import com.phonxiety.bridge.CrashReports
+import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.model.DoctorReport
+import com.phonxiety.bridge.model.LinkKind
 import com.phonxiety.bridge.model.LinkState
 import com.phonxiety.bridge.model.PathKind
 import com.phonxiety.bridge.root.DetectedProvider
@@ -18,10 +21,15 @@ import com.phonxiety.bridge.root.SuStatus
 /** Managers that hide `su` from a package they have not allowed yet. */
 private fun RootDetection.hidingManagers(): List<DetectedProvider> = providers.filter { it.id != RootId.MAGISK }
 
+/** The version without the provider's own banner suffix: "31.1:MAGISK" reads "31.1". */
+private fun DetectedProvider.displayVersion(): String = version.substringBefore(':').ifBlank { version }
+
 /** Leftovers of a provider that did not answer: reported so a migration makes sense. */
-private fun leftoversSuffix(root: RootDetection): String = root.leftovers.takeIf { it.isNotEmpty() }
-    ?.joinToString(prefix = " · inactive leftovers: ", separator = ", ") { "${it.id.doctorTitle()} ${it.version}" }
-    .orEmpty()
+private fun leftovers(root: RootDetection): UiText? {
+    if (root.leftovers.isEmpty()) return null
+    val names = root.leftovers.joinToString(", ") { "${it.id.doctorTitle()} ${it.displayVersion()}" }
+    return UiText.Res(R.string.doctor_evidence_leftovers, listOf(names))
+}
 
 /**
  * Turns one snapshot into the rows the screen shows. Pure: the same snapshot and bridge state always
@@ -38,11 +46,12 @@ object DoctorEvaluator {
         val rows = mutableListOf<DoctorRow>()
         val root = snapshot.root
         val provider = root.provider
+        val context = FixContext(provider = provider?.id, overlay = snapshot.overlay)
 
         rows += DoctorRow(
             id = ID_ROOT,
             kind = DoctorItemKind.ROOT_PROVIDER,
-            title = "Root provider",
+            title = UiText.Res(R.string.doctor_row_root_provider),
             severity = when {
                 root.su == SuStatus.GRANTED && root.conflict -> DoctorSeverity.WARN
                 root.su == SuStatus.GRANTED && provider == null -> DoctorSeverity.WARN
@@ -52,40 +61,68 @@ object DoctorEvaluator {
                 else -> DoctorSeverity.UNKNOWN
             },
             evidence = when {
-                root.su == SuStatus.GRANTED && root.conflict ->
-                    root.providers.joinToString(" + ") { "${it.id.doctorTitle()} ${it.version}" } +
-                        " are present but nothing said which one answers su; installing would be a guess"
+                root.su == SuStatus.GRANTED && root.conflict -> listOf(
+                    UiText.Res(
+                        R.string.doctor_evidence_root_conflict,
+                        listOf(root.providers.joinToString(" and ") { "${it.id.doctorTitle()} ${it.displayVersion()}" })
+                    )
+                )
 
-                root.su == SuStatus.GRANTED && provider == null ->
-                    "root is granted but no supported provider was found"
+                root.su == SuStatus.GRANTED && provider == null -> listOf(
+                    UiText.Res(R.string.doctor_evidence_root_no_provider)
+                )
 
-                root.su == SuStatus.GRANTED && provider != null ->
-                    "${provider.id.doctorTitle()} ${provider.version}" +
-                        (if (provider.managerInstalled) " · manager installed" else " · manager app not installed") +
-                        leftoversSuffix(root)
+                root.su == SuStatus.GRANTED && provider != null -> buildList {
+                    add(
+                        UiText.Res(
+                            R.string.doctor_evidence_root_granted,
+                            listOf(provider.id.doctorTitle(), provider.displayVersion())
+                        )
+                    )
+                    add(
+                        UiText.Res(
+                            if (provider.managerInstalled) {
+                                R.string.doctor_evidence_manager_installed
+                            } else {
+                                R.string.doctor_evidence_manager_missing
+                            }
+                        )
+                    )
+                    leftovers(root)?.let(::add)
+                }
 
-                root.su == SuStatus.DENIED -> "su answered but the manager refused this app"
+                root.su == SuStatus.DENIED -> listOf(UiText.Res(R.string.doctor_evidence_root_denied))
 
-                root.su == SuStatus.NOT_ROOTED && root.hidingManagers().isNotEmpty() ->
-                    "the ${root.hidingManagers().joinToString(" and ") { it.id.doctorTitle() }} manager is installed, " +
-                        "but su is hidden from this app until it is allowed in Superuser"
+                root.su == SuStatus.NOT_ROOTED && root.hidingManagers().isNotEmpty() -> listOf(
+                    UiText.Res(
+                        R.string.doctor_evidence_root_hidden,
+                        listOf(root.hidingManagers().joinToString(" and ") { it.id.doctorTitle() })
+                    )
+                )
 
-                root.su == SuStatus.NOT_ROOTED ->
-                    "no su binary answered" +
+                root.su == SuStatus.NOT_ROOTED -> listOf(
+                    UiText.Res(
                         if (root.providers.any { it.id == RootId.MAGISK }) {
-                            " · the Magisk app is installed, so Magisk itself is not active"
+                            R.string.doctor_evidence_root_not_rooted_magisk
                         } else {
-                            ""
+                            R.string.doctor_evidence_root_not_rooted
                         }
+                    )
+                )
 
-                else -> "su did not answer within ${RootShell.DEFAULT_TIMEOUT_MS / 1000} s"
+                else -> listOf(
+                    UiText.Res(
+                        R.string.doctor_evidence_root_timeout,
+                        listOf(RootShell.DEFAULT_TIMEOUT_MS / 1000)
+                    )
+                )
             },
-            plan = DoctorPolicy.planFor(DoctorItemKind.ROOT_PROVIDER)
+            plan = DoctorPolicy.planFor(DoctorItemKind.ROOT_PROVIDER, context)
         )
 
-        rows += moduleRow(snapshot)
-        rows += enabledRow(snapshot)
-        rows += overlayRow(snapshot)
+        rows += moduleRow(snapshot, context)
+        rows += enabledRow(snapshot, context)
+        rows += overlayRow(snapshot, context)
 
         val facts = snapshot.appFacts
         PrivilegedPermissions.ALL.sorted().forEach { permission ->
@@ -99,13 +136,17 @@ object DoctorEvaluator {
                     granted -> DoctorSeverity.OK
                     else -> DoctorSeverity.FAIL
                 },
-                evidence = when {
-                    facts == null -> "the package manager did not answer"
-                    granted -> "granted by the module's privapp allowlist"
-                    else -> "not granted; privapp-permissions-com.phonxiety.bridge.xml does not cover it"
-                },
+                evidence = listOf(
+                    UiText.Res(
+                        when {
+                            facts == null -> R.string.doctor_evidence_overlay_no_package_manager
+                            granted -> R.string.doctor_evidence_privileged_granted
+                            else -> R.string.doctor_evidence_privileged_missing
+                        }
+                    )
+                ),
                 subject = permission,
-                plan = DoctorPolicy.planFor(DoctorItemKind.PRIVILEGED_PERMISSION)
+                plan = DoctorPolicy.planFor(DoctorItemKind.PRIVILEGED_PERMISSION, context)
             )
         }
 
@@ -118,16 +159,20 @@ object DoctorEvaluator {
                     kind = DoctorItemKind.RUNTIME_PERMISSION,
                     title = permission.doctorTitle(),
                     severity = if (missing) DoctorSeverity.FAIL else DoctorSeverity.OK,
-                    evidence = when {
-                        !missing -> "granted"
+                    evidence = listOf(
+                        UiText.Res(
+                            when {
+                                !missing -> R.string.doctor_evidence_granted
 
-                        permission == RuntimePermission.ACCESS_LOCAL_NETWORK ->
-                            "not granted; Android 17 reports the missing grant as a timeout, not as a denial"
+                                permission == RuntimePermission.ACCESS_LOCAL_NETWORK ->
+                                    R.string.doctor_evidence_local_network_missing
 
-                        else -> "not granted"
-                    },
+                                else -> R.string.doctor_evidence_not_granted
+                            }
+                        )
+                    ),
                     subject = permission.androidName,
-                    plan = DoctorPolicy.planFor(DoctorItemKind.RUNTIME_PERMISSION)
+                    plan = DoctorPolicy.planFor(DoctorItemKind.RUNTIME_PERMISSION, context)
                 )
             }
 
@@ -135,49 +180,61 @@ object DoctorEvaluator {
         rows += DoctorRow(
             id = ID_NOTIFICATIONS,
             kind = DoctorItemKind.NOTIFICATIONS,
-            title = "Notifications",
+            title = UiText.Res(R.string.doctor_row_notifications),
             severity = if (notificationsMissing || !snapshot.notificationsEnabled) {
                 DoctorSeverity.FAIL
             } else {
                 DoctorSeverity.OK
             },
-            evidence = when {
-                notificationsMissing -> "POST_NOTIFICATIONS is not granted"
-                !snapshot.notificationsEnabled -> "the permission is granted but notifications are switched off"
-                else -> "notifications are allowed"
-            },
+            evidence = listOf(
+                UiText.Res(
+                    when {
+                        notificationsMissing -> R.string.doctor_evidence_notifications_permission
+                        !snapshot.notificationsEnabled -> R.string.doctor_evidence_notifications_switched_off
+                        else -> R.string.doctor_evidence_notifications_allowed
+                    }
+                )
+            ),
             subject = when {
                 notificationsMissing -> RuntimePermission.POST_NOTIFICATIONS.androidName
                 !snapshot.notificationsEnabled -> SUBJECT_NOTIFICATION_SETTINGS
                 else -> null
             },
-            plan = DoctorPolicy.planFor(DoctorItemKind.NOTIFICATIONS)
+            plan = DoctorPolicy.planFor(DoctorItemKind.NOTIFICATIONS, context)
         )
 
         rows += DoctorRow(
             id = ID_BATTERY,
             kind = DoctorItemKind.BATTERY_EXEMPTION,
-            title = "Battery exemption",
+            title = UiText.Res(R.string.doctor_row_battery),
             severity = when (snapshot.batteryExempt) {
                 true -> DoctorSeverity.OK
                 false -> DoctorSeverity.WARN
                 null -> DoctorSeverity.UNKNOWN
             },
-            evidence = when (snapshot.batteryExempt) {
-                true -> "exempt from battery optimisation"
-                false -> "not exempt; a locked phone can miss the heartbeat"
-                null -> "the power manager did not answer"
-            },
-            plan = DoctorPolicy.planFor(DoctorItemKind.BATTERY_EXEMPTION)
+            evidence = listOf(
+                UiText.Res(
+                    when (snapshot.batteryExempt) {
+                        true -> R.string.doctor_evidence_battery_allowed
+                        false -> R.string.doctor_evidence_battery_missing
+                        null -> R.string.doctor_evidence_battery_unknown
+                    }
+                )
+            ),
+            plan = DoctorPolicy.planFor(DoctorItemKind.BATTERY_EXEMPTION, context)
         )
 
         rows += DoctorRow(
             id = ID_PAIRING,
             kind = DoctorItemKind.PAIRING,
-            title = "Pairing",
+            title = UiText.Res(R.string.doctor_row_pairing),
             severity = if (paired) DoctorSeverity.OK else DoctorSeverity.FAIL,
-            evidence = if (paired) "a pairing is stored" else "no pairing link is stored",
-            plan = DoctorPolicy.planFor(DoctorItemKind.PAIRING)
+            evidence = listOf(
+                UiText.Res(
+                    if (paired) R.string.doctor_evidence_pairing_stored else R.string.doctor_evidence_pairing_missing
+                )
+            ),
+            plan = DoctorPolicy.planFor(DoctorItemKind.PAIRING, context)
         )
 
         // Only shown when the app actually recorded a death: a healthy install should not carry a
@@ -187,24 +244,29 @@ object DoctorEvaluator {
             rows += DoctorRow(
                 id = ID_LAST_CRASH,
                 kind = DoctorItemKind.LAST_CRASH,
-                title = "Last process exit",
+                title = UiText.Res(R.string.doctor_row_last_crash),
                 severity = when {
                     crash.memoryLimiter -> DoctorSeverity.WARN
                     crash.kind == CrashReports.Kind.ANR -> DoctorSeverity.WARN
                     crash.kind == CrashReports.Kind.CRASH -> DoctorSeverity.WARN
                     else -> DoctorSeverity.OK
                 },
-                evidence = when {
-                    crash.memoryLimiter ->
-                        "${crash.summary()}; the system reclaimed the process's memory, so keep the " +
-                            "service heap small and the battery exemption granted"
+                evidence = listOf(
+                    when {
+                        crash.memoryLimiter -> UiText.Res(
+                            R.string.doctor_evidence_crash_memory,
+                            listOf(crash.summary())
+                        )
 
-                    crash.kind == CrashReports.Kind.ANR ->
-                        "${crash.summary()}; the trace is in the diagnostics bundle"
+                        crash.kind == CrashReports.Kind.ANR -> UiText.Res(
+                            R.string.doctor_evidence_crash_trace,
+                            listOf(crash.summary())
+                        )
 
-                    else -> crash.summary()
-                },
-                plan = DoctorPolicy.planFor(DoctorItemKind.LAST_CRASH)
+                        else -> UiText.Literal(crash.summary())
+                    }
+                ),
+                plan = DoctorPolicy.planFor(DoctorItemKind.LAST_CRASH, context)
             )
         }
 
@@ -217,57 +279,84 @@ object DoctorEvaluator {
         return rows.map { row -> row.blockedWhileCalling(callActive) }
     }
 
-    private fun moduleRow(snapshot: DoctorSnapshot): DoctorRow {
+    private fun moduleRow(snapshot: DoctorSnapshot, context: FixContext): DoctorRow {
         val module = snapshot.module
-        val version = moduleVersion(module)
+        val version = module.version
         return DoctorRow(
             id = ID_MODULE_PRESENT,
             kind = DoctorItemKind.MODULE_PRESENT,
-            title = "Module installed",
+            title = UiText.Res(R.string.doctor_row_module_installed),
             severity = when (module) {
                 null, ModuleState.Unknown -> DoctorSeverity.UNKNOWN
                 ModuleState.Absent -> DoctorSeverity.FAIL
                 is ModuleState.Staged -> DoctorSeverity.WARN
                 else -> DoctorSeverity.OK
             },
-            evidence = when (module) {
-                null -> "the root provider could not be asked"
-                ModuleState.Unknown -> "the module directory under /data/adb could not be read"
-                ModuleState.Absent -> "no ${RecoveryBook.MODULE_ID} under /data/adb/modules"
-                is ModuleState.Staged -> "installed$version, waiting for the reboot that applies it"
-                is ModuleState.Enabled -> "present$version"
-                is ModuleState.Disabled -> "present$version, disabled"
-                ModuleState.RemovePending -> "present, but the remove flag is set"
-            },
-            plan = DoctorPolicy.planFor(DoctorItemKind.MODULE_PRESENT)
+            evidence = listOf(
+                UiText.Res(
+                    when (module) {
+                        null -> R.string.doctor_evidence_module_not_asked
+
+                        ModuleState.Unknown -> R.string.doctor_evidence_module_unreadable
+
+                        ModuleState.Absent -> R.string.doctor_evidence_module_absent
+
+                        is ModuleState.Staged -> if (version == null) {
+                            R.string.doctor_evidence_module_staged_no_version
+                        } else {
+                            R.string.doctor_evidence_module_staged
+                        }
+
+                        is ModuleState.Enabled -> if (version == null) {
+                            R.string.doctor_evidence_module_enabled_no_version
+                        } else {
+                            R.string.doctor_evidence_module_enabled
+                        }
+
+                        is ModuleState.Disabled -> if (version == null) {
+                            R.string.doctor_evidence_module_disabled_no_version
+                        } else {
+                            R.string.doctor_evidence_module_disabled
+                        }
+
+                        ModuleState.RemovePending -> R.string.doctor_evidence_module_remove_pending
+                    },
+                    listOfNotNull(version)
+                )
+            ),
+            plan = DoctorPolicy.planFor(DoctorItemKind.MODULE_PRESENT, context)
         )
     }
 
-    private fun enabledRow(snapshot: DoctorSnapshot): DoctorRow {
+    private fun enabledRow(snapshot: DoctorSnapshot, context: FixContext): DoctorRow {
         val module = snapshot.module
         return DoctorRow(
             id = ID_MODULE_ENABLED,
             kind = DoctorItemKind.MODULE_ENABLED,
-            title = "Module enabled",
+            title = UiText.Res(R.string.doctor_row_module_enabled),
             severity = when (module) {
                 is ModuleState.Enabled -> DoctorSeverity.OK
                 is ModuleState.Staged -> DoctorSeverity.WARN
                 is ModuleState.Disabled, ModuleState.Absent, ModuleState.RemovePending -> DoctorSeverity.FAIL
                 else -> DoctorSeverity.UNKNOWN
             },
-            evidence = when (module) {
-                is ModuleState.Enabled -> "the disable flag is absent"
-                is ModuleState.Staged -> "the overlay applies on the next boot"
-                is ModuleState.Disabled -> "the disable flag is set; the overlay is not mounted"
-                ModuleState.Absent -> "the module is not installed"
-                ModuleState.RemovePending -> "the remove flag is set; it disappears on the next boot"
-                ModuleState.Unknown, null -> "the module state could not be read"
-            },
-            plan = DoctorPolicy.planFor(DoctorItemKind.MODULE_ENABLED)
+            evidence = listOf(
+                UiText.Res(
+                    when (module) {
+                        null, ModuleState.Unknown -> R.string.doctor_evidence_module_unknown
+                        is ModuleState.Enabled -> R.string.doctor_evidence_enabled_flag_absent
+                        is ModuleState.Staged -> R.string.doctor_evidence_enabled_staged
+                        is ModuleState.Disabled -> R.string.doctor_evidence_enabled_disabled
+                        ModuleState.Absent -> R.string.doctor_evidence_enabled_absent
+                        ModuleState.RemovePending -> R.string.doctor_evidence_enabled_remove_pending
+                    }
+                )
+            ),
+            plan = DoctorPolicy.planFor(DoctorItemKind.MODULE_ENABLED, context)
         )
     }
 
-    private fun overlayRow(snapshot: DoctorSnapshot): DoctorRow {
+    private fun overlayRow(snapshot: DoctorSnapshot, context: FixContext): DoctorRow {
         val facts = snapshot.appFacts
         val path = facts?.apkPath
         val underPrivApp = path?.startsWith(PREFIX_PRIV_APP) == true
@@ -275,28 +364,27 @@ object DoctorEvaluator {
         return DoctorRow(
             id = ID_OVERLAY,
             kind = DoctorItemKind.OVERLAY,
-            title = "System overlay applied",
+            title = UiText.Res(R.string.doctor_row_overlay),
             severity = when {
                 facts == null -> DoctorSeverity.UNKNOWN
                 underPrivApp || updatedSystem -> DoctorSeverity.OK
                 else -> DoctorSeverity.FAIL
             },
-            evidence = when {
-                facts == null -> "the package manager did not answer"
+            evidence = listOf(
+                when {
+                    facts == null -> UiText.Res(R.string.doctor_evidence_overlay_no_package_manager)
 
-                underPrivApp -> "pm path $path"
+                    underPrivApp -> UiText.Res(R.string.doctor_evidence_overlay_privapp, listOfNotNull(path))
 
-                updatedSystem -> "an updated system app runs from $path"
+                    updatedSystem -> UiText.Res(R.string.doctor_evidence_overlay_updated, listOfNotNull(path))
 
-                else ->
-                    "the APK runs from $path; the module's overlay is not mounted" +
-                        if (snapshot.overlay == Overlay.METAMODULE_MISSING) {
-                            " (the provider needs a metamodule to mount system/)"
-                        } else {
-                            ""
-                        }
-            },
-            plan = DoctorPolicy.planFor(DoctorItemKind.OVERLAY)
+                    snapshot.overlay == Overlay.METAMODULE_MISSING ->
+                        UiText.Res(R.string.doctor_evidence_overlay_metamodule, listOfNotNull(path))
+
+                    else -> UiText.Res(R.string.doctor_evidence_overlay_not_mounted, listOfNotNull(path))
+                }
+            ),
+            plan = DoctorPolicy.planFor(DoctorItemKind.OVERLAY, context)
         )
     }
 
@@ -308,24 +396,28 @@ object DoctorEvaluator {
             LinkState.Offline -> DoctorSeverity.FAIL
         }
         val evidence = when (link) {
-            is LinkState.Up -> buildString {
-                append("up over ${link.kind.name.lowercase()} · ${link.path.name.lowercase()}")
-                link.rttMs?.let { append(" · $it ms") }
-                append(" · ${link.reconnects} reconnects")
-                link.address?.let { append(" · $it") }
+            is LinkState.Up -> buildList<UiText> {
+                add(UiText.Res(pathLabel(link.path)))
+                add(UiText.Res(kindLabel(link.kind)))
+                add(UiText.Plural(R.plurals.doctor_evidence_reconnects, link.reconnects))
+                link.rttMs?.let { add(UiText.Res(R.string.doctor_evidence_rtt, listOf(it))) }
+                link.address?.let { add(UiText.Literal(it)) }
             }
 
-            is LinkState.Connecting -> "connecting over ${link.candidate.name.lowercase()}"
+            is LinkState.Connecting -> listOf(
+                UiText.Res(R.string.doctor_evidence_link_connecting),
+                UiText.Res(kindLabel(link.candidate))
+            )
 
-            LinkState.Offline -> buildString {
-                append("offline; no path to the daemon")
-                bridge.lastError?.let { append(": ${it.message} (${it.code})") }
+            LinkState.Offline -> buildList<UiText> {
+                add(UiText.Res(R.string.doctor_evidence_link_offline))
+                bridge.lastError?.let { add(UiText.Literal("${it.message} (${it.code})")) }
             }
         }
         return DoctorRow(
             id = ID_LINK,
             kind = DoctorItemKind.LINK,
-            title = "Device link",
+            title = UiText.Res(R.string.doctor_row_link),
             severity = severity,
             evidence = evidence,
             plan = DoctorPolicy.planFor(DoctorItemKind.LINK)
@@ -338,17 +430,24 @@ object DoctorEvaluator {
             DoctorRow(
                 id = ID_DAEMON,
                 kind = DoctorItemKind.DAEMON,
-                title = "Daemon reachable",
+                title = UiText.Res(R.string.doctor_row_daemon),
                 severity = when (status) {
                     "ok" -> DoctorSeverity.OK
                     "warn" -> DoctorSeverity.WARN
                     "fail" -> DoctorSeverity.FAIL
                     else -> DoctorSeverity.UNKNOWN
                 },
-                evidence = buildString {
-                    append("self-check ${status ?: "answered"}")
-                    append(" · ${daemon.report.checks.size} checks")
-                    daemon.report.checkedAt?.let { append(" · $it") }
+                evidence = buildList {
+                    add(
+                        when (status) {
+                            "ok" -> UiText.Res(R.string.doctor_evidence_daemon_status_clear)
+                            "warn" -> UiText.Res(R.string.doctor_evidence_daemon_status_warnings)
+                            "fail" -> UiText.Res(R.string.doctor_evidence_daemon_status_failures)
+                            else -> UiText.Literal(daemon.report.status ?: "—")
+                        }
+                    )
+                    add(UiText.Plural(R.plurals.doctor_evidence_daemon_checks, daemon.report.checks.size))
+                    daemon.report.checkedAt?.let { add(UiText.Literal(it)) }
                 }
             )
         }
@@ -356,9 +455,9 @@ object DoctorEvaluator {
         is DaemonProbe.Unreachable -> DoctorRow(
             id = ID_DAEMON,
             kind = DoctorItemKind.DAEMON,
-            title = "Daemon reachable",
+            title = UiText.Res(R.string.doctor_row_daemon),
             severity = DoctorSeverity.FAIL,
-            evidence = "${daemon.code}: ${daemon.message}"
+            evidence = listOf(UiText.Literal("${daemon.code}: ${daemon.message}"))
         )
     }.let { it.copy(plan = DoctorPolicy.planFor(DoctorItemKind.DAEMON)) }
 
@@ -369,12 +468,12 @@ object DoctorEvaluator {
         return DoctorRow(
             id = ID_RELAY,
             kind = DoctorItemKind.RELAY,
-            title = "Relay configuration",
+            title = UiText.Res(R.string.doctor_row_relay),
             severity = worst ?: DoctorSeverity.UNKNOWN,
             evidence = if (checks.isEmpty()) {
-                "the daemon did not report a relay state"
+                listOf(UiText.Res(R.string.doctor_evidence_relay_missing))
             } else {
-                checks.joinToString(" · ") { "${it.name}: ${it.detail ?: it.status ?: "unknown"}" }
+                listOf(UiText.Literal(checks.joinToString(" · ") { "${it.name}: ${it.detail ?: it.status ?: "unknown"}" }))
             },
             plan = DoctorPolicy.planFor(DoctorItemKind.RELAY)
         )
@@ -390,7 +489,11 @@ object DoctorEvaluator {
                     kind = DoctorItemKind.DAEMON_CHECK,
                     title = daemonCheckTitle(check.name),
                     severity = severityOf(check.status),
-                    evidence = check.detail ?: check.status ?: "the daemon reported no detail"
+                    evidence = listOf(
+                        check.detail?.let(UiText::Literal)
+                            ?: check.status?.let(UiText::Literal)
+                            ?: UiText.Res(R.string.doctor_evidence_daemon_no_detail)
+                    )
                 )
             }
     }
@@ -408,13 +511,6 @@ object DoctorEvaluator {
         else -> DoctorSeverity.UNKNOWN
     }
 
-    private fun moduleVersion(module: ModuleState?): String = when (module) {
-        is ModuleState.Enabled -> module.version?.let { " · $it" } ?: ""
-        is ModuleState.Disabled -> module.version?.let { " · $it" } ?: ""
-        is ModuleState.Staged -> module.version?.let { " · $it" } ?: ""
-        else -> ""
-    }
-
     private fun List<DoctorSeverity>.worstOrNull(): DoctorSeverity? = when {
         isEmpty() -> null
         contains(DoctorSeverity.FAIL) -> DoctorSeverity.FAIL
@@ -423,8 +519,31 @@ object DoctorEvaluator {
         else -> DoctorSeverity.OK
     }
 
-    private fun daemonCheckTitle(name: String): String = DAEMON_CHECK_TITLES[name]
-        ?: name.replace('_', ' ').replaceFirstChar { it.uppercase() }
+    private fun pathLabel(path: PathKind): Int = when (path) {
+        PathKind.DIRECT -> R.string.doctor_link_path_direct
+        PathKind.RELAY -> R.string.doctor_link_path_relay
+        PathKind.UNKNOWN -> R.string.doctor_link_path_unknown
+    }
+
+    private fun kindLabel(kind: LinkKind): Int = when (kind) {
+        LinkKind.IROH -> R.string.doctor_link_kind_iroh
+        LinkKind.WEBSOCKET -> R.string.doctor_link_kind_lan
+        LinkKind.TAILSCALE -> R.string.doctor_link_kind_tailscale
+    }
+
+    /** A daemon check the app knows by name gets its own title; anything else keeps the daemon's name. */
+    private fun daemonCheckTitle(name: String): UiText {
+        val title: Int? = DAEMON_CHECK_TITLES[name]
+        return title?.let(UiText::Res) ?: UiText.Literal(name)
+    }
+
+    private val ModuleState?.version: String?
+        get() = when (this) {
+            is ModuleState.Enabled -> version
+            is ModuleState.Disabled -> version
+            is ModuleState.Staged -> version
+            else -> null
+        }
 
     const val ID_ROOT: String = "root"
     const val ID_MODULE_PRESENT: String = "module_present"
@@ -448,11 +567,11 @@ object DoctorEvaluator {
 
     private val RELAY_CHECKS = setOf("relays", "iroh_relay")
 
-    private val DAEMON_CHECK_TITLES = mapOf(
-        "daemon" to "Daemon process",
-        "phone" to "Phone connection",
-        "codex_auth" to "Codex credentials",
-        "voice_backend" to "Voice backend",
-        "disk" to "Daemon storage"
+    private val DAEMON_CHECK_TITLES: Map<String, Int> = mapOf(
+        "daemon" to R.string.doctor_check_daemon,
+        "phone" to R.string.doctor_check_phone,
+        "codex_auth" to R.string.doctor_check_codex_auth,
+        "voice_backend" to R.string.doctor_check_voice_backend,
+        "disk" to R.string.doctor_check_disk
     )
 }
