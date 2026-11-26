@@ -1,0 +1,15 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/app/v1/pair/rotate",
+    "body": {}
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "app_token": "contract-token-0001",
+      "device_token": null,
+      "restart_required": false
+    }
+  }
+}

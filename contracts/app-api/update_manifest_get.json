@@ -1,0 +1,22 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/app/v1/update/manifest",
+    "query": {
+      "channel": "stable"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "version": "0.2.0",
+      "channel": "stable",
+      "entry": {
+        "version": "0.2.0",
+        "apk": {
+          "file": "app.apk"
+        }
+      }
+    }
+  }
+}

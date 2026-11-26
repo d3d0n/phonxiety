@@ -1,0 +1,42 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/app/v1/link-test",
+    "body": {
+      "seconds": 1.0
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "id": "0000000000004000",
+      "at": "2026-01-01T00:00:00+00:00",
+      "codec": "opus",
+      "bitrate": null,
+      "transport": "stream",
+      "peer": "iroh:abcd",
+      "route": "direct 10.0.0.2, 4 ms",
+      "route_after": "direct 10.0.0.2, 5 ms",
+      "seconds": 1.0,
+      "frame_bytes": 48,
+      "frames": {
+        "sent": 50,
+        "echoed": 50
+      },
+      "p50": 30,
+      "p95": 44,
+      "max": 61,
+      "loss": 0.0,
+      "reorder": null,
+      "throughput_bps": 2400,
+      "ping_ms": {
+        "median": 4,
+        "p95": 8,
+        "max": 9
+      },
+      "send_stall_ms": 2,
+      "healthy": true,
+      "verdict": "good"
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/app/v1/update/artifact",
+    "query": {
+      "name": "apk"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "name": "apk",
+      "total": 12,
+      "offset": 0,
+      "limit": 196608,
+      "data": "Y29udHJhY3QtYXBr"
+    }
+  }
+}

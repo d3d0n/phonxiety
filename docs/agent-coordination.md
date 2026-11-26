@@ -13,7 +13,9 @@ live calls, and the integration branch `main`.
 - `android/gradle/libs.versions.toml`, `android/settings.gradle.kts`, `android/build.gradle.kts`
 - `android/app/**` navigation host and `Routes.kt`
 - `src/phonxiety/app_api.py` route table, `src/phonxiety/settings.py`
-- Shared contracts: `android/core/model/**` (`BridgeState`, `DeviceProtocol`, `ApiModels`),
+- Shared contracts: `contracts/**` (`/app/v1` request/response files both suites run against;
+  regenerate with `PHONXIETY_UPDATE_CONTRACTS=1 uv run pytest tests/test_app_api_contract.py`),
+  `android/core/model/**` (`BridgeState`, `DeviceProtocol`, `ApiModels`),
   `android/core/data/.../Repositories.kt`
 
 ## Checks a worker runs in its checkout

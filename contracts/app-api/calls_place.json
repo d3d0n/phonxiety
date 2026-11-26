@@ -1,0 +1,43 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/app/v1/calls",
+    "body": {
+      "destination": "+998901234567",
+      "goal": "Confirm the Friday appointment is still on.",
+      "context": "Synthetic contract sample.",
+      "constraints": "Keep the call under a minute.",
+      "confirmation_id": "contract-1",
+      "max_duration_s": 600,
+      "ring_timeout_s": 45,
+      "result_fields": [
+        "heard"
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "call_id": "00000000-0000-4000-8000-000000000001",
+      "request_id": "app-contract-1",
+      "destination": "+998901234567",
+      "state": "preparing",
+      "call_outcome": null,
+      "task_outcome": null,
+      "result_status": "pending",
+      "summary": null,
+      "fields": {},
+      "error": null,
+      "created_at": 1767225601.0,
+      "connected_at": null,
+      "ended_at": null,
+      "disconnect_cause": null,
+      "transcript": [],
+      "current_partials": [],
+      "next_cursor": 0,
+      "has_more": false,
+      "transcript_complete": false,
+      "confirmation_id": "contract-1"
+    }
+  }
+}

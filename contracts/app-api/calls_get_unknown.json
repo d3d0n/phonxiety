@@ -1,0 +1,13 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/app/v1/calls/00000000-0000-4000-8000-000000000000"
+  },
+  "response": {
+    "status": 404,
+    "body": {
+      "code": "call_not_found",
+      "message": "no call 00000000-0000-4000-8000-000000000000"
+    }
+  }
+}

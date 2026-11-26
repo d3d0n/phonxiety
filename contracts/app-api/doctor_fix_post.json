@@ -1,0 +1,21 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/app/v1/doctor/fix",
+    "body": {
+      "fix": "state_dirs"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "applied": [
+        {
+          "fix": "state_dirs",
+          "detail": "state directories are present"
+        }
+      ],
+      "restart_required": false
+    }
+  }
+}

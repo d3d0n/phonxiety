@@ -1,0 +1,18 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/app/v1/loopback",
+    "body": {
+      "enabled": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "enabled": true,
+      "result": {
+        "accepted": true
+      }
+    }
+  }
+}

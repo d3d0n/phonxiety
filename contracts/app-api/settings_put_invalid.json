@@ -1,0 +1,18 @@
+{
+  "request": {
+    "method": "PUT",
+    "path": "/app/v1/settings",
+    "body": {
+      "values": {
+        "audio_codec": "mp3"
+      }
+    }
+  },
+  "response": {
+    "status": 400,
+    "body": {
+      "code": "invalid_argument",
+      "message": "audio_codec must be one of: pcm, opus"
+    }
+  }
+}

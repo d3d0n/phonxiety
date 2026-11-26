@@ -3,44 +3,44 @@ package com.phonxiety.bridge.data
 import com.phonxiety.bridge.model.CallEvent
 import com.phonxiety.bridge.model.CallPhase
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
- * The vocabulary the live call screen has to translate. The JSON below is the exact shape the
- * daemon's events long-poll emits: `app_api._sync` forwards the `role` the controller stored in
- * `controller._transcript`, and the voice backends report `assistant` and `user` (`gemini.py`).
+ * The vocabulary the live call screen has to translate, read from the shared
+ * `contracts/app-api/call_events_live.json` page: the daemon's events long-poll
+ * (`app_api._sync`) forwards the `role` the controller stored from the voice backend.
  */
 class LiveCallMappingTest {
     private val json = Json { ignoreUnknownKeys = true }
 
-    private fun event(raw: String): CallEvent = json.decodeFromString(raw)
+    private val events: List<CallEvent> by lazy {
+        val text = javaClass.classLoader!!.getResourceAsStream("app-api/call_events_live.json")!!
+            .bufferedReader()
+            .use { it.readText() }
+        val body = Json.parseToJsonElement(text).jsonObject
+            .getValue("response").jsonObject
+            .getValue("body").jsonObject
+        body.getValue("events").jsonArray.map { json.decodeFromJsonElement(CallEvent.serializer(), it) }
+    }
+
+    private fun event(type: String, role: String? = null): CallEvent = events.first { it.type == type && (role == null || it.role == role) }
 
     @Test
     fun theDaemonsTurnRolesNameTheAgentAndTheFarEnd() {
-        val assistant = event(
-            """{"type":"transcript","revision":4,"sequence":303,"role":"assistant",""" +
-                """"text":"Hi, I'm testing a call from the app.","final":true,""" +
-                """"at":"2026-11-26T10:00:20+00:00"}"""
-        )
-        val user = event(
-            """{"type":"transcript","revision":6,"sequence":304,"role":"user",""" +
-                """"text":"One, two, three","final":true,"at":"2026-11-26T10:00:24+00:00"}"""
-        )
-
-        assertEquals(Speaker.AGENT, speakerOf(assistant.role))
-        assertEquals(Speaker.FAR_END, speakerOf(user.role))
+        assertEquals(Speaker.AGENT, speakerOf(event("transcript", "assistant").role))
+        assertEquals(Speaker.FAR_END, speakerOf(event("transcript", "user").role))
     }
 
     @Test
     fun partialTurnsUseTheSameWordsAsFinalOnes() {
-        val partial = event(
-            """{"type":"partial","revision":3,"role":"assistant","text":"Hi, I'm",""" +
-                """"final":false,"at":"2026-11-26T10:00:19+00:00"}"""
+        assertEquals(
+            speakerOf(event("transcript", "user").role),
+            speakerOf(event("partial").role)
         )
-
-        assertEquals(Speaker.AGENT, speakerOf(partial.role))
     }
 
     @Test

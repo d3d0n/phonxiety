@@ -32,6 +32,14 @@ android {
             isReturnDefaultValues = true
         }
     }
+
+    // The shared `/app/v1` contracts are unit-test inputs: Gradle tracks them, so the
+    // build cache cannot serve a test run made against older files.
+    sourceSets {
+        getByName("test") {
+            resources.srcDir("../../../contracts")
+        }
+    }
 }
 
 dependencies {

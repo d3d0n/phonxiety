@@ -1,0 +1,35 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/app/v1/test-call",
+    "body": {
+      "destination": "+998901234567",
+      "max_duration_s": 30
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "call_id": "00000000-0000-4000-8000-000000000002",
+      "request_id": "test-00000000000040008000000000000001",
+      "destination": "+998901234567",
+      "state": "preparing",
+      "call_outcome": null,
+      "task_outcome": null,
+      "result_status": "pending",
+      "summary": null,
+      "fields": {},
+      "error": null,
+      "created_at": 1767225600.0,
+      "connected_at": null,
+      "ended_at": null,
+      "disconnect_cause": null,
+      "transcript": [],
+      "current_partials": [],
+      "next_cursor": 0,
+      "has_more": false,
+      "transcript_complete": false,
+      "profile": "test"
+    }
+  }
+}

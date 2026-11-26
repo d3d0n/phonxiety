@@ -1,0 +1,15 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/app/v1/calls/00000000-0000-4000-8000-000000000001/resume"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "call_id": "00000000-0000-4000-8000-000000000001",
+      "muted": false,
+      "state": "active",
+      "paused": false
+    }
+  }
+}

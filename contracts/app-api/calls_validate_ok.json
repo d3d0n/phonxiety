@@ -1,0 +1,33 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/app/v1/calls/validate",
+    "body": {
+      "destination": "+998901234567",
+      "goal": "Confirm a table for two."
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "valid": true,
+      "errors": [],
+      "warnings": [
+        "no result fields: the summary will be free text"
+      ],
+      "request": {
+        "request_id": "validate-validate",
+        "destination": "+998901234567",
+        "goal": "Confirm a table for two.",
+        "context": "",
+        "constraints": "",
+        "limits": {
+          "max_duration_s": 900,
+          "ring_timeout_s": 60
+        },
+        "result_fields": [],
+        "phone_account": null
+      }
+    }
+  }
+}

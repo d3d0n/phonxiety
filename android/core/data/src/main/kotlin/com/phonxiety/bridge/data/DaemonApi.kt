@@ -145,7 +145,7 @@ class DefaultDaemonApi @Inject constructor(
     private val api: AppApi,
     @ApplicationContext private val context: Context
 ) : DaemonApi {
-    private val json = Json {
+    internal val json = Json {
         ignoreUnknownKeys = true
         explicitNulls = false
         coerceInputValues = true

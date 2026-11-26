@@ -1,0 +1,72 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/app/v1/info"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "daemon_version": "0.4.0",
+      "protocol": 3,
+      "protocol_versions": [
+        2,
+        3
+      ],
+      "app_api": 1,
+      "settings_schema": 1,
+      "voice_backend": "gemini",
+      "voice_controls": {
+        "instruction": true,
+        "pause": true,
+        "resume": true,
+        "summarize": true,
+        "dtmf": true,
+        "marks": true,
+        "hangup": true,
+        "test_call": true,
+        "test_call_probes": true,
+        "loopback": false,
+        "tone": false
+      },
+      "attachments": "paged",
+      "capabilities": {
+        "call_control": true,
+        "link_test": true
+      },
+      "control_caps": [],
+      "phone": {
+        "device": null,
+        "app_api": null,
+        "preferred_codec": null,
+        "max_bitrate": null
+      },
+      "limits": {
+        "max_result_bytes": 262144,
+        "audio_page_bytes": 196608,
+        "transcript_page": 200,
+        "events_wait_s": 25,
+        "max_duration_s": 3600,
+        "ring_timeout_s": 180,
+        "test_call_max_duration_s": 60,
+        "calls_per_hour": 12
+      },
+      "mark_kinds": [
+        "agreed",
+        "refused",
+        "follow-up",
+        "unclear",
+        "callback"
+      ],
+      "connection": {
+        "device_port": 18763,
+        "certificate": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "lan": [
+          "wss://192.0.2.10:18763/device"
+        ],
+        "tailscale": [
+          "wss://[2001:db8::1]:18763/device"
+        ]
+      }
+    }
+  }
+}

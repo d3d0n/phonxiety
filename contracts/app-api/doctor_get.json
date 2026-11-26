@@ -1,0 +1,57 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/app/v1/doctor"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "status": "ok",
+      "checks": [
+        {
+          "name": "daemon",
+          "status": "ok",
+          "detail": "phonxietyd 0.4.0 answering (pid 4242)"
+        },
+        {
+          "name": "phone",
+          "status": "ok",
+          "detail": "None connected"
+        },
+        {
+          "name": "iroh_relay",
+          "status": "ok",
+          "detail": "iroh endpoint bound"
+        },
+        {
+          "name": "voice_backend",
+          "status": "ok",
+          "detail": "gemini is configured"
+        },
+        {
+          "name": "disk",
+          "status": "ok",
+          "detail": "10240 MiB free in <state>"
+        },
+        {
+          "name": "relays",
+          "status": "ok",
+          "detail": "using iroh's public relays"
+        }
+      ],
+      "fixes": [
+        {
+          "fix": "relay_config",
+          "description": "re-read the relay list from disk",
+          "restart_required": true
+        },
+        {
+          "fix": "state_dirs",
+          "description": "recreate the archive and diagnostics directories",
+          "restart_required": false
+        }
+      ],
+      "checked_at": "2026-01-01T00:00:00+00:00"
+    }
+  }
+}

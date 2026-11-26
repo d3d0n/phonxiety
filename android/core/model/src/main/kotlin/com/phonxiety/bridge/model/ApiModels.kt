@@ -20,7 +20,7 @@ data class DaemonInfo(
     @SerialName("settings_schema") val settingsSchema: Int? = null,
     @SerialName("voice_backend") val voiceBackend: String? = null,
     @SerialName("voice_controls") val voiceControls: VoiceControls = VoiceControls(),
-    val attachments: String? = null,
+    val attachments: AttachmentMode? = null,
     val capabilities: JsonObject? = null,
     @SerialName("control_caps") val controlCaps: List<String> = emptyList(),
     val phone: PhoneInfo = PhoneInfo(),
@@ -42,6 +42,16 @@ data class ConnectionInfo(
     val lan: List<String> = emptyList(),
     val tailscale: List<String> = emptyList()
 )
+
+/** How bulk data travels: its own stream, or base64 pages on the shared link. */
+@Serializable
+enum class AttachmentMode {
+    @SerialName("stream")
+    STREAM,
+
+    @SerialName("paged")
+    PAGED
+}
 
 @Serializable
 data class VoiceControls(

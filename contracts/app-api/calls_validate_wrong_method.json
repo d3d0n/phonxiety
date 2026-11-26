@@ -1,0 +1,13 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/app/v1/calls/validate"
+  },
+  "response": {
+    "status": 405,
+    "body": {
+      "code": "method_not_allowed",
+      "message": "GET is not used on /app/v1/calls/validate"
+    }
+  }
+}

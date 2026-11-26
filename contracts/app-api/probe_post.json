@@ -1,0 +1,47 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/app/v1/probe",
+    "body": {
+      "candidates": [
+        "iroh",
+        "tailscale",
+        "lan"
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "candidates": [
+        {
+          "name": "iroh",
+          "available": true,
+          "reachable": false,
+          "rtt_ms": null,
+          "reason": "not_measured",
+          "detail": "No link is up; iroh was not measured."
+        },
+        {
+          "name": "tailscale",
+          "available": false,
+          "reachable": false,
+          "rtt_ms": null,
+          "reason": "not_installed"
+        },
+        {
+          "name": "lan",
+          "available": true,
+          "reachable": false,
+          "rtt_ms": null,
+          "addresses": [
+            "wss://192.0.2.10:18763/device"
+          ],
+          "detail": "no LAN address answered the pinned listener; check the bind address of the address listener",
+          "reason": "no_listener_answer"
+        }
+      ],
+      "checked_at": "2026-01-01T00:00:00+00:00"
+    }
+  }
+}

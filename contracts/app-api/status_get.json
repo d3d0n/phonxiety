@@ -1,0 +1,23 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/app/v1/status"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "daemon": "ready",
+      "uptime_s": 0.0,
+      "phone": {
+        "connected": true
+      },
+      "active_calls": [],
+      "link": {
+        "endpoint_id": "864b90b70123456789abcdef0123456789abcdef0123456789abcdef0123cc62",
+        "address_port": 18763,
+        "certificate": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "iroh_available": true
+      }
+    }
+  }
+}

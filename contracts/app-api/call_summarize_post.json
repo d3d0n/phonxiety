@@ -1,0 +1,17 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/app/v1/calls/00000000-0000-4000-8000-000000000001/summarize"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "call_id": "00000000-0000-4000-8000-000000000001",
+      "task_outcome": "incomplete",
+      "summary": "Still waiting for confirmation",
+      "fields": {
+        "when": "unknown"
+      }
+    }
+  }
+}

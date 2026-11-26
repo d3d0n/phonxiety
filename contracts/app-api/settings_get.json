@@ -1,0 +1,68 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/app/v1/settings"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "schema": 1,
+      "values": {
+        "audio_codec": "opus",
+        "opus_bitrate": 32000,
+        "voice_backend": "gemini",
+        "codex_voice": "sol",
+        "gemini_voice": "",
+        "codex_task_model": "",
+        "gemini_model": "",
+        "language_hint": "",
+        "ring_timeout_s": 60,
+        "max_duration_s": 900,
+        "default_result_fields": [],
+        "default_constraints": "",
+        "iroh_relays": []
+      },
+      "restart_required_fields": [
+        "audio_codec",
+        "opus_bitrate",
+        "voice_backend",
+        "codex_voice",
+        "gemini_voice",
+        "codex_task_model",
+        "gemini_model",
+        "language_hint",
+        "iroh_relays"
+      ],
+      "choices": {
+        "audio_codec": [
+          "pcm",
+          "opus"
+        ],
+        "voice_backend": [
+          "codex",
+          "gemini",
+          "deepgram"
+        ],
+        "opus_bitrate": {
+          "min": 6000,
+          "max": 128000
+        },
+        "ring_timeout_s": {
+          "min": 5,
+          "max": 180
+        },
+        "max_duration_s": {
+          "min": 10,
+          "max": 3600
+        },
+        "default_result_fields": {
+          "max_items": 16,
+          "max_chars": 64
+        },
+        "default_constraints": {
+          "max_chars": 2000
+        }
+      }
+    }
+  }
+}

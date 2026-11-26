@@ -1,0 +1,19 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/app/v1/calls/00000000-0000-4000-8000-000000000001/dtmf",
+    "body": {
+      "digits": "12#*"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "call_id": "00000000-0000-4000-8000-000000000001",
+      "digits": "12#*",
+      "result": {
+        "accepted": true
+      }
+    }
+  }
+}

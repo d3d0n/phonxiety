@@ -1,0 +1,64 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/app/v1/calls/00000000-0000-4000-8000-000000000001/events",
+    "query": {
+      "since": "0",
+      "wait_s": "0.0"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "call_id": "00000000-0000-4000-8000-000000000001",
+      "revision": 5,
+      "state": "ended",
+      "call_outcome": "answered",
+      "result_status": "ready",
+      "events": [
+        {
+          "type": "state",
+          "state": "ended",
+          "call_outcome": "answered",
+          "at": "2026-01-01T00:00:05+00:00",
+          "revision": 1
+        },
+        {
+          "type": "ended",
+          "state": "ended",
+          "call_outcome": "answered",
+          "result_status": "ready",
+          "revision": 2
+        },
+        {
+          "type": "transcript",
+          "sequence": 1,
+          "role": "assistant",
+          "text": "Hello, this is the Phonxiety contract line.",
+          "final": true,
+          "at": "2026-01-01T00:00:02+00:00",
+          "revision": 3
+        },
+        {
+          "type": "transcript",
+          "sequence": 2,
+          "role": "user",
+          "text": "Yes, Friday at three works.",
+          "final": true,
+          "at": "2026-01-01T00:00:03+00:00",
+          "revision": 4
+        },
+        {
+          "type": "result",
+          "task_outcome": "succeeded",
+          "summary": "Friday at three is confirmed.",
+          "fields": {
+            "when": "Friday at three"
+          },
+          "revision": 5
+        }
+      ],
+      "truncated": false
+    }
+  }
+}

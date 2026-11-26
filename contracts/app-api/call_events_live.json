@@ -1,0 +1,76 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/app/v1/calls/00000000-0000-4000-8000-000000000001/events",
+    "query": {
+      "since": "0",
+      "wait_s": "0.0"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "call_id": "00000000-0000-4000-8000-000000000001",
+      "revision": 7,
+      "state": "active",
+      "call_outcome": "answered",
+      "result_status": "pending",
+      "events": [
+        {
+          "type": "state",
+          "state": "active",
+          "call_outcome": "answered",
+          "at": "2026-01-01T00:00:06+00:00",
+          "revision": 1
+        },
+        {
+          "type": "transcript",
+          "sequence": 1,
+          "role": "assistant",
+          "text": "Hello, this is the Phonxiety contract line.",
+          "final": true,
+          "at": "2026-01-01T00:00:02+00:00",
+          "revision": 2
+        },
+        {
+          "type": "transcript",
+          "sequence": 2,
+          "role": "user",
+          "text": "Yes, Friday at three works.",
+          "final": true,
+          "at": "2026-01-01T00:00:03+00:00",
+          "revision": 3
+        },
+        {
+          "type": "partial",
+          "role": "user",
+          "text": "Yes, Friday at",
+          "final": false,
+          "revision": 4
+        },
+        {
+          "type": "marks",
+          "marks": [
+            {
+              "mark": "agreed",
+              "at": 1767225605.0,
+              "note": "Friday 15:00"
+            }
+          ],
+          "revision": 5
+        },
+        {
+          "type": "muted",
+          "muted": false,
+          "revision": 6
+        },
+        {
+          "type": "agent_activity",
+          "activity": "idle",
+          "revision": 7
+        }
+      ],
+      "truncated": false
+    }
+  }
+}

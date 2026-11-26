@@ -40,6 +40,7 @@ on:
     branches: [main, "feat/**"]
     paths:
       - "android/**"
+      - "contracts/**"
       - "mise-tasks/phone/**"
       - "mise.toml"
       - ".github/workflows/android.yml"
@@ -47,6 +48,7 @@ on:
   pull_request:
     paths:
       - "android/**"
+      - "contracts/**"
       - "mise-tasks/phone/**"
       - "mise.toml"
       - ".github/workflows/android.yml"

@@ -1,0 +1,17 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/app/v1/calls",
+    "body": {
+      "destination": "+998901234567",
+      "goal": "Confirm the Friday appointment is still on."
+    }
+  },
+  "response": {
+    "status": 400,
+    "body": {
+      "code": "confirmation_required",
+      "message": "confirmation_id must be 1..128 characters of letters, digits, '_', '.', ':' or '-'"
+    }
+  }
+}

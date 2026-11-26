@@ -1,0 +1,28 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/app/v1/compat",
+    "query": {
+      "app_api": "1",
+      "protocol": "3"
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "daemon_version": "0.4.0",
+      "app_api": 1,
+      "protocol": 3,
+      "protocol_versions": [
+        2,
+        3
+      ],
+      "client": {
+        "app_api": 1,
+        "protocol": 3
+      },
+      "compatible": true,
+      "notes": []
+    }
+  }
+}

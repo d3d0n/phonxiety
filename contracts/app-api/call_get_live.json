@@ -1,0 +1,96 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/app/v1/calls/00000000-0000-4000-8000-000000000001"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "call_id": "00000000-0000-4000-8000-000000000001",
+      "request_id": "contract-live",
+      "destination": "+998901234567",
+      "state": "active",
+      "call_outcome": "answered",
+      "task_outcome": null,
+      "result_status": "pending",
+      "summary": null,
+      "fields": {},
+      "error": null,
+      "created_at": 1767225600.0,
+      "connected_at": 1767225601.0,
+      "ended_at": null,
+      "disconnect_cause": null,
+      "transcript": [
+        {
+          "sequence": 1,
+          "role": "assistant",
+          "text": "Hello, this is the Phonxiety contract line.",
+          "at": 1767225602.0
+        },
+        {
+          "sequence": 2,
+          "role": "user",
+          "text": "Yes, Friday at three works.",
+          "at": 1767225603.0
+        }
+      ],
+      "current_partials": [
+        {
+          "role": "user",
+          "text": "Yes, Friday at",
+          "at": 1767225604.0
+        }
+      ],
+      "next_cursor": 2,
+      "has_more": false,
+      "transcript_complete": false,
+      "request": {
+        "request_id": "contract-live",
+        "destination": "+998901234567",
+        "goal": "Confirm the Friday appointment is still on.",
+        "context": "",
+        "constraints": "",
+        "limits": {
+          "max_duration_s": 900,
+          "ring_timeout_s": 60
+        },
+        "result_fields": [],
+        "phone_account": null
+      },
+      "marks": [
+        {
+          "mark": "agreed",
+          "at": 1767225605.0,
+          "note": "Friday 15:00"
+        }
+      ],
+      "far_end": null,
+      "audio_codec": "pcm",
+      "live": {
+        "call_id": "00000000-0000-4000-8000-000000000001",
+        "finalizing": false,
+        "muted": false,
+        "audio_ready": true,
+        "awaiting_link": false,
+        "far_end": null,
+        "audio_codec": "pcm",
+        "assistant_turns": 0,
+        "marks": [
+          {
+            "mark": "agreed",
+            "at": 1767225605.0,
+            "note": "Friday 15:00"
+          }
+        ],
+        "agent_activity": "idle",
+        "recording": null,
+        "error": null
+      },
+      "counters": {
+        "frames_out": 10,
+        "frames_in": 9,
+        "dropped_samples": 0
+      }
+    }
+  }
+}

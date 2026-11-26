@@ -1,0 +1,19 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/app/v1/calls/11111111-1111-4111-8111-111111111111/marks"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "call_id": "11111111-1111-4111-8111-111111111111",
+      "marks": [
+        {
+          "mark": "agreed",
+          "at": 1767225570.0,
+          "note": "Friday 15:00"
+        }
+      ]
+    }
+  }
+}

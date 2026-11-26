@@ -1,0 +1,58 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/app/v1/diagnostics"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "daemon": {
+        "version": "0.4.0",
+        "protocol": 3,
+        "app_api": 1,
+        "pid": 4242,
+        "uptime_s": 0.0
+      },
+      "settings": {
+        "audio_codec": "opus",
+        "opus_bitrate": 32000,
+        "voice_backend": "gemini",
+        "codex_voice": "sol",
+        "codex_task_model": "",
+        "gemini_model": "",
+        "gemini_voice": "",
+        "language_hint": "",
+        "ring_timeout_s": 60,
+        "max_duration_s": 900,
+        "default_result_fields": [],
+        "iroh_relays": []
+      },
+      "phone": {
+        "connected": true
+      },
+      "counters": {
+        "frames_out": 10,
+        "frames_in": 9,
+        "dropped_samples": 0
+      },
+      "link": {
+        "endpoint_id": "864b90b70123456789abcdef0123456789abcdef0123456789abcdef0123cc62",
+        "address_port": 18763,
+        "certificate": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "iroh_available": true
+      },
+      "paths": {
+        "state_dir": "<state>",
+        "archive": "<state>/calls",
+        "link_tests": "<state>/link-tests",
+        "log": "<state>/daemon.log"
+      },
+      "generated_at": "2026-01-01T00:00:00+00:00",
+      "log_tail": [
+        "2026-01-01 INFO daemon started on the canonical state",
+        "2026-01-01 INFO app_token=<redacted> accepted",
+        "2026-01-01 INFO Authorization: <redacted> <redacted>"
+      ]
+    }
+  }
+}

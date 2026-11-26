@@ -1,0 +1,22 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/app/v1/tone",
+    "body": {
+      "hz": 440,
+      "dbfs": -18.0
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "started": true,
+      "hz": 440,
+      "dbfs": -18.0,
+      "stop_after_s": null,
+      "result": {
+        "accepted": true
+      }
+    }
+  }
+}
