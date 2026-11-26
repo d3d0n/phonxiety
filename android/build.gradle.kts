@@ -26,6 +26,22 @@ plugins {
     alias(libs.plugins.ktlint) apply false
 }
 
+// `-PskipScreenshots` leaves the Roborazzi-capturing classes out of every
+// module's unit test run: a feature-branch push checks the logic without
+// rendering and comparing the golden images.  The switch is presence-only, so
+// every other invocation is unchanged.  The excluded classes are each module's
+// `*ScreenshotTest` and the onboarding helper that calls `captureRoboImage`.
+val skipScreenshots = providers.gradleProperty("skipScreenshots").isPresent
+
+subprojects {
+    tasks.withType<Test>().configureEach {
+        if (skipScreenshots) {
+            exclude("**/*ScreenshotTest*")
+            exclude("**/OnboardingCaptureSupport*")
+        }
+    }
+}
+
 // ktlint as a formatting-only gate.  The Gradle plugin is declared above for
 // editor integration; the check itself runs the CLI so it sees exactly the
 // same file set for every module and needs no per-module configuration.
