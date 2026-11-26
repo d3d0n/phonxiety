@@ -126,7 +126,13 @@ class SettingsViewModel @Inject constructor(
             }
 
             is ApiOutcome.Failure -> _state.update {
-                it.copy(daemon = it.daemon.copy(loading = false, error = UiText.Literal(outcome.describe())))
+                it.copy(
+                    daemon = it.daemon.copy(
+                        loading = false,
+                        error = UiText.Literal(outcome.describe()),
+                        errorOnSave = false
+                    )
+                )
             }
         }
     }
@@ -178,7 +184,13 @@ class SettingsViewModel @Inject constructor(
                 }
 
                 is ApiOutcome.Failure -> _state.update {
-                    it.copy(daemon = it.daemon.copy(saving = false, error = UiText.Literal(outcome.describe())))
+                    it.copy(
+                        daemon = it.daemon.copy(
+                            saving = false,
+                            error = UiText.Literal(outcome.describe()),
+                            errorOnSave = true
+                        )
+                    )
                 }
             }
         }

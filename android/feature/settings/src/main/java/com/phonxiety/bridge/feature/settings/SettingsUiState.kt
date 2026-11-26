@@ -113,6 +113,8 @@ data class DaemonSettingsUi(
     val loading: Boolean = false,
     val saving: Boolean = false,
     val error: UiText? = null,
+    /** True when [error] came from a refused save: the edits stay, and reloading would drop them. */
+    val errorOnSave: Boolean = false,
     val values: DaemonSettingsValues = DaemonSettingsValues(),
     val form: DaemonForm = DaemonForm(),
     val restartRequiredFields: List<String> = emptyList(),

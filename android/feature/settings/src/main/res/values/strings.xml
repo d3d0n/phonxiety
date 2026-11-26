@@ -93,6 +93,8 @@
     <string name="settings_daemon_status_loaded">Loaded</string>
     <string name="settings_daemon_error_title">The daemon did not answer</string>
     <string name="settings_daemon_error_message">Check that the daemon is running on the computer, then reload.</string>
+    <string name="settings_daemon_save_error_title">The daemon did not save the changes</string>
+    <string name="settings_daemon_save_error_message">Your edits are kept. Open Details to see what the daemon refused.</string>
     <string name="settings_daemon_applied">Applied changes</string>
     <plurals name="settings_daemon_restart_needed">
         <item quantity="one">Restart the daemon to apply %1$d change</item>

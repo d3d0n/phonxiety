@@ -118,6 +118,26 @@ class SettingsViewModelTest {
     }
 
     @Test
+    fun `a save the daemon refuses keeps the edits and is not a read failure`() = runBlocking<Unit> {
+        api.putSettingsHandler = {
+            ApiOutcome.Failure(400, "invalid_argument", "ring_timeout_s must be between 5 and 180")
+        }
+        val vm = viewModel()
+        withTimeout(5_000) { vm.state.first { !it.daemon.loading } }
+
+        vm.updateForm { it.copy(ringTimeout = "1") }
+        vm.saveDaemonSettings()
+        withTimeout(5_000) { vm.state.first { !it.daemon.saving && it.daemon.error != null } }
+
+        val daemon = vm.state.value.daemon
+        assertTrue("a refused save is reported as a save", daemon.errorOnSave)
+        assertEquals("the edit stays in the form", "1", daemon.form.ringTimeout)
+        assertTrue("the edit is still pending", daemon.dirty)
+        val details = requireNotNull(daemon.error).asString(context.resources)
+        assertTrue("the daemon's reason stays available", details.contains("between 5 and 180"))
+    }
+
+    @Test
     fun `an invalid number is never sent and never reported as saved`() = runBlocking<Unit> {
         val vm = viewModel()
         withTimeout(5_000) { vm.state.first { !it.daemon.loading } }

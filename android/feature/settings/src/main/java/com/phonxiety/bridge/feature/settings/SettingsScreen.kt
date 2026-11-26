@@ -493,9 +493,15 @@ private fun DaemonCard(daemon: DaemonSettingsUi, callbacks: SettingsCallbacks) {
         }
     ) {
         daemon.error?.let {
+            // A refused save keeps the edits; reloading would replace them, so only a failed read
+            // asks for a reload.
             ErrorCard(
-                title = stringResource(R.string.settings_daemon_error_title),
-                message = stringResource(R.string.settings_daemon_error_message),
+                title = stringResource(
+                    if (daemon.errorOnSave) R.string.settings_daemon_save_error_title else R.string.settings_daemon_error_title
+                ),
+                message = stringResource(
+                    if (daemon.errorOnSave) R.string.settings_daemon_save_error_message else R.string.settings_daemon_error_message
+                ),
                 output = it.asString()
             )
         }
