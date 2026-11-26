@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- The in-app fallback scanner (CameraX + bundled ML Kit) reads the pairing QR code. The
+         Google code scanner path needs no camera permission; this one is asked for when it opens,
+         and pairing by pasted link never needs it. The camera itself is optional: a phone without
+         one can still pair. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+
+    <uses-feature
+        android:name="android.hardware.camera.any"
+        android:required="false" />
+
+</manifest>

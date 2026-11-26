@@ -30,9 +30,25 @@ class RootDetectorTest {
         assertEquals(1, detection.providers.size)
         val provider = detection.providers.single()
         assertEquals(RootId.MAGISK, provider.id)
-        assertEquals("31.1:MAGISK", provider.version)
+        assertEquals("31.1", provider.version)
         assertEquals(MagiskProvider.MANAGER_PACKAGE, provider.managerPackage)
         assertTrue(provider.managerInstalled)
+    }
+
+    @Test
+    fun magiskBuildCodeComesFromTheSecondCommand() = runTest {
+        val environment = FakeEnvironment().apply {
+            dirs[RootCommand.ADB_ROOT] = listOf("magisk", "modules")
+        }
+        val detection = detect(environment) { script ->
+            when (script) {
+                "magisk -v" -> ShellOutput(stdout = "31.1:MAGISK:R\n")
+                "magisk -V" -> ShellOutput(stdout = "31100\n")
+                else -> ShellOutput(stdout = "uid=0(root)")
+            }
+        }
+
+        assertEquals("31.1 (31100)", detection.providers.single().version)
     }
 
     @Test

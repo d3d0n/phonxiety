@@ -78,7 +78,7 @@ for perm in CAPTURE_AUDIO_OUTPUT MODIFY_PHONE_STATE CONTROL_INCALL_EXPERIENCE; d
     fi
 done
 
-for perm in RECORD_AUDIO CALL_PHONE READ_PHONE_STATE POST_NOTIFICATIONS; do
+for perm in RECORD_AUDIO CALL_PHONE READ_PHONE_STATE POST_NOTIFICATIONS ACCESS_LOCAL_NETWORK; do
     "${ADB_CMD[@]}" shell pm grant --user 0 "$PACKAGE" "android.permission.$perm" \
         >/dev/null 2>&1 || true
 done
@@ -88,6 +88,15 @@ for perm in RECORD_AUDIO CALL_PHONE READ_PHONE_STATE; do
         die "runtime permission $perm was not granted; inspect: adb shell dumpsys package $PACKAGE"
     fi
 done
+
+# ACCESS_LOCAL_NETWORK is a runtime permission from Android 17 only. Without it the phone cannot
+# answer the daemon's LAN probes and the iroh handshake falls back to the relay or times out, so a
+# silent miss here is checked on the releases that enforce it.
+SDK="$("${ADB_CMD[@]}" shell getprop ro.build.version.sdk | tr -d '\r')"
+case "$SDK" in '' | *[!0-9]*) SDK=0 ;; esac
+if [ "$SDK" -ge 37 ] && ! printf '%s\n' "$PKG_DUMP" | grep -q "ACCESS_LOCAL_NETWORK.*granted=true"; then
+    die "runtime permission ACCESS_LOCAL_NETWORK was not granted; grant it in Settings > Apps > Phonxiety > Permissions, then rerun"
+fi
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/phonxiety-pair.XXXXXX")"
 umask 077

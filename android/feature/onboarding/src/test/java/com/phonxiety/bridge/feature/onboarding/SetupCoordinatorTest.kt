@@ -2,8 +2,11 @@ package com.phonxiety.bridge.feature.onboarding
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.phonxiety.bridge.BridgeConfig
+import com.phonxiety.bridge.BridgeConfigLoader
 import com.phonxiety.bridge.data.ApiResult
 import com.phonxiety.bridge.data.AppApi
+import com.phonxiety.bridge.data.DevicePairingRepository
 import com.phonxiety.bridge.data.PairResult
 import com.phonxiety.bridge.data.PairingRepository
 import com.phonxiety.bridge.model.BridgeState
@@ -221,6 +224,43 @@ class SetupCoordinatorTest {
 
         coordinator.pair("phonxiety://pair?token=old")
         assertTrue(hosts.any { it == SetupHostRequest.PairingRejected("the ticket expired") })
+    }
+
+    @Test
+    fun aPairingWrittenWhileTheAppRunsIsSeenOnResume() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        BridgeConfigLoader.delete(context)
+        val stored = DevicePairingRepository(context)
+        val wizard = SetupCoordinator(
+            backend = backend,
+            pairing = stored,
+            appApi = appApi,
+            progressStore = progress,
+            preferences = preferences,
+            permissions = permissions,
+            serviceStarter = { serviceStarts++ },
+            host = { hosts += it }
+        )
+        backend.detection = RootDetection(SuStatus.GRANTED, listOf(MAGISK))
+        backend.module = ModuleState.Enabled("0.3.0", 3)
+        backend.verify = PASSED
+        permissions.missingState = mutableListOf()
+        appApi.linkTest = ApiResult.Success(200, buildJsonObject { put("healthy", true) })
+
+        wizard.start()
+        assertTrue(wizard.wizard.value is WizardState.NeedsPairing)
+
+        // `mise run phone:pair` writes the config while the wizard is showing "Unpaired".
+        BridgeConfigLoader.write(
+            context,
+            BridgeConfig.Address("wss://192.168.1.10:18763/device", token = "device-token", certSha256 = null)
+        )
+
+        // Returning to the app re-probes instead of trusting the state captured at start.
+        wizard.dispatch(WizardEvent.RecheckRequested)
+
+        assertEquals(WizardState.Ready, wizard.wizard.value)
+        assertEquals(1, serviceStarts)
     }
 
     private companion object {

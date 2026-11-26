@@ -43,9 +43,11 @@ class RootDetector(
         val magiskVersion = if (
             "magisk" in adbEntries || MagiskProvider.MANAGER_PACKAGE in packages
         ) {
-            versionOf { RootCommand.magiskVersionName() }
-                ?: versionOf { RootCommand.magiskVersionCode() }
-                ?: environment.packageVersion(MagiskProvider.MANAGER_PACKAGE)
+            // `magisk -v` names the version, `-V` the build code: both are needed for `31.1 (31100)`.
+            parseProviderVersion(
+                versionOf { RootCommand.magiskVersionName() },
+                versionOf { RootCommand.magiskVersionCode() }
+            ) ?: environment.packageVersion(MagiskProvider.MANAGER_PACKAGE)
         } else {
             null
         }
@@ -72,20 +74,21 @@ class RootDetector(
             KernelSuProvider.KERNELSU_MANAGER_PACKAGE,
             KernelSuProvider.KERNELSU_NEXT_MANAGER_PACKAGE
         )
-        val ksuVersion = if (
+        val ksuRawVersion = if (
             ksuArtefacts.isNotEmpty() || ksuManagers.any { it in packages }
         ) {
             versionOf { RootCommand.ksudVersion() }
-                ?: ksuManagers.firstNotNullOfOrNull { environment.packageVersion(it) }
         } else {
             null
         }
+        val ksuVersion = parseProviderVersion(ksuRawVersion)
+            ?: ksuManagers.firstNotNullOfOrNull { environment.packageVersion(it) }
         if (ksuArtefacts.isNotEmpty() || ksuVersion != null) {
             val installedKsuManagers = ksuManagers.filter { it in packages }
             val manager = installedKsuManagers.firstOrNull()
                 ?: KernelSuProvider.KERNELSU_MANAGER_PACKAGE
             val nextByPackage = KernelSuProvider.KERNELSU_NEXT_MANAGER_PACKAGE in packages
-            val nextByVersion = ksuVersion?.lowercase()?.contains("next") == true
+            val nextByVersion = ksuRawVersion?.lowercase()?.contains("next") == true
             val id = if (nextByPackage || nextByVersion) RootId.KERNELSU_NEXT else RootId.KERNELSU
             val note = when {
                 nextByPackage || nextByVersion -> null
@@ -112,7 +115,7 @@ class RootDetector(
         val apatchVersion = if (
             apatchArtefacts.isNotEmpty() || ApatchProvider.MANAGER_PACKAGE in packages
         ) {
-            versionOf { RootCommand.apdVersion() }
+            parseProviderVersion(versionOf { RootCommand.apdVersion() })
                 ?: environment.packageVersion(ApatchProvider.MANAGER_PACKAGE)
         } else {
             null
