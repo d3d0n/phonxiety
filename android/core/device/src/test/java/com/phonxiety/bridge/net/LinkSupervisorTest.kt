@@ -1,23 +1,32 @@
 package com.phonxiety.bridge.net
 
+import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.runBlocking
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * The link lifecycle as the engine sees it: reconnect backoff, owner identity,
- * the host-activity deadline and the audio backlog cap.
+ * the host-activity deadline, the hello gate and the audio backlog cap.
  */
 class LinkSupervisorTest {
+    private companion object {
+        /** What the engine queues first on every link. */
+        const val HELLO = """{"type":"hello","version":3}"""
+    }
+
     private val clock = ManualClock()
     private val scheduler = ManualScheduler(clock)
     private val factory = RecordingFactory()
     private val calls = RecordingCallbacks()
 
     private fun supervisor() = LinkSupervisor(factory, calls, scheduler) { clock.now }
+        .also { calls.supervisor = it }
 
     @Test
     fun reconnectBackoffDoublesToEightSecondsAndResetsOnOpen() {
@@ -136,7 +145,7 @@ class LinkSupervisorTest {
 
         link.open()
         assertTrue(supervisor.sendText("{}"))
-        assertEquals(listOf("{}"), link.sentText)
+        assertEquals(listOf(HELLO, "{}"), link.sentText)
 
         // The cap itself still goes out; one byte more is dropped.
         link.backlog = LinkSupervisor.MAX_AUDIO_BACKLOG_BYTES
@@ -149,6 +158,83 @@ class LinkSupervisorTest {
         assertFalse(supervisor.sendFrame(ByteArray(4), 4))
         assertFalse(supervisor.sendText("{}"))
         assertEquals(listOf(4), link.sentFrameLengths)
+    }
+
+    @Test
+    fun textBinaryAndAttachmentsAreRefusedUntilHelloIsQueued() = runBlocking {
+        val supervisor = supervisor()
+        supervisor.start()
+        val link = factory.last()
+
+        // The link is live before its hello: every other frame is refused at
+        // once instead of waiting, because the transports cannot be fed yet.
+        assertFalse(supervisor.sendText("""{"type":"api","id":"x"}"""))
+        assertFalse(supervisor.sendFrame(ByteArray(4), 4))
+        assertNull(supervisor.openAttachment("{}"))
+        assertEquals(0, link.sentText.size)
+        assertEquals(0, link.sentFrameLengths.size)
+        assertEquals(0, link.attachments)
+
+        link.open()
+        assertEquals(listOf(HELLO), link.sentText)
+        assertTrue(supervisor.sendText("""{"type":"api","id":"x"}"""))
+        assertTrue(supervisor.sendFrame(ByteArray(4), 4))
+        supervisor.openAttachment("{}")
+        assertEquals(1, link.attachments)
+    }
+
+    @Test
+    fun aProducerRacingASlowHelloCannotOvertakeIt() {
+        val supervisor = supervisor()
+        val producerSent = AtomicReference<Boolean>()
+        calls.beforeHello = {
+            // The hello's cold settings read is still running; a producer on
+            // another thread tries the same link in that window.
+            val producer = Thread { producerSent.set(supervisor.sendText("""{"type":"api"}""")) }
+            producer.start()
+            producer.join(5_000)
+        }
+        supervisor.start()
+        val link = factory.last()
+        link.open()
+
+        assertEquals(false, producerSent.get())
+        assertEquals(listOf(HELLO), link.sentText)
+    }
+
+    @Test
+    fun aHelloTheTransportRefusesLeavesEverySendRefused() {
+        factory.refuseFirstText = true
+        val supervisor = supervisor()
+        supervisor.start()
+        val failed = factory.last()
+        failed.open()
+
+        assertEquals(listOf("hello_failed"), calls.downs)
+        assertFalse(supervisor.isUp())
+        assertEquals(1, failed.cancelling)
+        // Nothing slips into the gap a refused hello left behind.
+        assertFalse(supervisor.sendText("{}"))
+        assertEquals(0, failed.sentText.size)
+    }
+
+    @Test
+    fun aReplacementLinkStartsWithItsGateClosed() {
+        val supervisor = supervisor()
+        supervisor.start()
+        factory.last().open()
+        assertTrue(supervisor.sendText("{}"))
+
+        factory.last().down("closed")
+        assertFalse(supervisor.sendText("{}"))
+
+        scheduler.advance(LinkSupervisor.RECONNECT_BASE_MS)
+        val replacement = factory.last()
+        assertFalse(supervisor.sendText("{}"))
+        replacement.open()
+        assertTrue(supervisor.sendText("{}"))
+        assertEquals(listOf(HELLO, "{}"), replacement.sentText)
+        assertEquals(0, replacement.cancelling)
     }
 
     @Test
@@ -200,6 +286,7 @@ class LinkSupervisorTest {
     fun aThrowingFactoryIsOneFailedAttemptAndTheSupervisorKeepsGoing() {
         val throwing = ThrowingFactory()
         val supervisor = LinkSupervisor(throwing, calls, scheduler) { clock.now }
+            .also { calls.supervisor = it }
         supervisor.start()
 
         assertEquals(0, throwing.created.size)
@@ -399,13 +486,23 @@ class LinkSupervisorTest {
         val texts = mutableListOf<String>()
         val binaries = mutableListOf<ByteString>()
         val downs = mutableListOf<String>()
+
+        /** The engine's supervisor; the test wires it before start(). */
+        lateinit var supervisor: LinkSupervisor
+
+        /** False: the engine could not queue its hello (like an unwired send). */
         var helloQueued = true
         var helloThrows = false
+
+        /** Runs inside onLinkOpened before the hello, e.g. a producer racing a slow settings read. */
+        var beforeHello: (() -> Unit)? = null
 
         override fun onLinkOpened(): Boolean {
             opened += Unit
             if (helloThrows) throw IllegalStateException("hello failed")
-            return helloQueued
+            beforeHello?.invoke()
+            if (!helloQueued) return false
+            return supervisor.sendHello(HELLO)
         }
 
         override fun onLinkText(text: String) {
@@ -425,9 +522,18 @@ class LinkSupervisorTest {
         val created = mutableListOf<FakeLink>()
         var shutdowns = 0
 
+        /** The next created link refuses its first text frame, like a closed transport. */
+        var refuseFirstText = false
+
         fun last(): FakeLink = created.last()
 
-        override fun create(): DeviceLink = FakeLink().also { created += it }
+        override fun create(): DeviceLink {
+            val link = FakeLink()
+            link.refuseNextText = refuseFirstText
+            refuseFirstText = false
+            created += link
+            return link
+        }
 
         override fun shutdown() {
             shutdowns++
@@ -455,22 +561,35 @@ class LinkSupervisorTest {
 
         var backlog = 0L
         var cancelling = 0
+        var refuseNextText = false
+        var attachments = 0
         val sentText = mutableListOf<String>()
         val sentFrameLengths = mutableListOf<Int>()
 
         override val backlogBytes: Long get() = backlog
+
+        override val supportsAttachments: Boolean get() = true
 
         override fun start(listener: DeviceLink.Listener) {
             this.listener = listener
         }
 
         override fun sendText(message: String): Boolean {
+            if (refuseNextText) {
+                refuseNextText = false
+                return false
+            }
             sentText += message
             return true
         }
 
         override fun sendBinary(frame: ByteArray, length: Int) {
             sentFrameLengths += length
+        }
+
+        override suspend fun openAttachment(header: String): AttachmentChannel? {
+            attachments++
+            return null
         }
 
         override fun cancel() {

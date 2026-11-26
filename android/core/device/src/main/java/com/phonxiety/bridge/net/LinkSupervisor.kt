@@ -33,7 +33,8 @@ internal class ExecutorLinkScheduler(
 
 /**
  * Owns the single live [DeviceLink]: connecting, the per-attempt listener with
- * owner checks, reconnect backoff, the host-activity deadline and the two send
+ * owner checks, reconnect backoff, the host-activity deadline, the gate that
+ * keeps `hello` the first post-authentication control frame and the two send
  * paths with the audio backlog cap.
  *
  * The protocol and call control stay in
@@ -51,8 +52,8 @@ internal class LinkSupervisor(
     interface Callbacks {
         /**
          * Called once the link is current and counted as live.  The engine
-         * sends `hello` here and returns whether that send was queued; false
-         * reports the link down as `hello_failed`.
+         * queues `hello` here through [sendHello] and returns whether that send
+         * was accepted; false reports the link down as `hello_failed`.
          */
         fun onLinkOpened(): Boolean
 
@@ -96,6 +97,14 @@ internal class LinkSupervisor(
     private var closed = false
     private var link: DeviceLink? = null
     private var linkUp = false
+
+    /**
+     * True once the live link's `hello` was accepted by the transport.  The
+     * daemon reads the first post-authentication control frame as the
+     * handshake and closes the link when it is not `hello`, so every other
+     * control, audio and attachment operation refuses until this is true.
+     */
+    private var helloQueued = false
     private var reconnectScheduled = false
     private var reconnectDelayMs = RECONNECT_BASE_MS
     private var reconnectTask: LinkTask? = null
@@ -126,6 +135,7 @@ internal class LinkSupervisor(
             closed = true
             running = false
             linkUp = false
+            helloQueued = false
             lastHostActivity = 0L
             current = link
             link = null
@@ -170,26 +180,59 @@ internal class LinkSupervisor(
     /** Bytes accepted but not yet written to the live link. */
     fun backlogBytes(): Long = synchronized(lock) { if (linkUp) link?.backlogBytes ?: 0L else 0L }
 
-    /** Opens one attachment stream on the live link; null while down or unsupported. */
+    /**
+     * Opens one attachment stream on the live link; null while down, unsupported
+     * or before the link's `hello` was queued.
+     */
     suspend fun openAttachment(header: String): AttachmentChannel? {
-        val target = synchronized(lock) { if (linkUp) link else null } ?: return null
+        val target = synchronized(lock) {
+            if (linkUp && helloQueued) link else null
+        } ?: return null
         return target.openAttachment(header)
     }
 
-    /** Queues one JSON text message; false when there is no live link. */
-    fun sendText(message: String): Boolean {
-        val target = synchronized(lock) { if (linkUp) link else null } ?: return false
-        return target.sendText(message)
+    /**
+     * Queues one JSON control message; false when there is no live link or its
+     * `hello` is not queued yet.  The daemon closes a link whose first
+     * post-authentication control frame is not `hello`.
+     */
+    fun sendText(message: String): Boolean = synchronized(lock) {
+        if (!linkUp || !helloQueued) return false
+        val target = link ?: return false
+        target.sendText(message)
     }
 
-    /** False when the frame was discarded: no link, or a backlog above the cap. */
-    fun sendFrame(frame: ByteArray, length: Int): Boolean {
-        val target = synchronized(lock) { if (linkUp) link else null } ?: return false
+    /** False when the frame was discarded: no link, no hello, or a backlog above the cap. */
+    fun sendFrame(frame: ByteArray, length: Int): Boolean = synchronized(lock) {
+        if (!linkUp || !helloQueued) return false
+        val target = link ?: return false
         // Live capture: never let a stalled network turn into growing latency.
         // Control messages use sendText and are never dropped.
         if (target.backlogBytes > MAX_AUDIO_BACKLOG_BYTES) return false
         target.sendBinary(frame, length)
-        return true
+        true
+    }
+
+    /**
+     * Queues the live link's `hello`, the only frame allowed to precede it.
+     *
+     * The gate check and the hand-off to the transport happen under [lock], the
+     * same monitor every other send checks, so a producer can never enqueue
+     * between them: whichever runs first wins, and the hello either goes out
+     * first or not at all.  Both transports only enqueue in `sendText` (iroh's
+     * unlimited control channel, OkHttp's send queue) — no I/O and no
+     * suspension under the lock.
+     *
+     * False while down or when a hello is already queued; the flag is set only
+     * after the transport accepted the frame, so a refused hello leaves every
+     * other send refused too.
+     */
+    fun sendHello(message: String): Boolean = synchronized(lock) {
+        if (!linkUp || helloQueued) return false
+        val target = link ?: return false
+        if (!target.sendText(message)) return false
+        helloQueued = true
+        true
     }
 
     /**
@@ -302,6 +345,7 @@ internal class LinkSupervisor(
     private fun retireCurrentLocked(): Boolean {
         link = null
         linkUp = false
+        helloQueued = false
         lastHostActivity = 0L
         clearAttemptDeadlineLocked()
         return running
@@ -326,6 +370,8 @@ internal class LinkSupervisor(
                 false
             } else {
                 linkUp = true
+                // A fresh link starts closed until its own hello is queued.
+                helloQueued = false
                 opens++
                 reconnectScheduled = false
                 reconnectDelayMs = RECONNECT_BASE_MS
