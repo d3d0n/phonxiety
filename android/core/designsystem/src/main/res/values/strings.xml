@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Shared component copy. Feature modules own their own screen copy. -->
+    <string name="designsystem_action_back">Back</string>
+    <string name="designsystem_action_working">Working</string>
+    <string name="designsystem_show_details">Show details</string>
+    <string name="designsystem_hide_details">Hide details</string>
+
+    <string name="designsystem_step_done">Done</string>
+    <string name="designsystem_step_in_progress">In progress</string>
+    <string name="designsystem_step_failed">Failed</string>
+    <string name="designsystem_step_not_started">Not started</string>
+
+    <string name="designsystem_path_direct">Direct</string>
+    <string name="designsystem_path_relay">Relay</string>
+    <string name="designsystem_path_offline">Offline</string>
+    <string name="designsystem_path_unknown">Unknown</string>
+
+    <string name="designsystem_duration_seconds">%1$d&#160;s</string>
+    <string name="designsystem_duration_hours_minutes">%1$d&#160;h&#160;%2$02d&#160;min</string>
+    <plurals name="designsystem_duration_minutes">
+        <item quantity="one">%1$d&#160;min</item>
+        <item quantity="other">%1$d&#160;min</item>
+    </plurals>
+</resources>

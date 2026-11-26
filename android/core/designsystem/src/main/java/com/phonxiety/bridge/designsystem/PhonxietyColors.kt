@@ -31,6 +31,11 @@ internal object PhonxietyColors {
     val DarkRedContainer = Color(0xFF93000A)
 
     val LightBackground = Color(0xFFFBF8FF)
+    val LightSurfaceContainerLowest = Color(0xFFFFFFFF)
+    val LightSurfaceContainerLow = Color(0xFFF5F2FB)
+    val LightSurfaceContainer = Color(0xFFEFEDF5)
+    val LightSurfaceContainerHigh = Color(0xFFE9E7F0)
+    val LightSurfaceContainerHighest = Color(0xFFE3E1EA)
     val LightOnSurface = Color(0xFF1B1B21)
     val LightSurfaceVariant = Color(0xFFE3E1EC)
     val LightOnSurfaceVariant = Color(0xFF46464F)
@@ -38,6 +43,11 @@ internal object PhonxietyColors {
     val LightOutlineVariant = Color(0xFFC7C5D0)
 
     val DarkBackground = Color(0xFF131318)
+    val DarkSurfaceContainerLowest = Color(0xFF0E0E13)
+    val DarkSurfaceContainerLow = Color(0xFF1B1B21)
+    val DarkSurfaceContainer = Color(0xFF1F1F25)
+    val DarkSurfaceContainerHigh = Color(0xFF292930)
+    val DarkSurfaceContainerHighest = Color(0xFF34343B)
     val DarkOnSurface = Color(0xFFE4E1E9)
     val DarkSurfaceVariant = Color(0xFF46464F)
     val DarkOnSurfaceVariant = Color(0xFFC7C5D0)
@@ -46,7 +56,13 @@ internal object PhonxietyColors {
 
     val White = Color(0xFFFFFFFF)
 
-    /** Signal colours for pills and meters; tones are semantic, not raw component colours. */
+    /**
+     * Signal colours for pills and meters; tones are semantic, not raw component colours.
+     * Success and warning never come from the wallpaper palette, so an "OK" pill cannot turn
+     * salmon under a warm system accent.
+     */
     val Warn = Color(0xFF8A5300)
+    val WarnContainer = Color(0xFFFFE2BE)
     val WarnDark = Color(0xFFFFB870)
+    val WarnContainerDark = Color(0xFF4A2F00)
 }
