@@ -26,6 +26,8 @@ import os
 import re
 import secrets
 import shutil
+import socket
+import ssl
 import subprocess
 import time
 import uuid
@@ -75,6 +77,10 @@ FEEDS_MAX = 32
 BUNDLES_KEEP = 8
 BUNDLES_TTL_S = 2 * 3600
 LINK_TESTS_KEEP = 50
+# The daemon checks its own LAN listener: one TLS handshake per advertised
+# address, and never more addresses than a phone would plan for.
+LAN_PROBE_BUDGET_S = 0.25
+LAN_PROBE_ADDRESSES = 4
 MARK_KINDS = ("agreed", "refused", "follow-up", "unclear", "callback")
 UPDATE_ARTIFACT_PATH = "/app/v1/update/artifact"
 # The manifest keys an artifact may be requested by; the file name always comes from the manifest.
@@ -118,6 +124,53 @@ def _iso(timestamp: float | None) -> str | None:
     if timestamp is None:
         return None
     return datetime.fromtimestamp(timestamp, timezone.utc).isoformat(timespec="seconds")
+
+
+def _probe_lan_listener(
+    addresses: list[str], certificate: str | None, *, budget_s: float = LAN_PROBE_BUDGET_S,
+) -> dict[str, Any]:
+    """Opens the daemon's own certificate-pinned listener at each LAN address.
+
+    A phone on the same network asks a question the daemon cannot see: whether
+    its packets reach the listener. The daemon measures the half it owns — a
+    TLS handshake to the address it advertises, accepting only the pinned
+    certificate (another daemon on the port must not answer for this one) — and
+    reports the round trip it saw. The phone probes the rest itself.
+    """
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    pin = (certificate or "").strip().lower()
+    tried = addresses[:LAN_PROBE_ADDRESSES]
+    for address in tried:
+        parts = urlsplit(address)
+        host = parts.hostname
+        try:
+            port = parts.port
+        except ValueError:
+            port = None
+        if not host or port is None:
+            continue
+        began = time.monotonic()
+        try:
+            with socket.create_connection((host, port), timeout=budget_s) as raw:
+                with context.wrap_socket(raw, server_hostname=host) as tls:
+                    presented = tls.getpeercert(binary_form=True) or b""
+        except OSError:
+            continue
+        if pin and hashlib.sha256(presented).hexdigest() != pin:
+            # Another listener on the port: this is not the daemon the phone pinned.
+            continue
+        return {
+            "reachable": True,
+            "address": address,
+            "rtt_ms": round((time.monotonic() - began) * 1000, 1),
+        }
+    return {
+        "reachable": False,
+        "address": tried[0] if tried else None,
+        "reason": "no_listener_answer" if tried else "no_lan_address",
+    }
 
 
 def redact(text: str) -> str:
@@ -659,20 +712,44 @@ class AppApi:
                 })
             elif name == "lan":
                 addresses = (await asyncio.to_thread(addresses_for, self.settings.device_port))["lan"]
-                answers.append({
-                    "name": "lan",
-                    "available": True,
-                    "reachable": connected and self._path_kind() == "lan",
-                    "rtt_ms": rtt,
-                    "addresses": addresses,
-                    "detail": f"certificate-pinned listener on port {self.settings.device_port}",
-                })
+                answers.append(await self._lan_candidate(addresses, link.get("certificate"), rtt, connected))
             elif name == "tailscale":
                 answers.append(self._tailscale_candidate(rtt, connected))
             else:
                 answers.append({"name": name, "available": False, "reachable": False, "rtt_ms": None,
                                 "reason": "unknown_candidate"})
         return 200, {"candidates": answers, "checked_at": _iso(time.time())}
+
+    async def _lan_candidate(
+        self, addresses: list[str], certificate: str | None, rtt: float | None, connected: bool,
+    ) -> dict[str, Any]:
+        """Whether this daemon's pinned listener answers at its LAN address.
+
+        The daemon cannot see the phone's network, so it measures the half it
+        owns: a TLS handshake to its own LAN address that presents the pinned
+        certificate. A phone connected over that address already proves the
+        path; the phone's own check of the rest runs in the app's Lab.
+        """
+        on_lan_path = connected and self._path_kind() == "lan"
+        listener = await asyncio.to_thread(_probe_lan_listener, addresses, certificate)
+        reachable = bool(on_lan_path or listener["reachable"])
+        if on_lan_path:
+            detail = "the phone link arrived over this LAN address"
+        elif listener["reachable"]:
+            detail = "the pinned listener answers on this host's LAN address; the phone checks its own path in the Lab"
+        else:
+            detail = "no LAN address answered the pinned listener; check the bind address of the address listener"
+        answer: dict[str, Any] = {
+            "name": "lan",
+            "available": bool(addresses),
+            "reachable": reachable,
+            "rtt_ms": listener["rtt_ms"] if listener["reachable"] else (rtt if on_lan_path else None),
+            "addresses": addresses,
+            "detail": detail,
+        }
+        if not reachable:
+            answer["reason"] = listener.get("reason") or "no_lan_address"
+        return answer
 
     def _path_kind(self) -> str:
         """How the connected phone reached the daemon: iroh, lan, tailscale or address."""

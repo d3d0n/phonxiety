@@ -5,19 +5,23 @@ import base64
 import hashlib
 import json
 import os
+import socket
+import ssl
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from phonxiety.app_api import APP_API_VERSION, AppApi, redact
+from phonxiety.app_api import APP_API_VERSION, AppApi, _probe_lan_listener, redact
 from phonxiety.controller import CallController
 from phonxiety.device import MAX_API_RESULT_CHARS, DeviceHub
 from phonxiety.models import CallRequest, CallState
 from phonxiety.net.framing import HEADER_BYTES, TEXT, frame, parse_header
 from phonxiety.net.iroh import IrohLink
 from phonxiety.net.link import LinkClosed
+from phonxiety.net.tls import device_identity, server_context
 from phonxiety.settings import Settings
 from phonxiety.store import CallStore
 
@@ -290,6 +294,106 @@ class LinkTestAndProbeTests(_ApiCase):
         status, body = await self.call("POST", "/app/v1/probe", body={"candidates": ["wireguard"]})
         self.assertEqual(status, 200)
         self.assertEqual(body["candidates"][0]["reason"], "unknown_candidate")
+
+    async def test_probe_checks_the_lan_listener_the_daemon_owns(self) -> None:
+        address = "wss://192.168.1.10:18763/device"
+        with mock.patch("phonxiety.app_api.addresses_for", return_value={"lan": [address], "tailscale": []}), \
+                mock.patch("phonxiety.app_api._probe_lan_listener", return_value={
+                    "reachable": True, "address": address, "rtt_ms": 4.5,
+                }) as listener:
+            status, body = await self.call("POST", "/app/v1/probe", body={"candidates": ["lan"]})
+        self.assertEqual(status, 200)
+        lan = body["candidates"][0]
+        self.assertTrue(lan["available"])
+        self.assertTrue(lan["reachable"])
+        # The measured handshake, not the phone's ping: the link being relay does not make the LAN unreachable.
+        self.assertEqual(lan["rtt_ms"], 4.5)
+        self.assertEqual(lan["addresses"], [address])
+        self.assertIn("pinned listener", lan["detail"])
+        listener.assert_called_once_with([address], "cc" * 32)
+
+    async def test_probe_reports_lan_unreachable_when_no_listener_answers(self) -> None:
+        address = "wss://192.168.1.10:18763/device"
+        with mock.patch("phonxiety.app_api.addresses_for", return_value={"lan": [address], "tailscale": []}), \
+                mock.patch("phonxiety.app_api._probe_lan_listener", return_value={
+                    "reachable": False, "address": address, "reason": "no_listener_answer",
+                }):
+            status, body = await self.call("POST", "/app/v1/probe", body={"candidates": ["lan"]})
+        self.assertEqual(status, 200)
+        lan = body["candidates"][0]
+        self.assertTrue(lan["available"])
+        self.assertFalse(lan["reachable"])
+        self.assertIsNone(lan["rtt_ms"])
+        self.assertEqual(lan["reason"], "no_listener_answer")
+        self.assertIn("no LAN address answered", lan["detail"])
+
+    async def test_a_phone_connected_over_lan_proves_the_path_without_a_handshake(self) -> None:
+        address = "wss://192.168.1.10:18763/device"
+        with mock.patch("phonxiety.app_api.addresses_for", return_value={"lan": [address], "tailscale": []}), \
+                mock.patch("phonxiety.app_api._probe_lan_listener", return_value={
+                    "reachable": False, "address": address, "reason": "no_listener_answer",
+                }), \
+                mock.patch.object(self.device, "status", return_value={"connected": True, "peer": "192.168.1.103"}):
+            status, body = await self.call("POST", "/app/v1/probe", body={"candidates": ["lan"]})
+        self.assertEqual(status, 200)
+        lan = body["candidates"][0]
+        self.assertTrue(lan["reachable"])
+        self.assertIsInstance(lan["rtt_ms"], float)
+        self.assertIn("arrived over", lan["detail"])
+
+
+def _one_shot_tls(context: ssl.SSLContext) -> tuple[int, threading.Thread]:
+    """A listener on 127.0.0.1 that completes one TLS handshake and stops."""
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    port = server.getsockname()[1]
+
+    def serve() -> None:
+        try:
+            connection, _ = server.accept()
+            with context.wrap_socket(connection, server_side=True):
+                pass
+        except OSError:
+            pass
+        finally:
+            server.close()
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    return port, thread
+
+
+class LanListenerProbeTests(unittest.IsolatedAsyncioTestCase):
+    """The daemon's half of the LAN question, against a real TLS listener."""
+
+    async def test_a_listener_with_the_pinned_certificate_answers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cert_path, key_path, fingerprint = device_identity(Path(directory))
+            port, server = _one_shot_tls(server_context(cert_path, key_path))
+            try:
+                result = await asyncio.to_thread(
+                    _probe_lan_listener, [f"wss://127.0.0.1:{port}/device"], fingerprint,
+                )
+            finally:
+                server.join(1)
+        self.assertTrue(result["reachable"])
+        self.assertIsInstance(result["rtt_ms"], float)
+
+    async def test_another_certificate_on_the_port_is_not_this_daemon(self) -> None:
+        with tempfile.TemporaryDirectory() as here, tempfile.TemporaryDirectory() as elsewhere:
+            cert_path, key_path, _ = device_identity(Path(here))
+            _, _, other = device_identity(Path(elsewhere))
+            port, server = _one_shot_tls(server_context(cert_path, key_path))
+            try:
+                result = await asyncio.to_thread(
+                    _probe_lan_listener, [f"wss://127.0.0.1:{port}/device"], other,
+                )
+            finally:
+                server.join(1)
+        self.assertFalse(result["reachable"])
+        self.assertEqual(result["reason"], "no_listener_answer")
 
 
 class CallsTests(_ApiCase):

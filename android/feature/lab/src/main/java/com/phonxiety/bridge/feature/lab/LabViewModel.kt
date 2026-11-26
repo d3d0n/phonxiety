@@ -3,6 +3,7 @@ package com.phonxiety.bridge.feature.lab
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.phonxiety.bridge.BridgeConfigLoader
 import com.phonxiety.bridge.BridgeLog
 import com.phonxiety.bridge.PhonePreferences
 import com.phonxiety.bridge.PhoneSettings
@@ -12,7 +13,9 @@ import com.phonxiety.bridge.data.BridgeStateRepository
 import com.phonxiety.bridge.data.DaemonApi
 import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.model.LinkTestResult
+import com.phonxiety.bridge.model.ProbeCandidate
 import com.phonxiety.bridge.model.TestCallRequest
+import com.phonxiety.bridge.net.LanPathProbe
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
@@ -35,6 +38,7 @@ class LabViewModel @Inject constructor(
     private val api: DaemonApi,
     bridgeState: BridgeStateRepository,
     private val phonePreferences: PhonePreferences,
+    private val lanPathCheck: LanPathCheck,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
     private val history = LabHistoryStore(File(context.filesDir, "lab/link-tests.json"))
@@ -122,15 +126,18 @@ class LabViewModel @Inject constructor(
         _state.update { it.copy(probe = it.probe.copy(running = true, error = null)) }
         viewModelScope.launch {
             when (val outcome = api.probe(selected.sorted())) {
-                is ApiOutcome.Ok -> _state.update {
-                    it.copy(
-                        probe = it.probe.copy(
-                            running = false,
-                            candidates = outcome.value.candidates,
-                            checkedAt = outcome.value.checkedAt,
-                            error = null
+                is ApiOutcome.Ok -> {
+                    val candidates = if ("lan" in selected) checkedLan(outcome.value.candidates) else outcome.value.candidates
+                    _state.update {
+                        it.copy(
+                            probe = it.probe.copy(
+                                running = false,
+                                candidates = candidates,
+                                checkedAt = outcome.value.checkedAt,
+                                error = null
+                            )
                         )
-                    )
+                    }
                 }
 
                 is ApiOutcome.Failure -> _state.update {
@@ -138,6 +145,63 @@ class LabViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    /**
+     * Replaces the daemon's LAN answer with this phone's own measurement.
+     *
+     * The daemon can only report whether its listener answers on its own LAN
+     * address; the question the lab asks is whether this phone's network
+     * reaches that address. The same pinned TLS handshake and bearer upgrade
+     * link selection uses answers it from here; the daemon's finding stays in
+     * the row's detail so both halves are visible.
+     */
+    private suspend fun checkedLan(candidates: List<ProbeCandidate>): List<ProbeCandidate> {
+        val row = candidates.firstOrNull { it.name == "lan" } ?: return candidates
+        val info = (api.info() as? ApiOutcome.Ok)?.value
+        val urls = info?.connection?.lan.orEmpty()
+        val pin = info?.connection?.certificate
+        val token = BridgeConfigLoader.loadOrNull(context)?.token
+        val probes = if (urls.isNotEmpty() && token != null) {
+            withContext(Dispatchers.IO) { runCatching { lanPathCheck.probe(urls, pin, token) }.getOrNull() }
+        } else {
+            null
+        }
+        val answered = probes?.firstOrNull { it.reachable }
+        val updated = when {
+            urls.isEmpty() -> row.copy(detail = row.notes("the daemon reports no LAN address"))
+
+            token == null -> row.copy(detail = row.notes("this phone is not paired, so it cannot authenticate a probe"))
+
+            probes == null -> row.copy(detail = row.notes("the phone's own check failed"))
+
+            else -> row.copy(
+                available = true,
+                reachable = answered != null,
+                rttMs = answered?.rttMs?.toDouble(),
+                address = answered?.address ?: urls.first(),
+                detail = "${phoneResult(probes, answered)} · ${daemonListener(row)}",
+                reason = when {
+                    answered != null -> null
+                    row.reachable -> "unreachable_from_phone"
+                    else -> row.reason ?: "no_listener_answer"
+                }
+            )
+        }
+        return candidates.map { if (it.name == row.name) updated else it }
+    }
+
+    private fun ProbeCandidate.notes(note: String): String = listOfNotNull(detail, note).joinToString(" · ")
+
+    private fun phoneResult(probes: List<LanPathProbe>, answered: LanPathProbe?): String = when (answered) {
+        null -> "this phone could not reach ${probes.joinToString(", ") { it.address }}"
+        else -> "this phone: tls+auth to ${answered.address} in ${answered.rttMs} ms"
+    }
+
+    private fun daemonListener(row: ProbeCandidate): String = if (row.reachable) {
+        "the daemon's listener answers on its own LAN address"
+    } else {
+        "the daemon's listener does not answer there either"
     }
 
     // -- loopback and tone ----------------------------------------------

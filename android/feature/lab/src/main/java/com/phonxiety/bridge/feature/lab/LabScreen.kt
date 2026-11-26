@@ -55,6 +55,10 @@ import com.phonxiety.bridge.designsystem.component.StatusPill
 import com.phonxiety.bridge.designsystem.component.StatusTone
 import com.phonxiety.bridge.model.LinkTestResult
 import com.phonxiety.bridge.model.ProbeCandidate
+import java.time.LocalDateTime
+import java.time.OffsetDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlinx.coroutines.launch
 
@@ -262,7 +266,7 @@ private fun LinkTestCard(link: LinkTestUi, callbacks: LabCallbacks) {
             link.history.take(5).forEach { run ->
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = run.at?.let { it.replace('T', ' ').take(19) } ?: "—",
+                        text = localTime(run.at) ?: "—",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f)
@@ -298,7 +302,7 @@ private fun LinkTestDetails(result: LinkTestResult) {
 private fun ProbeCard(probe: ProbeUi, callbacks: LabCallbacks) {
     SectionCard(
         title = "Path probe",
-        subtitle = "What the daemon can reach, from the daemon's side"
+        subtitle = "What this phone can reach: the daemon checks its listener, the phone checks the LAN path"
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("iroh", "lan", "tailscale").forEach { name ->
@@ -319,7 +323,7 @@ private fun ProbeCard(probe: ProbeUi, callbacks: LabCallbacks) {
         probe.candidates.forEach { candidate -> ProbeRow(candidate) }
         probe.checkedAt?.let {
             Text(
-                text = "checked $it",
+                text = "checked ${localTime(it)}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -605,6 +609,22 @@ private fun LinkTestResult.p95Tone(): StatTone {
 }
 
 private fun Double.format(digits: Int): String = String.format(Locale.US, "%.${digits}f", this)
+
+/**
+ * Daemon timestamps are UTC ISO-8601; the lab is read on this phone, so the
+ * history and the check time are shown in the phone's zone. A stamp without an
+ * offset is already local wall-clock (old records and previews) and is kept.
+ */
+internal fun localTime(at: String?): String? {
+    if (at == null) return null
+    val zone = ZoneId.systemDefault()
+    val converted = runCatching { OffsetDateTime.parse(at) }.getOrNull()
+        ?.atZoneSameInstant(zone)
+        ?: runCatching { LocalDateTime.parse(at).atZone(zone) }.getOrNull()
+    return converted?.format(LAB_TIME) ?: at.replace('T', ' ').take(19)
+}
+
+private val LAB_TIME: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
 
 private fun copyToClipboard(context: Context, label: String, text: String) {
     val manager = context.getSystemService(ClipboardManager::class.java) ?: return

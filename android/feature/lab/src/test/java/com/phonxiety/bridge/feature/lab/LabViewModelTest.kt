@@ -2,6 +2,8 @@ package com.phonxiety.bridge.feature.lab
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.phonxiety.bridge.BridgeConfig
+import com.phonxiety.bridge.BridgeConfigLoader
 import com.phonxiety.bridge.BridgeLog
 import com.phonxiety.bridge.PhonePreferences
 import com.phonxiety.bridge.PhoneSettings
@@ -10,6 +12,7 @@ import com.phonxiety.bridge.data.BridgeStateRepository
 import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.model.CallPhase
 import com.phonxiety.bridge.model.CallState
+import com.phonxiety.bridge.model.ConnectionInfo
 import com.phonxiety.bridge.model.DaemonInfo
 import com.phonxiety.bridge.model.LinkTests
 import com.phonxiety.bridge.model.LoopbackResult
@@ -18,6 +21,7 @@ import com.phonxiety.bridge.model.ProbeResult
 import com.phonxiety.bridge.model.TestCallRequest
 import com.phonxiety.bridge.model.ToneResult
 import com.phonxiety.bridge.model.VoiceControls
+import com.phonxiety.bridge.net.LanPathProbe
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -48,6 +52,7 @@ class LabViewModelTest {
     private lateinit var api: FakeDaemonApi
     private lateinit var prefs: FakePhonePreferences
     private lateinit var bridge: FakeBridgeStateRepository
+    private lateinit var lanCheck: FakeLanPathCheck
 
     @Before
     fun setUp() {
@@ -58,6 +63,7 @@ class LabViewModelTest {
         api = FakeDaemonApi()
         prefs = FakePhonePreferences()
         bridge = FakeBridgeStateRepository()
+        lanCheck = FakeLanPathCheck()
     }
 
     @After
@@ -65,7 +71,7 @@ class LabViewModelTest {
         Dispatchers.resetMain()
     }
 
-    private fun viewModel(): LabViewModel = LabViewModel(api, bridge, prefs, context)
+    private fun viewModel(): LabViewModel = LabViewModel(api, bridge, prefs, lanCheck, context)
 
     @Test
     fun `a finished link test is shown and kept across a new screen`() = runBlocking<Unit> {
@@ -179,6 +185,93 @@ class LabViewModelTest {
     }
 
     @Test
+    fun `the lan row shows the phone's own probe, not the daemon's listener check alone`() = runBlocking<Unit> {
+        val url = "wss://192.0.2.10:18763/device"
+        val pin = "cc".repeat(32)
+        api.probeHandler = {
+            ApiOutcome.Ok(
+                200,
+                ProbeResult(
+                    // The daemon, probed while the link is on iroh, could not see the phone's path.
+                    candidates = listOf(ProbeCandidate("lan", available = true, reachable = false, reason = "no_listener_answer")),
+                    checkedAt = "2026-11-26T10:00:00+00:00"
+                )
+            )
+        }
+        api.infoHandler = { ApiOutcome.Ok(200, DaemonInfo(connection = ConnectionInfo(lan = listOf(url), certificate = pin))) }
+        BridgeConfigLoader.write(context, BridgeConfig.Address(url, "dev-token", pin))
+        lanCheck.results = { urls -> urls.map { LanPathProbe(it, reachable = true, rttMs = 9) } }
+        val vm = viewModel()
+        vm.toggleProbeCandidate("iroh")
+        vm.toggleProbeCandidate("tailscale")
+        vm.runProbe()
+        withTimeout(5_000) { vm.state.first { it.probe.candidates.isNotEmpty() } }
+        val row = vm.state.value.probe.candidates.single()
+        assertTrue(row.reachable)
+        assertEquals(9.0, row.rttMs)
+        assertEquals(url, row.address)
+        assertNull(row.reason)
+        assertTrue(row.detail.orEmpty().contains("this phone: tls+auth to $url in 9 ms"))
+        assertEquals(listOf(url), lanCheck.calls.single().first)
+        assertEquals(pin, lanCheck.calls.single().second)
+        assertEquals("dev-token", lanCheck.calls.single().third)
+    }
+
+    @Test
+    fun `a phone that cannot reach the listener says so while the daemon still answers`() = runBlocking<Unit> {
+        val url = "wss://192.0.2.10:18763/device"
+        val pin = "cc".repeat(32)
+        api.probeHandler = {
+            ApiOutcome.Ok(
+                200,
+                ProbeResult(
+                    candidates = listOf(
+                        ProbeCandidate("lan", available = true, reachable = true, rttMs = 4.0, detail = "the pinned listener answers on this host's LAN address")
+                    ),
+                    checkedAt = "2026-11-26T10:00:00+00:00"
+                )
+            )
+        }
+        api.infoHandler = { ApiOutcome.Ok(200, DaemonInfo(connection = ConnectionInfo(lan = listOf(url), certificate = pin))) }
+        BridgeConfigLoader.write(context, BridgeConfig.Address(url, "dev-token", pin))
+        lanCheck.results = { urls -> urls.map { LanPathProbe(it, reachable = false, rttMs = null) } }
+        val vm = viewModel()
+        vm.toggleProbeCandidate("iroh")
+        vm.toggleProbeCandidate("tailscale")
+        vm.runProbe()
+        withTimeout(5_000) { vm.state.first { it.probe.candidates.isNotEmpty() } }
+        val row = vm.state.value.probe.candidates.single()
+        assertFalse(row.reachable)
+        assertNull(row.rttMs)
+        assertEquals("unreachable_from_phone", row.reason)
+        assertTrue(row.detail.orEmpty().contains("this phone could not reach $url"))
+        assertTrue(row.detail.orEmpty().contains("the daemon's listener answers on its own LAN address"))
+    }
+
+    @Test
+    fun `without a LAN address the daemon's row is kept and says why`() = runBlocking<Unit> {
+        api.probeHandler = {
+            ApiOutcome.Ok(
+                200,
+                ProbeResult(
+                    candidates = listOf(ProbeCandidate("lan", available = false, reachable = false, reason = "no_lan_address")),
+                    checkedAt = "2026-11-26T10:00:00+00:00"
+                )
+            )
+        }
+        api.infoHandler = { ApiOutcome.Ok(200, DaemonInfo(connection = ConnectionInfo())) }
+        val vm = viewModel()
+        vm.toggleProbeCandidate("iroh")
+        vm.toggleProbeCandidate("tailscale")
+        vm.runProbe()
+        withTimeout(5_000) { vm.state.first { it.probe.candidates.isNotEmpty() } }
+        val row = vm.state.value.probe.candidates.single()
+        assertFalse(row.reachable)
+        assertTrue(row.detail.orEmpty().contains("the daemon reports no LAN address"))
+        assertTrue(lanCheck.calls.isEmpty())
+    }
+
+    @Test
     fun `diagnostics text renders and the log view honours the filter`() = runBlocking<Unit> {
         api.diagnosticsHandler = {
             ApiOutcome.Ok(
@@ -218,6 +311,16 @@ class LabViewModelTest {
 class FakeBridgeStateRepository(initial: BridgeState = BridgeState()) : BridgeStateRepository {
     val flow = MutableStateFlow(initial)
     override val state: StateFlow<BridgeState> = flow
+}
+
+class FakeLanPathCheck : LanPathCheck {
+    val calls = mutableListOf<Triple<List<String>, String?, String>>()
+    var results: (List<String>) -> List<LanPathProbe> = { urls -> urls.map { LanPathProbe(it, reachable = true, rttMs = 5) } }
+
+    override fun probe(urls: List<String>, certSha256: String?, token: String): List<LanPathProbe> {
+        calls += Triple(urls, certSha256, token)
+        return results(urls)
+    }
 }
 
 class FakePhonePreferences(initial: PhoneSettings = PhoneSettings()) : PhonePreferences {
