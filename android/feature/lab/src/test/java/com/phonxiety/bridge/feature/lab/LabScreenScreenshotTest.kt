@@ -31,7 +31,13 @@ import androidx.compose.ui.unit.dp
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
 import com.phonxiety.bridge.designsystem.UiText
+import com.phonxiety.bridge.designsystem.testing.assertAccessible
+import com.phonxiety.bridge.designsystem.testing.pinAnimationFrame
+import java.util.Locale
+import java.util.TimeZone
+import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -50,6 +56,21 @@ import org.robolectric.annotation.GraphicsMode
 class LabScreenScreenshotTest {
     @get:Rule
     val composeRule = createComposeRule()
+
+    private val originalLocale: Locale = Locale.getDefault()
+    private val originalTimeZone: TimeZone = TimeZone.getDefault()
+
+    @Before
+    fun pinLocaleAndTimeZone() {
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
+        Locale.setDefault(Locale.US)
+    }
+
+    @After
+    fun restoreLocaleAndTimeZone() {
+        TimeZone.setDefault(originalTimeZone)
+        Locale.setDefault(originalLocale)
+    }
 
     private fun setScreen(
         state: LabUiState,
@@ -85,6 +106,7 @@ class LabScreenScreenshotTest {
         content()
         beforeCapture()
         composeRule.waitForIdle()
+        composeRule.pinAnimationFrame()
         composeRule.onNodeWithTag(SCREEN_TAG).captureRoboImage("src/test/screenshots/lab_$name.png")
         composeRule.onNodeWithTag(SCREEN_TAG).assertAccessible()
     }
@@ -164,6 +186,7 @@ class LabScreenScreenshotTest {
         composeRule.onNodeWithTag(SCREEN_TAG).assertAccessible()
         // The dialog is captured on its own node: the scrim behind it animates, the dialog does not.
         composeRule.onAllNodes(isDialog()).onLast().assertAccessible()
+        composeRule.pinAnimationFrame()
         composeRule.onAllNodes(isDialog()).onLast()
             .captureRoboImage("src/test/screenshots/lab_dialog_411_light.png")
     }

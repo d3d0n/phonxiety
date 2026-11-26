@@ -13,6 +13,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.phonxiety.bridge.designsystem.component.PrimaryActionButton
+import com.phonxiety.bridge.designsystem.testing.assertAccessible
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test

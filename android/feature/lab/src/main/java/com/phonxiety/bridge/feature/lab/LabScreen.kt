@@ -776,20 +776,20 @@ private fun TestToneSecondsSlider(seconds: Int, enabled: Boolean, onSeconds: (In
 private fun TestCallResultCard(result: TestCallResultUi, onOpenCall: (String) -> Unit) {
     SectionCard(
         title = stringResource(R.string.lab_test_result_title),
-        subtitle = stringResource(R.string.lab_test_result_subtitle)
-    ) {
-        // The pill is in the content, not the title row: beside a two-word title it would leave the
-        // title one word wide at 200 % text.
-        testOutcomeLabel(result.outcome)?.let { label ->
-            StatusPill(
-                label = label,
-                tone = if (result.outcome?.lowercase(Locale.US) == "answered") {
-                    StatusTone.POSITIVE
-                } else {
-                    StatusTone.WARNING
-                }
-            )
+        subtitle = stringResource(R.string.lab_test_result_subtitle),
+        status = {
+            testOutcomeLabel(result.outcome)?.let { label ->
+                StatusPill(
+                    label = label,
+                    tone = if (result.outcome?.lowercase(Locale.US) == "answered") {
+                        StatusTone.POSITIVE
+                    } else {
+                        StatusTone.WARNING
+                    }
+                )
+            }
         }
+    ) {
         result.durationSeconds?.let {
             KeyValueRow(
                 label = stringResource(R.string.lab_test_result_duration),

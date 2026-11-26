@@ -23,6 +23,9 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
+import com.phonxiety.bridge.designsystem.testing.assertAccessible
+import com.phonxiety.bridge.designsystem.testing.pinAnimationFrame
+import com.phonxiety.bridge.designsystem.testing.resumeAnimationFrames
 import java.util.Locale
 import java.util.TimeZone
 import org.junit.After
@@ -83,6 +86,7 @@ class DoctorScreenshotTest(private val matrixCase: MatrixCase) {
         if (matrixCase.state == DoctorState.PENDING) {
             // The dialog lives in its own window: capture and gate it, not the screen behind it.
             composeRule.onNode(isDialog()).assertAccessible()
+            composeRule.pinAnimationFrame()
             composeRule.onNode(isDialog())
                 .captureRoboImage("src/test/screenshots/doctor_confirm_${variant.slug}.png")
         } else {
@@ -101,6 +105,7 @@ class DoctorScreenshotTest(private val matrixCase: MatrixCase) {
                     .assertIsDisplayed()
             }
             composeRule.onNodeWithTag(CAPTURE_TAG).assertAccessible()
+            composeRule.pinAnimationFrame()
             composeRule.onNodeWithTag(CAPTURE_TAG)
                 .captureRoboImage("src/test/screenshots/doctor_${matrixCase.state.slug}_${variant.slug}.png")
         }
@@ -127,13 +132,16 @@ class DoctorScreenshotTest(private val matrixCase: MatrixCase) {
         composeRule.onNodeWithText(RECOVERY_ENTRY_TEXT, substring = true).performScrollTo()
         composeRule.onNodeWithText(RECOVERY_ENTRY_TEXT, substring = true).assertIsDisplayed()
         composeRule.onNodeWithTag(CAPTURE_TAG).assertAccessible()
+        composeRule.pinAnimationFrame()
         composeRule.onNodeWithTag(CAPTURE_TAG)
             .captureRoboImage("src/test/screenshots/doctor_lower_recovery_${variant.slug}.png")
 
         // A real persisted entry, not an empty state: its text is on screen before the capture.
+        composeRule.resumeAnimationFrames()
         composeRule.onNodeWithText(SAVED_ENTRY_TEXT, substring = true).performScrollTo()
         composeRule.onNodeWithText(SAVED_ENTRY_TEXT, substring = true).assertIsDisplayed()
         composeRule.onNodeWithTag(CAPTURE_TAG).assertAccessible()
+        composeRule.pinAnimationFrame()
         composeRule.onNodeWithTag(CAPTURE_TAG)
             .captureRoboImage("src/test/screenshots/doctor_lower_changes_${variant.slug}.png")
     }
@@ -148,6 +156,10 @@ class DoctorScreenshotTest(private val matrixCase: MatrixCase) {
     private fun configureWindow(variant: Variant) {
         RuntimeEnvironment.setQualifiers("+w${variant.widthDp}dp-h891dp")
         RuntimeEnvironment.setFontScale(variant.fontScale)
+        // Changing the device configuration can reset the process default: the instant this screen
+        // formats is reproducible only with both pinned at the moment of composition.
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
+        Locale.setDefault(Locale.US)
     }
 
     @Composable

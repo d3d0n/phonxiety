@@ -364,16 +364,16 @@ private fun ResultCard(state: CallDetailUiState) {
     val fields = state.summaryFields
     SectionCard(
         title = stringResource(R.string.call_detail_result_title),
-        subtitle = snapshot?.taskOutcome?.takeIf { it.isNotBlank() }?.let(::humanize)
-    ) {
-        // The pill is in the content, not the title row: "Summary ready" beside "Result" leaves
-        // the title one character wide at 200 % text.
-        resultLabel(snapshot?.resultStatus)?.let { label ->
-            StatusPill(
-                label = label,
-                tone = if (snapshot?.resultStatus == "ready") StatusTone.POSITIVE else StatusTone.NEUTRAL
-            )
+        subtitle = snapshot?.taskOutcome?.takeIf { it.isNotBlank() }?.let(::humanize),
+        status = {
+            resultLabel(snapshot?.resultStatus)?.let { label ->
+                StatusPill(
+                    label = label,
+                    tone = if (snapshot?.resultStatus == "ready") StatusTone.POSITIVE else StatusTone.NEUTRAL
+                )
+            }
         }
+    ) {
         if (summary.isNullOrBlank() && fields.isEmpty()) {
             Text(
                 text = stringResource(

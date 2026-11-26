@@ -1,4 +1,4 @@
-package com.phonxiety.bridge.feature.calls
+package com.phonxiety.bridge.designsystem.testing
 
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import com.github.takahirom.roborazzi.ExperimentalRoborazziApi
@@ -13,9 +13,9 @@ import org.hamcrest.TypeSafeMatcher
 
 /**
  * WCAG 1.4.3 exempts the text of an inactive control from the contrast minimum, and the
- * Accessibility Test Framework misreads the label of a disabled Button whose text is centred: it
- * samples the container as the text color. This is the same suppression the designsystem's shared
- * gate applies, kept in step with it.
+ * Accessibility Test Framework misreads the label of a disabled Button whose text is centered: it
+ * samples the container as the text color and reports about 1.05:1. The design system still gives
+ * disabled labels readable colors; only the contrast result of a disabled element is suppressed.
  */
 private object DisabledTextContrast : TypeSafeMatcher<AccessibilityViewCheckResult>() {
     override fun matchesSafely(item: AccessibilityViewCheckResult): Boolean {
@@ -28,7 +28,7 @@ private object DisabledTextContrast : TypeSafeMatcher<AccessibilityViewCheckResu
     }
 }
 
-/** The flagged node is the label inside the control, so the disabled state sits on an ancestor. */
+/** The flagged node is the label inside the Button, so the disabled state sits on an ancestor. */
 private fun ViewHierarchyElement?.insideDisabledControl(): Boolean {
     var node = this
     while (node != null) {
@@ -44,13 +44,13 @@ private fun ViewHierarchyElement?.insideDisabledControl(): Boolean {
  * exactly what this pass exists to catch.
  */
 @OptIn(ExperimentalRoborazziApi::class)
-private fun accessibilityGateOptions(): RoborazziATFAccessibilityCheckOptions = RoborazziATFAccessibilityCheckOptions(
+fun accessibilityGateOptions(): RoborazziATFAccessibilityCheckOptions = RoborazziATFAccessibilityCheckOptions(
     checker = RoborazziATFAccessibilityChecker(suppressions = DisabledTextContrast),
     failureLevel = RoborazziATFAccessibilityChecker.CheckLevel.Warning
 )
 
 /** Runs the gate on one captured state. */
 @OptIn(ExperimentalRoborazziApi::class)
-internal fun SemanticsNodeInteraction.assertAccessible() {
+fun SemanticsNodeInteraction.assertAccessible() {
     checkRoboAccessibility(accessibilityGateOptions())
 }

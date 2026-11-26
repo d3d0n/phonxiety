@@ -25,6 +25,7 @@ import com.github.takahirom.roborazzi.captureRoboImage
 import com.phonxiety.bridge.designsystem.component.KeyValueRow
 import com.phonxiety.bridge.designsystem.component.ScreenScaffold
 import com.phonxiety.bridge.designsystem.component.SectionCard
+import com.phonxiety.bridge.designsystem.testing.assertAccessible
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith

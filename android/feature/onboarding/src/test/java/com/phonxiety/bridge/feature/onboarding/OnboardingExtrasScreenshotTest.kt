@@ -25,7 +25,13 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
+import com.phonxiety.bridge.designsystem.testing.assertAccessible
+import com.phonxiety.bridge.designsystem.testing.pinAnimationFrame
 import com.phonxiety.bridge.root.WizardState
+import java.util.Locale
+import java.util.TimeZone
+import org.junit.After
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -44,6 +50,21 @@ import org.robolectric.annotation.GraphicsMode
 class OnboardingExtrasScreenshotTest {
     @get:Rule
     val composeRule = createComposeRule()
+
+    private val originalLocale: Locale = Locale.getDefault()
+    private val originalTimeZone: TimeZone = TimeZone.getDefault()
+
+    @Before
+    fun pinLocaleAndTimeZone() {
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
+        Locale.setDefault(Locale.US)
+    }
+
+    @After
+    fun restoreLocaleAndTimeZone() {
+        TimeZone.setDefault(originalTimeZone)
+        Locale.setDefault(originalLocale)
+    }
 
     /** The height the screen is composed with; a content capture regrows it to fit the page. */
     private var pageHeightDp by mutableStateOf(PHONE_DP)
@@ -136,6 +157,7 @@ class OnboardingExtrasScreenshotTest {
         composeRule.onNodeWithText("Paste pairing link").performClick()
         composeRule.waitForIdle()
         composeRule.onAllNodes(isDialog()).onLast().assertAccessible()
+        composeRule.pinAnimationFrame()
         composeRule.onAllNodes(isDialog()).onLast()
             .captureRoboImage("src/test/screenshots/wizard_pairing_sheet_411_light.png")
     }
@@ -151,6 +173,7 @@ class OnboardingExtrasScreenshotTest {
         composeRule.onNodeWithText("Paste pairing link").performClick()
         composeRule.waitForIdle()
         composeRule.onAllNodes(isDialog()).onLast().assertAccessible()
+        composeRule.pinAnimationFrame()
         composeRule.onAllNodes(isDialog()).onLast()
             .captureRoboImage("src/test/screenshots/wizard_pairing_sheet_rejected_411_light.png")
     }
@@ -164,6 +187,7 @@ class OnboardingExtrasScreenshotTest {
         }
         composeRule.waitForIdle()
         composeRule.onAllNodes(isDialog()).onLast().assertAccessible()
+        composeRule.pinAnimationFrame()
         composeRule.onAllNodes(isDialog()).onLast()
             .captureRoboImage("src/test/screenshots/wizard_camera_blocked_411_light.png")
     }

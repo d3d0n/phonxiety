@@ -78,14 +78,6 @@
     <string name="updates_note_daemon_protocol">The daemon accepts device protocol %1$s; this app speaks %2$d. Update the daemon on your computer.</string>
     <string name="updates_note_daemon_unreachable">The daemon did not answer, so its version is unknown.</string>
 
-    <!-- Human titles for the privileged permissions a module release grants. -->
-    <string name="updates_permission_capture_audio">Capture audio output</string>
-    <string name="updates_permission_modify_phone_state">Modify phone state</string>
-    <string name="updates_permission_control_in_call">Control in-call experience</string>
-    <string name="updates_permission_install_updates">Install self updates</string>
-    <string name="updates_permission_reboot">Reboot</string>
-    <string name="updates_permission_start_after_boot">Start after boot</string>
-
     <!-- App install -->
     <string name="updates_install_app">Install %1$s</string>
     <string name="updates_install_app_generic">Install the update</string>

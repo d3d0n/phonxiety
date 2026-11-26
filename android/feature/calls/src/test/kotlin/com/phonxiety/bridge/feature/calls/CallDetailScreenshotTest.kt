@@ -37,13 +37,19 @@ import com.github.takahirom.roborazzi.captureRoboImage
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
 import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.designsystem.formatPhoneNumber
+import com.phonxiety.bridge.designsystem.testing.assertAccessible
+import com.phonxiety.bridge.designsystem.testing.pinAnimationFrame
 import com.phonxiety.bridge.model.CallMark
 import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.TranscriptTurn
+import java.util.Locale
+import java.util.TimeZone
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -62,6 +68,21 @@ import org.robolectric.annotation.GraphicsMode
 class CallDetailScreenshotTest {
     @get:Rule
     val composeRule = createComposeRule()
+
+    private val originalLocale: Locale = Locale.getDefault()
+    private val originalTimeZone: TimeZone = TimeZone.getDefault()
+
+    @Before
+    fun pinLocaleAndTimeZone() {
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
+        Locale.setDefault(Locale.US)
+    }
+
+    @After
+    fun restoreLocaleAndTimeZone() {
+        TimeZone.setDefault(originalTimeZone)
+        Locale.setDefault(originalLocale)
+    }
 
     private fun setScreen(
         state: CallDetailUiState,
@@ -109,6 +130,7 @@ class CallDetailScreenshotTest {
         content()
         beforeCapture()
         composeRule.waitForIdle()
+        composeRule.pinAnimationFrame()
         composeRule.onNodeWithTag(SCREEN_TAG).captureRoboImage("src/test/screenshots/call_detail_$name.png")
         composeRule.onNodeWithTag(SCREEN_TAG).assertAccessible()
     }
