@@ -1,5 +1,6 @@
 package com.phonxiety.bridge.net
 
+import com.phonxiety.bridge.model.LinkKind
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.runBlocking
 import okio.ByteString
@@ -25,6 +26,9 @@ class LinkSupervisorTest {
     private val calls = RecordingCallbacks()
 
     private fun supervisor() = LinkSupervisor(factory, calls, scheduler) { clock.now }
+        .also { calls.supervisor = it }
+
+    private fun supervisor(factory: DeviceLinkFactory) = LinkSupervisor(factory, calls, scheduler) { clock.now }
         .also { calls.supervisor = it }
 
     @Test
@@ -431,6 +435,156 @@ class LinkSupervisorTest {
     }
 
     // ------------------------------------------------------------------
+    // Attempt outcomes: one classification per accepted attempt
+    // ------------------------------------------------------------------
+
+    @Test
+    fun aFailureAfterAnAcceptedOpenIsNotCounted() {
+        val budget = IrohFailureBudget { clock.now }
+        val factory = BudgetFactory(budget, LinkKind.IROH)
+        val supervisor = supervisor(factory)
+
+        // `hello_failed` arrives after the transport opened...
+        calls.helloQueued = false
+        supervisor.start()
+        factory.last().open()
+        assertEquals(listOf("hello_failed"), calls.downs)
+        scheduler.advance(scheduler.reconnectDelays.last())
+
+        // ...and `connect_failed` can arrive after QUIC connected too.
+        calls.helloQueued = true
+        repeat(2) {
+            val link = factory.last()
+            link.open()
+            link.down("connect_failed")
+            scheduler.advance(scheduler.reconnectDelays.last())
+        }
+
+        assertEquals(listOf(AttemptOutcome.OPENED, AttemptOutcome.OPENED, AttemptOutcome.OPENED), factory.outcomes.map { it.first })
+        assertFalse(budget.pending())
+    }
+
+    @Test
+    fun duplicateAndLateDownsAreClassifiedOnce() {
+        val budget = IrohFailureBudget { clock.now }
+        val factory = BudgetFactory(budget, LinkKind.IROH)
+        val supervisor = supervisor(factory)
+        supervisor.start()
+
+        // Two attempts, each reporting down twice: the second report comes from
+        // an attempt that is no longer current and must change nothing.
+        repeat(2) {
+            val link = factory.last()
+            link.down("connect_failed")
+            link.down("closed")
+            scheduler.advance(scheduler.reconnectDelays.last())
+        }
+        assertEquals(2, factory.outcomes.count { it.first == AttemptOutcome.FAILED_BEFORE_OPEN })
+        assertFalse(budget.pending())
+
+        // The third real failure is the one that trips: duplicates never counted.
+        factory.last().down("connect_failed")
+        assertTrue(budget.pending())
+        assertEquals(3, factory.outcomes.count { it.first == AttemptOutcome.FAILED_BEFORE_OPEN })
+    }
+
+    @Test
+    fun anOpenRacingTheAttemptDeadlineIsClassifiedAsOpenedOnly() {
+        val budget = IrohFailureBudget { clock.now }
+        val factory = BudgetFactory(budget, LinkKind.IROH)
+        val supervisor = supervisor(factory)
+        supervisor.start()
+
+        // The deadline task is already dispatched when the transport opens.
+        scheduler.beforeAction = { factory.last().open() }
+        scheduler.advance(LinkSupervisor.ATTEMPT_TIMEOUT_MS)
+
+        assertEquals(listOf(AttemptOutcome.OPENED), factory.outcomes.map { it.first })
+        assertFalse(budget.pending())
+        assertTrue(supervisor.isUp())
+    }
+
+    @Test
+    fun mixedTransportsOnlyCountingIrohFailures() {
+        val budget = IrohFailureBudget { clock.now }
+        val factory = BudgetFactory(budget, LinkKind.IROH)
+        val supervisor = supervisor(factory)
+        supervisor.start()
+
+        // iroh, LAN, iroh, Tailscale, iroh: three iroh failures trip, the LAN
+        // failures neither add to the streak nor reset it.  The kind is fixed
+        // when the attempt is created, so it is set before the reconnect.
+        factory.last().down("connect_failed")
+        factory.kind = LinkKind.WEBSOCKET
+        scheduler.advance(scheduler.reconnectDelays.last())
+        factory.last().down("connect_failed")
+        factory.kind = LinkKind.IROH
+        scheduler.advance(scheduler.reconnectDelays.last())
+        factory.last().down("connect_failed")
+        factory.kind = LinkKind.TAILSCALE
+        scheduler.advance(scheduler.reconnectDelays.last())
+        factory.last().down("connect_failed")
+        assertFalse(budget.pending())
+
+        factory.kind = LinkKind.IROH
+        scheduler.advance(scheduler.reconnectDelays.last())
+        factory.last().down("connect_failed")
+        assertTrue(budget.pending())
+    }
+
+    @Test
+    fun anUnknownKindConstructionFailureNeverCountsAndStillReconnects() {
+        val budget = IrohFailureBudget { clock.now }
+        val factory = BudgetFactory(budget, LinkKind.IROH).also { it.throwCreate = true }
+        val supervisor = supervisor(factory)
+        supervisor.start()
+
+        scheduler.advance(1_000)
+        scheduler.advance(2_000)
+
+        // Nothing was selected, so every failure is unknown to the budget...
+        assertEquals(0, factory.created.size)
+        assertEquals(
+            listOf(AttemptOutcome.FAILED_BEFORE_OPEN, AttemptOutcome.FAILED_BEFORE_OPEN, AttemptOutcome.FAILED_BEFORE_OPEN),
+            factory.outcomes.map { it.first }
+        )
+        assertTrue(factory.outcomes.all { it.second == null })
+        assertFalse(budget.pending())
+
+        // ...while reconnect and backoff run exactly as before.
+        assertEquals(listOf(1_000L, 2_000L, 4_000L), scheduler.reconnectDelays)
+    }
+
+    @Test
+    fun threeIrohFailuresTripOneRequestThatTheNextBindConsumesOnce() = runBlocking {
+        val budget = IrohFailureBudget { clock.now }
+        val factory = BudgetFactory(budget, LinkKind.IROH)
+        val supervisor = supervisor(factory)
+        supervisor.start()
+
+        repeat(3) { round ->
+            scheduler.advance(LinkSupervisor.ATTEMPT_TIMEOUT_MS)
+            if (round < 2) scheduler.advance(scheduler.reconnectDelays.last())
+        }
+        assertTrue(budget.pending())
+
+        // The endpoint a replacement already bound.
+        val detached = mutableListOf<Long>()
+        val cache = IrohEndpointCache<Long> { handle, _ -> detached += handle }
+        assertEquals(1L, cache.acquire { it })
+
+        // The next iroh attempt that binds consumes the one request.
+        val attempt = IrohLinkLifecycle(recycleEndpoint = { false }, isClosed = { false })
+        assertEquals(2L, cache.acquire(BudgetFreshBind(budget, attempt)) { it })
+        assertEquals(listOf(1L), detached)
+        assertFalse(budget.pending())
+
+        // A second bind on a live attempt reuses the new endpoint.
+        assertEquals(2L, cache.acquire(BudgetFreshBind(budget, attempt)) { it })
+        assertEquals(listOf(1L), detached)
+    }
+
+    // ------------------------------------------------------------------
     // Fakes
     // ------------------------------------------------------------------
 
@@ -561,9 +715,51 @@ class LinkSupervisorTest {
         override fun shutdown() = Unit
     }
 
+    /**
+     * A factory whose outcomes take the production route: the real router and a
+     * real budget, so the supervisor-to-budget path is exercised end to end.
+     */
+    private class BudgetFactory(
+        private val budget: IrohFailureBudget,
+        var kind: LinkKind? = null
+    ) : DeviceLinkFactory {
+        val created = mutableListOf<FakeLink>()
+        val outcomes = mutableListOf<Pair<AttemptOutcome, LinkKind?>>()
+        var throwCreate = false
+
+        private val router = IrohAttemptOutcomes {
+            object : DeviceLinkFactory {
+                override fun create(): DeviceLink = error("the router only reports outcomes")
+
+                override fun shutdown() = Unit
+
+                override fun attemptEnded(outcome: AttemptOutcome, kind: LinkKind?) = budget.note(outcome)
+            }
+        }
+
+        fun last(): FakeLink = created.last()
+
+        override fun create(): DeviceLink {
+            if (throwCreate) throw IllegalStateException("no candidate")
+            return FakeLink().also {
+                it.kind = kind
+                created += it
+            }
+        }
+
+        override fun shutdown() = Unit
+
+        override fun attemptEnded(outcome: AttemptOutcome, kind: LinkKind?) {
+            outcomes += outcome to kind
+            router.report(outcome, kind)
+        }
+    }
+
     /** A link the test opens, feeds and drops by hand. */
     private class FakeLink : DeviceLink {
         private var listener: DeviceLink.Listener? = null
+
+        override var kind: LinkKind? = null
 
         var backlog = 0L
         var cancelling = 0
