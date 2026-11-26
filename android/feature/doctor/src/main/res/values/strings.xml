@@ -132,8 +132,22 @@
     <string name="doctor_evidence_pairing_missing">No pairing is stored.</string>
 
     <!-- Evidence: crash, link, daemon -->
-    <string name="doctor_evidence_crash_memory">%1$s. The system reclaimed the process\'s memory; keep the service heap small and allow background running.</string>
-    <string name="doctor_evidence_crash_trace">%1$s. The trace is in the diagnostics bundle.</string>
+    <string name="doctor_exit_crashed">Crashed</string>
+    <string name="doctor_exit_crashed_native">Crashed in native code</string>
+    <string name="doctor_exit_not_responding">Not responding</string>
+    <string name="doctor_exit_memory">Stopped by the system to free memory</string>
+    <string name="doctor_exit_signaled">Killed by a signal</string>
+    <string name="doctor_exit_self">Closed itself</string>
+    <string name="doctor_exit_startup">Stopped because startup failed</string>
+    <string name="doctor_exit_permission">Stopped after a permission change</string>
+    <string name="doctor_exit_resources">Stopped for using too many resources</string>
+    <string name="doctor_exit_user">Killed by a user request</string>
+    <string name="doctor_exit_user_stopped">Stopped because its user session ended</string>
+    <string name="doctor_exit_dependency">Stopped because another process died</string>
+    <string name="doctor_exit_frozen">Stopped by App Freezer</string>
+    <string name="doctor_exit_package">Stopped after a package state change</string>
+    <string name="doctor_exit_updated">Updated</string>
+    <string name="doctor_exit_unavailable">Reason unavailable</string>
     <string name="doctor_evidence_link_connecting">Connecting</string>
     <string name="doctor_evidence_link_offline">Offline; no path to the daemon</string>
     <plurals name="doctor_evidence_reconnects">
@@ -148,8 +162,12 @@
     <string name="doctor_evidence_daemon_status_clear">All clear</string>
     <string name="doctor_evidence_daemon_status_warnings">Warnings</string>
     <string name="doctor_evidence_daemon_status_failures">Failures</string>
+    <string name="doctor_evidence_daemon_status_unknown">The daemon did not say how it is</string>
+    <string name="doctor_evidence_daemon_unreachable">The daemon did not answer.</string>
     <string name="doctor_evidence_relay_missing">The daemon did not report a relay state.</string>
     <string name="doctor_evidence_daemon_no_detail">The daemon reported no detail.</string>
+    <string name="doctor_details_show">Details</string>
+    <string name="doctor_details_hide">Hide details</string>
 
     <string name="doctor_link_path_direct">Direct</string>
     <string name="doctor_link_path_relay">Relay</string>

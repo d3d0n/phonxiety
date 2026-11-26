@@ -44,9 +44,11 @@
     <string name="dashboard_up_for">Up for</string>
     <string name="dashboard_reconnects">Reconnects</string>
     <string name="dashboard_endpoint">Endpoint</string>
+    <string name="dashboard_endpoint_show">Show full ID</string>
+    <string name="dashboard_endpoint_hide">Hide full ID</string>
     <string name="dashboard_connecting_trying">Trying %1$s…</string>
     <string name="dashboard_link_offline">No path to the daemon. Check that the computer is on and on the same network.</string>
-    <string name="dashboard_link_kind_iroh">Iroh</string>
+    <string name="dashboard_link_kind_iroh">iroh</string>
     <string name="dashboard_link_kind_websocket">WebSocket</string>
     <string name="dashboard_link_kind_tailscale">Tailscale</string>
 

@@ -144,9 +144,6 @@
     <string name="lab_test_outcome_disconnected">Disconnected</string>
     <string name="lab_test_outcome_canceled">Canceled</string>
     <string name="lab_test_outcome_failed">Failed</string>
-    <string name="lab_test_summary_ready">Summary ready</string>
-    <string name="lab_test_summary_pending">Summary pending</string>
-    <string name="lab_test_summary_failed">Summary failed</string>
 
     <!-- Codec trial -->
     <string name="lab_trial_title">Codec trial</string>
@@ -188,6 +185,6 @@
     </plurals>
     <string name="lab_level_debug">Debug</string>
     <string name="lab_level_info">Info</string>
-    <string name="lab_level_warn">Warn</string>
+    <string name="lab_level_warn">Warning</string>
     <string name="lab_level_error">Error</string>
 </resources>

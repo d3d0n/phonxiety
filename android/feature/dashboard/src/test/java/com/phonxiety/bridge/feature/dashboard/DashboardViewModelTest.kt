@@ -150,7 +150,7 @@ class DashboardViewModelTest {
             link = LinkState.Up(
                 kind = LinkKind.IROH,
                 path = PathKind.DIRECT,
-                address = "6c3a1f9b",
+                address = DashboardSamples.ENDPOINT_ID,
                 rttMs = 41,
                 sinceEpochMs = 0,
                 reconnects = 0

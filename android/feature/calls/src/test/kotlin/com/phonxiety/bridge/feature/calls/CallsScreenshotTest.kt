@@ -9,6 +9,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -17,6 +18,9 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -27,6 +31,7 @@ import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.designsystem.formatPhoneNumber
 import com.phonxiety.bridge.model.CallSummary
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -182,6 +187,21 @@ class CallsScreenshotTest {
         }
         // The list is the owner's own history: nothing is masked here.
         composeRule.onNodeWithText("··", substring = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun aSummaryPreviewStopsAtTwoLinesWithAnEllipsis() {
+        val long = "The agent held the table for two on Thursday at eight and confirmed the window " +
+            "seat, then read the booking reference back twice"
+        setScreen(CallsUiState(loaded = true, calls = listOf(summary("call-long", summary = long))))
+        val layouts = mutableListOf<TextLayoutResult>()
+        composeRule.onNodeWithText(long, useUnmergedTree = true)
+            .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it.invoke(layouts) }
+        // Two lines, and the reader is told the rest is elsewhere: the preview truncates with an
+        // ellipsis, never a silent cut.
+        assertEquals(2, layouts.single().lineCount)
+        assertEquals(TextOverflow.Ellipsis, layouts.single().layoutInput.overflow)
+        assertTrue(layouts.single().hasVisualOverflow)
     }
 
     @Test

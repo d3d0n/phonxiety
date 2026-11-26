@@ -15,6 +15,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
@@ -26,6 +27,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.unit.Density
@@ -41,6 +43,7 @@ import com.phonxiety.bridge.model.TranscriptTurn
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -287,6 +290,165 @@ class CallDetailScreenshotTest {
     }
 
     @Test
+    fun theHeaderNamesTheFarEndTheWayTheListDoes() {
+        setScreen(
+            CallDetailUiState(
+                callId = "call-1",
+                snapshot = detailSnapshot(callId = "call-1").copy(farEnd = "person"),
+                loading = false
+            )
+        )
+        // One mapping for the far end: the header reads "Person", never the daemon's key.
+        composeRule.onNodeWithText("Person · Ended").assertExists()
+        composeRule.onNodeWithText("person · Ended").assertDoesNotExist()
+    }
+
+    /**
+     * The recording card in each state, across the decision-10 matrix. The recording section is
+     * brought into the viewport first, so a 200 % image shows the card's own words instead of the
+     * top of the call.
+     */
+    private fun captureRecording(
+        name: String,
+        state: CallDetailUiState,
+        subtitle: String,
+        dark: Boolean = false,
+        dynamicColor: Boolean = false,
+        fontScale: Float = 1f,
+        width: Dp = 411.dp
+    ) = render(
+        name,
+        beforeCapture = {
+            scrollToNode("Recording")
+            composeRule.onNodeWithText(subtitle).performScrollTo().assertIsDisplayed()
+        }
+    ) { setScreen(state, dark = dark, dynamicColor = dynamicColor, fontScale = fontScale, width = width) }
+
+    @Test
+    fun theRecordingCardOffersTheDownloadWhileTheFileIsOnTheBridge() = captureRecording("recording_remote_411_light", remoteRecording(), REMOTE_SUBTITLE)
+
+    @Test
+    fun theRemoteRecordingInDark() = captureRecording("recording_remote_411_dark", remoteRecording(), REMOTE_SUBTITLE, dark = true)
+
+    @Test
+    fun theRemoteRecordingInDynamicColor() = captureRecording("recording_remote_411_dynamic", remoteRecording(), REMOTE_SUBTITLE, dynamicColor = true)
+
+    @Test
+    fun theRemoteRecordingAtTwoHundredPercentInLight() = captureRecording(
+        "recording_remote_320_font200_light",
+        remoteRecording(),
+        REMOTE_SUBTITLE,
+        fontScale = 2f,
+        width = 320.dp
+    )
+
+    @Test
+    fun theRemoteRecordingAtTwoHundredPercentInDark() = captureRecording(
+        "recording_remote_320_font200_dark",
+        remoteRecording(),
+        REMOTE_SUBTITLE,
+        dark = true,
+        fontScale = 2f,
+        width = 320.dp
+    )
+
+    @Test
+    fun theRecordingCardReportsTheTransferWhileItRuns() = captureRecording("recording_downloading_411_light", finished(), DOWNLOADING_SUBTITLE)
+
+    @Test
+    fun theRunningDownloadInDark() = captureRecording("recording_downloading_411_dark", finished(), DOWNLOADING_SUBTITLE, dark = true)
+
+    @Test
+    fun theRunningDownloadInDynamicColor() = captureRecording("recording_downloading_411_dynamic", finished(), DOWNLOADING_SUBTITLE, dynamicColor = true)
+
+    @Test
+    fun theRunningDownloadAtTwoHundredPercentInLight() = captureRecording(
+        "recording_downloading_320_font200_light",
+        finished(),
+        DOWNLOADING_SUBTITLE,
+        fontScale = 2f,
+        width = 320.dp
+    )
+
+    @Test
+    fun theRunningDownloadAtTwoHundredPercentInDark() = captureRecording(
+        "recording_downloading_320_font200_dark",
+        finished(),
+        DOWNLOADING_SUBTITLE,
+        dark = true,
+        fontScale = 2f,
+        width = 320.dp
+    )
+
+    @Test
+    fun theRecordingCardSaysSavedOnlyOnceTheFileIsHere() = captureRecording("recording_saved_411_light", savedRecording(), SAVED_SUBTITLE)
+
+    @Test
+    fun theSavedRecordingInDark() = captureRecording("recording_saved_411_dark", savedRecording(), SAVED_SUBTITLE, dark = true)
+
+    @Test
+    fun theSavedRecordingInDynamicColor() = captureRecording("recording_saved_411_dynamic", savedRecording(), SAVED_SUBTITLE, dynamicColor = true)
+
+    @Test
+    fun theSavedRecordingAtTwoHundredPercentInLight() = captureRecording(
+        "recording_saved_320_font200_light",
+        savedRecording(),
+        SAVED_SUBTITLE,
+        fontScale = 2f,
+        width = 320.dp
+    )
+
+    @Test
+    fun theSavedRecordingAtTwoHundredPercentInDark() = captureRecording(
+        "recording_saved_320_font200_dark",
+        savedRecording(),
+        SAVED_SUBTITLE,
+        dark = true,
+        fontScale = 2f,
+        width = 320.dp
+    )
+
+    @Test
+    fun theRecordingSubtitleFollowsTheDownload() {
+        setScreen(finished().copy(audio = CallAudioUiState()))
+        scrollToNode("Recording")
+        composeRule.onNodeWithText("Download the recording to play or share it.").assertExists()
+        composeRule.onNodeWithText("Saved on this phone.").assertDoesNotExist()
+        composeRule.onNodeWithText("Download the recording").assertExists()
+    }
+
+    @Test
+    fun aRunningDownloadSaysSoInsteadOfClaimingTheFile() {
+        setScreen(finished())
+        scrollToNode("Recording")
+        composeRule.onNodeWithText("Downloading from the bridge…").assertExists()
+        composeRule.onNodeWithText("Saved on this phone.").assertDoesNotExist()
+        composeRule.onNodeWithText("Download the recording to play or share it.").assertDoesNotExist()
+    }
+
+    @Test
+    fun aSavedRecordingSaysTheFileIsOnThisPhone() {
+        setScreen(finished().copy(audio = CallAudioUiState(filePath = "/tmp/call-1.m4a", prepared = true)))
+        scrollToNode("Recording")
+        composeRule.onNodeWithText("Saved on this phone.").assertExists()
+        composeRule.onNodeWithText("Download the recording to play or share it.").assertDoesNotExist()
+        composeRule.onNodeWithText("Download the recording").assertDoesNotExist()
+    }
+
+    @Test
+    fun theSeekBarKeepsItsWidthAtTwoHundredPercent() {
+        setScreen(savedRecording(), fontScale = 2f, width = 320.dp)
+        scrollToNode("Recording")
+        composeRule.onNodeWithText(SAVED_SUBTITLE).performScrollTo()
+        val seek = composeRule.onNodeWithTag(RECORDING_SEEK_TAG).fetchSemanticsNode()
+        val width = with(composeRule.density) { seek.size.width.toDp() }
+        // Beside a 200 % time readout the bar used to shrink to its thumb.
+        assertTrue("the seek bar is $width wide on a 320 dp screen", width >= 160.dp)
+        composeRule.onNodeWithText("00:12").assertIsDisplayed()
+        composeRule.onNodeWithText("03:00").assertIsDisplayed()
+    }
+
+    @Test
     fun theRecordingSliderIsNamedAndSeekableWithoutDragging() {
         setScreen(
             CallDetailUiState(
@@ -354,5 +516,17 @@ class CallDetailScreenshotTest {
             hasMoreTranscript = true,
             audio = CallAudioUiState(downloading = true)
         )
+
+        /** The same call once its recording is on this phone, with the playhead where the user left it. */
+        fun savedRecording(): CallDetailUiState = finished().copy(
+            audio = CallAudioUiState(filePath = "/tmp/call-1.m4a", prepared = true, positionMs = 12_000, durationMs = 180_000)
+        )
+
+        /** The call whose recording is still on the bridge, so the card can only offer a download. */
+        fun remoteRecording(): CallDetailUiState = finished().copy(audio = CallAudioUiState())
+
+        const val REMOTE_SUBTITLE = "Download the recording to play or share it."
+        const val DOWNLOADING_SUBTITLE = "Downloading from the bridge…"
+        const val SAVED_SUBTITLE = "Saved on this phone."
     }
 }

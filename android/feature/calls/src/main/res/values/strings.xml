@@ -113,7 +113,8 @@
     <string name="call_detail_mark_follow_up">Follow-up</string>
 
     <string name="call_detail_recording_title">Recording</string>
-    <string name="call_detail_recording_subtitle">The recording, saved on this phone.</string>
+    <string name="call_detail_recording_subtitle_remote">Download the recording to play or share it.</string>
+    <string name="call_detail_recording_subtitle_saved">Saved on this phone.</string>
     <string name="call_detail_recording_downloading">Downloading from the bridge…</string>
     <string name="call_detail_recording_download">Download the recording</string>
     <string name="call_detail_recording_play">Play</string>

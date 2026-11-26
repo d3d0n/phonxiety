@@ -12,6 +12,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -173,6 +174,67 @@ class DashboardScreenshotTest {
             composeRule.onNodeWithTag(SCREEN_TAG).performTouchInput { swipeUp() }
         }
     ) { setScreen(fontScale = 2f, width = 320.dp) }
+
+    @Test
+    fun theEndpointShowsAShortFormAndTheWholeKeyOnRequest() {
+        setScreen()
+        // The row is readable: eight characters, an ellipsis, the last four.
+        composeRule.onNodeWithText("864b90b7…cc62").assertExists()
+        composeRule.onNodeWithText(DashboardSamples.ENDPOINT_ID).assertDoesNotExist()
+
+        composeRule.onNodeWithText("Show full ID").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        // The whole key is text the reader can select and copy.
+        composeRule.onNodeWithText(DashboardSamples.ENDPOINT_ID).assertExists()
+        composeRule.onNodeWithText("Hide full ID").assertExists()
+        composeRule.onNodeWithText("Show full ID").assertDoesNotExist()
+    }
+
+    /**
+     * The whole endpoint after its disclosure is opened, across the decision-10 matrix. The key is
+     * scrolled into the viewport, so a 200 % image shows the expanded id rather than the top card.
+     */
+    private fun captureWholeEndpoint(
+        name: String,
+        dark: Boolean = false,
+        dynamicColor: Boolean = false,
+        fontScale: Float = 1f,
+        width: Dp = 411.dp
+    ) {
+        setScreen(dark = dark, dynamicColor = dynamicColor, fontScale = fontScale, width = width)
+        // A semantics click starts no ripple, so the capture does not depend on animation timing.
+        composeRule.onNodeWithText("Show full ID").performScrollTo()
+            .performSemanticsAction(SemanticsActions.OnClick)
+        composeRule.waitForIdle()
+        // A key that fills several lines must be on screen, and still be one legible block.
+        composeRule.onNodeWithText(DashboardSamples.ENDPOINT_ID).performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithTag(SCREEN_TAG).assertAccessible()
+        composeRule.onNodeWithTag(SCREEN_TAG)
+            .captureRoboImage("src/test/screenshots/dashboard_$name.png")
+    }
+
+    @Test
+    fun theWholeEndpointAfterTheDisclosureIsOpened() = captureWholeEndpoint("endpoint_full_411_light")
+
+    @Test
+    fun theWholeEndpointInDark() = captureWholeEndpoint("endpoint_full_411_dark", dark = true)
+
+    @Test
+    fun theWholeEndpointInDynamicColor() = captureWholeEndpoint("endpoint_full_411_dynamic", dynamicColor = true)
+
+    @Test
+    fun theWholeEndpointAtTwoHundredPercentInLight() = captureWholeEndpoint("endpoint_full_320_font200_light", fontScale = 2f, width = 320.dp)
+
+    @Test
+    fun theWholeEndpointAtTwoHundredPercentInDark() = captureWholeEndpoint("endpoint_full_320_font200_dark", dark = true, fontScale = 2f, width = 320.dp)
+
+    @Test
+    fun theTransportIsSpelledTheSameWayEverywhere() {
+        setScreen()
+        // The project and the library style it lowercase, like a stylized proper noun.
+        composeRule.onNodeWithText("iroh").assertExists()
+        composeRule.onNodeWithText("Iroh").assertDoesNotExist()
+    }
 
     @Test
     fun theUnpairConfirmation() {

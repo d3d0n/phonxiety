@@ -1,5 +1,6 @@
 package com.phonxiety.bridge.feature.doctor
 
+import com.phonxiety.bridge.CrashReports
 import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.model.DoctorCheck
 import com.phonxiety.bridge.model.DoctorFix
@@ -92,6 +93,15 @@ object DoctorSamples {
         runtimeMissing = setOf(RuntimePermission.ACCESS_LOCAL_NETWORK, RuntimePermission.RECORD_AUDIO),
         notificationsEnabled = false,
         batteryExempt = false,
+        // The device record: Android named a reason this build did not know, so it holds the code.
+        lastCrash = CrashReports.Report(
+            atEpochMs = CHECKED_AT - 3_600_000,
+            kind = CrashReports.Kind.EXIT,
+            reason = "reason_16",
+            description = null,
+            memoryLimiter = false,
+            detail = null
+        ),
         checkedAtEpochMs = CHECKED_AT
     )
 
@@ -99,7 +109,7 @@ object DoctorSamples {
         link = LinkState.Up(
             kind = LinkKind.IROH,
             path = PathKind.RELAY,
-            address = "relay euw1-1",
+            address = ENDPOINT_ID,
             rttMs = 182,
             sinceEpochMs = CHECKED_AT - 8 * 60_000,
             reconnects = 4
@@ -114,7 +124,8 @@ object DoctorSamples {
                 DoctorCheck("phone", "fail", "no phone is connected"),
                 DoctorCheck("iroh_relay", "warn", "iroh endpoint unavailable; pair by address instead"),
                 DoctorCheck("voice_backend", "ok", "gemini is configured"),
-                DoctorCheck("disk", "warn", "140 MiB free in /Users/user/.local/state/phonxiety"),
+                DoctorCheck("codex_auth", "warn", "credentials at /var/lib/phonxiety/auth.json expire in 2 days"),
+                DoctorCheck("disk", "warn", "140 MiB free in /var/lib/phonxiety"),
                 DoctorCheck("relays", "ok", "2 custom relay(s): https://relay.example.net:443")
             ),
             fixes = listOf(
@@ -194,4 +205,7 @@ object DoctorSamples {
     }
 
     private const val CHECKED_AT = 1_796_500_000_000L
+
+    /** A public endpoint id, the shape the engine publishes: the whole key, never a shortened one. */
+    const val ENDPOINT_ID: String = "864b90b7d1f2a5c6e93b47f80a1c2d3e4f5061728394a5b6c7d8e9f0a1b2cc62"
 }
