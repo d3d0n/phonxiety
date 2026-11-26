@@ -18,11 +18,12 @@ import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowLooper
 
 /**
- * The lifecycle sequences card G3 names: a placed call is pulled back exactly once, only inside the
- * initial cover, and nothing else — a later cover, a manual return, a late or missing placement
- * reply, a hangup, an incoming call — brings it forward. Call state stays exactly what production
- * publishes: when an incoming call covers an owned outgoing call, [BridgeEngine] ignores the
- * incoming one, so the runtime keeps showing the placed call.
+ * The lifecycle sequences the return policy has to get right: a placed call is pulled back once
+ * over the initial cover and once more over the cover Telecom raises when it is answered, and
+ * nothing else — a manual return, a late or missing placement reply, a hangup, an incoming call, a
+ * deliberate leave, a second cover after the answer — brings it forward. Call state stays exactly
+ * what production publishes: when an incoming call covers an owned outgoing call, [BridgeEngine]
+ * ignores the incoming one, so the runtime keeps showing the placed call.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -99,7 +100,7 @@ class CallFrontReturnTest {
     }
 
     @Test
-    fun secondStopDuringActiveDoesNotReturn() {
+    fun answeredCoverReturnsOnceAfterTheAnswer() {
         val front = controller()
         placed("c1")
         call = dialing("c1")
@@ -107,9 +108,113 @@ class CallFrontReturnTest {
         idle(400)
         assertEquals(1, returns)
 
-        // The call connects; the user leaves again. The one shot is spent.
-        call = active("c1")
+        // The live screen is back in front. The far end answers, Telecom raises its screen again,
+        // and the daemon reports ACTIVE a link round-trip after the stop.
         front.onResume()
+        call = dialing("c1")
+        front.onStop(canReturn = true)
+        idle(400)
+        assertEquals("still ringing: nothing to pull back", 1, returns)
+
+        call = active("c1")
+        idle(300)
+        assertEquals(2, returns)
+        assertFalse(LiveCallFront.answerCoverPending(now))
+    }
+
+    @Test
+    fun aSecondCoverAfterTheAnswerDoesNotReturn() {
+        val front = controller()
+        placed("c1")
+        call = dialing("c1")
+        front.onStop(canReturn = true)
+        idle(400)
+        front.onResume()
+
+        // Answered before the cover: the answer screen comes up over the live screen.
+        call = active("c1")
+        front.onStop(canReturn = true)
+        idle(400)
+        assertEquals(2, returns)
+
+        // A hold and unhold raise Telecom's screen once more; the answer permit is spent.
+        front.onResume()
+        front.onStop(canReturn = true)
+        idle(4000)
+        assertEquals(2, returns)
+    }
+
+    @Test
+    fun leavingBeforeTheAnswerMeansNoReturn() {
+        val front = controller()
+        placed("c1")
+        call = dialing("c1")
+        front.onStop(canReturn = true)
+        idle(400)
+        assertEquals(1, returns)
+
+        // The user goes Home and answers from the system screen: the live screen was left behind
+        // on purpose and must stay there.
+        front.onUserLeaveHint()
+        front.onStop(canReturn = true)
+        idle(400)
+        assertEquals(1, returns)
+
+        call = active("c1")
+        front.onStop(canReturn = true)
+        idle(4000)
+        assertEquals(1, returns)
+        assertFalse(LiveCallFront.answerCoverPending(now))
+    }
+
+    @Test
+    fun incomingCallAnsweredDoesNotReturn() {
+        val front = controller()
+
+        // An incoming call is answered while the app is covered; this phone placed nothing.
+        call = active("incoming")
+        front.onStop(canReturn = true)
+        idle(4000)
+
+        assertEquals(0, returns)
+        assertNull(LiveCallFront.placedCallId())
+        assertFalse(LiveCallFront.answerCoverPending(now))
+    }
+
+    @Test
+    fun anAnswerAfterTheAnswerWaitExpiredDoesNothing() {
+        val front = controller()
+        placed("c1")
+        call = dialing("c1")
+        front.onStop(canReturn = true)
+        idle(400)
+        front.onResume()
+
+        // The cover is up but the ringback lasts past the wait for ACTIVE.
+        call = dialing("c1")
+        front.onStop(canReturn = true)
+        idle(4_500)
+        assertEquals(1, returns)
+
+        // The answer lands afterwards; the cover it belonged to is long over.
+        call = active("c1")
+        idle(4_000)
+        assertEquals(1, returns)
+        assertFalse(LiveCallFront.answerCoverPending(now))
+    }
+
+    @Test
+    fun leavingAgainDuringActiveDoesNotReturn() {
+        val front = controller()
+        placed("c1")
+        call = dialing("c1")
+        front.onStop(canReturn = true)
+        idle(400)
+        assertEquals(1, returns)
+
+        // The call connects; the user leaves again on purpose instead of watching it.
+        call = active("c1")
+        front.onUserLeaveHint()
         front.onStop(canReturn = true)
         idle(4000)
 

@@ -21,8 +21,8 @@ import dagger.hilt.android.AndroidEntryPoint
  * renders the back stack, and every piece of screen state lives in a ViewModel or in the wizard's
  * on-disk journal, so process death and configuration changes do not lose a setup step.
  *
- * The one-shot return over Telecom's in-call screen after a call placed here is
- * [CallFrontReturn]; the lifecycle simply forwards to it.
+ * The returns over Telecom's in-call screen after a call placed here are [CallFrontReturn]; the
+ * lifecycle simply forwards to it.
  */
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
