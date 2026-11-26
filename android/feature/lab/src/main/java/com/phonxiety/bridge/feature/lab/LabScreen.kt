@@ -34,6 +34,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -73,6 +74,7 @@ import com.phonxiety.bridge.designsystem.component.StatTone
 import com.phonxiety.bridge.designsystem.component.StatusPill
 import com.phonxiety.bridge.designsystem.component.StatusTone
 import com.phonxiety.bridge.designsystem.component.ToggleRow
+import com.phonxiety.bridge.designsystem.formatElapsedTime
 import com.phonxiety.bridge.designsystem.formatPhoneNumber
 import com.phonxiety.bridge.model.LinkTestResult
 import java.text.DateFormat
@@ -104,6 +106,10 @@ data class LabCallbacks(
     val onRequestTestCall: () -> Unit = {},
     val onDismissTestCall: () -> Unit = {},
     val onConfirmTestCall: () -> Unit = {},
+    val onTestLoopback: (Boolean) -> Unit = {},
+    val onTestTone: (Boolean) -> Unit = {},
+    val onTestToneSeconds: (Int) -> Unit = {},
+    val onOpenCall: (String) -> Unit = {},
     val onRunCodecTrial: () -> Unit = {},
     val onApplyRecommendation: () -> Unit = {},
     val onLoadDiagnostics: () -> Unit = {},
@@ -121,6 +127,7 @@ internal val TONE_PRESETS_HZ = listOf(300, 440, 700, 1_000, 1_500, 2_000, 3_000,
 @Composable
 fun LabRoute(
     onBack: () -> Unit,
+    onOpenCall: (String) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: LabViewModel = hiltViewModel()
 ) {
@@ -129,6 +136,13 @@ fun LabRoute(
     val resources = LocalResources.current
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+
+    // Leaving the Lab — a push to the call record included — stops the record read, and coming
+    // back resumes it unless what it read was already complete.
+    DisposableEffect(viewModel) {
+        viewModel.onLabShown()
+        onDispose { viewModel.onLabHidden() }
+    }
 
     LaunchedEffect(state.share) {
         val share = state.share ?: return@LaunchedEffect
@@ -169,6 +183,10 @@ fun LabRoute(
             onRequestTestCall = viewModel::requestTestCall,
             onDismissTestCall = viewModel::dismissTestCall,
             onConfirmTestCall = viewModel::confirmTestCall,
+            onTestLoopback = viewModel::setTestCallLoopback,
+            onTestTone = viewModel::setTestCallTone,
+            onTestToneSeconds = viewModel::setTestCallToneSeconds,
+            onOpenCall = onOpenCall,
             onRunCodecTrial = viewModel::runCodecTrial,
             onApplyRecommendation = viewModel::applyTrialRecommendation,
             onLoadDiagnostics = viewModel::loadDiagnostics,
@@ -209,7 +227,8 @@ fun LabScreen(
             LinkTestCard(state.link, callbacks)
             ProbeCard(state.probe, callbacks)
             AudioCard(state, callbacks)
-            TestCallCard(state.testCall, callbacks)
+            TestCallCard(state, callbacks)
+            state.testCall.result?.let { result -> TestCallResultCard(result, callbacks.onOpenCall) }
             CodecTrialCard(state.trial, callbacks)
             DiagnosticsCard(state.diagnostics, callbacks)
             LogCard(state.logs, callbacks)
@@ -222,7 +241,11 @@ fun LabScreen(
             text = {
                 Text(
                     stringResource(
-                        R.string.lab_test_dialog_body,
+                        if (state.testCallLoopback || state.testCallTone) {
+                            R.string.lab_test_dialog_body_probes
+                        } else {
+                            R.string.lab_test_dialog_body
+                        },
                         formatPhoneNumber(state.testCall.number)
                     )
                 )
@@ -510,6 +533,10 @@ private fun ProbeRow(row: ProbeRowUi) {
 @Composable
 private fun AudioCard(state: LabUiState, callbacks: LabCallbacks) {
     val reason = state.audioDisabledReason
+    // The automatic test tone takes its frequency and level from these sliders, so they are
+    // usable while that option is on even with no call; only live playback waits for one.
+    val live = reason == null
+    val toneSetup = state.testCallTone
     SectionCard(
         title = stringResource(R.string.lab_audio_title),
         subtitle = stringResource(R.string.lab_audio_subtitle)
@@ -520,7 +547,8 @@ private fun AudioCard(state: LabUiState, callbacks: LabCallbacks) {
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-        } else {
+        }
+        if (live) {
             ToggleRow(
                 title = stringResource(R.string.lab_audio_loopback),
                 checked = state.audio.loopbackOn,
@@ -528,8 +556,20 @@ private fun AudioCard(state: LabUiState, callbacks: LabCallbacks) {
                 detail = stringResource(R.string.lab_audio_loopback_detail),
                 enabled = !state.audio.busy && state.loopbackSupported != false
             )
+        }
+        if (live || toneSetup) {
+            // With no call the sliders configure the automatic test tone, not playback: name them.
+            if (!live) {
+                Text(
+                    text = stringResource(R.string.lab_audio_tone_setup),
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.semantics { heading() }
+                )
+            }
             ToneFrequencySlider(audio = state.audio, onToneHz = callbacks.onToneHz)
             ToneLevelSlider(audio = state.audio, onToneDbfs = callbacks.onToneDbfs)
+        }
+        if (live) {
             PrimaryActionButton(
                 label = stringResource(if (state.audio.busy) R.string.lab_audio_play_busy else R.string.lab_audio_play),
                 onClick = callbacks.onPlayTone,
@@ -620,7 +660,8 @@ private fun NamedSlider(
 }
 
 @Composable
-private fun TestCallCard(call: TestCallUi, callbacks: LabCallbacks) {
+private fun TestCallCard(state: LabUiState, callbacks: LabCallbacks) {
+    val call = state.testCall
     SectionCard(
         title = stringResource(R.string.lab_test_title),
         subtitle = stringResource(R.string.lab_test_subtitle)
@@ -638,6 +679,48 @@ private fun TestCallCard(call: TestCallUi, callbacks: LabCallbacks) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        // Each toggle needs its own phone capability as well as the daemon's orchestration:
+        // asking for one the phone does not have rejects the whole placement with 409.
+        val loopbackAvailable = state.testCallLoopbackAvailable
+        val toneAvailable = state.testCallToneAvailable
+        if (loopbackAvailable || toneAvailable) {
+            HorizontalDivider()
+            Text(
+                text = stringResource(R.string.lab_test_probes_title),
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.semantics { heading() }
+            )
+            Text(
+                text = stringResource(R.string.lab_test_probes_subtitle),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (loopbackAvailable) {
+                ToggleRow(
+                    title = stringResource(R.string.lab_test_loopback),
+                    checked = call.loopback,
+                    onCheckedChange = callbacks.onTestLoopback,
+                    detail = stringResource(R.string.lab_test_loopback_detail),
+                    enabled = !call.placing
+                )
+            }
+            if (toneAvailable) {
+                ToggleRow(
+                    title = stringResource(R.string.lab_test_tone),
+                    checked = call.tone,
+                    onCheckedChange = callbacks.onTestTone,
+                    detail = stringResource(R.string.lab_test_tone_detail),
+                    enabled = !call.placing
+                )
+                if (call.tone) {
+                    TestToneSecondsSlider(
+                        seconds = call.toneSeconds,
+                        enabled = !call.placing,
+                        onSeconds = callbacks.onTestToneSeconds
+                    )
+                }
+            }
+        }
         PrimaryActionButton(
             label = stringResource(if (call.placing) R.string.lab_test_placing else R.string.lab_test_place),
             onClick = callbacks.onRequestTestCall,
@@ -660,6 +743,116 @@ private fun TestCallCard(call: TestCallUi, callbacks: LabCallbacks) {
             )
         }
     }
+}
+
+/** Ten positions, each a whole second; a drag cannot land between them. */
+@Composable
+private fun TestToneSecondsSlider(seconds: Int, enabled: Boolean, onSeconds: (Int) -> Unit) {
+    val name = stringResource(R.string.lab_test_tone_seconds)
+    val valueText = stringResource(R.string.lab_test_tone_seconds_state, seconds)
+    Text(
+        text = "$name · $valueText",
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Slider(
+        value = seconds.toFloat(),
+        onValueChange = { raw -> onSeconds(raw.roundToInt().coerceIn(TONE_SECONDS_MIN, TONE_SECONDS_MAX)) },
+        valueRange = TONE_SECONDS_MIN.toFloat()..TONE_SECONDS_MAX.toFloat(),
+        steps = TONE_SECONDS_MAX - TONE_SECONDS_MIN - 1,
+        enabled = enabled,
+        modifier = Modifier.semantics {
+            contentDescription = name
+            stateDescription = valueText
+        }
+    )
+}
+
+/**
+ * The call the lab placed, as the bridge recorded it. The summary is a phase of the record, not an
+ * instant fact: the card says it is still being written rather than showing an empty result.
+ */
+@Composable
+private fun TestCallResultCard(result: TestCallResultUi, onOpenCall: (String) -> Unit) {
+    SectionCard(
+        title = stringResource(R.string.lab_test_result_title),
+        subtitle = stringResource(R.string.lab_test_result_subtitle)
+    ) {
+        // The pill is in the content, not the title row: beside a two-word title it would leave the
+        // title one word wide at 200 % text.
+        testOutcomeLabel(result.outcome)?.let { label ->
+            StatusPill(
+                label = label,
+                tone = if (result.outcome?.lowercase(Locale.US) == "answered") {
+                    StatusTone.POSITIVE
+                } else {
+                    StatusTone.WARNING
+                }
+            )
+        }
+        result.durationSeconds?.let {
+            KeyValueRow(
+                label = stringResource(R.string.lab_test_result_duration),
+                value = formatElapsedTime(it),
+                mono = true
+            )
+        }
+        result.codec?.takeIf { it.isNotBlank() }?.let {
+            KeyValueRow(label = stringResource(R.string.lab_test_result_codec), value = codecLabel(it))
+        }
+        when {
+            result.summaryReady -> Text(text = result.summary.orEmpty(), style = MaterialTheme.typography.bodyLarge)
+
+            result.waiting -> Text(
+                text = stringResource(R.string.lab_test_result_waiting),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            result.error != null -> ErrorCard(
+                title = stringResource(R.string.lab_test_result_failed),
+                message = result.error.message.asString(),
+                output = result.error.code
+            )
+
+            result.unfinished -> Text(
+                text = stringResource(R.string.lab_test_result_unfinished),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            result.summaryAbsent -> Text(
+                text = stringResource(R.string.lab_test_result_summary_absent),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            else -> Text(
+                text = stringResource(R.string.lab_test_result_summary_pending),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        PrimaryActionButton(
+            label = stringResource(R.string.lab_test_result_open),
+            onClick = { onOpenCall(result.callId) },
+            emphasis = ActionEmphasis.TONAL
+        )
+    }
+}
+
+/** The daemon's outcome in words; an outcome this build does not know still reads cleanly. */
+@Composable
+private fun testOutcomeLabel(outcome: String?): String? = when (outcome?.lowercase(Locale.US)) {
+    null, "" -> null
+    "answered" -> stringResource(R.string.lab_test_outcome_answered)
+    "no_answer" -> stringResource(R.string.lab_test_outcome_no_answer)
+    "busy" -> stringResource(R.string.lab_test_outcome_busy)
+    "declined" -> stringResource(R.string.lab_test_outcome_declined)
+    "disconnected" -> stringResource(R.string.lab_test_outcome_disconnected)
+    "cancelled", "canceled" -> stringResource(R.string.lab_test_outcome_canceled)
+    "failed" -> stringResource(R.string.lab_test_outcome_failed)
+    else -> humanize(outcome)
 }
 
 @Composable
@@ -1059,6 +1252,8 @@ internal fun previewLabState(): LabUiState {
         ),
         callPhase = "active",
         callId = "call-1",
+        loopbackSupported = true,
+        toneSupported = true,
         probe = ProbeUi(
             rows = listOf(
                 ProbeRowUi(
@@ -1098,4 +1293,6 @@ private const val PREVIEW_LINES = 12
 private const val MAX_PREVIEW_LINES = 500
 private const val LOG_MAX_LINES = 500
 private const val TONE_SECONDS = 5
+private const val TONE_SECONDS_MIN = 1
+private const val TONE_SECONDS_MAX = 10
 private val PROBE_PATHS = listOf("iroh", "lan", "tailscale")

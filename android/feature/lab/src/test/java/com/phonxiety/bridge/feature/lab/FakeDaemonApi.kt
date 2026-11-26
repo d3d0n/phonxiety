@@ -46,6 +46,10 @@ open class FakeDaemonApi : DaemonApi {
     var toneHandler: suspend (Int?, Double?, Double?, String?) -> ApiOutcome<ToneResult> =
         { _, _, _, _ -> unset("tone") }
     var testCallHandler: suspend (TestCallRequest) -> ApiOutcome<CallSnapshot> = { unset("testCall") }
+    var callHandler: suspend (String) -> ApiOutcome<CallSnapshot> = { unset("call") }
+
+    /** Every record the lab asked for, in order. */
+    val callRequests = mutableListOf<String>()
     var diagnosticsHandler: suspend () -> ApiOutcome<JsonObject> = { unset("diagnostics") }
     var bundleHandler: suspend () -> ApiOutcome<DiagnosticsBundle> = { unset("bundle") }
     var downloadBundleHandler: suspend (String, OutputStream) -> ApiResult = { _, _ -> ApiResult.Failure(503, "unset", "downloadBundle") }
@@ -87,7 +91,10 @@ open class FakeDaemonApi : DaemonApi {
     override suspend fun calls(limit: Int?, offset: Int?, before: Double?, outcome: String?, farEnd: String?): ApiOutcome<CallsPage> = unset("calls")
     override suspend fun placeCall(request: PlaceCallRequest): ApiOutcome<CallSnapshot> = unset("placeCall")
     override suspend fun validateCall(request: PlaceCallRequest): ApiOutcome<ValidationResult> = unset("validateCall")
-    override suspend fun call(callId: String): ApiOutcome<CallSnapshot> = unset("call")
+    override suspend fun call(callId: String): ApiOutcome<CallSnapshot> {
+        callRequests += callId
+        return callHandler(callId)
+    }
     override suspend fun transcript(callId: String, cursor: Long?, limit: Int?): ApiOutcome<TranscriptPage> = unset("transcript")
     override suspend fun events(callId: String, since: Long?, waitSeconds: Double?): ApiOutcome<CallEventsPage> = unset("events")
     override suspend fun instruction(callId: String, text: String): ApiOutcome<InstructionResult> = unset("instruction")

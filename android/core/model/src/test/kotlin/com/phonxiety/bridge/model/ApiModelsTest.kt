@@ -2,6 +2,7 @@ package com.phonxiety.bridge.model
 
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -142,5 +143,59 @@ class ApiModelsTest {
                 "client":{"app_api":1},"compatible":true,"notes":[]}"""
         )
         assertTrue(compat.compatible)
+    }
+
+    // The client's own encoder: defaults omitted, nulls omitted, exactly as DefaultDaemonApi sends.
+    private val wire = Json {
+        ignoreUnknownKeys = true
+        explicitNulls = false
+        coerceInputValues = true
+    }
+
+    @Test
+    fun aTestCallWithoutProbesCarriesNoProbeKeys() {
+        val body = wire.encodeToJsonElement(
+            TestCallRequest.serializer(),
+            TestCallRequest(destination = "+998901234567", maxDurationSeconds = 30)
+        )
+        assertEquals(
+            """{"destination":"+998901234567","max_duration_s":30}""",
+            body.toString()
+        )
+    }
+
+    @Test
+    fun aTestCallCarriesTheProbesItAsksFor() {
+        val body = wire.encodeToJsonElement(
+            TestCallRequest.serializer(),
+            TestCallRequest(
+                destination = "+998901234567",
+                maxDurationSeconds = 45,
+                loopback = true,
+                tone = TestCallTone(hz = 1_000, dbfs = -20.0, seconds = 5)
+            )
+        )
+        // The tone's own defaults are the daemon's, so only the length is on the wire here.
+        assertEquals(
+            """{"destination":"+998901234567","max_duration_s":45,"loopback":true,""" +
+                """"tone":{"seconds":5}}""",
+            body.toString()
+        )
+        val tuned = wire.encodeToJsonElement(
+            TestCallRequest.serializer(),
+            TestCallRequest(destination = "+998901234567", tone = TestCallTone(hz = 700, dbfs = -40.0, seconds = 10))
+        )
+        assertEquals("""{"destination":"+998901234567","tone":{"hz":700,"dbfs":-40.0,"seconds":10}}""", tuned.toString())
+    }
+
+    @Test
+    fun infoAdvertisesTheTestCallProbes() {
+        val info = json.decodeFromString(
+            DaemonInfo.serializer(),
+            """{"voice_controls":{"test_call":true,"test_call_probes":true,"loopback":true,"tone":true}}"""
+        )
+        assertTrue(info.voiceControls.testCallProbes)
+        val older = json.decodeFromString(DaemonInfo.serializer(), """{"voice_controls":{"test_call":true}}""")
+        assertFalse("a daemon that predates the probes says nothing", older.voiceControls.testCallProbes)
     }
 }

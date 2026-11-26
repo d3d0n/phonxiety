@@ -1,15 +1,17 @@
-package com.phonxiety.bridge.feature.livecall
+package com.phonxiety.bridge.data
 
 import android.os.SystemClock
 import androidx.annotation.VisibleForTesting
 
 /**
- * The call-scoped, one-shot permission to bring Phonxiety's live screen back over the system's
+ * The call-scoped, one-shot permission to bring Phonxiety's own screen back over the system's
  * in-call UI. A call the computer places also runs through Telecom, but nobody on the phone asked
- * to watch that one, so the token exists only for a call placed from the composer here.
+ * to watch that one, so the token exists only for a call placed from this phone: the composer, or
+ * the test lab's test call.
  *
- * It lives outside the activity on purpose: it is armed when the composer's placement is accepted,
- * spent the first time the screen is pulled forward, and cleared when that call ends. Recreation
+ * It lives in the data layer because both of those screens arm it and neither may depend on the
+ * other. It lives outside the activity on purpose: it is armed when a placement is accepted, spent
+ * the first time the screen is pulled forward, and cleared when that call ends. Recreation
  * therefore cannot re-arm it, and a second cover of the same call finds it spent.
  *
  * The permission is bound to the *initial* cover only. [expectPlacement] opens one opportunity,
