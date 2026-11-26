@@ -149,6 +149,32 @@ class LabViewModelTest {
     }
 
     @Test
+    fun `a slow store never replays an older number over a newer keystroke`() = runBlocking<Unit> {
+        // Every write takes a moment, like the disk: the stored value answers after later keystrokes.
+        prefs = SlowPhonePreferences(writeDelayMs = 40)
+        val vm = viewModel()
+        val typed = "+998901234567"
+        // A fast typer, one character at a time.
+        for (length in 1..typed.length) {
+            vm.setTestNumber(typed.take(length))
+            delay(4)
+        }
+        withTimeout(5_000) { prefs.settings.first { it.testNumber == typed } }
+        assertEquals("the draft wins until the user changes it", typed, vm.state.value.testCall.number)
+
+        // The number that reaches the daemon is the one that was typed, to the digit.
+        var dialed: String? = null
+        api.testCallHandler = { request ->
+            dialed = request.destination
+            ApiOutcome.Ok(200, CallSnapshot(callId = "test-call", profile = "test"))
+        }
+        vm.requestTestCall()
+        vm.confirmTestCall()
+        withTimeout(5_000) { vm.state.first { it.testCall.callId != null } }
+        assertEquals(typed, dialed)
+    }
+
+    @Test
     fun `the test call arms the return before it is placed and spends it on failure`() = runBlocking<Unit> {
         var expectingDuringPlacement = false
         api.testCallHandler = {
@@ -837,12 +863,23 @@ class FakeLanPathCheck : LanPathCheck {
     }
 }
 
-class FakePhonePreferences(initial: PhoneSettings = PhoneSettings()) : PhonePreferences {
+open class FakePhonePreferences(initial: PhoneSettings = PhoneSettings()) : PhonePreferences {
     override val settings = MutableStateFlow(initial)
 
     override suspend fun update(block: (PhoneSettings) -> PhoneSettings): PhoneSettings {
         val next = block(settings.value)
         settings.value = next
         return next
+    }
+}
+
+/** A store whose writes take time, like the disk: an answer arrives after later keystrokes. */
+class SlowPhonePreferences(
+    private val writeDelayMs: Long = 40,
+    initial: PhoneSettings = PhoneSettings()
+) : FakePhonePreferences(initial) {
+    override suspend fun update(block: (PhoneSettings) -> PhoneSettings): PhoneSettings {
+        delay(writeDelayMs)
+        return super.update(block)
     }
 }

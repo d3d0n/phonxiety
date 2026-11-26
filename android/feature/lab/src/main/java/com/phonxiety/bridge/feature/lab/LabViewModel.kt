@@ -34,6 +34,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -76,13 +78,27 @@ class LabViewModel @Inject constructor(
     @VisibleForTesting
     internal var resultRetryDelayMs: Long = RESULT_RETRY_MS
 
+    /** The newest number still to be stored; the store keeps one pending value, so a burst is one write. */
+    private val pendingNumberWrite = MutableStateFlow<String?>(null)
+
+    /** A keystroke landed: a seed read that answers afterwards may not replace what was typed. */
+    private var numberEdited = false
+
     init {
         viewModelScope.launch {
             _state.update { it.copy(link = it.link.copy(history = history.load())) }
         }
         viewModelScope.launch {
-            phonePreferences.settings.collect { settings ->
-                _state.update { it.copy(testCall = it.testCall.copy(number = settings.testNumber)) }
+            // Storage seeds the field once. It is a copy of what was typed, never a second writer:
+            // replaying a persisted value would undo every keystroke that landed before the answer.
+            val stored = phonePreferences.settings.first()
+            if (!numberEdited) {
+                _state.update { it.copy(testCall = it.testCall.copy(number = stored.testNumber)) }
+            }
+        }
+        viewModelScope.launch {
+            pendingNumberWrite.filterNotNull().collect { number ->
+                phonePreferences.update { it.copy(testNumber = number) }
             }
         }
         viewModelScope.launch {
@@ -388,10 +404,10 @@ class LabViewModel @Inject constructor(
 
     fun setTestNumber(number: String) {
         val clean = PhoneSettings.sanitizeNumber(number)
+        numberEdited = true
+        // The draft is authoritative the moment it changes; the write is a consequence of it.
         _state.update { it.copy(testCall = it.testCall.copy(number = clean, error = null)) }
-        viewModelScope.launch {
-            phonePreferences.update { it.copy(testNumber = clean) }
-        }
+        pendingNumberWrite.value = clean
     }
 
     fun requestTestCall() {
@@ -448,7 +464,7 @@ class LabViewModel @Inject constructor(
                     _state.update {
                         it.copy(
                             testCall = it.testCall.copy(placing = false, callId = outcome.value.callId),
-                            message = UiText.Res(R.string.lab_test_placed_message)
+                            message = UiText.Res(R.string.lab_test_placed)
                         )
                     }
                     // Voice startup can fail before dialing, and then Telecom never reports the

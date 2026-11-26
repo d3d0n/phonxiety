@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -757,12 +758,19 @@ private fun TestCallCard(state: LabUiState, callbacks: LabCallbacks) {
             busy = call.placing,
             supportingText = if (call.numberReady) null else stringResource(R.string.lab_test_need_number)
         )
-        call.callId?.let {
+        call.callId?.let { callId ->
+            // What happened reads as a status; the internal id is evidence, selectable and labelled.
             Text(
-                text = stringResource(R.string.lab_test_placed, it),
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.Monospace
+                text = stringResource(R.string.lab_test_placed),
+                style = MaterialTheme.typography.bodyMedium
             )
+            SelectionContainer {
+                KeyValueRow(
+                    label = stringResource(R.string.lab_test_call_id),
+                    value = callId,
+                    mono = true
+                )
+            }
         }
         call.error?.let { failure ->
             ErrorCard(
