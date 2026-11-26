@@ -30,6 +30,7 @@ import androidx.compose.ui.semantics.error
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import com.phonxiety.bridge.designsystem.LocalStatusColors
 import com.phonxiety.bridge.designsystem.R
 
 /**
@@ -52,6 +53,7 @@ fun ErrorCard(
     onDismiss: (() -> Unit)? = null
 ) {
     var expanded by rememberSaveable(output) { mutableStateOf(initiallyExpanded) }
+    val status = LocalStatusColors.current
     Surface(
         modifier = modifier
             .fillMaxWidth()
@@ -71,7 +73,7 @@ fun ErrorCard(
                 Icon(
                     imageVector = Icons.Filled.Warning,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.error,
+                    tint = status.negative.content,
                     modifier = Modifier.size(22.dp)
                 )
                 Text(text = title, style = MaterialTheme.typography.titleMedium)

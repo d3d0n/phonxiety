@@ -25,6 +25,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
+import com.phonxiety.bridge.designsystem.LocalStatusColors
 import com.phonxiety.bridge.designsystem.R
 
 /** Status of one wizard step in a [SetupStepList]. */
@@ -87,6 +88,7 @@ fun SetupStepList(steps: List<SetupStep>, modifier: Modifier = Modifier) {
 
 @Composable
 private fun StepIndicator(state: SetupStepState, showConnector: Boolean) {
+    val status = LocalStatusColors.current
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         when (state) {
             SetupStepState.ACTIVE -> CircularProgressIndicator(
@@ -98,13 +100,13 @@ private fun StepIndicator(state: SetupStepState, showConnector: Boolean) {
             SetupStepState.DONE -> Box(
                 modifier = Modifier
                     .size(18.dp)
-                    .background(MaterialTheme.colorScheme.tertiary, CircleShape),
+                    .background(status.positive.container, CircleShape),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = Icons.Filled.Check,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onTertiary,
+                    tint = status.positive.content,
                     modifier = Modifier.size(12.dp)
                 )
             }
@@ -112,13 +114,13 @@ private fun StepIndicator(state: SetupStepState, showConnector: Boolean) {
             SetupStepState.FAILED -> Box(
                 modifier = Modifier
                     .size(18.dp)
-                    .background(MaterialTheme.colorScheme.error, CircleShape),
+                    .background(status.negative.container, CircleShape),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = Icons.Filled.Close,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onError,
+                    tint = status.negative.content,
                     modifier = Modifier.size(12.dp)
                 )
             }
