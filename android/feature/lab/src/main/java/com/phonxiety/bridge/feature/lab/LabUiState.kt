@@ -37,6 +37,21 @@ data class LabUiState(
             callPhase != "active" -> UiText.Res(R.string.lab_audio_reason_not_active)
             else -> null
         }
+
+    /**
+     * The automatic loopback is offered only when the daemon starts it and this phone has it:
+     * asking for a probe the phone does not support rejects the whole placement with 409.
+     */
+    val testCallLoopbackAvailable: Boolean get() = testCall.probesAvailable && loopbackSupported == true
+
+    /** The automatic tone, under the same two conditions as [testCallLoopbackAvailable]. */
+    val testCallToneAvailable: Boolean get() = testCall.probesAvailable && toneSupported == true
+
+    /** The loopback this placement will actually ask for. */
+    val testCallLoopback: Boolean get() = testCallLoopbackAvailable && testCall.loopback
+
+    /** The automatic tone this placement will actually ask for. */
+    val testCallTone: Boolean get() = testCallToneAvailable && testCall.tone
 }
 
 data class LinkTestUi(
@@ -121,6 +136,13 @@ data class TestCallResultUi(
 ) {
     /** The summary is only shown once the daemon says it is ready; pending is not an answer. */
     val summaryReady: Boolean get() = resultStatus == "ready" && !summary.isNullOrBlank()
+
+    /**
+     * The daemon marks a record `ready` even when it wrote no summary at all: that is an absent
+     * summary, not one still on its way.
+     */
+    val summaryAbsent: Boolean
+        get() = !summaryReady && (resultStatus.isNullOrBlank() || resultStatus == "ready")
 }
 
 data class CodecTrialUi(

@@ -29,6 +29,7 @@ import java.util.Locale
 import javax.inject.Inject
 import kotlin.math.roundToLong
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -53,8 +54,17 @@ class LabViewModel @Inject constructor(
     private val _state = MutableStateFlow(LabUiState())
     val state: StateFlow<LabUiState> = _state.asStateFlow()
 
-    /** The call whose record is already being read, so a repeated ended state does not start again. */
-    private var resultFetchedFor: String? = null
+    /**
+     * The one read of the accepted call's record; a new placement, and leaving the Lab, stop it.
+     * A stopped read leaves what it already published in place, and [onLabShown] resumes it.
+     */
+    private var resultJob: Job? = null
+
+    /** The call [resultJob] reads, so a second hint for the same call does not start another read. */
+    private var resultCallId: String? = null
+
+    /** Which placement the running read belongs to; an older read may not publish over a newer call. */
+    private var placement = 0
 
     /** How long the record of a finished test call waits between refetches; tests shorten it. */
     @VisibleForTesting
@@ -94,10 +104,28 @@ class LabViewModel @Inject constructor(
         val phase = bridge.call?.phase?.name?.lowercase(Locale.US)
         val callId = bridge.call?.callId
         _state.update { it.copy(callPhase = phase, callId = callId) }
-        // The call this lab placed has ended: read its record until the daemon has the summary.
+        // The accepted call's record is watched from placement, because a test call can fail
+        // before Telecom ever reports it here. This phone's ENDED only asks for the read the
+        // record may already answer.
         if (phase == PHASE_ENDED && callId != null && callId == _state.value.testCall.callId) {
-            loadTestCallResult(callId)
+            readTestCallResult(callId)
         }
+    }
+
+    /**
+     * The Lab is on screen again: resume a read the screen took with it when it left. A record
+     * that was already read stays as it was fetched rather than being read again.
+     */
+    fun onLabShown() {
+        val callId = _state.value.testCall.callId ?: return
+        readTestCallResult(callId)
+    }
+
+    /** The Lab left the screen — a push to the call record included: nothing of its read may land. */
+    fun onLabHidden() {
+        resultJob?.cancel()
+        resultJob = null
+        resultCallId = null
     }
 
     // -- link test ------------------------------------------------------
@@ -382,10 +410,22 @@ class LabViewModel @Inject constructor(
     fun confirmTestCall() {
         val request = _state.value.testCall
         if (request.placing) return
-        val payload = request.toRequest(_state.value.audio)
+        val payload = _state.value.toRequest()
+        // This placement owns the record from here: the previous call's read stops and may not
+        // publish, and its id is gone with it.
+        placement++
+        resultJob?.cancel()
+        resultJob = null
+        resultCallId = null
         _state.update {
             it.copy(
-                testCall = it.testCall.copy(confirming = false, placing = true, error = null, result = null)
+                testCall = it.testCall.copy(
+                    confirming = false,
+                    placing = true,
+                    error = null,
+                    result = null,
+                    callId = null
+                )
             )
         }
         // From this moment Telecom's in-call screen may cover the lab, and only this phone's own
@@ -403,6 +443,9 @@ class LabViewModel @Inject constructor(
                             message = UiText.Res(R.string.lab_test_placed_message)
                         )
                     }
+                    // Voice startup can fail before dialing, and then Telecom never reports the
+                    // call here: the daemon's own record is what says the call is over.
+                    readTestCallResult(outcome.value.callId)
                 }
 
                 is ApiOutcome.Failure -> {
@@ -416,63 +459,112 @@ class LabViewModel @Inject constructor(
     }
 
     /**
-     * The probes travel only when the daemon advertises them: an older daemon would read the extra
-     * keys as a validation error. The tone takes the frequency and level the lab's audio card
-     * shows, and the length chosen on the test-call card.
+     * The probes travel only when the daemon advertises them and this phone has the one asked for:
+     * an older daemon would read the extra keys as a validation error, and a phone without the
+     * capability answers the whole placement with 409. The tone takes the frequency and level the
+     * lab's audio card shows, and the length chosen on the test-call card.
      */
-    private fun TestCallUi.toRequest(audio: AudioUi): TestCallRequest {
-        val advertised = probesAvailable
-        return TestCallRequest(
-            destination = number,
-            maxDurationSeconds = maxDurationSeconds,
-            loopback = true.takeIf { advertised && loopback },
-            tone = if (advertised && tone) {
-                TestCallTone(hz = audio.toneHz, dbfs = audio.toneDbfs, seconds = toneSeconds.coerceIn(1, 10))
-            } else {
-                null
-            }
-        )
+    private fun LabUiState.toRequest(): TestCallRequest = TestCallRequest(
+        destination = testCall.number,
+        maxDurationSeconds = testCall.maxDurationSeconds,
+        loopback = true.takeIf { testCallLoopback },
+        tone = if (testCallTone) {
+            TestCallTone(hz = audio.toneHz, dbfs = audio.toneDbfs, seconds = testCall.toneSeconds.coerceIn(1, 10))
+        } else {
+            null
+        }
+    )
+
+    /**
+     * Starts reading [callId]'s record unless this call's record is already read or being read.
+     */
+    private fun readTestCallResult(callId: String) {
+        val result = _state.value.testCall.result
+        if (result?.callId == callId && !result.waiting) return
+        if (resultCallId == callId && resultJob?.isActive == true) return
+        resultJob?.cancel()
+        val generation = placement
+        resultCallId = callId
+        resultJob = viewModelScope.launch { collectTestCallResult(callId, generation) }
     }
 
     /**
-     * The phone reports the call ended before the daemon has finished the record, so the summary is
-     * read in a bounded number of attempts; [RESULT_ATTEMPTS] with the retry delay is the longest a
-     * person waits for it. An ended state is published repeatedly, hence [resultFetchedFor].
+     * Reads the accepted call's record until the daemon has finished the call and written its
+     * summary.
+     *
+     * The phone's own ended state is not the only way a test call ends: when voice startup fails
+     * before dialing, the daemon finalizes the call and Telecom never reports it to this screen.
+     * So the record itself is watched for its terminal state, and the result card appears only
+     * once the daemon calls the call over. The summary is then read in a bounded number of
+     * attempts; [RESULT_ATTEMPTS] with the retry delay is the longest a person waits for it.
      */
-    private fun loadTestCallResult(callId: String) {
-        if (resultFetchedFor == callId) return
-        resultFetchedFor = callId
-        _state.update { it.copy(testCall = it.testCall.copy(result = TestCallResultUi(callId = callId, waiting = true))) }
-        viewModelScope.launch {
-            var snapshot: CallSnapshot? = null
-            var failure: LabFailure? = null
-            var attempt = 0
-            while (true) {
-                attempt++
-                when (val outcome = api.call(callId)) {
-                    is ApiOutcome.Ok -> snapshot = outcome.value
-                    is ApiOutcome.Failure -> failure = outcome.failure()
+    private suspend fun collectTestCallResult(callId: String, generation: Int) {
+        var polls = 0
+        var record: CallSnapshot? = null
+        // Waiting for the daemon's verdict: the daemon caps a test call at 60 s, so a record that
+        // outlives this is not one this screen is going to see finish.
+        while (isCurrent(generation, callId)) {
+            polls++
+            when (val outcome = api.call(callId)) {
+                is ApiOutcome.Ok -> {
+                    record = outcome.value
+                    if (outcome.value.finished()) break
                 }
-                if (snapshot?.resultStatus == RESULT_READY || attempt >= RESULT_ATTEMPTS) break
-                delay(resultRetryDelayMs)
+
+                // A record that cannot be read is retried a few times, then left to the next hint.
+                is ApiOutcome.Failure -> if (polls >= RESULT_ATTEMPTS) return
             }
-            val found = snapshot
-            val card = if (found == null) {
-                TestCallResultUi(callId = callId, waiting = false, error = failure)
-            } else {
-                TestCallResultUi(
-                    callId = callId,
-                    outcome = found.callOutcome,
-                    resultStatus = found.resultStatus,
-                    summary = found.summary,
-                    durationSeconds = found.durationSeconds(),
-                    codec = found.audioCodec,
-                    waiting = false
-                )
-            }
-            _state.update { it.copy(testCall = it.testCall.copy(result = card)) }
+            if (polls >= LIVE_POLLS) return
+            delay(resultRetryDelayMs)
         }
+        if (!isCurrent(generation, callId)) return
+        publish(generation) {
+            it.copy(testCall = it.testCall.copy(result = TestCallResultUi(callId = callId, waiting = true)))
+        }
+        var attempt = if (record == null) 0 else 1
+        var failure: LabFailure? = null
+        while (isCurrent(generation, callId)) {
+            if (record?.resultStatus == RESULT_READY || attempt >= RESULT_ATTEMPTS) break
+            attempt++
+            delay(resultRetryDelayMs)
+            when (val outcome = api.call(callId)) {
+                is ApiOutcome.Ok -> {
+                    record = outcome.value
+                    failure = null
+                }
+
+                is ApiOutcome.Failure -> failure = outcome.failure()
+            }
+        }
+        if (!isCurrent(generation, callId)) return
+        val found = record
+        val card = if (found == null) {
+            TestCallResultUi(callId = callId, waiting = false, error = failure)
+        } else {
+            TestCallResultUi(
+                callId = callId,
+                outcome = found.callOutcome,
+                resultStatus = found.resultStatus,
+                summary = found.summary,
+                durationSeconds = found.durationSeconds(),
+                codec = found.audioCodec,
+                waiting = false
+            )
+        }
+        publish(generation) { it.copy(testCall = it.testCall.copy(result = card)) }
     }
+
+    /** Whether a read still belongs to the current placement and the call the lab accepted. */
+    private fun isCurrent(generation: Int, callId: String): Boolean = generation == placement && _state.value.testCall.callId == callId
+
+    /** Applies a read's answer only while its placement is still the current one. */
+    private fun publish(generation: Int, change: (LabUiState) -> LabUiState) {
+        if (generation != placement) return
+        _state.update(change)
+    }
+
+    /** The daemon's terminal states: after one of these the record has what it will ever have. */
+    private fun CallSnapshot.finished(): Boolean = state?.lowercase(Locale.US) in TERMINAL_STATES || resultStatus == RESULT_READY
 
     private fun CallSnapshot.durationSeconds(): Long? {
         val connected = connectedAt ?: return null
@@ -674,8 +766,12 @@ class LabViewModel @Inject constructor(
         /** Eight attempts is long enough for a summary and short enough to give up in view. */
         const val RESULT_ATTEMPTS = 8
         const val RESULT_RETRY_MS = 1_000L
+
+        /** The daemon's test call is capped at 60 s; a minute and a half of waiting outlives it. */
+        const val LIVE_POLLS = 90
         const val RESULT_READY = "ready"
         const val PHASE_ENDED = "ended"
+        val TERMINAL_STATES = setOf("ended", "cancelled", "canceled", "failed", "unknown")
     }
 }
 

@@ -270,6 +270,71 @@ class LabScreenScreenshotTest {
     }
 
     @Test
+    fun eachProbeToggleFollowsItsPhoneCapability() {
+        val base = previewLabState()
+        setScreen(
+            base.copy(
+                loopbackSupported = false,
+                toneSupported = true,
+                testCall = base.testCall.copy(probesSupported = true)
+            )
+        )
+        composeRule.onNodeWithText("Loop the far end back").assertDoesNotExist()
+        composeRule.onNodeWithText("Play a tone").performScrollTo().assertExists()
+    }
+
+    @Test
+    fun aPhoneWithoutAToneIsNotOfferedOne() {
+        val base = previewLabState()
+        setScreen(
+            base.copy(
+                loopbackSupported = true,
+                toneSupported = false,
+                testCall = base.testCall.copy(probesSupported = true)
+            )
+        )
+        composeRule.onNodeWithText("Loop the far end back").performScrollTo().assertExists()
+        composeRule.onNodeWithText("Play a tone").assertDoesNotExist()
+    }
+
+    /** The automatic tone is configured before dialing, so its settings are usable with no call. */
+    @Test
+    fun theToneSettingsBeforeDialing() = render(
+        "audio_tone_setup_411_light",
+        beforeCapture = {
+            composeRule.onNodeWithContentDescription("Tone level").performScrollTo()
+            composeRule.waitForIdle()
+        }
+    ) {
+        val base = previewLabState()
+        setScreen(
+            LabUiState(
+                link = base.link,
+                loopbackSupported = true,
+                toneSupported = true,
+                testCall = base.testCall.copy(probesSupported = true, tone = true)
+            )
+        )
+    }
+
+    @Test
+    fun theToneSettingsComeBeforeAnyCallButLivePlaybackDoesNot() {
+        val base = previewLabState()
+        setScreen(
+            LabUiState(
+                loopbackSupported = true,
+                toneSupported = true,
+                testCall = base.testCall.copy(probesSupported = true, tone = true)
+            )
+        )
+        composeRule.onNodeWithContentDescription("Tone frequency").performScrollTo().assertExists()
+        composeRule.onNodeWithContentDescription("Tone level").assertExists()
+        composeRule.onNodeWithText("Tone for the test call").assertExists()
+        // Only the live playback waits for a call.
+        composeRule.onNodeWithText("Play tone").assertDoesNotExist()
+    }
+
+    @Test
     fun theToneSecondsControlFollowsTheToneToggle() {
         val base = previewLabState()
         val state = mutableStateOf(
@@ -321,6 +386,13 @@ class LabScreenScreenshotTest {
         setScreen(finishedTestCall(testCallResult(resultStatus = null, summary = null, waiting = false)))
         composeRule.onNodeWithText("The bridge has no summary for this call.").performScrollTo().assertExists()
         composeRule.onNodeWithText("Answered").assertExists()
+    }
+
+    @Test
+    fun aReadyRecordWithoutASummaryIsNotStillPending() {
+        setScreen(finishedTestCall(testCallResult(resultStatus = "ready", summary = null, waiting = false)))
+        composeRule.onNodeWithText("The bridge has no summary for this call.").performScrollTo().assertExists()
+        composeRule.onNodeWithText("The bridge is still writing the summary.").assertDoesNotExist()
     }
 
     @Test

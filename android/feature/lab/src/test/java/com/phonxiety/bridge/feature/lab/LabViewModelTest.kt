@@ -29,6 +29,7 @@ import com.phonxiety.bridge.net.LanPathProbe
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
@@ -76,7 +77,10 @@ class LabViewModelTest {
         Dispatchers.resetMain()
     }
 
-    private fun viewModel(): LabViewModel = LabViewModel(api, bridge, prefs, lanCheck, context)
+    private fun viewModel(): LabViewModel = LabViewModel(api, bridge, prefs, lanCheck, context).apply {
+        // The record of a placed call is read on a one-second cadence in the app; tests do not wait.
+        resultRetryDelayMs = 1
+    }
 
     @Test
     fun `a finished link test is shown and kept across a new screen`() = runBlocking<Unit> {
@@ -180,7 +184,12 @@ class LabViewModelTest {
             placed = request
             ApiOutcome.Ok(200, CallSnapshot(callId = "call-8", profile = "test"))
         }
-        api.infoHandler = { ApiOutcome.Ok(200, DaemonInfo(voiceControls = VoiceControls(testCallProbes = true))) }
+        api.infoHandler = {
+            ApiOutcome.Ok(
+                200,
+                DaemonInfo(voiceControls = VoiceControls(testCallProbes = true, loopback = true, tone = true))
+            )
+        }
         val vm = viewModel()
         withTimeout(5_000) { vm.state.first { it.testCall.probesAvailable } }
         vm.setTestNumber("+12025550123")
@@ -264,8 +273,13 @@ class LabViewModelTest {
         assertEquals("The line answered and the tone was heard.", card.summary)
         assertFalse(card.waiting)
         assertEquals(3, api.callRequests.size)
-        // A further ended state is the same answer: the record is not read again.
+        // A further ended state is the same answer: the record is not read again. The phone has to
+        // report the call active first, or the second ended state is the same value and no
+        // emission reaches the lab at all.
+        bridge.flow.value = BridgeState(call = CallState("call-9", "+12025550123", CallPhase.ACTIVE, 0L))
+        withTimeout(5_000) { vm.state.first { it.callPhase == "active" } }
         bridge.flow.value = BridgeState(call = CallState("call-9", "+12025550123", CallPhase.ENDED, 0L))
+        withTimeout(5_000) { vm.state.first { it.callPhase == "ended" } }
         assertEquals(3, api.callRequests.size)
     }
 
@@ -289,6 +303,203 @@ class LabViewModelTest {
         assertFalse(card.summaryReady)
         assertNull(card.error)
         assertEquals(8, api.callRequests.size)
+    }
+
+    @Test
+    fun `a ready record with a blank summary has no summary`() {
+        assertTrue(TestCallResultUi(callId = "c", resultStatus = "ready", summary = null).summaryAbsent)
+        assertTrue(TestCallResultUi(callId = "c", resultStatus = "ready", summary = " ").summaryAbsent)
+        assertTrue(TestCallResultUi(callId = "c", resultStatus = null, summary = null).summaryAbsent)
+        assertFalse(TestCallResultUi(callId = "c", resultStatus = "pending", summary = null).summaryAbsent)
+        assertFalse(TestCallResultUi(callId = "c", resultStatus = "ready", summary = "Said hello.").summaryAbsent)
+    }
+
+    @Test
+    fun `a call that ends before Telecom reports it still gets its result`() = runBlocking<Unit> {
+        api.testCallHandler = { ApiOutcome.Ok(200, CallSnapshot(callId = "call-voice", profile = "test")) }
+        api.callHandler = { callId ->
+            ApiOutcome.Ok(
+                200,
+                CallSnapshot(
+                    callId = callId,
+                    state = "failed",
+                    callOutcome = "failed",
+                    resultStatus = "ready",
+                    summary = "The voice engine did not start.",
+                    error = "voice_unavailable"
+                )
+            )
+        }
+        val vm = viewModel()
+        vm.setTestNumber("+12025550123")
+        withTimeout(5_000) { vm.state.first { it.testCall.number == "+12025550123" } }
+        vm.requestTestCall()
+        vm.confirmTestCall()
+        // Voice startup failed before dialing: no ended state ever reaches this screen.
+        withTimeout(5_000) { vm.state.first { it.testCall.result?.waiting == false } }
+
+        val card = vm.state.value.testCall.result!!
+        assertEquals("call-voice", card.callId)
+        assertEquals("failed", card.outcome)
+        assertEquals("The voice engine did not start.", card.summary)
+        assertNull(vm.state.value.callPhase)
+        assertEquals(1, api.callRequests.size)
+    }
+
+    @Test
+    fun `each probe travels only when this phone has it`() = runBlocking<Unit> {
+        val placed = mutableListOf<TestCallRequest>()
+        api.testCallHandler = { request ->
+            placed += request
+            ApiOutcome.Ok(200, CallSnapshot(callId = "call-${placed.size}", profile = "test"))
+        }
+        api.callHandler = { callId ->
+            ApiOutcome.Ok(200, CallSnapshot(callId = callId, state = "ended", resultStatus = "ready", summary = "done"))
+        }
+        // The daemon starts the probes itself, but this phone has loopback only.
+        api.infoHandler = {
+            ApiOutcome.Ok(
+                200,
+                DaemonInfo(voiceControls = VoiceControls(testCallProbes = true, loopback = true, tone = false))
+            )
+        }
+        val vm = viewModel()
+        withTimeout(5_000) { vm.state.first { it.testCall.probesSupported == true } }
+        assertTrue(vm.state.value.testCallLoopbackAvailable)
+        assertFalse(vm.state.value.testCallToneAvailable)
+        vm.setTestNumber("+12025550123")
+        withTimeout(5_000) { vm.state.first { it.testCall.number == "+12025550123" } }
+        vm.setTestCallLoopback(true)
+        vm.setTestCallTone(true)
+        vm.requestTestCall()
+        vm.confirmTestCall()
+        withTimeout(5_000) { vm.state.first { it.testCall.callId != null } }
+        assertEquals(true, placed.single().loopback)
+        assertNull("a tone the phone cannot play is not asked for", placed.single().tone)
+    }
+
+    @Test
+    fun `a phone without loopback is never asked for one`() = runBlocking<Unit> {
+        var placed: TestCallRequest? = null
+        api.testCallHandler = { request ->
+            placed = request
+            ApiOutcome.Ok(200, CallSnapshot(callId = "call-9", profile = "test"))
+        }
+        api.infoHandler = {
+            ApiOutcome.Ok(
+                200,
+                DaemonInfo(voiceControls = VoiceControls(testCallProbes = true, loopback = false, tone = true))
+            )
+        }
+        val vm = viewModel()
+        withTimeout(5_000) { vm.state.first { it.testCall.probesSupported == true } }
+        assertFalse(vm.state.value.testCallLoopbackAvailable)
+        assertTrue(vm.state.value.testCallToneAvailable)
+        vm.setTestNumber("+12025550123")
+        withTimeout(5_000) { vm.state.first { it.testCall.number == "+12025550123" } }
+        vm.setTestCallLoopback(true)
+        vm.setTestCallTone(true)
+        vm.requestTestCall()
+        vm.confirmTestCall()
+        withTimeout(5_000) { vm.state.first { it.testCall.callId != null } }
+        assertNull("a loopback the phone cannot run is not asked for", placed?.loopback)
+        assertEquals(TestCallTone(hz = 1_000, dbfs = -20.0, seconds = 5), placed?.tone)
+    }
+
+    @Test
+    fun `the automatic tone takes the frequency and level set before dialing`() = runBlocking<Unit> {
+        var placed: TestCallRequest? = null
+        api.testCallHandler = { request ->
+            placed = request
+            ApiOutcome.Ok(200, CallSnapshot(callId = "call-tone", profile = "test"))
+        }
+        api.callHandler = { callId ->
+            ApiOutcome.Ok(200, CallSnapshot(callId = callId, state = "ended", resultStatus = "ready", summary = "done"))
+        }
+        api.infoHandler = {
+            ApiOutcome.Ok(200, DaemonInfo(voiceControls = VoiceControls(testCallProbes = true, tone = true)))
+        }
+        val vm = viewModel()
+        withTimeout(5_000) { vm.state.first { it.testCall.probesSupported == true } }
+        vm.setTestNumber("+12025550123")
+        withTimeout(5_000) { vm.state.first { it.testCall.number == "+12025550123" } }
+        vm.setTestCallTone(true)
+        // No call is active: the tone settings belong to the phone, not to a live call.
+        assertFalse(vm.state.value.audioEnabled)
+        vm.setToneHz(1_500)
+        vm.setToneDbfs(-35.0)
+        vm.requestTestCall()
+        vm.confirmTestCall()
+        withTimeout(5_000) { vm.state.first { it.testCall.callId != null } }
+        assertEquals(TestCallTone(hz = 1_500, dbfs = -35.0, seconds = 5), placed?.tone)
+    }
+
+    @Test
+    fun `leaving the lab stops the read and coming back resumes it`() = runBlocking<Unit> {
+        api.testCallHandler = { ApiOutcome.Ok(200, CallSnapshot(callId = "call-hidden", profile = "test")) }
+        api.callHandler = { callId ->
+            ApiOutcome.Ok(200, CallSnapshot(callId = callId, state = "ended", resultStatus = "pending"))
+        }
+        val vm = viewModel()
+        vm.setTestNumber("+12025550123")
+        withTimeout(5_000) { vm.state.first { it.testCall.number == "+12025550123" } }
+        vm.requestTestCall()
+        vm.confirmTestCall()
+        withTimeout(5_000) { vm.state.first { it.testCall.result?.waiting == true } }
+
+        vm.onLabHidden()
+        delay(20)
+        val left = api.callRequests.size
+        delay(50)
+        assertEquals("a hidden lab reads nothing more", left, api.callRequests.size)
+        assertTrue("what was read stays on screen", vm.state.value.testCall.result?.waiting == true)
+
+        vm.onLabShown()
+        withTimeout(5_000) { vm.state.first { it.testCall.result?.waiting == false } }
+        assertTrue("the read is taken up again on return", api.callRequests.size > left)
+        assertEquals("call-hidden", vm.state.value.testCall.result?.callId)
+    }
+
+    @Test
+    fun `a new placement never inherits the previous call's result`() = runBlocking<Unit> {
+        var placements = 0
+        api.testCallHandler = { _ ->
+            placements++
+            ApiOutcome.Ok(200, CallSnapshot(callId = "call-$placements", profile = "test"))
+        }
+        api.callHandler = { callId ->
+            if (callId == "call-1") {
+                ApiOutcome.Ok(200, CallSnapshot(callId = callId, state = "ended", resultStatus = "pending"))
+            } else {
+                ApiOutcome.Ok(
+                    200,
+                    CallSnapshot(
+                        callId = callId,
+                        state = "ended",
+                        callOutcome = "answered",
+                        resultStatus = "ready",
+                        summary = "The second call."
+                    )
+                )
+            }
+        }
+        val vm = viewModel()
+        vm.setTestNumber("+12025550123")
+        withTimeout(5_000) { vm.state.first { it.testCall.number == "+12025550123" } }
+        vm.requestTestCall()
+        vm.confirmTestCall()
+        withTimeout(5_000) { vm.state.first { it.testCall.result?.waiting == true } }
+
+        // The first call's read is still waiting when the next placement starts.
+        vm.requestTestCall()
+        vm.confirmTestCall()
+        withTimeout(5_000) { vm.state.first { it.testCall.result?.summary == "The second call." } }
+        delay(50)
+        assertEquals("call-2", vm.state.value.testCall.result?.callId)
+        assertTrue(
+            "the first call's read stopped instead of using its whole budget",
+            api.callRequests.count { it == "call-1" } < 8
+        )
     }
 
     @Test

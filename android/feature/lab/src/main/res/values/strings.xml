@@ -89,6 +89,7 @@
     <string name="lab_audio_loopback_detail">The far end hears their own voice, slightly delayed.</string>
     <string name="lab_audio_tone_frequency">Tone frequency</string>
     <string name="lab_audio_tone_level">Tone level</string>
+    <string name="lab_audio_tone_setup">Tone for the test call</string>
     <string name="lab_audio_hz">%1$s&#160;Hz</string>
     <string name="lab_audio_dbfs">%1$s&#160;dBFS</string>
     <string name="lab_audio_play">Play tone</string>
