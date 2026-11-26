@@ -53,5 +53,6 @@ dependencies {
     testImplementation(libs.androidx.compose.ui.test.junit4)
     testImplementation(libs.roborazzi)
     testImplementation(libs.roborazzi.compose)
+    testImplementation(libs.roborazzi.accessibility.check)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
