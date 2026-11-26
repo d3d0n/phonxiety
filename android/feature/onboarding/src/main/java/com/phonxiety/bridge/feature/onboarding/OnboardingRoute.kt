@@ -23,6 +23,7 @@ import androidx.core.net.toUri
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.phonxiety.bridge.root.WizardState
 import kotlinx.coroutines.launch
 
 /**
@@ -39,6 +40,7 @@ fun OnboardingRoute(
 ) {
     val wizard by viewModel.wizard.collectAsStateWithLifecycle()
     val pairingError by viewModel.pairingError.collectAsStateWithLifecycle()
+    val detection by viewModel.detection.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -56,7 +58,8 @@ fun OnboardingRoute(
         onUnavailable = { reason ->
             scope.launch { snackbar.showSnackbar(reason) }
             inlineScanner = true
-        }
+        },
+        onFailed = { reason -> scope.launch { snackbar.showSnackbar(reason) } }
     )
 
     LaunchedEffect(viewModel) {
@@ -68,7 +71,11 @@ fun OnboardingRoute(
                 SetupHostRequest.RequestBatteryExemption ->
                     batteryLauncher.launch(batteryExemptionIntent(context))
 
-                SetupHostRequest.StartPairing -> scanner()
+                SetupHostRequest.StartPairing ->
+                    // The automatic launch belongs to the pairing visit that asked for it. A request
+                    // consumed after the wizard advanced (or after an external pairing) must not open
+                    // a scanner over the next step; the explicit Scan button does not come through here.
+                    if (wizard is WizardState.NeedsPairing) scanner()
 
                 is SetupHostRequest.PairingRejected -> snackbar.showSnackbar(request.reason)
 
@@ -100,11 +107,16 @@ fun OnboardingRoute(
 
     Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { padding ->
         OnboardingScreen(
-            state = OnboardingUiState(wizard = wizard, pairingError = pairingError),
+            state = OnboardingUiState(
+                wizard = wizard,
+                pairingError = pairingError,
+                leftovers = detection?.leftovers.orEmpty()
+            ),
             callbacks = OnboardingCallbacks(
                 onPrimary = viewModel::onPrimary,
                 onSecondary = viewModel::onSecondary,
                 onScanQr = scanner,
+                onCameraScan = { inlineScanner = true },
                 onPairLink = viewModel::pair,
                 onDismissPairingError = viewModel::dismissPairingError,
                 onOpenManager = { pkg -> openManager(context, pkg, scope, snackbar) },

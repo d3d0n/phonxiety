@@ -18,6 +18,13 @@ class RootCommand private constructor(
         /** `su -c id`, the root/denial probe. */
         fun id(): RootCommand = RootCommand(listOf("id"))
 
+        /**
+         * `su -v`, the answerer's own banner: `<version>:<SUFFIX>`, e.g. `31.1:MAGISKSU` (Magisk),
+         * `11282:APatch`, and the KernelSU family's own spelling. It is the only signal that names
+         * the provider without guessing from files another provider may have left behind.
+         */
+        fun suVersion(): RootCommand = RootCommand(listOf("su", "-v"))
+
         /** Magisk version name, e.g. `31.1:MAGISK`. */
         fun magiskVersionName(): RootCommand = RootCommand(listOf("magisk", "-v"))
 
@@ -160,8 +167,18 @@ class RootCommand private constructor(
             )
         )
 
-        /** `reboot`, the fallback when `android.permission.REBOOT` is not granted. */
-        fun reboot(): RootCommand = RootCommand(listOf("reboot"))
+        /**
+         * The reboot the managers use, for when `android.permission.REBOOT` is not granted:
+         * `/system/bin/svc power reboot <reason>` asks PowerManager over binder, which uid 0 passes
+         * without writing `sys.powerctl` — a plain `reboot` from a shell context is refused with
+         * PROP_ERROR_PERMISSION_DENIED. The plain binary stays as the fallback.
+         */
+        fun reboot(reason: String): RootCommand {
+            require(SAFE_NAME.matches(reason)) { "reboot reason is not a safe token: $reason" }
+            return RootCommand(
+                listOf("/system/bin/svc", "power", "reboot", reason, "||", "/system/bin/reboot", reason)
+            )
+        }
 
         const val ADB_ROOT: String = "/data/adb"
         const val MODULES_DIR: String = "$ADB_ROOT/modules"

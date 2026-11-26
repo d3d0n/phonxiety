@@ -66,7 +66,11 @@ object TestData {
         managerInstalled = true
     )
 
-    fun root(su: SuStatus = SuStatus.GRANTED, providers: List<DetectedProvider> = listOf(magisk)) = RootDetection(su = su, providers = providers)
+    fun root(
+        su: SuStatus = SuStatus.GRANTED,
+        providers: List<DetectedProvider> = listOf(magisk),
+        active: RootId? = null
+    ) = RootDetection(su = su, providers = providers, active = active)
 
     fun facts(
         apkPath: String = "/system/priv-app/phonxiety-bridge/base.apk",

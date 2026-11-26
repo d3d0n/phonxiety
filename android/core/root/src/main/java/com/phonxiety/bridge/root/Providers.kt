@@ -172,7 +172,7 @@ internal suspend fun rebootThrough(
         val accepted = runCatching { rebooter.reboot(reason.powerManagerReason) }.getOrDefault(false)
         if (accepted) return ProviderResult.Success("reboot requested (${reason.powerManagerReason})")
     }
-    return shell.execSafely { RootCommand.reboot() }
+    return shell.execSafely { RootCommand.reboot(reason.powerManagerReason) }
 }
 
 // ---------------------------------------------------------------------------------------------

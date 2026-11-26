@@ -225,6 +225,28 @@ object BridgeConfigLoader {
         return stored
     }
 
+    /**
+     * The stored config exactly as it sits on disk, or null when there is none. A caller that must
+     * undo its own [write] keeps this and hands it back to [restore]: the pairing store is also
+     * written from outside the app, so only the bytes put it back the way it was.
+     */
+    fun snapshot(context: Context): ByteArray? {
+        if (loadOrNull(context) == null) return null
+        return runCatching { configFile(context).readBytes() }.getOrNull()
+    }
+
+    /**
+     * Puts [snapshot] back byte for byte, or removes the file when there was none. A failed restore
+     * removes the file instead: no config is better than the rejected one.
+     */
+    fun restore(context: Context, snapshot: ByteArray?): Boolean {
+        if (snapshot == null) return delete(context)
+        return runCatching {
+            AppStorage.writeAtomically(configFile(context), snapshot)
+            true
+        }.getOrElse { delete(context) }
+    }
+
     /** Removes the paired-daemon file; returns true when no config remains. */
     fun delete(context: Context): Boolean {
         AppStorage.migrateFile(context, FILE_NAME)

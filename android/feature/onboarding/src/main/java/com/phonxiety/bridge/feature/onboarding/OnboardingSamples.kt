@@ -83,6 +83,12 @@ object OnboardingSamples {
             result = installFailure
         ),
         "reboot_pending" to WizardState.RebootPending(magisk, RebootReason.MODULE_INSTALL),
+        "reboot_failed" to WizardState.RebootPending(
+            provider = magisk,
+            reason = RebootReason.MODULE_INSTALL,
+            module = ModuleState.Absent,
+            failure = "svc: Unable to set property \"sys.powerctl\": PROP_ERROR_PERMISSION_DENIED"
+        ),
         "reboot_pending_metamodule" to WizardState.RebootPending(
             kernelSu,
             RebootReason.METAMODULE_INSTALL,

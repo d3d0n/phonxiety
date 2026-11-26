@@ -22,7 +22,7 @@ class RootShellTest {
         val runner = RecordingRunner { ShellOutput(timedOut = true, stdout = "partial") }
         val shell = RootShell(runner, timeoutMs = 5_000)
 
-        val output = shell.exec(RootCommand.reboot())
+        val output = shell.exec(RootCommand.reboot(RebootReason.USER_REQUEST.powerManagerReason))
 
         assertEquals(true, output.timedOut)
         assertEquals(5_000L, output.timeoutMs)

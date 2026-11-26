@@ -93,6 +93,74 @@ class ModuleControllerTest {
     }
 
     @Test
+    fun aHidingManagerMeansAPendingGrantNotAPhoneWithoutRoot() {
+        val state = probe(
+            snapshot(
+                detection = RootDetection(
+                    su = SuStatus.NOT_ROOTED,
+                    providers = listOf(kernelSu),
+                    suOutput = "Cannot run program \"su\""
+                )
+            )
+        ).state
+
+        // KernelSU hides su from a package it has not allowed: the wizard names the grant.
+        assertEquals(WizardState.RootDenied(kernelSu, "Cannot run program \"su\""), state)
+    }
+
+    @Test
+    fun twoHidingManagersListBothGrants() {
+        val apatch = apatchProvider()
+        val state = probe(
+            snapshot(detection = RootDetection(SuStatus.NOT_ROOTED, listOf(kernelSu, apatch)))
+        ).state
+
+        val denied = state as WizardState.RootDenied
+        assertEquals(kernelSu, denied.provider)
+        assertEquals(listOf(apatch), denied.coProviders)
+    }
+
+    @Test
+    fun magiskOnlyWithNoSuMeansMagiskIsNotActive() {
+        val state = probe(
+            snapshot(detection = RootDetection(SuStatus.NOT_ROOTED, listOf(magisk)))
+        ).state
+
+        assertEquals(WizardState.NoRoot(listOf(magisk)), state)
+    }
+
+    @Test
+    fun theProviderThatAnsweredSuIsTheActiveOneAndTheRestAreLeftovers() {
+        val state = probe(
+            snapshot(
+                detection = RootDetection(
+                    su = SuStatus.GRANTED,
+                    providers = listOf(magisk, kernelSu),
+                    active = RootId.KERNELSU
+                )
+            )
+        ).state
+
+        // Magisk's files remain from the migration; they do not block KernelSU.
+        assertEquals(WizardState.ReadyToInstall(kernelSu), state)
+    }
+
+    @Test
+    fun magiskActiveWithKernelSuLeftoversInstallsThroughMagisk() {
+        val state = probe(
+            snapshot(
+                detection = RootDetection(
+                    su = SuStatus.GRANTED,
+                    providers = listOf(magisk, kernelSu),
+                    active = RootId.MAGISK
+                )
+            )
+        ).state
+
+        assertEquals(WizardState.ReadyToInstall(magisk), state)
+    }
+
+    @Test
     fun conflictRefusesInstall() {
         val state = probe(
             snapshot(detection = RootDetection(SuStatus.GRANTED, listOf(magisk, kernelSu)))
@@ -455,6 +523,51 @@ class ModuleControllerTest {
             ),
             transition.effects
         )
+    }
+
+    @Test
+    fun aRebootThatFailedKeepsTheStepAndSaysWhy() {
+        val pending = WizardState.RebootPending(magisk, RebootReason.MODULE_INSTALL, ModuleState.Absent)
+
+        val failed = ModuleController.reduce(
+            pending,
+            WizardEvent.RebootFailed("svc: Unable to set property \"sys.powerctl\": PROP_ERROR_PERMISSION_DENIED")
+        ).state
+
+        assertEquals(
+            WizardState.RebootPending(
+                magisk,
+                RebootReason.MODULE_INSTALL,
+                ModuleState.Absent,
+                "svc: Unable to set property \"sys.powerctl\": PROP_ERROR_PERMISSION_DENIED"
+            ),
+            failed
+        )
+    }
+
+    @Test
+    fun aRebootThatDidNotHappenIsNotReportedAsDone() {
+        val pending = WizardState.RebootPending(magisk, RebootReason.MODULE_INSTALL, ModuleState.Absent)
+
+        val unconfirmed = ModuleController.reduce(pending, WizardEvent.RebootNotConfirmed).state
+
+        val failure = (unconfirmed as WizardState.RebootPending).failure.orEmpty()
+        assertTrue(failure, failure.contains("still running 20 s after the reboot request"))
+    }
+
+    @Test
+    fun retryingTheRebootClearsTheLastFailure() {
+        val failed = WizardState.RebootPending(
+            magisk,
+            RebootReason.MODULE_INSTALL,
+            ModuleState.Absent,
+            "PROP_ERROR_PERMISSION_DENIED"
+        )
+
+        val retry = ModuleController.reduce(failed, WizardEvent.RebootRequested)
+
+        assertEquals(WizardState.RebootPending(magisk, RebootReason.MODULE_INSTALL, ModuleState.Absent), retry.state)
+        assertEquals(WizardEffect.Reboot(RebootReason.MODULE_INSTALL), retry.effects.first())
     }
 
     @Test

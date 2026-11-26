@@ -73,6 +73,9 @@ class OnboardingScreenshotTest {
     fun rebootPendingMetamodule() = capture("reboot_pending_metamodule", state("reboot_pending_metamodule"))
 
     @Test
+    fun rebootFailed() = capture("reboot_failed", state("reboot_failed"))
+
+    @Test
     fun verify() = capture("verify", state("verify"))
 
     @Test
@@ -107,6 +110,15 @@ class OnboardingScreenshotTest {
 
     @Test
     fun conflict() = capture("conflict", state("conflict"))
+
+    @Test
+    fun leftovers() = capture(
+        "leftovers",
+        OnboardingUiState(
+            wizard = WizardState.ReadyToInstall(OnboardingSamples.kernelSu),
+            leftovers = listOf(OnboardingSamples.magisk)
+        )
+    )
 
     private fun state(name: String): OnboardingUiState = OnboardingUiState(wizard = requireNotNull(OnboardingSamples.states[name]))
 }

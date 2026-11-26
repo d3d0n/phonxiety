@@ -132,15 +132,55 @@ data class DetectedProvider(
     val note: String? = null
 )
 
-/** Everything [RootDetector] learned in one pass. */
+/**
+ * Everything [RootDetector] learned in one pass.
+ *
+ * [providers] lists every provider with evidence on the phone; [active] names the one whose own
+ * `su` answered (its `su -v` banner, or the probe's SELinux domain). Providers left over from an
+ * earlier root solution stay in [providers] and are reported as [leftovers]: their files and their
+ * manager app are not deleted by this app.
+ */
 data class RootDetection(
     val su: SuStatus,
     val providers: List<DetectedProvider> = emptyList(),
     /** Combined stdout/stderr of the `su -c id` probe, for the "could not tell" screen. */
-    val suOutput: String? = null
+    val suOutput: String? = null,
+    /**
+     * The provider that answered `su`. [RootId.KERNELSU] here means the KernelSU family: the
+     * banner and the context cannot tell KernelSU from KernelSU-Next.
+     */
+    val active: RootId? = null
 ) {
-    val conflict: Boolean get() = providers.size > 1
-    val provider: DetectedProvider? get() = providers.singleOrNull()
+    /**
+     * Installing is a guess only when nobody can say which provider answers `su` and artefacts of
+     * two or more exist. A migration's leftovers are evidence of the past, not a conflict.
+     */
+    val conflict: Boolean get() = active == null && providers.size > 1
+
+    /** The provider the wizard and the Doctor act on. */
+    val provider: DetectedProvider?
+        get() {
+            val activeId = active ?: return providers.singleOrNull()
+            return providers.firstOrNull { it.id.sameFamily(activeId) }
+        }
+
+    /** Providers whose artefacts remain but which did not answer `su`. Refused nowhere, removed never. */
+    val leftovers: List<DetectedProvider>
+        get() {
+            val activeId = active ?: return emptyList()
+            return providers.filter { !it.id.sameFamily(activeId) }
+        }
+}
+
+/**
+ * KernelSU and KernelSU-Next answer with the same SELinux domain, and their banners differ only by
+ * a suffix, so they are one family wherever the evidence cannot separate them.
+ */
+internal fun RootId.sameFamily(other: RootId?): Boolean {
+    if (other == null) return false
+    if (this == other) return true
+    val kernelSu = setOf(RootId.KERNELSU, RootId.KERNELSU_NEXT)
+    return this in kernelSu && other in kernelSu
 }
 
 /** One or more providers answered: installing would be a guess, so the wizard refuses. */

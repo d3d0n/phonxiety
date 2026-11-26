@@ -1,6 +1,7 @@
 package com.phonxiety.bridge.feature.onboarding
 
 import android.content.Context
+import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -15,6 +16,7 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanner
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -25,10 +27,18 @@ import kotlinx.coroutines.withTimeoutOrNull
 internal sealed interface PlayScan {
     data class Code(val value: String) : PlayScan
 
+    /** The person dismissed the scanner: Back, Close, or a cancelled scanning task. */
     data object Cancelled : PlayScan
 
-    /** No usable scanner: the module is missing, Play services refused, or the camera was denied. */
+    /** Play services cannot provide the scanner: the host opens the in-app scanner instead. */
     data class Unavailable(val reason: String) : PlayScan
+
+    /**
+     * The scanner ran and the attempt failed. No automatic fallback: a CameraX permission prompt
+     * after a real scanner failure would be a surprise; the pairing sheet offers the in-app scanner
+     * as an explicit choice instead.
+     */
+    data class Failed(val reason: String) : PlayScan
 }
 
 /**
@@ -59,17 +69,19 @@ internal fun interface PlayScannerFactory {
 @Composable
 fun rememberQrScanner(
     onCode: (String) -> Unit,
-    onUnavailable: (String) -> Unit
+    onUnavailable: (String) -> Unit,
+    onFailed: (String) -> Unit
 ): () -> Unit {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    return remember(context, onCode, onUnavailable) {
+    return remember(context, onCode, onUnavailable, onFailed) {
         {
             scope.launch {
                 when (val result = scanWithPlayServices(context)) {
                     is PlayScan.Code -> onCode(result.value)
                     PlayScan.Cancelled -> Unit
                     is PlayScan.Unavailable -> onUnavailable(result.reason)
+                    is PlayScan.Failed -> onFailed(result.reason)
                 }
             }
         }
@@ -130,33 +142,56 @@ private fun scannerOptions(): GmsBarcodeScannerOptions = GmsBarcodeScannerOption
     .enableAutoZoom()
     .build()
 
-private suspend fun startScan(scanner: GmsBarcodeScanner): PlayScan = suspendCancellableCoroutine { continuation ->
+private const val SCANNER_LOG_TAG = "QrScanner"
+
+internal suspend fun startScan(scanner: GmsBarcodeScanner): PlayScan = suspendCancellableCoroutine { continuation ->
+    // A task can notify more than one listener and a listener can fire after the screen left; the
+    // wait is settled exactly once.
+    val settled = AtomicBoolean(false)
+    fun settle(result: PlayScan) {
+        if (!settled.compareAndSet(false, true)) return
+        if (continuation.isActive) continuation.resume(result)
+    }
     scanner.startScan()
         .addOnSuccessListener { barcode ->
-            if (!continuation.isActive) return@addOnSuccessListener
             val raw = barcode.rawValue
-            continuation.resume(
-                if (raw.isNullOrBlank()) PlayScan.Unavailable("the QR code was empty") else PlayScan.Code(raw)
+            settle(
+                if (raw.isNullOrBlank()) PlayScan.Failed("the QR code was empty") else PlayScan.Code(raw)
             )
         }
-        .addOnFailureListener { error ->
-            if (!continuation.isActive) return@addOnFailureListener
-            val code = (error as? MlKitException)?.errorCode
-            continuation.resume(
-                when (code) {
-                    MlKitException.CODE_SCANNER_CANCELLED -> PlayScan.Cancelled
-
-                    MlKitException.CODE_SCANNER_UNAVAILABLE,
-                    MlKitException.CODE_SCANNER_GOOGLE_PLAY_SERVICES_VERSION_TOO_OLD ->
-                        PlayScan.Unavailable("the phone does not have the Google code scanner module yet")
-
-                    MlKitException.CODE_SCANNER_CAMERA_PERMISSION_NOT_GRANTED ->
-                        PlayScan.Unavailable("the camera permission was not granted to the code scanner")
-
-                    else -> PlayScan.Unavailable(error.message ?: "the Google code scanner failed")
-                }
-            )
+        .addOnCanceledListener {
+            Log.i(SCANNER_LOG_TAG, "Google code scanner task cancelled")
+            settle(PlayScan.Cancelled)
         }
+        .addOnFailureListener { error -> settle(scanFailure(error)) }
+}
+
+/**
+ * One scanner failure, classified. The numeric ML Kit code and the platform message go to the log,
+ * never the scanned value.
+ *
+ * Play services 16.1.0 answers an empty cancelled activity result — what Android Back produces
+ * when it dismisses the scanner without the Close button — with `INTERNAL` (13), "Failed to scan
+ * code.". For the wizard that is a dismissal: the person gets the pairing sheet back, with Scan QR
+ * code and Paste still available, instead of an install, a rescan or a camera permission prompt. A
+ * genuine internal failure then has the pairing sheet's explicit "Use this phone's camera".
+ */
+internal fun scanFailure(error: Exception): PlayScan {
+    val code = (error as? MlKitException)?.errorCode
+    Log.i(SCANNER_LOG_TAG, "Google code scanner failed: errorCode=$code message=${error.message}")
+    return when (code) {
+        MlKitException.CODE_SCANNER_CANCELLED,
+        MlKitException.INTERNAL -> PlayScan.Cancelled
+
+        MlKitException.CODE_SCANNER_UNAVAILABLE,
+        MlKitException.CODE_SCANNER_GOOGLE_PLAY_SERVICES_VERSION_TOO_OLD ->
+            PlayScan.Unavailable("the phone does not have the Google code scanner module yet")
+
+        MlKitException.CODE_SCANNER_CAMERA_PERMISSION_NOT_GRANTED ->
+            PlayScan.Failed("the camera permission was not granted to the code scanner")
+
+        else -> PlayScan.Failed(error.message ?: "the Google code scanner failed")
+    }
 }
 
 /**

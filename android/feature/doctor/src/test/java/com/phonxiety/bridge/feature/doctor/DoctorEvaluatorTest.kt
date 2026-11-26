@@ -58,6 +58,46 @@ class DoctorEvaluatorTest {
     }
 
     @Test
+    fun theProviderThatAnsweredIsChosenAndTheRestAreListedAsLeftovers() {
+        val kernelSu = DetectedProvider(RootId.KERNELSU, "3.3.1", "me.weishu.kernelsu", true)
+        val rows = TestData.rows(
+            snapshot = TestData.snapshot(
+                root = TestData.root(providers = listOf(TestData.magisk, kernelSu), active = RootId.KERNELSU)
+            )
+        )
+
+        val root = TestData.row(rows, DoctorEvaluator.ID_ROOT)
+        assertEquals(DoctorSeverity.OK, root.severity)
+        assertTrue(root.evidence.startsWith("KernelSU 3.3.1"))
+        assertTrue(root.evidence.contains("inactive leftovers: Magisk"))
+    }
+
+    @Test
+    fun aHidingManagerExplainsThePendingGrant() {
+        val kernelSu = DetectedProvider(RootId.KERNELSU, "3.3.1", "me.weishu.kernelsu", true)
+        val rows = TestData.rows(
+            snapshot = TestData.snapshot(root = TestData.root(su = SuStatus.NOT_ROOTED, providers = listOf(kernelSu)))
+        )
+
+        val root = TestData.row(rows, DoctorEvaluator.ID_ROOT)
+        assertEquals(DoctorSeverity.FAIL, root.severity)
+        assertTrue(root.evidence.contains("KernelSU manager is installed"))
+        assertTrue(root.evidence.contains("hidden from this app"))
+    }
+
+    @Test
+    fun anInstalledMagiskAppWithNoSuMeansMagiskIsNotActive() {
+        val rows = TestData.rows(
+            snapshot = TestData.snapshot(root = TestData.root(su = SuStatus.NOT_ROOTED, providers = listOf(TestData.magisk)))
+        )
+
+        val root = TestData.row(rows, DoctorEvaluator.ID_ROOT)
+        assertEquals(DoctorSeverity.FAIL, root.severity)
+        assertTrue(root.evidence.contains("Magisk app is installed"))
+        assertTrue(root.evidence.contains("not active"))
+    }
+
+    @Test
     fun aMissingModuleFailsBothModuleRows() {
         val rows = TestData.rows(snapshot = TestData.snapshot(module = ModuleState.Absent))
         assertEquals(DoctorSeverity.FAIL, TestData.row(rows, DoctorEvaluator.ID_MODULE_PRESENT).severity)

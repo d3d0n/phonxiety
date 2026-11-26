@@ -13,7 +13,23 @@ class RootCommandTest {
         assertEquals("magisk -V", RootCommand.magiskVersionCode().script)
         assertEquals("ksud -V", RootCommand.ksudVersion().script)
         assertEquals("apd -V", RootCommand.apdVersion().script)
-        assertEquals("reboot", RootCommand.reboot().script)
+    }
+
+    @Test
+    fun rebootAsksPowerManagerBeforeFallingBackToTheBinary() {
+        // A plain `reboot` from a shell context is refused (PROP_ERROR_PERMISSION_DENIED):
+        // `svc power reboot` is the binder call the managers themselves use.
+        assertEquals(
+            "/system/bin/svc power reboot module_update || /system/bin/reboot module_update",
+            RootCommand.reboot(RebootReason.MODULE_INSTALL.powerManagerReason).script
+        )
+        assertEquals(
+            "/system/bin/svc power reboot userrequested || /system/bin/reboot userrequested",
+            RootCommand.reboot(RebootReason.USER_REQUEST.powerManagerReason).script
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            RootCommand.reboot("reboot; rm -rf /")
+        }
     }
 
     @Test

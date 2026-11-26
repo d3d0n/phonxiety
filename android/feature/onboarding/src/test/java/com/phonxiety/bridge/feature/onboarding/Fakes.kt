@@ -4,6 +4,9 @@ import com.phonxiety.bridge.data.ApiResult
 import com.phonxiety.bridge.data.AppApi
 import com.phonxiety.bridge.data.PairResult
 import com.phonxiety.bridge.data.PairingRepository
+import com.phonxiety.bridge.model.LinkKind
+import com.phonxiety.bridge.model.LinkState
+import com.phonxiety.bridge.model.PathKind
 import com.phonxiety.bridge.root.DetectedProvider
 import com.phonxiety.bridge.root.InstallOperation
 import com.phonxiety.bridge.root.ModuleState
@@ -20,6 +23,7 @@ import com.phonxiety.bridge.root.VerifyCheck
 import com.phonxiety.bridge.root.VerifyOutcome
 import com.phonxiety.bridge.root.VerifyReport
 import java.io.OutputStream
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.json.JsonElement
@@ -49,7 +53,17 @@ class FakeBackend : RootBackend {
     val installs = mutableListOf<InstallOperation>()
     val reboots = mutableListOf<RebootReason>()
 
-    override suspend fun detect(): RootDetection = detection
+    /** Probes that reached [detect]; an observation that must not probe leaves it unchanged. */
+    var detects = 0
+
+    /** Suspends [detect] until completed, for interleaving an observation with a probe. */
+    var detectGate: CompletableDeferred<Unit>? = null
+
+    override suspend fun detect(): RootDetection {
+        detects++
+        detectGate?.await()
+        return detection
+    }
 
     override suspend fun capabilities(provider: DetectedProvider): RootCapabilities = capabilities
 
@@ -73,7 +87,12 @@ class FakePairing : PairingRepository {
     override val paired: StateFlow<Boolean> = pairedState
     var pairResult: PairResult = PairResult.Paired
 
+    /** Suspends the attempt until completed, for interleaving an observation with a pairing. */
+    var pairGate: CompletableDeferred<Unit>? = null
+
+    /** Only a stored pairing publishes: a rejected attempt leaves nothing readable behind. */
     override suspend fun pair(link: String): PairResult {
+        pairGate?.await()
         if (pairResult is PairResult.Paired) pairedState.value = true
         return pairResult
     }
@@ -88,6 +107,9 @@ class FakeAppApi : AppApi {
     val requestedBodies = mutableListOf<Map<String, JsonElement>>()
     val requestedPaths = mutableListOf<String>()
 
+    /** Suspends a request after it is recorded, for keeping a link test in flight. */
+    var requestGate: CompletableDeferred<Unit>? = null
+
     override suspend fun request(
         method: String,
         path: String,
@@ -96,6 +118,7 @@ class FakeAppApi : AppApi {
     ): ApiResult {
         requestedPaths += path
         if (body != null) requestedBodies += body
+        requestGate?.await()
         return linkTest
     }
 
@@ -121,3 +144,18 @@ class FakePermissions : RuntimePermissionChecker {
 
     override fun missing(): List<RuntimePermission> = missingState.toList()
 }
+
+/** A live link, for tests whose first link test must actually run. */
+fun readyLink(): MutableStateFlow<LinkState> = MutableStateFlow(
+    LinkState.Up(
+        kind = LinkKind.IROH,
+        path = PathKind.DIRECT,
+        address = null,
+        rttMs = 12,
+        sinceEpochMs = 0,
+        reconnects = 0
+    )
+)
+
+/** A transport that has not come up yet: a stored pairing without a live link. */
+fun connectingLink(): MutableStateFlow<LinkState> = MutableStateFlow(LinkState.Connecting(LinkKind.IROH))

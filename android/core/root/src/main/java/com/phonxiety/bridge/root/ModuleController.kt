@@ -117,7 +117,12 @@ sealed interface WizardState {
 
     data class RootDenied(
         val provider: DetectedProvider?,
-        val output: String? = null
+        val output: String? = null,
+        /**
+         * Other managers whose grant is also pending: a phone can carry two hiding managers, and
+         * each has its own Superuser screen.
+         */
+        val coProviders: List<DetectedProvider> = emptyList()
     ) : WizardState
 
     data class ProviderPrep(
@@ -148,7 +153,12 @@ sealed interface WizardState {
     data class RebootPending(
         val provider: DetectedProvider,
         val reason: RebootReason,
-        val module: ModuleState = ModuleState.Unknown
+        val module: ModuleState = ModuleState.Unknown,
+        /**
+         * Why the phone is still running: the reboot command's own error, or the fact that this
+         * app is still here after the request said it went through. Null while nothing failed.
+         */
+        val failure: String? = null
     ) : WizardState
 
     data class Verify(
@@ -216,6 +226,12 @@ sealed interface WizardEvent {
 
     data class LinkTestCompleted(val passed: Boolean, val detail: String? = null) : WizardEvent
 
+    /** The reboot command ran and failed: the person has to restart the phone themselves. */
+    data class RebootFailed(val output: String) : WizardEvent
+
+    /** The reboot was requested and the app is still running: the phone did not restart. */
+    data object RebootNotConfirmed : WizardEvent
+
     data object Repaired : WizardEvent
 }
 
@@ -253,6 +269,9 @@ object ModuleController {
     const val MODULE_ID: String = "phonxiety_bridge"
     const val MODULE_NAME: String = "Phonxiety"
 
+    /** How long a requested reboot has to take this app down before it counts as not happening. */
+    const val REBOOT_SURVIVAL_WINDOW_SECONDS: Int = 20
+
     fun reduce(state: WizardState, event: WizardEvent): Transition = when (event) {
         is WizardEvent.ProbeCompleted -> onProbe(event.snapshot)
         WizardEvent.InstallRequested -> onInstallRequested(state)
@@ -266,6 +285,8 @@ object ModuleController {
         is WizardEvent.RuntimePermissionsChanged -> onRuntimePermissions(state, event.missing)
         WizardEvent.PairingCompleted -> onPaired(state)
         is WizardEvent.LinkTestCompleted -> onLinkTest(state, event)
+        is WizardEvent.RebootFailed -> onRebootFailed(state, event.output)
+        WizardEvent.RebootNotConfirmed -> onRebootNotConfirmed(state)
         WizardEvent.Repaired -> onRepaired(state)
     }
 
@@ -273,8 +294,7 @@ object ModuleController {
         val detection = snapshot.detection
         val provider = detection.provider
         return when {
-            detection.su == SuStatus.NOT_ROOTED ->
-                Transition(WizardState.NoRoot(detection.providers))
+            detection.su == SuStatus.NOT_ROOTED -> onNotRooted(detection)
 
             detection.su == SuStatus.TIMED_OUT -> Transition(
                 WizardState.Indeterminate(
@@ -287,8 +307,7 @@ object ModuleController {
                 WizardState.RootDenied(detection.provider, tail(detection.suOutput))
             )
 
-            detection.providers.size > 1 ->
-                Transition(WizardState.Conflict(detection.providers))
+            detection.conflict -> Transition(WizardState.Conflict(detection.providers))
 
             provider == null -> Transition(
                 WizardState.Indeterminate(
@@ -299,6 +318,26 @@ object ModuleController {
 
             else -> route(checkNotNull(provider), snapshot)
         }
+    }
+
+    /**
+     * A missing `su` is not the same as a phone without root. KernelSU, KernelSU-Next and APatch
+     * hide `su` from a package they have not allowed yet, so a failing launch with one of their
+     * managers installed is a grant waiting for the person. Magisk always exposes `su`: an
+     * installed Magisk app here means Magisk is not active, and the installer guide is the answer.
+     */
+    private fun onNotRooted(detection: RootDetection): Transition {
+        val hiding = detection.providers.filter { it.id != RootId.MAGISK }
+        if (hiding.isEmpty()) {
+            return Transition(WizardState.NoRoot(detection.providers))
+        }
+        return Transition(
+            WizardState.RootDenied(
+                provider = hiding.first(),
+                output = tail(detection.suOutput),
+                coProviders = hiding.drop(1)
+            )
+        )
     }
 
     private fun route(provider: DetectedProvider, snapshot: ProbeSnapshot): Transition = when (val module = snapshot.module) {
@@ -455,10 +494,32 @@ object ModuleController {
         )
     }
 
+    /**
+     * The reboot that did not happen. It stays on "Reboot pending" and says why: a silent stay is
+     * how a phone that never restarted looked like one that did.
+     */
+    private fun onRebootFailed(state: WizardState, output: String): Transition = if (state is WizardState.RebootPending) {
+        Transition(state.copy(failure = output))
+    } else {
+        Transition(state)
+    }
+
+    /** The request reported success and this app is still here: the phone did not restart. */
+    private fun onRebootNotConfirmed(state: WizardState): Transition {
+        if (state !is WizardState.RebootPending || state.failure != null) return Transition(state)
+        return Transition(
+            state.copy(
+                failure = "the app was still running " +
+                    "${ModuleController.REBOOT_SURVIVAL_WINDOW_SECONDS} s after the reboot request"
+            )
+        )
+    }
+
     private fun onReboot(state: WizardState): Transition {
         if (state !is WizardState.RebootPending) return Transition(state)
+        // A new request clears the last "it did not restart" note: the retry is the answer to it.
         return Transition(
-            state,
+            state.copy(failure = null),
             listOf(
                 WizardEffect.Reboot(state.reason),
                 WizardEffect.PersistProgress(

@@ -307,7 +307,12 @@ class ProviderCommandsTest {
         val result = provider.reboot(RebootReason.USER_REQUEST)
 
         assertTrue(result.isSuccess)
-        assertEquals(listOf("reboot"), runner.scripts)
+        // PowerManager over binder, with the plain binary as the fallback: a shell-context
+        // `reboot` alone is refused with PROP_ERROR_PERMISSION_DENIED on Android 17.
+        assertEquals(
+            listOf("/system/bin/svc power reboot userrequested || /system/bin/reboot userrequested"),
+            runner.scripts
+        )
         assertTrue(recorder.reasons.isEmpty())
     }
 

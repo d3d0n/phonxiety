@@ -42,6 +42,7 @@ import com.phonxiety.bridge.designsystem.component.SetupStepState
 import com.phonxiety.bridge.designsystem.component.StatusPill
 import com.phonxiety.bridge.designsystem.component.StatusTone
 import com.phonxiety.bridge.root.ApatchProvider
+import com.phonxiety.bridge.root.DetectedProvider
 import com.phonxiety.bridge.root.DoctorReason
 import com.phonxiety.bridge.root.KernelSuProvider
 import com.phonxiety.bridge.root.MagiskProvider
@@ -58,7 +59,12 @@ import com.phonxiety.bridge.root.WizardState
 /** What the wizard shows, plus the pairing rejection that belongs next to the scanner. */
 data class OnboardingUiState(
     val wizard: WizardState = WizardState.Checking,
-    val pairingError: String? = null
+    val pairingError: String? = null,
+    /**
+     * Providers that did not answer `su` but left files or a manager app behind. Reported so a
+     * migration makes sense; this app never deletes them.
+     */
+    val leftovers: List<DetectedProvider> = emptyList()
 )
 
 /** Every callback the screen needs; the route wires them to the ViewModel and the app. */
@@ -66,6 +72,8 @@ data class OnboardingCallbacks(
     val onPrimary: () -> Unit = {},
     val onSecondary: () -> Unit = {},
     val onScanQr: () -> Unit = {},
+    /** Opens the in-app CameraX scanner on purpose, for phones without the Google scanner. */
+    val onCameraScan: () -> Unit = {},
     val onPairLink: (String) -> Unit = {},
     val onDismissPairingError: () -> Unit = {},
     val onOpenManager: (String) -> Unit = {},
@@ -150,6 +158,15 @@ fun OnboardingScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("Scan QR code")
+                }
+                TextButton(
+                    onClick = {
+                        showPairing = false
+                        callbacks.onCameraScan()
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Use this phone's camera")
                 }
                 OutlinedTextField(
                     value = pastedLink,
@@ -295,11 +312,14 @@ private fun WizardCard(
             }
 
             is WizardState.RootDenied -> {
-                val provider = wizard.provider
+                val pending = listOfNotNull(wizard.provider) + wizard.coProviders
                 ErrorCard(
                     title = "Root is not granted yet",
-                    message = provider?.id?.grantInstruction()
-                        ?: "Open the root manager's Superuser list, grant Phonxiety, then come back. The app probes again by itself.",
+                    message = if (pending.isEmpty()) {
+                        "Open the root manager's Superuser list, grant Phonxiety, then come back. The app probes again by itself."
+                    } else {
+                        pending.joinToString("\n\n") { step -> "${step.id.managerName()}: ${step.id.grantInstruction()}" }
+                    },
                     output = wizard.output
                 )
                 Text(
@@ -363,6 +383,13 @@ private fun WizardCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 KeyValueRow(label = "Reason", value = wizard.reason.humanLabel())
+                if (wizard.failure != null) {
+                    ErrorCard(
+                        title = "The phone did not restart",
+                        message = "Restart it yourself (hold the power button, then Restart); setup continues after the boot.",
+                        output = wizard.failure
+                    )
+                }
             }
 
             is WizardState.Verify -> VerifyContent(wizard)
@@ -430,14 +457,32 @@ private fun WizardCard(
             is WizardState.Conflict -> {
                 ErrorCard(
                     title = "More than one root provider",
-                    message = "Installing would be a guess, so the wizard refuses until one provider remains. Present: " +
-                        wizard.providers.joinToString { "${it.id.managerName()} ${it.version}" },
+                    message = "Files of two root providers are present and neither answered su in a form this app can read, " +
+                        "so installing would be a guess. Present: " +
+                        wizard.providers.joinToString { "${it.id.managerName()} ${it.version}" } +
+                        ". Keep the one that answers su; leftovers of the other are reported below, not deleted.",
                     actionLabel = "Recheck",
                     onAction = callbacks.onPrimary
                 )
             }
         }
+        state.leftovers.forEach { leftover ->
+            Text(
+                text = leftover.leftoverDescription(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
+}
+
+/** What an inactive provider left behind, in the card's words: files, then the manager app. */
+internal fun DetectedProvider.leftoverDescription(): String {
+    val parts = buildList {
+        addAll(artefacts)
+        add(if (managerInstalled) "${id.managerName()} app" else "${id.managerName()} app not found")
+    }
+    return "${id.managerName()} leftovers, inactive: ${parts.joinToString(", ")}"
 }
 
 @Composable
@@ -530,11 +575,14 @@ internal fun RootId.grantInstruction(): String = when (this) {
     RootId.MAGISK ->
         "Open Magisk → Superuser → + → Phonxiety and enable it. Magisk 31.1 grants root ahead of time; there is no prompt to answer."
 
-    RootId.KERNELSU -> "Open KernelSU → Superuser → Phonxiety → allow."
+    RootId.KERNELSU ->
+        "Open KernelSU → Superuser → Phonxiety → the Superuser switch. If Phonxiety is missing from the list, force-close the manager and reopen it: it caches its app list."
 
-    RootId.KERNELSU_NEXT -> "Open KernelSU-Next → Superuser → Phonxiety → allow."
+    RootId.KERNELSU_NEXT ->
+        "Open KernelSU-Next → Superuser → Phonxiety → the Superuser switch. If Phonxiety is missing from the list, force-close the manager and reopen it: it caches its app list."
 
-    RootId.APATCH -> "Open APatch → Superuser → Phonxiety → allow."
+    RootId.APATCH ->
+        "Open APatch → Superuser → Phonxiety → allow. If Phonxiety is missing from the list, force-close the manager and reopen it: it caches its app list."
 }
 
 internal fun WizardState.title(): String = when (this) {
