@@ -60,4 +60,4 @@ What each phase of [`mobile-client-plan.md`](mobile-client-plan.md) produced on 
 ## Setup kept on the daemon host
 
 - Boot images before any root change: `~/.local/share/phonxiety/boot-backup/20261126-*/` — `boot_a/b`, `vendor_boot_a/b` (Magisk-patched, slot `_b` active), `stock_boot.img` (Magisk's own backup, SHA-1 `9199bf97…`), build fingerprint `google/bluejay_beta/bluejay:17/DP11.261030.003/16847878`.
-- Root kits: `~/.local/share/phonxiety/root-kits/` — KernelSU v3.3.1 manager, `ksud` (macOS + Android), LKM `android14-6.1`; APatch 11282 manager.
+- Root kits: `~/.local/share/phonxiety/root-kits/` — KernelSU v3.3.1 manager, `ksud` (for the computer and for Android), LKM `android14-6.1`; APatch 11282 manager.

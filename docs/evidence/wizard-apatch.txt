@@ -18,7 +18,7 @@ Run 1, app and module 0.3.0 built from 53deaf7
          grants fail. apd 11282 mounts module system/ directories only through a metamodule
          (APatch docs: apatch.dev/meta-module.html); nothing was mounted.
 
-Run 2, app built from 7f4dd50 (branch with the detection and reboot fixes)
+Run 2, app built from a task branch with the detection and reboot fixes (merged for run 3)
 08:14    APatch grant switched off: "Root is not granted yet — APatch: Open APatch → Superuser →
          Phonxiety → allow …" with an Open APatch button (wizard-apatch-root-denied.png)
 08:15    Magisk leftovers restored on purpose (/data/adb/magisk and the Magisk app), grant switched

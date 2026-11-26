@@ -37,7 +37,7 @@ Third boot (module mounted through meta-overlayfs); times after sys.boot_complet
 +35.4 s  wizard at "Pair with your computer"; `mise run phone:pair` delivered the pairing link
 +38.9 s  daemon: phone connected
 +48.0 s  the wizard was still at its pairing step (it did not follow a pairing it had not made
-         itself; fix 52b7c7c pending review); the app was reopened
+         itself; a fix was pending review); the app was reopened
 +51.6 s  "First link test — Probing the link for 5 s…"
 +58.4 s  dashboard: Link Direct, transport iroh, RTT p50 6 ms
 
