@@ -3,6 +3,7 @@ package com.phonxiety.bridge.model
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -32,6 +33,30 @@ class ApiModelsTest {
         val older = json.decodeFromString(DaemonInfo.serializer(), """{"voice_controls":{"test_call":true}}""")
         assertTrue(older.voiceControls.testCall)
         assertFalse(older.voiceControls.testCallProbes)
+    }
+
+    @Test
+    fun aTranscriptTurnThatCarriesTheFinalFlagStillDecodes() {
+        // Long-poll events carry `final`; the paged and archived turns do not, so no
+        // contract exchange samples it and the flag keeps its own case here.
+        val turn = wire.decodeFromString(
+            TranscriptTurn.serializer(),
+            """{"sequence":1,"role":"assistant","text":"Hello","final":true}"""
+        )
+        assertEquals(1L, turn.sequence)
+        assertEquals("assistant", turn.role)
+        assertEquals(true, turn.finalTurn)
+    }
+
+    @Test
+    fun aMarkWithoutItsTimeStillDecodes() {
+        // A manual mark may carry no timestamp; the note is optional as well.
+        val mark = wire.decodeFromString(CallMark.serializer(), """{"mark":"agreed"}""")
+        assertEquals("agreed", mark.mark)
+        assertNull(mark.at)
+        assertNull(mark.note)
+        val noted = wire.decodeFromString(CallMark.serializer(), """{"mark":"agreed","note":"Friday 15:00"}""")
+        assertEquals("Friday 15:00", noted.note)
     }
 
     // The client's own encoder: defaults omitted, nulls omitted, exactly as DefaultDaemonApi sends.

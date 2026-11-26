@@ -435,78 +435,8 @@ class LiveCallViewModel @Inject constructor(
 
     private fun applyEvents(events: List<CallEvent>) {
         if (events.isEmpty()) return
-        var turns: List<TranscriptTurn>? = null
-        var partials: List<PartialTurn>? = null
-        for (event in events) {
-            when (event.type) {
-                "transcript" -> {
-                    val sequence = event.sequence ?: continue
-                    if (!seenSequences.add(sequence)) continue
-                    val turn = TranscriptTurn(
-                        sequence = sequence,
-                        role = event.role,
-                        text = event.text,
-                        at = event.at?.let(::parseIsoSeconds),
-                        finalTurn = event.finalTurn ?: true
-                    )
-                    turns = (turns ?: _state.value.turns) + turn
-                    partials = (partials ?: _state.value.partials).filterNot { it.role == event.role }
-                }
-
-                "partial" -> {
-                    val others = (partials ?: _state.value.partials).filterNot { it.role == event.role }
-                    partials = if (event.text.isNullOrBlank()) {
-                        others
-                    } else {
-                        others + PartialTurn(role = event.role, text = event.text, at = null)
-                    }
-                }
-
-                "marks" -> _state.update { it.copy(marks = event.marks ?: it.marks) }
-
-                "muted" -> _state.update { it.copy(muted = event.muted ?: it.muted) }
-
-                "agent_activity" -> _state.update { it.copy(activity = event.activity) }
-
-                "result" -> _state.update {
-                    it.copy(
-                        summary = event.summary ?: it.summary,
-                        summaryFields = event.fields ?: it.summaryFields,
-                        resultStatus = event.resultStatus ?: it.resultStatus,
-                        callOutcome = event.callOutcome ?: it.callOutcome
-                    )
-                }
-
-                "state" -> _state.update {
-                    val ended = terminalState(event.state) || it.ended
-                    it.copy(
-                        state = event.state ?: it.state,
-                        callOutcome = event.callOutcome ?: it.callOutcome,
-                        resultStatus = event.resultStatus ?: it.resultStatus,
-                        endedAtMs = it.endedAtMs ?: if (ended) event.secondsEpochMs() else null,
-                        ended = ended,
-                        hangingUp = it.hangingUp && !ended
-                    )
-                }
-
-                "ended" -> _state.update {
-                    it.copy(
-                        state = event.state ?: it.state,
-                        callOutcome = event.callOutcome ?: it.callOutcome,
-                        resultStatus = event.resultStatus ?: it.resultStatus,
-                        endedAtMs = it.endedAtMs ?: event.secondsEpochMs(),
-                        ended = true,
-                        hangingUp = false
-                    )
-                }
-            }
-        }
-        turns?.let { list -> _state.update { it.copy(turns = list) } }
-        partials?.let { list -> _state.update { it.copy(partials = list) } }
+        _state.value = reduceCallEvents(_state.value, events, seenSequences)
     }
-
-    /** The event's own timestamp in epoch milliseconds; "now" when the daemon sent none. */
-    private fun CallEvent.secondsEpochMs(): Long = at?.let(::parseIsoSeconds)?.let { seconds -> (seconds * 1000).toLong() } ?: System.currentTimeMillis()
 
     private fun mergeTurns(incoming: List<TranscriptTurn>): List<TranscriptTurn> {
         val merged = _state.value.turns.toMutableList()
@@ -517,7 +447,7 @@ class LiveCallViewModel @Inject constructor(
         return merged.sortedBy { it.sequence }
     }
 
-    private fun terminalState(state: String?): Boolean = state in TERMINAL_STATES
+    private fun terminalState(state: String?): Boolean = isTerminalState(state)
 
     private fun backoffMs(failures: Int): Long = (FAILURE_BACKOFF_MS * failures.coerceIn(1, 5)).coerceAtMost(MAX_BACKOFF_MS)
 
@@ -525,9 +455,98 @@ class LiveCallViewModel @Inject constructor(
         const val EVENTS_WAIT_SECONDS = 25.0
         const val FAILURE_BACKOFF_MS = 1_000L
         const val MAX_BACKOFF_MS = 5_000L
-        val TERMINAL_STATES = setOf("ended", "cancelled", "failed", "unknown")
     }
 }
+
+/**
+ * One batch of polled events applied to [state], in the order the cursor delivered
+ * them. [applied] holds the transcript sequences already drawn, so a repeated page
+ * writes nothing twice; the caller keeps it for the call's whole life.
+ *
+ * Every event kind the daemon sends has a branch here: the contract test drives the
+ * shared `call_events_*` pages through this function and requires each one to change
+ * the state, so a renamed type or payload key cannot fall through unnoticed.
+ */
+internal fun reduceCallEvents(
+    state: LiveCallUiState,
+    events: List<CallEvent>,
+    applied: MutableSet<Long>
+): LiveCallUiState {
+    var next = state
+    var turns: List<TranscriptTurn>? = null
+    var partials: List<PartialTurn>? = null
+    for (event in events) {
+        when (event.type) {
+            "transcript" -> {
+                val sequence = event.sequence ?: continue
+                if (!applied.add(sequence)) continue
+                val turn = TranscriptTurn(
+                    sequence = sequence,
+                    role = event.role,
+                    text = event.text,
+                    at = event.at?.let(::parseIsoSeconds),
+                    finalTurn = event.finalTurn ?: true
+                )
+                turns = (turns ?: state.turns) + turn
+                partials = (partials ?: state.partials).filterNot { it.role == event.role }
+            }
+
+            "partial" -> {
+                val others = (partials ?: state.partials).filterNot { it.role == event.role }
+                partials = if (event.text.isNullOrBlank()) {
+                    others
+                } else {
+                    others + PartialTurn(role = event.role, text = event.text, at = null)
+                }
+            }
+
+            "marks" -> next = next.copy(marks = event.marks ?: next.marks)
+
+            "muted" -> next = next.copy(muted = event.muted ?: next.muted)
+
+            "agent_activity" -> next = next.copy(activity = event.activity)
+
+            "result" -> next = next.copy(
+                summary = event.summary ?: next.summary,
+                summaryFields = event.fields ?: next.summaryFields,
+                resultStatus = event.resultStatus ?: next.resultStatus,
+                callOutcome = event.callOutcome ?: next.callOutcome
+            )
+
+            "state" -> {
+                val ended = isTerminalState(event.state) || next.ended
+                next = next.copy(
+                    state = event.state ?: next.state,
+                    callOutcome = event.callOutcome ?: next.callOutcome,
+                    resultStatus = event.resultStatus ?: next.resultStatus,
+                    endedAtMs = next.endedAtMs ?: if (ended) event.secondsEpochMs() else null,
+                    ended = ended,
+                    hangingUp = next.hangingUp && !ended
+                )
+            }
+
+            "ended" -> next = next.copy(
+                state = event.state ?: next.state,
+                callOutcome = event.callOutcome ?: next.callOutcome,
+                resultStatus = event.resultStatus ?: next.resultStatus,
+                endedAtMs = next.endedAtMs ?: event.secondsEpochMs(),
+                ended = true,
+                hangingUp = false
+            )
+        }
+    }
+    turns?.let { list -> next = next.copy(turns = list) }
+    partials?.let { list -> next = next.copy(partials = list) }
+    return next
+}
+
+/** The event's own timestamp in epoch milliseconds; "now" when the daemon sent none. */
+private fun CallEvent.secondsEpochMs(): Long = at?.let(::parseIsoSeconds)?.let { seconds -> (seconds * 1000).toLong() } ?: System.currentTimeMillis()
+
+/** A daemon call state that ends the call. */
+private val TERMINAL_STATES = setOf("ended", "cancelled", "failed", "unknown")
+
+private fun isTerminalState(state: String?): Boolean = state in TERMINAL_STATES
 
 /** `2026-11-26T10:00:00+00:00` → epoch seconds; the transcript only needs the relative order. */
 internal fun parseIsoSeconds(value: String): Double? {

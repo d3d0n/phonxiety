@@ -13,8 +13,39 @@
       "channel": "stable",
       "entry": {
         "version": "0.2.0",
+        "versionCode": 2,
+        "zipUrl": "https://192.0.2.10/phonxiety-bridge-0.2.0.zip",
+        "changelog": "https://192.0.2.10/CHANGELOG.md",
+        "published_at": "2026-01-01T00:00:00+00:00",
         "apk": {
-          "file": "app.apk"
+          "version": "0.2.0",
+          "versionCode": 2,
+          "url": "daemon:apk",
+          "file": "app.apk",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "size": 12,
+          "signingCertSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "minSdk": 34
+        },
+        "module": {
+          "version": "0.2.0",
+          "versionCode": 2,
+          "zipUrl": "https://192.0.2.10/phonxiety-bridge-0.2.0.zip",
+          "url": "daemon:module",
+          "file": "module.zip",
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "size": 14,
+          "schemaVersion": 1,
+          "requiresReboot": true,
+          "permissions": [
+            "android.permission.CAPTURE_AUDIO_OUTPUT"
+          ]
+        },
+        "daemon": {
+          "minVersion": "0.1.0",
+          "protocol": 3,
+          "appApi": 1,
+          "moduleSchema": 1
         }
       }
     }

@@ -38,6 +38,14 @@ android {
             isIncludeAndroidResources = true
         }
     }
+
+    // The shared `/app/v1` contracts are unit-test inputs here too: the events pages
+    // run through the live call's own reducer.
+    sourceSets {
+        getByName("test") {
+            resources.srcDir("../../../contracts")
+        }
+    }
 }
 
 dependencies {

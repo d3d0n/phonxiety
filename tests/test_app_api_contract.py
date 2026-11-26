@@ -16,6 +16,7 @@ deterministic ids and a pinned daemon version); regenerate them with
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import contextlib
 import difflib
@@ -33,7 +34,7 @@ from unittest import mock
 
 import pytest
 
-from phonxiety.app_api import KNOWN_PATHS
+from phonxiety.app_api import KNOWN_PATHS, AppApi
 from phonxiety.models import CallRequest, CallState
 from test_app_api import TOKEN, _ApiCase
 
@@ -57,7 +58,9 @@ USER_LINE = "Yes, Friday at three works."
 PARTIAL_LINE = "Yes, Friday at"
 
 # Every route and method `AppApi._route`/`AppApi._call_route` answers, keyed by the
-# path patterns used in the exchanges. A new route must gain an exchange here.
+# path patterns used in the exchanges. The guard below probes the real dispatcher and
+# compares it with this set, so a new route or method fails until it is listed here
+# and covered by an exchange or an EXEMPT reason.
 SERVED = frozenset({
     ("GET", "/app/v1/info"),
     ("GET", "/app/v1/status"),
@@ -98,8 +101,6 @@ SERVED = frozenset({
 
 # Byte streams whose bytes cannot be reproduced from a fresh canonical state.
 EXEMPT = {
-    ("POST", "/app/v1/diagnostics/bundle"):
-        "the zip's size and bytes embed this run's state paths; the app reads bundle_id",
     ("GET", "/app/v1/diagnostics/bundle/{bundle_id}"):
         "byte stream: the same zip served page by page, not reproducible from a fresh state",
 }
@@ -196,6 +197,59 @@ def _canonical_environment(case: _ApiCase) -> None:
     # The default `codex` backend reads a credentials file that exists on some
     # computers and not others; the doctor answer must not depend on the host.
     case.api.values["voice_backend"] = "gemini"
+    # The shared fake fingerprints itself at a private address; the exchanges use a
+    # documentation address instead, so a route string carries no real network.
+    case.device.link_test_result["route"] = "direct 192.0.2.10, 4 ms"
+    case.device.link_test_result["route_after"] = "direct 192.0.2.10, 5 ms"
+
+
+def _manifest_entry(version: str = "0.2.0") -> dict[str, Any]:
+    """One release document every field of the app's installer contract requires.
+
+    The artifacts' digests are synthetic: the app checks their shape here, and the
+    bytes of `app.apk`/`module.zip` never claim to match them.
+    """
+    return {
+        "version": version,
+        "versionCode": 2,
+        "zipUrl": "https://192.0.2.10/phonxiety-bridge-0.2.0.zip",
+        "changelog": "https://192.0.2.10/CHANGELOG.md",
+        "published_at": "2026-01-01T00:00:00+00:00",
+        "apk": {
+            "version": version,
+            "versionCode": 2,
+            "url": "daemon:apk",
+            "file": "app.apk",
+            "sha256": "a" * 64,
+            "size": 12,
+            "signingCertSha256": CERTIFICATE,
+            "minSdk": 34,
+        },
+        "module": {
+            "version": version,
+            "versionCode": 2,
+            "zipUrl": "https://192.0.2.10/phonxiety-bridge-0.2.0.zip",
+            "url": "daemon:module",
+            "file": "module.zip",
+            "sha256": "b" * 64,
+            "size": 14,
+            "schemaVersion": 1,
+            "requiresReboot": True,
+            "permissions": ["android.permission.CAPTURE_AUDIO_OUTPUT"],
+        },
+        "daemon": {"minVersion": "0.1.0", "protocol": 3, "appApi": 1, "moduleSchema": 1},
+    }
+
+
+def _manifest_document() -> dict[str, Any]:
+    """The published file: channels wrap the release, as the daemon serves them."""
+    return {
+        "version": "0.2.0",
+        "channels": {
+            "stable": _manifest_entry("0.2.0"),
+            "beta": _manifest_entry("0.3.0-rc1"),
+        },
+    }
 
 
 def _record(case: _ApiCase) -> Path:
@@ -622,19 +676,13 @@ EXCHANGES: list[Exchange] = [
         lambda case: _write_daemon_log(case),
     ),
     Exchange(
+        "diagnostics_bundle_post", ("POST", "/app/v1/diagnostics/bundle"),
+        lambda case: _call(case, "POST", "/app/v1/diagnostics/bundle"),
+    ),
+    Exchange(
         "update_manifest_get", ("GET", "/app/v1/update/manifest"),
         lambda case: _call(case, "GET", "/app/v1/update/manifest", query={"channel": "stable"}),
-        lambda case: _publish_updates(
-            case,
-            {
-                "version": "0.2.0",
-                "channels": {
-                    "stable": {"version": "0.2.0", "apk": {"file": "app.apk"}},
-                    "beta": {"version": "0.3.0-rc1"},
-                },
-            },
-            {"app.apk": b"contract-apk"},
-        ),
+        lambda case: _publish_updates(case, _manifest_document(), {"app.apk": b"contract-apk"}),
     ),
     Exchange(
         "update_artifact_get", ("GET", "/app/v1/update/artifact"),
@@ -643,7 +691,7 @@ EXCHANGES: list[Exchange] = [
         ),
         lambda case: _publish_updates(
             case,
-            {"apk": {"file": "app.apk"}, "module": {"file": "module.zip"}},
+            _manifest_document(),
             {"app.apk": b"contract-apk", "module.zip": b"contract-module"},
         ),
     ),
@@ -678,6 +726,10 @@ def _canonical(case: _ApiCase, body: dict[str, Any]) -> dict[str, Any]:
     daemon = body.get("daemon")
     if isinstance(daemon, dict) and "uptime_s" in daemon:
         daemon["uptime_s"] = 0.0
+    # A bundle's zip length follows the file paths across machines; the app reads the
+    # id. The key itself stays, so its presence and type are still checked.
+    if "bundle_id" in body and "size" in body:
+        body["size"] = 0
     return body
 
 
@@ -733,9 +785,84 @@ async def test_exchange_matches_the_daemon(exchange: Exchange) -> None:
         )
 
 
+def _call_actions() -> list[str]:
+    """Every action `_call_route` dispatches, read from its source instead of a list here."""
+    tree = ast.parse(Path(inspect.getsourcefile(AppApi)).read_text())
+    actions: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.name != "_call_route":
+            continue
+        for compare in ast.walk(node):
+            if not isinstance(compare, ast.Compare):
+                continue
+            if not (isinstance(compare.left, ast.Name) and compare.left.id == "action"):
+                continue
+            for part in [compare.left, *compare.comparators]:
+                if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                    actions.add(part.value)
+                elif isinstance(part, (ast.Tuple, ast.List)):
+                    actions.update(
+                        item.value
+                        for item in part.elts
+                        if isinstance(item, ast.Constant) and isinstance(item.value, str)
+                    )
+    return sorted(actions)
+
+
+def _served(status: int, body: dict[str, Any]) -> bool:
+    """Whether one probe reached a handler; `_call_route` names a missing action in a 404."""
+    if status == 405:
+        return False
+    return not (status == 404 and str(body.get("message", "")).startswith("no endpoint"))
+
+
+async def _served_inventory() -> set[tuple[str, str]]:
+    """Every method/route pair the real dispatcher answers, probed one by one.
+
+    Known paths answer 405 for a method they do not use; a call action the router
+    does not know answers the same 404 as an unknown path. No hand-kept list is
+    consulted, so a new route, method or call action shows up here as soon as the
+    daemon learns it.
+    """
+    case = _Harness("runTest")
+    await case.asyncSetUp()
+    try:
+        with _deterministic():
+            _canonical_environment(case)
+            _archive(case)
+            probes = [(path, path) for path in sorted(KNOWN_PATHS)]
+            probes.append(
+                ("/app/v1/diagnostics/bundle/0000000000000000", "/app/v1/diagnostics/bundle/{bundle_id}"),
+            )
+            probes.append((f"/app/v1/calls/{ARCHIVED_CALL}", "/app/v1/calls/{call_id}"))
+            probes += [
+                (
+                    f"/app/v1/calls/{ARCHIVED_CALL}/{action}",
+                    f"/app/v1/calls/{{call_id}}/{action}",
+                )
+                for action in _call_actions()
+            ]
+            found: set[tuple[str, str]] = set()
+            for concrete, pattern in probes:
+                for method in ("GET", "POST", "PUT", "DELETE"):
+                    # A rotate probe replaces the token; every other probe needs it back.
+                    case.api.app_token = TOKEN
+                    status, body = await case.call(method, concrete)
+                    if _served(status, body):
+                        found.add((method, pattern))
+            return found
+    finally:
+        await case.asyncTearDown()
+
+
 def test_every_route_has_an_exchange_or_an_exempt_reason() -> None:
-    assert KNOWN_PATHS <= {route for _, route in SERVED}
-    assert ("GET", "/app/v1/diagnostics/bundle/{bundle_id}") in SERVED
+    inventory = asyncio.run(_served_inventory())
+    assert inventory == SERVED, (
+        f"routes the daemon serves and SERVED does not list: {sorted(inventory - SERVED)}; "
+        f"routes SERVED lists and the daemon does not serve: {sorted(SERVED - inventory)}"
+    )
     covered = {exchange.route for exchange in EXCHANGES}
     uncovered = sorted(route for route in SERVED if route not in covered and route not in EXEMPT)
     assert not uncovered, f"no exchange for {uncovered}; add one or an EXEMPT reason"

@@ -1,6 +1,15 @@
 package com.phonxiety.bridge.data
 
 import android.content.Context
+import com.phonxiety.bridge.data.updates.ManifestParse
+import com.phonxiety.bridge.data.updates.ReleaseSource
+import com.phonxiety.bridge.data.updates.UpdateManifestCodec
+import com.phonxiety.bridge.data.updates.source
+import com.phonxiety.bridge.model.AppGateway
+import com.phonxiety.bridge.model.AppGatewaySource
+import com.phonxiety.bridge.model.AttachmentHeader
+import com.phonxiety.bridge.model.AttachmentOutcome
+import com.phonxiety.bridge.model.CallEvent
 import com.phonxiety.bridge.model.CallEventsPage
 import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.CallsPage
@@ -8,6 +17,9 @@ import com.phonxiety.bridge.model.CompatReport
 import com.phonxiety.bridge.model.DaemonInfo
 import com.phonxiety.bridge.model.DaemonStatus
 import com.phonxiety.bridge.model.DeleteCallResult
+import com.phonxiety.bridge.model.DeviceApiRequest
+import com.phonxiety.bridge.model.DeviceApiResult
+import com.phonxiety.bridge.model.DiagnosticsBundle
 import com.phonxiety.bridge.model.DoctorFixResult
 import com.phonxiety.bridge.model.DoctorReport
 import com.phonxiety.bridge.model.DtmfResult
@@ -30,6 +42,8 @@ import com.phonxiety.bridge.model.TranscriptPage
 import com.phonxiety.bridge.model.TranscriptTurn
 import com.phonxiety.bridge.model.ValidationResult
 import java.io.ByteArrayOutputStream
+import java.io.OutputStream
+import java.util.Base64
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.SerialKind
@@ -38,11 +52,15 @@ import kotlinx.serialization.descriptors.elementNames
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -72,17 +90,26 @@ class DaemonContractTest {
         val covered = mutableSetOf<String>()
         for (exchange in EXCHANGES) {
             val contract = load(exchange.file)
-            val transport = RecordingTransport(contract)
+            val gateway = if (exchange.paged) ContractPageGateway(contract, exchange.file) else null
+            val transport: AppApi = if (gateway == null) {
+                RecordingTransport(contract)
+            } else {
+                EnvelopeTransport(
+                    AppApiEnvelope(
+                        AppGatewaySource { gateway },
+                        { APP_TOKEN },
+                        pageBytes = PAGE_BYTES
+                    )
+                )
+            }
             val api = DefaultDaemonApi(transport, context)
             val outcome = exchange.invoke(api, contract)
-            assertEnvelope(exchange.file, contract, transport.captured)
+            if (transport is RecordingTransport) {
+                assertEnvelope(exchange.file, contract, transport.captured)
+            }
             covered += exchange.methods
             when (outcome) {
-                is Outcome.Raw -> {
-                    val result = outcome.result
-                    assertTrue("${exchange.file}: expected success", result is ApiResult.Success)
-                    assertEquals(exchange.file, contract.status, (result as ApiResult.Success).status)
-                }
+                is Outcome.Download -> assertDownload(exchange.file, contract, outcome, gateway!!)
 
                 is Outcome.Typed -> when (val typed = outcome.outcome) {
                     is ApiOutcome.Ok<*> -> {
@@ -107,8 +134,24 @@ class DaemonContractTest {
                 }
             }
         }
-        checker.verifyAbsent()
+        checker.verifyPresence()
         assertMethodCoverage(covered)
+    }
+
+    /** The update document is installed through the same codec the update screen calls. */
+    @Test
+    fun theUpdateManifestSatisfiesTheProductionCodec() {
+        val contract = load("update_manifest_get.json")
+        val parsed = UpdateManifestCodec.parse(contract.responseBody)
+        val manifest = (parsed as? ManifestParse.Valid)?.manifest
+            ?: throw AssertionError("the contracted manifest is not installable: $parsed")
+        assertEquals("0.2.0", manifest.version)
+        assertEquals(2L, manifest.versionCode)
+        assertEquals(3, manifest.daemon.protocol)
+        assertEquals(ReleaseSource.Daemon("apk"), manifest.apk.source())
+        assertEquals("app.apk", manifest.apk.file)
+        assertEquals(ReleaseSource.Daemon("module"), manifest.module.source())
+        assertEquals("module.zip", manifest.module.file)
     }
 
     private fun load(file: String): Contract {
@@ -123,6 +166,47 @@ class DaemonContractTest {
         assertEquals("$file: path", contract.path, captured.path)
         assertEquals("$file: query", contract.query, captured.query)
         assertEquals("$file: body", contract.requestBody, captured.body)
+    }
+
+    /**
+     * A paged download is the same request the contract records plus the production
+     * page keys: the sink must hold the page's own bytes, and the page's `total` must
+     * be what ended the loop.
+     */
+    private fun assertDownload(
+        file: String,
+        contract: Contract,
+        outcome: Outcome.Download,
+        gateway: ContractPageGateway
+    ) {
+        val success = outcome.result as? ApiResult.Success
+        assertTrue("$file: expected success, got ${outcome.result}", success != null)
+        assertEquals("$file: status", contract.status, success!!.status)
+        val page = contract.responseBody.jsonObject
+        val data = Base64.getDecoder().decode(page.pageData(file))
+        val total = page.getValue("total").jsonPrimitive.content.toLong()
+        assertArrayEquals("$file: the sink is not the contract page's bytes", data, outcome.sink.toByteArray())
+        assertEquals("$file: the page's total is not what the sink holds", total, outcome.sink.size().toLong())
+        val requests = gateway.requests
+        assertEquals(
+            "$file: one page per $PAGE_BYTES bytes of $total",
+            (total + PAGE_BYTES - 1) / PAGE_BYTES,
+            requests.size.toLong()
+        )
+        assertEquals(
+            "$file: the page offsets did not drive the read",
+            (0 until requests.size).map { index -> (index * PAGE_BYTES).toString() },
+            requests.map { it.query["offset"] }
+        )
+        for (request in requests) {
+            assertEquals("$file: method", contract.method, request.method)
+            assertEquals("$file: path", contract.path, request.path)
+            assertEquals(
+                "$file: query",
+                contract.query + mapOf("limit" to PAGE_BYTES.toString()),
+                request.query - "offset"
+            )
+        }
     }
 
     /**
@@ -174,14 +258,14 @@ class DaemonContractTest {
             return reply()
         }
 
+        /** Downloads must run through the production paging decoder, never this fake. */
         override suspend fun download(
             path: String,
             query: Map<String, String>,
             sink: java.io.OutputStream
-        ): ApiResult {
-            captured = Captured("GET", path, query, null)
-            return reply()
-        }
+        ): ApiResult = throw AssertionError(
+            "$path: a download exchange must go through the production paging decoder (paged = true)"
+        )
 
         private fun reply(): ApiResult {
             val body = contract.responseBody
@@ -198,43 +282,133 @@ class DaemonContractTest {
         }
     }
 
+    /** The same [AppApi] surface, backed by the production envelope and its page decoder. */
+    private class EnvelopeTransport(private val envelope: AppApiEnvelope) : AppApi {
+        override suspend fun request(
+            method: String,
+            path: String,
+            query: Map<String, String>,
+            body: JsonObject?
+        ): ApiResult = envelope.request(method, path, query, body)
+
+        override suspend fun download(
+            path: String,
+            query: Map<String, String>,
+            sink: OutputStream
+        ): ApiResult = envelope.download(path, query, sink)
+    }
+
+    /**
+     * Answers the paged download from the contract's page: the whole artifact is the
+     * page's decoded `data`, sliced by the `offset`/`limit` the production decoder asks
+     * for, and every answer carries the contract's own `total`.
+     */
+    private class ContractPageGateway(contract: Contract, file: String) : AppGateway {
+        private val page: JsonObject = contract.responseBody.jsonObject
+        private val data: ByteArray = Base64.getDecoder().decode(page.pageData(file))
+        private val total: Long = page.getValue("total").jsonPrimitive.content.toLong()
+        val requests = mutableListOf<DeviceApiRequest>()
+
+        override val supportsAttachments: Boolean = false
+
+        override suspend fun exchange(request: DeviceApiRequest): DeviceApiResult {
+            requests += request
+            val offset = request.query["offset"]?.toLong() ?: 0L
+            val limit = request.query["limit"]?.toInt() ?: data.size
+            val start = minOf(offset, total).toInt()
+            val end = minOf(total, offset + limit).toInt()
+            val body = buildJsonObject {
+                put("total", total)
+                put("offset", offset)
+                put("limit", limit)
+                put("data", Base64.getEncoder().encodeToString(data.copyOfRange(start, end)))
+            }
+            return DeviceApiResult(id = request.id, status = 200, result = body)
+        }
+
+        override suspend fun receiveAttachment(
+            header: AttachmentHeader,
+            sink: OutputStream
+        ): AttachmentOutcome = AttachmentOutcome.Unsupported
+    }
+
     private sealed interface Outcome {
         data class Typed(val outcome: ApiOutcome<*>) : Outcome
-        data class Raw(val result: ApiResult) : Outcome
+
+        data class Download(val result: ApiResult, val sink: ByteArrayOutputStream) : Outcome
     }
 
     private data class Exchange(
         val file: String,
         val methods: Set<String>,
         val descriptor: SerialDescriptor? = null,
+        /** Runs the file's download through the production paging decoder, not the fake. */
+        val paged: Boolean = false,
         val invoke: suspend (DefaultDaemonApi, Contract) -> Outcome
     )
 
     /**
      * Walks the decoded model against the file's JSON through the [SerialDescriptor]:
      * (a) every JSON key is an element or an [IGNORED] field, (b) every element
-     * appears in at least one sample or is [ABSENT_OK], (c) every enum value is a
-     * serial name exactly.  `JsonElement`/`JsonObject` fields are not descended.
+     * appears in every object decoded as that type unless [SOMETIMES] allows it to
+     * vary, (c) an element no sample carries must be listed in [NEVER_SENT], (d) a
+     * type whose objects are discriminated by a `type` field is checked per group,
+     * (e) every enum value is a serial name exactly, and (f) a null is only ever a
+     * nullable element.  `JsonElement`/`JsonObject` fields are not descended.
      */
     private class StructureChecker {
-        private val samples = LinkedHashMap<String, MutableList<Set<String>>>()
+        private class Sample(val group: String?, val keys: Set<String>, val file: String)
+
+        private val samples = LinkedHashMap<String, MutableList<Sample>>()
         private val descriptors = LinkedHashMap<String, SerialDescriptor>()
 
         fun check(descriptor: SerialDescriptor, element: JsonElement, file: String) {
             visit(descriptor, element, file, "")
         }
 
-        fun verifyAbsent() {
+        fun verifyPresence() {
+            val problems = mutableListOf<String>()
             for ((type, objects) in samples) {
                 val descriptor = descriptors.getValue(type)
-                val seen = objects.flatten().toSet()
-                val allowed = ABSENT_OK[type].orEmpty().keys
-                val missing = descriptor.elementNames.filter { it !in seen && it !in allowed }
-                assertTrue(
-                    "$type never shows $missing in any sample; add a sample or list it in ABSENT_OK with a reason",
-                    missing.isEmpty()
-                )
+                val sometimes = SOMETIMES[type].orEmpty()
+                val never = NEVER_SENT[type].orEmpty()
+                val anywhere = objects.flatMap { it.keys }.toSet()
+                for (key in sometimes.keys - anywhere) {
+                    problems += "$type lists $key in SOMETIMES, but no sample carries it"
+                }
+                for (key in never.keys intersect anywhere) {
+                    problems += "$type lists $key in NEVER_SENT, but " +
+                        "a sample carries it: ${objects.first { key in it.keys }.file}"
+                }
+                if (type in DISCRIMINATED) {
+                    for ((group, members) in objects.groupBy { it.group }) {
+                        val seen = members.flatMap { it.keys }.toSet()
+                        for (member in members) {
+                            val missing = (seen - member.keys) - sometimes.keys
+                            if (missing.isNotEmpty()) {
+                                problems += "${member.file}: $type \"$group\" misses $missing," +
+                                    " which another sample of the same event kind carries"
+                            }
+                        }
+                    }
+                    val missing = descriptor.elementNames.filter { it !in anywhere && it !in never.keys }
+                    if (missing.isNotEmpty()) {
+                        problems += "$type never shows $missing in any sample;" +
+                            " add a sample or list it in NEVER_SENT with a reason"
+                    }
+                } else {
+                    for (sample in objects) {
+                        val missing = descriptor.elementNames.filter {
+                            it !in sample.keys && it !in sometimes.keys && it !in never.keys
+                        }
+                        if (missing.isNotEmpty()) {
+                            problems += "${sample.file}: $type misses $missing; every answer of a type" +
+                                " carries every element, or the element is listed in SOMETIMES with a reason"
+                        }
+                    }
+                }
             }
+            assertTrue(problems.joinToString("\n"), problems.isEmpty())
         }
 
         private fun visit(
@@ -243,6 +417,15 @@ class DaemonContractTest {
             file: String,
             path: String
         ) {
+            if (element is JsonNull) {
+                if (!descriptor.isNullable) {
+                    fail(
+                        "$file at ${path.ifEmpty { descriptor.serialName }}: null for a non-nullable" +
+                            " ${descriptor.serialName}; the app's decoder would coerce it to a default"
+                    )
+                }
+                return
+            }
             if (descriptor.serialName.startsWith("kotlinx.serialization.json.")) return
             when (descriptor.kind) {
                 SerialKind.CONTEXTUAL -> return
@@ -273,14 +456,21 @@ class DaemonContractTest {
                 else -> return
             }
             val obj = element as? JsonObject ?: fail("$file at $path: expected an object")
-            descriptors[descriptor.serialName] = descriptor
-            samples.getOrPut(descriptor.serialName) { mutableListOf() }.add(obj.keys.toSet())
+            val type = descriptor.serialName.removeSuffix("?")
+            descriptors[type] = descriptor
+            val group = if (type in DISCRIMINATED) {
+                (obj["type"] as? JsonPrimitive)?.contentOrNull
+                    ?: fail("$file at $path: ${descriptor.serialName} has no string \"type\"")
+            } else {
+                null
+            }
+            samples.getOrPut(type) { mutableListOf() }.add(Sample(group, obj.keys, file))
             val indexes = descriptor.elementNames.withIndex().associate { (index, name) -> name to index }
             for ((key, value) in obj) {
                 val where = "$file at ${path.ifEmpty { descriptor.serialName }}"
                 val index = indexes[key]
                 if (index == null) {
-                    if (IGNORED[descriptor.serialName]?.containsKey(key) == true) continue
+                    if (IGNORED[type]?.containsKey(key) == true) continue
                     fail("${descriptor.serialName} has no element \"$key\" ($where); rename it here and in the daemon")
                 }
                 val child = if (path.isEmpty()) key else "$path.$key"
@@ -292,6 +482,12 @@ class DaemonContractTest {
     }
 
     private companion object {
+        /** The production page length is overridden so a short artifact still pages. */
+        const val PAGE_BYTES = 4
+
+        /** The app token the envelope needs; the contract files never carry it. */
+        const val APP_TOKEN = "contract-app-token"
+
         val EXCHANGES: List<Exchange> = listOf(
             Exchange("info_get.json", setOf("info"), DaemonInfo.serializer().descriptor) { api, _ ->
                 Outcome.Typed(api.info())
@@ -417,8 +613,9 @@ class DaemonContractTest {
             Exchange("call_delete.json", setOf("deleteCall"), DeleteCallResult.serializer().descriptor) { api, c ->
                 Outcome.Typed(api.deleteCall(c.callId))
             },
-            Exchange("call_audio_get.json", setOf("downloadAudio")) { api, c ->
-                Outcome.Raw(api.downloadAudio(c.callId, c.query.getValue("format"), ByteArrayOutputStream()))
+            Exchange("call_audio_get.json", setOf("downloadAudio"), paged = true) { api, c ->
+                val sink = ByteArrayOutputStream()
+                Outcome.Download(api.downloadAudio(c.callId, c.query.getValue("format"), sink), sink)
             },
             Exchange("settings_get.json", setOf("settings"), SettingsSnapshot.serializer().descriptor) { api, _ ->
                 Outcome.Typed(api.settings())
@@ -455,16 +652,22 @@ class DaemonContractTest {
                 Outcome.Typed(api.diagnostics())
             },
             Exchange(
+                "diagnostics_bundle_post.json",
+                setOf("createDiagnosticsBundle"),
+                DiagnosticsBundle.serializer().descriptor
+            ) { api, _ ->
+                Outcome.Typed(api.createDiagnosticsBundle())
+            },
+            Exchange(
                 "update_manifest_get.json",
                 setOf("updateManifest"),
                 JsonObject.serializer().descriptor
             ) { api, c ->
                 Outcome.Typed(api.updateManifest(c.query["channel"]))
             },
-            Exchange("update_artifact_get.json", setOf("downloadUpdateArtifact")) { api, c ->
-                Outcome.Raw(
-                    api.downloadUpdateArtifact(c.query.getValue("name"), ByteArrayOutputStream())
-                )
+            Exchange("update_artifact_get.json", setOf("downloadUpdateArtifact"), paged = true) { api, c ->
+                val sink = ByteArrayOutputStream()
+                Outcome.Download(api.downloadUpdateArtifact(c.query.getValue("name"), sink), sink)
             },
             Exchange("compat_get.json", setOf("compat"), CompatReport.serializer().descriptor) { api, c ->
                 Outcome.Typed(
@@ -478,6 +681,9 @@ class DaemonContractTest {
                 Outcome.Typed(api.rotatePair(false))
             }
         )
+
+        /** Types whose objects are a union tagged by a `type` field, checked per tag. */
+        val DISCRIMINATED: Set<String> = setOf(CallEvent.serializer().descriptor.serialName)
 
         /**
          * Response fields the app deliberately ignores, per model type, with the
@@ -493,12 +699,40 @@ class DaemonContractTest {
         )
 
         /**
-         * Model elements the current daemon never emits, with the reason: older
-         * daemons and the long-poll stream own these shapes, so there is no sample.
+         * Elements a type carries in some answers and not others, with the reason.
+         * The element must still appear in at least one sample, and every other
+         * element must appear in every sample of its type.
          */
-        val ABSENT_OK: Map<String, Map<String, String>> = mapOf(
+        val SOMETIMES: Map<String, Map<String, String>> = mapOf(
+            CallSnapshot.serializer().descriptor.serialName to mapOf(
+                "marks" to "only a record read carries the marks; an action answer is the bridge's snapshot",
+                "audio_codec" to "only a record read names the negotiated codec",
+                "request" to "only a record read echoes the stored request",
+                "far_end" to "only a record read names the far end",
+                "live" to "only the live record carries the bridge's live block",
+                "counters" to "only the live record carries the bridge's counters",
+                "confirmation_id" to "only a placed call echoes the caller's confirmation id",
+                "profile" to "only a test call names the test profile",
+                "recording" to "only an ended record carries the recording descriptor",
+                "next_cursor" to "an ended record's transcript is complete, so its read has no cursor",
+                "has_more" to "an ended record's transcript is complete, so its read has no more pages"
+            ),
+            ValidationResult.serializer().descriptor.serialName to mapOf(
+                "request" to "an invalid request is not echoed back"
+            ),
+            ProbeCandidate.serializer().descriptor.serialName to mapOf(
+                "detail" to "a candidate that was never measured has no detail line"
+            )
+        )
+
+        /**
+         * Model elements the current daemon never emits, with the reason: older
+         * daemons and the long-poll stream own these shapes, so no exchange carries
+         * them.  A sample that starts carrying one fails [StructureChecker].
+         */
+        val NEVER_SENT: Map<String, Map<String, String>> = mapOf(
             TranscriptTurn.serializer().descriptor.serialName to mapOf(
-                "final" to "paged and archived turns carry no final flag; only long-poll events do"
+                "final" to "paged and archived turns carry no final flag; the long-poll event does"
             ),
             ProbeCandidate.serializer().descriptor.serialName to mapOf(
                 "address" to "older daemon shape: the current daemon reports `addresses` instead"
@@ -507,13 +741,16 @@ class DaemonContractTest {
 
         /** Interface methods no exchange can exercise without nondeterministic bytes. */
         val EXEMPT_METHODS: Map<String, String> = mapOf(
-            "createDiagnosticsBundle" to "the zip's size encodes this run's state paths; byte stream",
-            "downloadBundle" to "the same zip page by page; byte stream"
+            "downloadBundle" to "the bundle's pages are the same zip; byte stream"
         )
     }
 }
 
 private val CONTRACT_JSON = Json { ignoreUnknownKeys = true }
+
+/** The page's base64 payload, with a message that names the missing field. */
+private fun JsonObject.pageData(file: String): String = (get("data") as? JsonPrimitive)?.contentOrNull
+    ?: throw AssertionError("$file: the attachment page has no \"data\" field, which the paged decoder reads")
 
 private fun JsonObject.textOrNull(key: String): String? = get(key)?.jsonPrimitive?.contentOrNull
 

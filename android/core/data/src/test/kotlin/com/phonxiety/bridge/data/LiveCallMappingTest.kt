@@ -10,21 +10,24 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
- * The vocabulary the live call screen has to translate, read from the shared
- * `contracts/app-api/call_events_live.json` page: the daemon's events long-poll
+ * The vocabulary the live call screen has to translate, read from both shared
+ * `contracts/app-api/call_events_*.json` pages: the daemon's events long-poll
  * (`app_api._sync`) forwards the `role` the controller stored from the voice backend.
+ * Every event kind's own effect is checked by the live-call module's contract test.
  */
 class LiveCallMappingTest {
     private val json = Json { ignoreUnknownKeys = true }
 
     private val events: List<CallEvent> by lazy {
-        val text = javaClass.classLoader!!.getResourceAsStream("app-api/call_events_live.json")!!
-            .bufferedReader()
-            .use { it.readText() }
-        val body = Json.parseToJsonElement(text).jsonObject
-            .getValue("response").jsonObject
-            .getValue("body").jsonObject
-        body.getValue("events").jsonArray.map { json.decodeFromJsonElement(CallEvent.serializer(), it) }
+        listOf("call_events_live.json", "call_events_ended.json").flatMap { file ->
+            val text = javaClass.classLoader!!.getResourceAsStream("app-api/$file")!!
+                .bufferedReader()
+                .use { it.readText() }
+            val body = Json.parseToJsonElement(text).jsonObject
+                .getValue("response").jsonObject
+                .getValue("body").jsonObject
+            body.getValue("events").jsonArray.map { json.decodeFromJsonElement(CallEvent.serializer(), it) }
+        }
     }
 
     private fun event(type: String, role: String? = null): CallEvent = events.first { it.type == type && (role == null || it.role == role) }

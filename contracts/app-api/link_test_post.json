@@ -15,8 +15,8 @@
       "bitrate": null,
       "transport": "stream",
       "peer": "iroh:abcd",
-      "route": "direct 10.0.0.2, 4 ms",
-      "route_after": "direct 10.0.0.2, 5 ms",
+      "route": "direct 192.0.2.10, 4 ms",
+      "route_after": "direct 192.0.2.10, 5 ms",
       "seconds": 1.0,
       "frame_bytes": 48,
       "frames": {
