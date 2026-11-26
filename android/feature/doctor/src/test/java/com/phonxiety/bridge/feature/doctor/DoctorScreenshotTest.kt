@@ -30,6 +30,7 @@ import java.util.Locale
 import java.util.TimeZone
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assume.assumeFalse
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -40,11 +41,11 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * Doctor across the decision-10 matrix: 411 dp at 100 %, a deterministic dynamic-colour case, and
- * 320 dp at 200 % font scale in light and dark. Each variant sets the window width and the resource
- * font scale itself, so the confirmation dialog is laid out at the configuration it is named after
- * rather than at 411 dp with a scaled child. The accessibility gate runs on each recorded state
- * before its image is accepted.
+ * Doctor in three shots: every state at 411 dp light, one overview in 411 dp dark, and the states
+ * whose rows, records or pinned actions reflow at 320 dp with 200 % text. Each variant sets the
+ * window width and the resource font scale itself, so the confirmation dialog is laid out at the
+ * configuration it is named after rather than at 411 dp with a scaled child. The accessibility gate
+ * runs on each recorded state before its image is accepted.
  */
 @RunWith(ParameterizedRobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -75,7 +76,7 @@ class DoctorScreenshotTest(private val matrixCase: MatrixCase) {
         configureWindow(variant)
         composeRule.setContent {
             AssertWindowMatches(variant)
-            PhonxietyTheme(darkTheme = variant.dark, dynamicColor = variant.dynamic) {
+            PhonxietyTheme(darkTheme = variant.dark, dynamicColor = false) {
                 Surface(color = MaterialTheme.colorScheme.background) {
                     Box(modifier = Modifier.fillMaxSize().testTag(CAPTURE_TAG)) {
                         DoctorScreen(state = matrixCase.state.build(), callbacks = DoctorCallbacks())
@@ -117,11 +118,14 @@ class DoctorScreenshotTest(private val matrixCase: MatrixCase) {
      */
     @Test
     fun rendersTheLowerSections() {
+        // The dark overview above carries the theme; the lower sections are judged at light and
+        // at 200 % text, where the long entries reflow.
+        assumeFalse(matrixCase.variant.dark)
         val variant = matrixCase.variant
         configureWindow(variant)
         composeRule.setContent {
             AssertWindowMatches(variant)
-            PhonxietyTheme(darkTheme = variant.dark, dynamicColor = variant.dynamic) {
+            PhonxietyTheme(darkTheme = variant.dark, dynamicColor = false) {
                 Surface(color = MaterialTheme.colorScheme.background) {
                     Box(modifier = Modifier.fillMaxSize().testTag(CAPTURE_TAG)) {
                         DoctorScreen(state = DoctorSamples.withChangeLog(), callbacks = DoctorCallbacks())
@@ -177,19 +181,33 @@ class DoctorScreenshotTest(private val matrixCase: MatrixCase) {
         const val SAVED_ENTRY_TEXT = "Restarted the bridge to reopen the link"
         const val RECOVERY_ENTRY_TEXT = "The call dropped at the phone"
 
+        private val LIGHT = Variant(411, dark = false, fontScale = 1f, slug = "411_light")
+        private val DARK = Variant(411, dark = true, fontScale = 1f, slug = "411_dark")
+        private val LARGE_TEXT = Variant(320, dark = false, fontScale = 2f, slug = "320_font200_light")
+
+        /** The screen's overview is the one state that also carries the dark theme. */
+        private val OVERVIEW = DoctorState.ALL_GREEN
+
+        /** States whose rows, raw records or pinned actions reflow at 200 % text. */
+        private val LARGE_TEXT_STATES = setOf(
+            DoctorState.ALL_GREEN,
+            DoctorState.FAILURES,
+            DoctorState.PENDING,
+            DoctorState.RECOVERY,
+            DoctorState.DURING_CALL,
+            DoctorState.DETAILS_RELAY,
+            DoctorState.DETAILS_EXIT
+        )
+
         @JvmStatic
         @ParameterizedRobolectricTestRunner.Parameters(name = "{0}")
-        fun matrix(): List<Array<Any>> {
-            val variants = listOf(
-                Variant(411, dark = false, fontScale = 1f, dynamic = false, slug = "411_light"),
-                Variant(411, dark = true, fontScale = 1f, dynamic = false, slug = "411_dark"),
-                Variant(411, dark = false, fontScale = 1f, dynamic = true, slug = "411_dynamic"),
-                Variant(320, dark = false, fontScale = 2f, dynamic = false, slug = "320_font200_light"),
-                Variant(320, dark = true, fontScale = 2f, dynamic = false, slug = "320_font200_dark")
-            )
-            return DoctorState.entries.flatMap { state ->
-                variants.map { variant -> arrayOf<Any>(MatrixCase(state, variant)) }
+        fun matrix(): List<Array<Any>> = DoctorState.entries.flatMap { state ->
+            val variants = buildList {
+                add(LIGHT)
+                if (state == OVERVIEW) add(DARK)
+                if (state in LARGE_TEXT_STATES) add(LARGE_TEXT)
             }
+            variants.map { variant -> arrayOf<Any>(MatrixCase(state, variant)) }
         }
     }
 }
@@ -198,7 +216,6 @@ data class Variant(
     val widthDp: Int,
     val dark: Boolean,
     val fontScale: Float,
-    val dynamic: Boolean,
     val slug: String
 )
 

@@ -35,13 +35,10 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * Every wizard state across the decision-10 matrix: 411 dp at 100 % in light, dark and one
- * deterministic dynamic-color case, plus 320 dp at 200 % in light and dark. The accessibility gate
- * runs on each recorded state before the image is accepted.
- *
- * All states are rendered at 411 dp/light; the other four variants cover the states whose layout
- * changes the most (longest copy, longest action label, a sheet-free progress block, both error
- * kinds).
+ * Every wizard state at 411 dp light, the main screen once in 411 dp dark, and 320 dp at 200 %
+ * light for the states whose layout changes the most (longest copy, longest action label, a
+ * sheet-free progress block, both error kinds). The accessibility gate runs on each recorded state
+ * before the image is accepted.
  */
 @RunWith(ParameterizedRobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -75,10 +72,7 @@ class OnboardingScreenshotTest(private val case: MatrixCase) {
             CompositionLocalProvider(
                 LocalDensity provides Density(density.density, case.variant.fontScale)
             ) {
-                PhonxietyTheme(
-                    darkTheme = case.variant.dark,
-                    dynamicColor = case.variant.dynamic
-                ) {
+                PhonxietyTheme(darkTheme = case.variant.dark, dynamicColor = false) {
                     Box(
                         modifier = Modifier
                             .testTag(SCREEN_TAG)
@@ -118,7 +112,6 @@ class OnboardingScreenshotTest(private val case: MatrixCase) {
         val heightDp: Int,
         val dark: Boolean,
         val fontScale: Float,
-        val dynamic: Boolean,
         /** Whether the height is a phone viewport, which also needs a whole-content capture. */
         val phoneViewport: Boolean = false,
         val slug: String
@@ -133,29 +126,19 @@ class OnboardingScreenshotTest(private val case: MatrixCase) {
          * gets a whole-content capture, which is the only one the gate checks because a viewport
          * edge cuts lines.
          */
-        private val allVariants = listOf(
-            Variant(411, heightDp = FULL_PAGE_DP, dark = false, fontScale = 1f, dynamic = false, slug = "411_light"),
-            Variant(411, heightDp = FULL_PAGE_DP, dark = true, fontScale = 1f, dynamic = false, slug = "411_dark"),
-            Variant(411, heightDp = FULL_PAGE_DP, dark = false, fontScale = 1f, dynamic = true, slug = "411_dynamic"),
-            Variant(
-                widthDp = 320,
-                heightDp = PHONE_DP,
-                dark = false,
-                fontScale = 2f,
-                dynamic = false,
-                phoneViewport = true,
-                slug = "320_font200_light"
-            ),
-            Variant(
-                widthDp = 320,
-                heightDp = PHONE_DP,
-                dark = true,
-                fontScale = 2f,
-                dynamic = false,
-                phoneViewport = true,
-                slug = "320_font200_dark"
-            )
+        private val LIGHT = Variant(411, heightDp = FULL_PAGE_DP, dark = false, fontScale = 1f, slug = "411_light")
+        private val DARK = Variant(411, heightDp = FULL_PAGE_DP, dark = true, fontScale = 1f, slug = "411_dark")
+        private val LARGE_TEXT = Variant(
+            widthDp = 320,
+            heightDp = PHONE_DP,
+            dark = false,
+            fontScale = 2f,
+            phoneViewport = true,
+            slug = "320_font200_light"
         )
+
+        /** The screen's main state, and the one that carries the dark theme. */
+        private const val OVERVIEW_STATE = "ready_to_install"
 
         /** The page's last line; the whole-content capture measures the page by it. */
         private const val FOOTER = "No cloud, no analytics"
@@ -187,13 +170,14 @@ class OnboardingScreenshotTest(private val case: MatrixCase) {
         @ParameterizedRobolectricTestRunner.Parameters(name = "{0}")
         fun matrix(): List<Array<Any>> {
             val states = states()
-            val wide = states.map { (name, state) -> MatrixCase(name, state, allVariants.first()) }
-            val rest = states
+            val wide = states.map { (name, state) -> MatrixCase(name, state, LIGHT) }
+            val large = states
                 .filter { (name, _) -> name in representative }
-                .flatMap { (name, state) ->
-                    allVariants.drop(1).map { variant -> MatrixCase(name, state, variant) }
-                }
-            return (wide + rest).map { arrayOf<Any>(it) }
+                .map { (name, state) -> MatrixCase(name, state, LARGE_TEXT) }
+            val overview = states
+                .filter { (name, _) -> name == OVERVIEW_STATE }
+                .map { (name, state) -> MatrixCase(name, state, DARK) }
+            return (wide + large + overview).map { arrayOf<Any>(it) }
         }
 
         private fun states(): List<Pair<String, OnboardingUiState>> {

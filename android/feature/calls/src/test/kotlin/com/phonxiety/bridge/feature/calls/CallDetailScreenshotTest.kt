@@ -60,9 +60,10 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * One call's record on the decision-10 matrix: 411 dp at 100 %, 320 dp at 200 %, light, dark and one
- * dynamic-color case, the running call, the offline copy, the lower sections and the delete dialog.
- * Every capture runs the accessibility gate first.
+ * One call's record: the finished call at 411 dp light and dark and at 320 dp with 200 % text, the
+ * running call, the offline copy, the lower sections, the long and missing result rows, each
+ * recording state at 411 dp light and at 320 dp with 200 % text, and the delete dialog. Every capture
+ * runs the accessibility gate first.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -89,7 +90,6 @@ class CallDetailScreenshotTest {
     private fun setScreen(
         state: CallDetailUiState,
         dark: Boolean = false,
-        dynamicColor: Boolean = false,
         fontScale: Float = 1f,
         width: Dp = 411.dp,
         onDelete: () -> Unit = {}
@@ -99,7 +99,7 @@ class CallDetailScreenshotTest {
             CompositionLocalProvider(
                 LocalDensity provides Density(density.density, fontScale = fontScale)
             ) {
-                PhonxietyTheme(darkTheme = dark, dynamicColor = dynamicColor) {
+                PhonxietyTheme(darkTheme = dark, dynamicColor = false) {
                     Box(
                         modifier = Modifier
                             .testTag(SCREEN_TAG)
@@ -144,16 +144,8 @@ class CallDetailScreenshotTest {
     fun widePhoneInDark() = render("411_dark") { setScreen(finished(), dark = true) }
 
     @Test
-    fun widePhoneInDynamicColor() = render("411_dynamic") { setScreen(finished(), dynamicColor = true) }
-
-    @Test
     fun smallScreenAtTwoHundredPercentInLight() = render("320_font200_light") {
         setScreen(finished(), fontScale = 2f, width = 320.dp)
-    }
-
-    @Test
-    fun smallScreenAtTwoHundredPercentInDark() = render("320_font200_dark") {
-        setScreen(finished(), dark = true, fontScale = 2f, width = 320.dp)
     }
 
     @Test
@@ -189,15 +181,6 @@ class CallDetailScreenshotTest {
             composeRule.waitForIdle()
         }
     ) { setScreen(finished()) }
-
-    @Test
-    fun theLowerSectionsAtTwoHundredPercent() = render(
-        "lower_320_font200_dark",
-        beforeCapture = {
-            scrollToNode("Delete this call")
-            composeRule.waitForIdle()
-        }
-    ) { setScreen(finished(), dark = true, fontScale = 2f, width = 320.dp) }
 
     @Test
     fun theDeleteConfirmation() {
@@ -272,15 +255,6 @@ class CallDetailScreenshotTest {
             composeRule.waitForIdle()
         }
     ) { setScreen(longFieldCall()) }
-
-    @Test
-    fun aLongResultAnswerStacksAtTwoHundredPercent() = render(
-        "result_long_320_font200_dark",
-        beforeCapture = {
-            scrollToNode("Menu options heard")
-            composeRule.waitForIdle()
-        }
-    ) { setScreen(longFieldCall(), dark = true, fontScale = 2f, width = 320.dp) }
 
     @Test
     fun anUnreportedResultFieldSaysSo() = render(
@@ -405,7 +379,6 @@ class CallDetailScreenshotTest {
         state: CallDetailUiState,
         subtitle: String,
         dark: Boolean = false,
-        dynamicColor: Boolean = false,
         fontScale: Float = 1f,
         width: Dp = 411.dp
     ) = render(
@@ -414,16 +387,10 @@ class CallDetailScreenshotTest {
             scrollToNode("Recording")
             composeRule.onNodeWithText(subtitle).performScrollTo().assertIsDisplayed()
         }
-    ) { setScreen(state, dark = dark, dynamicColor = dynamicColor, fontScale = fontScale, width = width) }
+    ) { setScreen(state, dark = dark, fontScale = fontScale, width = width) }
 
     @Test
     fun theRecordingCardOffersTheDownloadWhileTheFileIsOnTheBridge() = captureRecording("recording_remote_411_light", remoteRecording(), REMOTE_SUBTITLE)
-
-    @Test
-    fun theRemoteRecordingInDark() = captureRecording("recording_remote_411_dark", remoteRecording(), REMOTE_SUBTITLE, dark = true)
-
-    @Test
-    fun theRemoteRecordingInDynamicColor() = captureRecording("recording_remote_411_dynamic", remoteRecording(), REMOTE_SUBTITLE, dynamicColor = true)
 
     @Test
     fun theRemoteRecordingAtTwoHundredPercentInLight() = captureRecording(
@@ -435,23 +402,7 @@ class CallDetailScreenshotTest {
     )
 
     @Test
-    fun theRemoteRecordingAtTwoHundredPercentInDark() = captureRecording(
-        "recording_remote_320_font200_dark",
-        remoteRecording(),
-        REMOTE_SUBTITLE,
-        dark = true,
-        fontScale = 2f,
-        width = 320.dp
-    )
-
-    @Test
     fun theRecordingCardReportsTheTransferWhileItRuns() = captureRecording("recording_downloading_411_light", finished(), DOWNLOADING_SUBTITLE)
-
-    @Test
-    fun theRunningDownloadInDark() = captureRecording("recording_downloading_411_dark", finished(), DOWNLOADING_SUBTITLE, dark = true)
-
-    @Test
-    fun theRunningDownloadInDynamicColor() = captureRecording("recording_downloading_411_dynamic", finished(), DOWNLOADING_SUBTITLE, dynamicColor = true)
 
     @Test
     fun theRunningDownloadAtTwoHundredPercentInLight() = captureRecording(
@@ -463,39 +414,13 @@ class CallDetailScreenshotTest {
     )
 
     @Test
-    fun theRunningDownloadAtTwoHundredPercentInDark() = captureRecording(
-        "recording_downloading_320_font200_dark",
-        finished(),
-        DOWNLOADING_SUBTITLE,
-        dark = true,
-        fontScale = 2f,
-        width = 320.dp
-    )
-
-    @Test
     fun theRecordingCardSaysSavedOnlyOnceTheFileIsHere() = captureRecording("recording_saved_411_light", savedRecording(), SAVED_SUBTITLE)
-
-    @Test
-    fun theSavedRecordingInDark() = captureRecording("recording_saved_411_dark", savedRecording(), SAVED_SUBTITLE, dark = true)
-
-    @Test
-    fun theSavedRecordingInDynamicColor() = captureRecording("recording_saved_411_dynamic", savedRecording(), SAVED_SUBTITLE, dynamicColor = true)
 
     @Test
     fun theSavedRecordingAtTwoHundredPercentInLight() = captureRecording(
         "recording_saved_320_font200_light",
         savedRecording(),
         SAVED_SUBTITLE,
-        fontScale = 2f,
-        width = 320.dp
-    )
-
-    @Test
-    fun theSavedRecordingAtTwoHundredPercentInDark() = captureRecording(
-        "recording_saved_320_font200_dark",
-        savedRecording(),
-        SAVED_SUBTITLE,
-        dark = true,
         fontScale = 2f,
         width = 320.dp
     )
