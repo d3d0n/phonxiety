@@ -242,4 +242,29 @@ class AudioStreamStatsTest {
         assertFalse("the held publish reported success", landed.get() == true)
         assertEquals(AudioState(), store.state.value.audio)
     }
+
+    /**
+     * Telecom reports the call ending: the callback detaches under the engine lock and releases
+     * the stream right after it, through the same [releaseDetachedAudio] the engine calls. The
+     * terminal cleanup then finds nothing, and a publish captured before the ending is refused.
+     */
+    @Test
+    fun aTelecomEndingReleasesItsStreamAndTheTerminalCleanupFindsNothing() {
+        val store = EngineStateStore()
+        val owned = BridgeEngine.OwnedCall("call-1", "+998901234567")
+        val attached = owned.attach(store, epoch = 1)
+        assertTrue(store.audioStats(attached.stream, stats(drops = 255_329)))
+        val captured = owned.audioToPublish()
+        assertNotNull(captured)
+
+        val detached = owned.detachAudio()
+        val closed = mutableListOf<PhoneAudio?>()
+        releaseDetachedAudio(store, detached) { closed += it }
+
+        assertEquals(listOf(attached.audio), closed)
+        assertEquals(AudioState(), store.state.value.audio)
+        assertNull("the terminal cleanup must find nothing to reset", owned.detachAudio())
+        assertFalse(store.audioStats(attached.stream, stats(drops = 300_000)))
+        assertEquals(AudioState(), store.state.value.audio)
+    }
 }

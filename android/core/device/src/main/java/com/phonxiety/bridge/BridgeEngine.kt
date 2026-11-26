@@ -1643,7 +1643,7 @@ class BridgeEngine(
 
     private fun onCallStateChanged(call: Call, state: Int) {
         if (!running) return
-        var audio: PhoneAudio? = null
+        var detached: AttachedAudio? = null
         var toneOwner: OwnedCall? = null
         var finish = false
         var cause: DisconnectCause? = null
@@ -1655,21 +1655,21 @@ class BridgeEngine(
             val mapped = mapState(state)
             if (mapped == "ending" || mapped == "ended") {
                 current.generation.set(Long.MAX_VALUE)
-                audio = current.detachAudio()?.audio
+                detached = current.detachAudio()
                 current.epoch = -1
                 toneOwner = current
             }
             reportState(current, mapped, cause)
             finish = mapped == "ended"
         }
-        closeAudioAsync(audio)
+        releaseDetachedAudio(stateStore, detached, ::closeAudioAsync)
         toneOwner?.let { cancelToneFor(it) }
         if (finish) finishOwned(call, cause)
     }
 
     private fun onCallDetailsChanged(call: Call, details: Call.Details) {
         if (!running) return
-        var audio: PhoneAudio? = null
+        var detached: AttachedAudio? = null
         var toneOwner: OwnedCall? = null
         var finish = false
         var cause: DisconnectCause? = null
@@ -1681,14 +1681,14 @@ class BridgeEngine(
             val mapped = mapState(details.state)
             if (mapped == "ending" || mapped == "ended") {
                 current.generation.set(Long.MAX_VALUE)
-                audio = current.detachAudio()?.audio
+                detached = current.detachAudio()
                 current.epoch = -1
                 toneOwner = current
             }
             reportState(current, mapped, cause)
             finish = mapped == "ended"
         }
-        closeAudioAsync(audio)
+        releaseDetachedAudio(stateStore, detached, ::closeAudioAsync)
         toneOwner?.let { cancelToneFor(it) }
         if (finish) finishOwned(call, cause)
     }
@@ -2505,6 +2505,20 @@ class BridgeEngine(
  * detached: a cleanup that finds nothing has nothing to reset.
  */
 internal class AttachedAudio(val audio: PhoneAudio, val stream: AudioStream)
+
+/**
+ * Closes a detached stream's audio and clears its numbers, after the engine lock is released.
+ * The stream is gone for good: a later cleanup of the same call finds nothing to reset, and a
+ * publish still in flight for it is refused by the store.
+ */
+internal fun releaseDetachedAudio(
+    store: EngineStateStore,
+    detached: AttachedAudio?,
+    close: (PhoneAudio?) -> Unit
+) {
+    close(detached?.audio)
+    detached?.let { store.audioReset(it.stream) }
+}
 
 /**
  * One admitted idle-only link action: the iroh link holds it while it recycles
