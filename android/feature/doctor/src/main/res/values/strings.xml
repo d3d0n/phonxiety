@@ -138,7 +138,7 @@
     <string name="doctor_exit_memory">Stopped by the system to free memory</string>
     <string name="doctor_exit_signaled">Killed by a signal</string>
     <string name="doctor_exit_self">Closed itself</string>
-    <string name="doctor_exit_startup">Crashed on startup</string>
+    <string name="doctor_exit_startup">Stopped because startup failed</string>
     <string name="doctor_exit_permission">Stopped after a permission change</string>
     <string name="doctor_exit_resources">Stopped for using too many resources</string>
     <string name="doctor_exit_user">Killed by a user request</string>

@@ -43,8 +43,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -543,40 +548,47 @@ private fun RecordingCard(
         } else {
             val position = formatElapsedTime(state.audio.positionMs / 1000)
             val total = formatElapsedTime((state.audio.durationMs ?: 0L) / 1000)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onToggle, enabled = state.audio.prepared) {
-                    Icon(
-                        imageVector = Icons.Filled.PlayArrow,
-                        contentDescription = stringResource(
-                            if (state.audio.playing) {
-                                R.string.call_detail_recording_pause
-                            } else {
-                                R.string.call_detail_recording_play
-                            }
-                        ),
-                        modifier = Modifier.size(22.dp)
+            // The times sit under the track: beside it, large text left the seek bar no width at all.
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onToggle, enabled = state.audio.prepared) {
+                        Icon(
+                            imageVector = if (state.audio.playing) PauseIcon else Icons.Filled.PlayArrow,
+                            contentDescription = stringResource(
+                                if (state.audio.playing) {
+                                    R.string.call_detail_recording_pause
+                                } else {
+                                    R.string.call_detail_recording_play
+                                }
+                            ),
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    val duration = (state.audio.durationMs ?: 0L).coerceAtLeast(1L)
+                    val name = stringResource(R.string.call_detail_recording_position)
+                    val positionState = stringResource(R.string.call_detail_recording_position_state, position, total)
+                    Slider(
+                        value = (state.audio.positionMs.toFloat() / duration).coerceIn(0f, 1f),
+                        onValueChange = { fraction -> onSeek((fraction * duration).toLong()) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag(RECORDING_SEEK_TAG)
+                            .semantics {
+                                contentDescription = name
+                                stateDescription = positionState
+                            },
+                        enabled = state.audio.prepared
                     )
                 }
-                val duration = (state.audio.durationMs ?: 0L).coerceAtLeast(1L)
-                val name = stringResource(R.string.call_detail_recording_position)
-                val positionState = stringResource(R.string.call_detail_recording_position_state, position, total)
-                Slider(
-                    value = (state.audio.positionMs.toFloat() / duration).coerceIn(0f, 1f),
-                    onValueChange = { fraction -> onSeek((fraction * duration).toLong()) },
+                Row(
                     modifier = Modifier
-                        .weight(1f)
-                        .semantics {
-                            contentDescription = name
-                            stateDescription = positionState
-                        },
-                    enabled = state.audio.prepared
-                )
-                Text(
-                    text = "$position / $total",
-                    style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"),
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                        .fillMaxWidth()
+                        .padding(start = PLAY_BUTTON_WIDTH),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    PlaybackTime(position)
+                    PlaybackTime(total)
+                }
             }
             TextButton(onClick = onShare) {
                 Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -601,6 +613,46 @@ private fun RecordingCard(
         }
     }
 }
+
+@Composable
+private fun PlaybackTime(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"),
+        fontFamily = FontFamily.Monospace,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+}
+
+/** Material's pause glyph: the core icon set has play but not pause. */
+private val PauseIcon: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "Pause",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f
+    ).apply {
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(6f, 19f)
+            horizontalLineTo(10f)
+            verticalLineTo(5f)
+            horizontalLineTo(6f)
+            close()
+            moveTo(14f, 5f)
+            verticalLineTo(19f)
+            horizontalLineTo(18f)
+            verticalLineTo(5f)
+            close()
+        }
+    }.build()
+}
+
+/** The recording's seek bar, for tests that measure it. */
+internal const val RECORDING_SEEK_TAG = "call_detail_recording_seek"
+
+/** The play button's touch target, so the times line up under the seek bar. */
+private val PLAY_BUTTON_WIDTH = 48.dp
 
 @Composable
 private fun TranscriptCard(state: CallDetailUiState, onLoadMore: () -> Unit) {

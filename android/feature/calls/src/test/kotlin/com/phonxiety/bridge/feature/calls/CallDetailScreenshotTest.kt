@@ -43,6 +43,7 @@ import com.phonxiety.bridge.model.TranscriptTurn
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -432,6 +433,19 @@ class CallDetailScreenshotTest {
         composeRule.onNodeWithText("Saved on this phone.").assertExists()
         composeRule.onNodeWithText("Download the recording to play or share it.").assertDoesNotExist()
         composeRule.onNodeWithText("Download the recording").assertDoesNotExist()
+    }
+
+    @Test
+    fun theSeekBarKeepsItsWidthAtTwoHundredPercent() {
+        setScreen(savedRecording(), fontScale = 2f, width = 320.dp)
+        scrollToNode("Recording")
+        composeRule.onNodeWithText(SAVED_SUBTITLE).performScrollTo()
+        val seek = composeRule.onNodeWithTag(RECORDING_SEEK_TAG).fetchSemanticsNode()
+        val width = with(composeRule.density) { seek.size.width.toDp() }
+        // Beside a 200 % time readout the bar used to shrink to its thumb.
+        assertTrue("the seek bar is $width wide on a 320 dp screen", width >= 160.dp)
+        composeRule.onNodeWithText("00:12").assertIsDisplayed()
+        composeRule.onNodeWithText("03:00").assertIsDisplayed()
     }
 
     @Test
