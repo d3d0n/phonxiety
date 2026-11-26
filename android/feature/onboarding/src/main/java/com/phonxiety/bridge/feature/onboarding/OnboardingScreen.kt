@@ -707,13 +707,20 @@ private fun ReadyToInstallContent(state: WizardState.ReadyToInstall) {
         label = stringResource(R.string.onboarding_row_provider),
         value = state.provider.providerLabel()
     )
+    // The identifiers are long, so each grant is its own stacked line: side by side, the longest
+    // one (START_FOREGROUND_SERVICES_FROM_BACKGROUND) squeezes its label into single characters.
     PRIVILEGED_GRANTS.forEach { grant ->
-        KeyValueRow(
-            label = stringResource(grant.label),
-            value = grant.permission,
-            mono = true,
-            valueMaxLines = 2
-        )
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                text = stringResource(grant.label),
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Text(
+                text = grant.permission,
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
     HorizontalDivider()
     Text(
