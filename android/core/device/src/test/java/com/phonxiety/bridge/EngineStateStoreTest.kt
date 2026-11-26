@@ -41,12 +41,12 @@ class EngineStateStoreTest {
             store.callPhase(CallPhase.ACTIVE)
             assertEquals(CallPhase.ACTIVE, awaitItem().call?.phase)
 
-            store.audio("opus", 24_000)
+            val stream = store.audioStreamStart()
+            store.audio(stream, "opus", 24_000)
             val audio = awaitItem().audio
             assertEquals("opus", audio.codec)
             assertEquals(24_000, audio.bitrate)
 
-            val stream = store.audioStreamStart()
             assertTrue(
                 store.audioStats(
                     stream,

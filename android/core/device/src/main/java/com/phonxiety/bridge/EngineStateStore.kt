@@ -149,8 +149,12 @@ class EngineStateStore {
         }
     }
 
-    fun audio(codec: String?, bitrate: Int?) {
-        mutable.update { it.copy(audio = it.audio.copy(codec = codec, bitrate = bitrate)) }
+    /** Sets the live stream's codec before its first 100 ms publish; ignored once the stream is gone. */
+    internal fun audio(stream: AudioStream, codec: String?, bitrate: Int?) {
+        synchronized(audioLock) {
+            if (liveAudioStream !== stream) return@synchronized
+            mutable.update { it.copy(audio = it.audio.copy(codec = codec, bitrate = bitrate)) }
+        }
     }
 
     /** Starts a new live audio stream; the previous stream's numbers stop being publishable. */
@@ -184,13 +188,29 @@ class EngineStateStore {
     }
 
     /**
-     * Clears the audio block.  With [stream], only that stream's numbers are
-     * cleared, so a teardown cannot wipe a stream that replaced it; without
-     * one, whatever is live is cleared.
+     * Clears the audio block of exactly [stream].  A stream that has already
+     * been replaced is left alone, so a teardown that arrives late cannot wipe
+     * the numbers of the call that started meanwhile.
+     *
+     * There is deliberately no parameterless form: a teardown that captured no
+     * stream has nothing to clear, and resetting "whatever is live" is how a
+     * delayed cleanup invalidates a successor's stream for its whole lifetime.
+     * Whole-engine clears go through [resetAllAudio].
      */
-    internal fun audioReset(stream: AudioStream? = null) {
+    internal fun audioReset(stream: AudioStream) {
         synchronized(audioLock) {
-            if (stream != null && liveAudioStream !== stream) return@synchronized
+            if (liveAudioStream !== stream) return@synchronized
+            liveAudioStream = null
+            mutable.update { it.copy(audio = AudioState()) }
+        }
+    }
+
+    /**
+     * Clears the audio block regardless of which stream owns it.  Only for the
+     * engine's own reset and shutdown, where nothing may keep publishing.
+     */
+    internal fun resetAllAudio() {
+        synchronized(audioLock) {
             liveAudioStream = null
             mutable.update { it.copy(audio = AudioState()) }
         }
