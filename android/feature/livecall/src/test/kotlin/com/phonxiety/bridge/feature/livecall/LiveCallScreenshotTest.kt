@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
 import com.phonxiety.bridge.designsystem.UiText
+import com.phonxiety.bridge.designsystem.testing.Screenshot
 import com.phonxiety.bridge.designsystem.testing.assertAccessible
 import com.phonxiety.bridge.designsystem.testing.pinAnimationFrame
 import com.phonxiety.bridge.model.AudioState
@@ -52,6 +53,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -137,15 +139,19 @@ class LiveCallScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     fun widePhoneInLight() = render("411_light") { setScreen() }
 
     @Test
+    @Category(Screenshot::class)
     fun widePhoneInDark() = render("411_dark") { setScreen(dark = true) }
 
     @Test
+    @Category(Screenshot::class)
     fun smallScreenAtTwoHundredPercentInLight() = render("320_font200_light") { setScreen(fontScale = 2f, width = 320.dp) }
 
     @Test
+    @Category(Screenshot::class)
     fun theControlsAfterScrolling() = render(
         "controls_lower_411_light",
         beforeCapture = {
@@ -155,11 +161,13 @@ class LiveCallScreenshotTest {
     ) { setScreen() }
 
     @Test
+    @Category(Screenshot::class)
     fun aDroppedLink() = render("reconnecting_411_light") {
         setScreen(state = LiveCallSamples.live.copy(reconnecting = true, partials = emptyList()))
     }
 
     @Test
+    @Category(Screenshot::class)
     fun theEndedCallWithItsResult() = render("ended_411_light") { setScreen(state = LiveCallSamples.ended) }
 
     /**
@@ -177,13 +185,18 @@ class LiveCallScreenshotTest {
     }
 
     @Test
-    fun anEndedCallJumpsToItsLastLine() = render(
+    fun anEndedCallJumpsToItsLastLine() {
+        setScreen(state = LiveCallSamples.ended)
+        scrollTranscriptTo("Transcript")
+        composeRule.onNodeWithText("Jump to the end").assertExists()
+        composeRule.onNodeWithText("Jump to live").assertDoesNotExist()
+    }
+
+    @Test
+    @Category(Screenshot::class)
+    fun theEndedCallScrolledUp() = render(
         "ended_scrolled_411_light",
-        beforeCapture = {
-            scrollTranscriptTo("Transcript")
-            composeRule.onNodeWithText("Jump to the end").assertExists()
-            composeRule.onNodeWithText("Jump to live").assertDoesNotExist()
-        }
+        beforeCapture = { scrollTranscriptTo("Transcript") }
     ) { setScreen(state = LiveCallSamples.ended) }
 
     /** An unconfirmed end is neither live nor recorded: the control just reaches the last turn. */
@@ -212,6 +225,7 @@ class LiveCallScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     fun aPausedAgentWithADraft() = render("paused_411_light") {
         setScreen(
             state = LiveCallSamples.live.copy(
@@ -223,6 +237,7 @@ class LiveCallScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     fun noAudioStreamShowsNoFabricatedZeros() = render("no_stream_411_dark") {
         setScreen(state = LiveCallSamples.live.copy(audio = AudioState()), dark = true)
     }
@@ -238,6 +253,7 @@ class LiveCallScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     fun theHangUpConfirmation() {
         setScreen()
         // A semantics click starts no ripple, so the capture does not depend on animation timing.
@@ -251,6 +267,7 @@ class LiveCallScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     fun thePhoneIsDialingWhileTheRecordStillSaysPreparing() = render("preparing_dialing_411_light") {
         // Telecom dials before the daemon's snapshot answers: the header follows the phone.
         setScreen(state = LiveCallSamples.live.copy(state = "preparing", localPhase = CallPhase.DIALING))
@@ -301,6 +318,7 @@ class LiveCallScreenshotTest {
 
     /** The first words are on screen while they are spoken: a turn in progress, not a wait. */
     @Test
+    @Category(Screenshot::class)
     fun theFirstPartialTurnIsInProgress() = render("first_turn_411_light") {
         setScreen(
             state = LiveCallSamples.live.copy(
@@ -311,18 +329,21 @@ class LiveCallScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     fun theUnconfirmedEndExplainsItself() = render(
         "status_unknown_411_light",
         beforeCapture = { scrollTranscriptTo("Call status unknown") }
     ) { setScreen(state = unknownEndedCapture(UNCONFIRMED_REASON)) }
 
     @Test
+    @Category(Screenshot::class)
     fun theUnconfirmedEndAtTwoHundredPercent() = render(
         "status_unknown_320_font200_light",
         beforeCapture = { scrollTranscriptTo("Call status unknown") }
     ) { setScreen(state = unknownEndedCapture(UNCONFIRMED_REASON), fontScale = 2f, width = 320.dp) }
 
     @Test
+    @Category(Screenshot::class)
     fun theUnconfirmedEndExpandedAtTwoHundredPercent() = render(
         "status_unknown_expanded_320_font200_light",
         beforeCapture = {

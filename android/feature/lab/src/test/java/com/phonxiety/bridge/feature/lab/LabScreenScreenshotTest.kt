@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
 import com.phonxiety.bridge.designsystem.UiText
+import com.phonxiety.bridge.designsystem.testing.Screenshot
 import com.phonxiety.bridge.designsystem.testing.assertAccessible
 import com.phonxiety.bridge.designsystem.testing.pinAnimationFrame
 import java.util.Locale
@@ -42,6 +43,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -113,17 +115,21 @@ class LabScreenScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     fun widePhoneInLight() = render("411_light") { setScreen(previewLabState()) }
 
     @Test
+    @Category(Screenshot::class)
     fun widePhoneInDark() = render("411_dark") { setScreen(previewLabState(), dark = true) }
 
     @Test
+    @Category(Screenshot::class)
     fun smallScreenAtTwoHundredPercentInLight() = render("320_font200_light") {
         setScreen(previewLabState(), fontScale = 2f, width = 320.dp)
     }
 
     @Test
+    @Category(Screenshot::class)
     fun audioOutsideACall() = render(
         "audio_idle_411_light",
         beforeCapture = {
@@ -144,6 +150,7 @@ class LabScreenScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     fun theToneControlsInsideACall() = render(
         "audio_live_411_light",
         beforeCapture = {
@@ -153,6 +160,7 @@ class LabScreenScreenshotTest {
     ) { setScreen(previewLabState()) }
 
     @Test
+    @Category(Screenshot::class)
     fun theLowerSections() = render(
         "lower_411_light",
         beforeCapture = {
@@ -200,6 +208,7 @@ class LabScreenScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     fun theTestCallConfirmation() {
         setScreen(previewLabState().copy(testCall = previewLabState().testCall.copy(confirming = true)))
         // Let the dialog's enter animation finish: a half-faded scrim is a different image.
@@ -245,6 +254,7 @@ class LabScreenScreenshotTest {
     )
 
     @Test
+    @Category(Screenshot::class)
     fun theTestCallProbesAndTheirResult() = render(
         "test_call_result_411_light",
         beforeCapture = {
@@ -264,6 +274,7 @@ class LabScreenScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     fun theTestCallResultAtTwoHundredPercentInLight() = render(
         "test_call_result_320_font200_light",
         beforeCapture = {
@@ -273,6 +284,7 @@ class LabScreenScreenshotTest {
     ) { setScreen(finishedTestCall(), fontScale = 2f, width = 320.dp) }
 
     @Test
+    @Category(Screenshot::class)
     fun theTestCallWhoseSummaryIsStillBeingWritten() = render(
         "test_call_waiting_411_light",
         beforeCapture = {
@@ -327,6 +339,7 @@ class LabScreenScreenshotTest {
 
     /** The automatic tone is configured before dialing, so its settings are usable with no call. */
     @Test
+    @Category(Screenshot::class)
     fun theToneSettingsBeforeDialing() = render(
         "audio_tone_setup_411_light",
         beforeCapture = {

@@ -45,6 +45,7 @@ import com.phonxiety.bridge.designsystem.component.StatTone
 import com.phonxiety.bridge.designsystem.component.StatusPill
 import com.phonxiety.bridge.designsystem.component.StatusTone
 import com.phonxiety.bridge.designsystem.component.ToggleRow
+import com.phonxiety.bridge.designsystem.testing.Screenshot
 import com.phonxiety.bridge.designsystem.testing.assertAccessible
 import com.phonxiety.bridge.designsystem.testing.pinAnimationFrame
 import java.util.Locale
@@ -53,6 +54,7 @@ import org.junit.After
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.ParameterizedRobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -65,6 +67,7 @@ import org.robolectric.annotation.GraphicsMode
 @RunWith(ParameterizedRobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "w411dp-h2600dp-xxhdpi")
+@Category(Screenshot::class)
 class DesignSystemScreenshotTest(private val matrixCase: MatrixCase) {
     @get:Rule
     val composeRule = createComposeRule()

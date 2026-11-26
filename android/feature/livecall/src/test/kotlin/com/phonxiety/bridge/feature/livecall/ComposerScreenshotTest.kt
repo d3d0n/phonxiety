@@ -28,6 +28,7 @@ import com.github.takahirom.roborazzi.captureRoboImage
 import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
 import com.phonxiety.bridge.designsystem.UiText
+import com.phonxiety.bridge.designsystem.testing.Screenshot
 import com.phonxiety.bridge.designsystem.testing.assertAccessible
 import com.phonxiety.bridge.designsystem.testing.pinAnimationFrame
 import com.phonxiety.bridge.model.ApiLimits
@@ -42,6 +43,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -125,21 +127,27 @@ class ComposerScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     fun widePhoneInLight() = render("411_light") { setScreen(VALIDATED) }
 
     @Test
+    @Category(Screenshot::class)
     fun widePhoneInDark() = render("411_dark") { setScreen(VALIDATED, dark = true) }
 
     @Test
+    @Category(Screenshot::class)
     fun smallScreenAtTwoHundredPercentInLight() = render("320_font200_light") { setScreen(VALIDATED, fontScale = 2f, width = 320.dp) }
 
     @Test
+    @Category(Screenshot::class)
     fun anEmptyBrief() = render("empty_411_light") { setScreen(ComposerUiState(limits = LIMITS)) }
 
     @Test
+    @Category(Screenshot::class)
     fun anInvalidNumber() = render("invalid_411_light") { setScreen(INVALID) }
 
     @Test
+    @Category(Screenshot::class)
     fun theLowerFormAfterScrolling() = render(
         "lower_411_light",
         beforeCapture = {
@@ -149,18 +157,21 @@ class ComposerScreenshotTest {
     ) { setScreen(VALIDATED) }
 
     @Test
+    @Category(Screenshot::class)
     fun theLimitsAfterScrolling() = render(
         "limits_411_light",
         beforeCapture = { composeRule.onNodeWithText("Calls per hour").performScrollTo() }
     ) { setScreen(VALIDATED) }
 
     @Test
+    @Category(Screenshot::class)
     fun theWarningsAfterScrolling() = render(
         "warnings_411_light",
         beforeCapture = { composeRule.onNodeWithText("agent may not know", substring = true).performScrollTo() }
     ) { setScreen(VALIDATED) }
 
     @Test
+    @Category(Screenshot::class)
     fun theConfirmation() = render("confirmation_411_light") {
         setScreen(VALIDATED.copy(confirming = true))
     }

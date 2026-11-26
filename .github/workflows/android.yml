@@ -5,7 +5,7 @@ name: Android
 #           bindings, release APK, unit tests, lint, Roborazzi screenshot
 #           verification and the module zip.
 #   quick — every push to feat/**: iroh bindings, debug APK and unit tests
-#           with the screenshot classes skipped (-PskipScreenshots); no
+#           with the screenshot captures skipped (-PskipScreenshots); no
 #           release build, lint, Roborazzi verify or module zip.
 on:
   push:
@@ -227,8 +227,9 @@ jobs:
       - name: Build iroh bindings
         run: mise run phone:iroh
 
-      # Debug APK and unit tests only: the screenshot classes are excluded by
-      # -PskipScreenshots, so neither Roborazzi nor lint runs here.
+      # Debug APK and unit tests only: the Screenshot-category captures are
+      # excluded by -PskipScreenshots, so neither Roborazzi nor lint runs here.
+      # Every other test in those classes still runs.
       - name: Debug build and unit tests
         working-directory: android
         run: |

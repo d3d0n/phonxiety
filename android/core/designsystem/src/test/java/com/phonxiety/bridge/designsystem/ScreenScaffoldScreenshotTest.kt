@@ -25,9 +25,11 @@ import com.github.takahirom.roborazzi.captureRoboImage
 import com.phonxiety.bridge.designsystem.component.KeyValueRow
 import com.phonxiety.bridge.designsystem.component.ScreenScaffold
 import com.phonxiety.bridge.designsystem.component.SectionCard
+import com.phonxiety.bridge.designsystem.testing.Screenshot
 import com.phonxiety.bridge.designsystem.testing.assertAccessible
 import org.junit.Rule
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -42,6 +44,7 @@ class ScreenScaffoldScreenshotTest {
     val composeRule = createComposeRule()
 
     @Test
+    @Category(Screenshot::class)
     fun lightPhone() {
         composeRule.setContent {
             PhonxietyTheme(dynamicColor = false) {
@@ -63,6 +66,7 @@ class ScreenScaffoldScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     fun widePhoneInDark() {
         composeRule.setContent {
             PhonxietyTheme(darkTheme = true, dynamicColor = false) {
@@ -84,6 +88,7 @@ class ScreenScaffoldScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     fun smallScreenAtTwoHundredPercentInLight() {
         composeRule.setContent {
             val density = LocalDensity.current
@@ -112,6 +117,7 @@ class ScreenScaffoldScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     fun lowerSectionAfterScrolling() {
         composeRule.setContent {
             PhonxietyTheme(dynamicColor = false) {

@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
+import com.phonxiety.bridge.designsystem.testing.Screenshot
 import com.phonxiety.bridge.designsystem.testing.assertAccessible
 import com.phonxiety.bridge.designsystem.testing.pinAnimationFrame
 import com.phonxiety.bridge.root.WizardState
@@ -34,6 +35,7 @@ import org.junit.After
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -96,6 +98,7 @@ class OnboardingExtrasScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     @Config(sdk = [35], qualifiers = "w411dp-h4000dp-xxhdpi")
     fun theOpenStepPlan() {
         setScreen(OnboardingUiState(wizard = requireNotNull(OnboardingSamples.states["verify_failed"])))
@@ -114,6 +117,7 @@ class OnboardingExtrasScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     @Config(sdk = [35], qualifiers = "w411dp-h4000dp-xxhdpi")
     fun theOpenStepPlanAtTwoHundredPercent() {
         setScreen(
@@ -136,6 +140,7 @@ class OnboardingExtrasScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     @Config(sdk = [35], qualifiers = "w411dp-h4000dp-xxhdpi")
     fun theScrolledLowerSection() {
         setScreen(OnboardingUiState(wizard = requireNotNull(OnboardingSamples.states["ready_to_install"])))
@@ -152,6 +157,7 @@ class OnboardingExtrasScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     fun thePairingSheet() {
         setScreen(OnboardingUiState(wizard = WizardState.NeedsPairing(OnboardingSamples.magisk)))
         composeRule.onNodeWithText("Paste pairing link").performClick()
@@ -163,6 +169,7 @@ class OnboardingExtrasScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     fun thePairingSheetWithARejectedLink() {
         setScreen(
             OnboardingUiState(
@@ -179,6 +186,7 @@ class OnboardingExtrasScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     fun theCameraDialogWhenTheCameraIsBlocked() {
         composeRule.setContent {
             PhonxietyTheme(dynamicColor = false) {

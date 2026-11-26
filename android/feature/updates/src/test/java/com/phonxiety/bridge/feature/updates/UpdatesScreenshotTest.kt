@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
+import com.phonxiety.bridge.designsystem.testing.Screenshot
 import com.phonxiety.bridge.designsystem.testing.assertAccessible
 import com.phonxiety.bridge.designsystem.testing.pinAnimationFrame
 import java.util.Locale
@@ -27,6 +28,7 @@ import org.junit.After
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.ParameterizedRobolectricTestRunner
 import org.robolectric.RobolectricTestRunner
@@ -42,6 +44,7 @@ import org.robolectric.annotation.GraphicsMode
 @RunWith(ParameterizedRobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "w411dp-h2600dp-xxhdpi")
+@Category(Screenshot::class)
 class UpdatesScreenshotTest(private val matrixCase: UpdatesMatrixCase) {
     private val originalTimeZone: TimeZone = TimeZone.getDefault()
     private val originalLocale: Locale = Locale.getDefault()
@@ -140,6 +143,7 @@ class UpdatesScreenshotTest(private val matrixCase: UpdatesMatrixCase) {
 @RunWith(ParameterizedRobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "w411dp-h1400dp-xxhdpi")
+@Category(Screenshot::class)
 class UpdatesDialogScreenshotTest(private val case: UpdatesDialogCase) {
     private val originalTimeZone: TimeZone = TimeZone.getDefault()
     private val originalLocale: Locale = Locale.getDefault()
@@ -291,6 +295,7 @@ class UpdatesLowerSectionTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     fun rendersTheLowerSections() {
         composeRule.setContent {
             PhonxietyTheme(dynamicColor = false) {

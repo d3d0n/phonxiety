@@ -30,6 +30,7 @@ import com.phonxiety.bridge.data.calls.CallFilter
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
 import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.designsystem.formatPhoneNumber
+import com.phonxiety.bridge.designsystem.testing.Screenshot
 import com.phonxiety.bridge.designsystem.testing.assertAccessible
 import com.phonxiety.bridge.designsystem.testing.pinAnimationFrame
 import com.phonxiety.bridge.model.CallSummary
@@ -41,6 +42,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -122,20 +124,25 @@ class CallsScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     fun widePhoneInLight() = render("411_light") { setScreen(filled()) }
 
     @Test
+    @Category(Screenshot::class)
     fun widePhoneInDark() = render("411_dark") { setScreen(filled(), dark = true) }
 
     @Test
+    @Category(Screenshot::class)
     fun smallScreenAtTwoHundredPercentInLight() = render("320_font200_light") {
         setScreen(filled(), fontScale = 2f, width = 320.dp)
     }
 
     @Test
+    @Category(Screenshot::class)
     fun noCallsYet() = render("empty_411_light") { setScreen(CallsUiState(loaded = true)) }
 
     @Test
+    @Category(Screenshot::class)
     fun nothingMatchesTheFilter() = render("empty_filtered_411_light") {
         setScreen(
             CallsUiState(loaded = true, filter = CallFilter(outcome = "no_answer", query = "pizza"))
@@ -143,11 +150,13 @@ class CallsScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     fun theOfflineCopy() = render("offline_411_light") {
         setScreen(filled().copy(offline = true, error = CallsFailure(UiText.Literal("The bridge service isn't running."), "link_down")))
     }
 
     @Test
+    @Category(Screenshot::class)
     fun theEndOfTheHistory() = render(
         "lower_411_light",
         beforeCapture = {

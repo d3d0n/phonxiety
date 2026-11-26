@@ -26,18 +26,29 @@ plugins {
     alias(libs.plugins.ktlint) apply false
 }
 
-// `-PskipScreenshots` leaves the Roborazzi-capturing classes out of every
-// module's unit test run: a feature-branch push checks the logic without
-// rendering and comparing the golden images.  The switch is presence-only, so
-// every other invocation is unchanged.  The excluded classes are each module's
-// `*ScreenshotTest` and the onboarding helper that calls `captureRoboImage`.
+// `-PskipScreenshots` leaves the Roborazzi-capturing tests out of every module's
+// unit test run: a feature-branch push checks the logic without rendering and
+// comparing the golden images.  Only tests in the `Screenshot` category are
+// dropped, so the behaviour checks that share a screen's test class still run.
+// The switch is presence-only, so every other invocation is unchanged.
 val skipScreenshots = providers.gradleProperty("skipScreenshots").isPresent
 
 subprojects {
-    tasks.withType<Test>().configureEach {
-        if (skipScreenshots) {
-            exclude("**/*ScreenshotTest*")
-            exclude("**/OnboardingCaptureSupport*")
+    // The category lives in the design system's test fixtures, so only a module
+    // whose test classpath consumes them can hold a tagged test; every other
+    // module is left alone (a JUnit category the test runtime cannot load would
+    // fail the whole executor).
+    afterEvaluate {
+        val seesTheFixtures = path == ":core:designsystem" ||
+            configurations.findByName("testImplementation")?.dependencies?.any {
+                it is ProjectDependency && it.path == ":core:designsystem"
+            } == true
+        if (skipScreenshots && seesTheFixtures) {
+            tasks.withType<Test>().configureEach {
+                useJUnit {
+                    excludeCategories("com.phonxiety.bridge.designsystem.testing.Screenshot")
+                }
+            }
         }
     }
 }

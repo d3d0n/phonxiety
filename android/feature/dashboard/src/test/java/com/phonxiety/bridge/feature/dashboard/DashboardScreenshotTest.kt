@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
+import com.phonxiety.bridge.designsystem.testing.Screenshot
 import com.phonxiety.bridge.designsystem.testing.assertAccessible
 import com.phonxiety.bridge.designsystem.testing.pinAnimationFrame
 import com.phonxiety.bridge.model.AudioState
@@ -46,6 +47,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -131,23 +133,29 @@ class DashboardScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     fun widePhoneInLight() = render("411_light") { setScreen() }
 
     @Test
+    @Category(Screenshot::class)
     fun widePhoneInDark() = render("411_dark") { setScreen(dark = true) }
 
     @Test
+    @Category(Screenshot::class)
     fun smallScreenAtTwoHundredPercentInLight() = render("320_font200_light") { setScreen(fontScale = 2f, width = 320.dp) }
 
     @Test
+    @Category(Screenshot::class)
     fun aCallInProgressAtWideWidth() = render("relay_in_call_411_light") { setScreen(bridge = DashboardSamples.relayInCall) }
 
     @Test
+    @Category(Screenshot::class)
     fun aCallInProgressAtTwoHundredPercent() = render("relay_in_call_320_font200_light") {
         setScreen(bridge = DashboardSamples.relayInCall, fontScale = 2f, width = 320.dp)
     }
 
     @Test
+    @Category(Screenshot::class)
     fun theLinkDropped() = render("offline_411_light") {
         setScreen(
             bridge = DashboardSamples.offline.copy(
@@ -161,25 +169,30 @@ class DashboardScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     fun anUnpairedPhone() = render("unpaired_411_light") { setScreen(bridge = BridgeState(), paired = false) }
 
     @Test
+    @Category(Screenshot::class)
     fun anUnpairedPhoneAtTwoHundredPercent() = render("unpaired_320_font200_light") {
         setScreen(bridge = BridgeState(), paired = false, fontScale = 2f, width = 320.dp)
     }
 
     @Test
+    @Category(Screenshot::class)
     fun noAudioStreamYet() = render("no_stream_411_light") {
         setScreen(bridge = DashboardSamples.direct.copy(audio = AudioState()))
     }
 
     @Test
+    @Category(Screenshot::class)
     fun theLowerCardsAfterScrolling() = render(
         "lower_411_light",
         beforeCapture = { composeRule.onNodeWithTag(SCREEN_TAG).performTouchInput { swipeUp() } }
     ) { setScreen() }
 
     @Test
+    @Category(Screenshot::class)
     fun theLowerCardsAtTwoHundredPercent() = render(
         "lower_320_font200_light",
         beforeCapture = {
@@ -227,9 +240,11 @@ class DashboardScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     fun theWholeEndpointAfterTheDisclosureIsOpened() = captureWholeEndpoint("endpoint_full_411_light")
 
     @Test
+    @Category(Screenshot::class)
     fun theWholeEndpointAtTwoHundredPercentInLight() = captureWholeEndpoint("endpoint_full_320_font200_light", fontScale = 2f, width = 320.dp)
 
     @Test
@@ -241,6 +256,7 @@ class DashboardScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     fun theUnpairConfirmation() {
         setScreen()
         openUnpairDialog()

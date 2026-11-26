@@ -38,6 +38,7 @@ import com.github.takahirom.roborazzi.captureRoboImage
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
 import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.designsystem.formatPhoneNumber
+import com.phonxiety.bridge.designsystem.testing.Screenshot
 import com.phonxiety.bridge.designsystem.testing.assertAccessible
 import com.phonxiety.bridge.designsystem.testing.pinAnimationFrame
 import com.phonxiety.bridge.model.CallMark
@@ -54,6 +55,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -138,17 +140,21 @@ class CallDetailScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     fun widePhoneInLight() = render("411_light") { setScreen(finished()) }
 
     @Test
+    @Category(Screenshot::class)
     fun widePhoneInDark() = render("411_dark") { setScreen(finished(), dark = true) }
 
     @Test
+    @Category(Screenshot::class)
     fun smallScreenAtTwoHundredPercentInLight() = render("320_font200_light") {
         setScreen(finished(), fontScale = 2f, width = 320.dp)
     }
 
     @Test
+    @Category(Screenshot::class)
     fun aRunningCall() = render("live_411_light") {
         setScreen(
             CallDetailUiState(
@@ -161,6 +167,7 @@ class CallDetailScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     fun theOfflineCopy() = render("offline_411_light") {
         setScreen(
             CallDetailUiState(
@@ -174,6 +181,7 @@ class CallDetailScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     fun theLowerSections() = render(
         "lower_411_light",
         beforeCapture = {
@@ -248,6 +256,7 @@ class CallDetailScreenshotTest {
     }
 
     @Test
+    @Category(Screenshot::class)
     fun aLongResultAnswerStacksUnderItsLabel() = render(
         "result_long_411_light",
         beforeCapture = {
@@ -257,6 +266,7 @@ class CallDetailScreenshotTest {
     ) { setScreen(longFieldCall()) }
 
     @Test
+    @Category(Screenshot::class)
     fun anUnreportedResultFieldSaysSo() = render(
         "result_missing_411_light",
         beforeCapture = {
@@ -390,9 +400,11 @@ class CallDetailScreenshotTest {
     ) { setScreen(state, dark = dark, fontScale = fontScale, width = width) }
 
     @Test
+    @Category(Screenshot::class)
     fun theRecordingCardOffersTheDownloadWhileTheFileIsOnTheBridge() = captureRecording("recording_remote_411_light", remoteRecording(), REMOTE_SUBTITLE)
 
     @Test
+    @Category(Screenshot::class)
     fun theRemoteRecordingAtTwoHundredPercentInLight() = captureRecording(
         "recording_remote_320_font200_light",
         remoteRecording(),
@@ -402,9 +414,11 @@ class CallDetailScreenshotTest {
     )
 
     @Test
+    @Category(Screenshot::class)
     fun theRecordingCardReportsTheTransferWhileItRuns() = captureRecording("recording_downloading_411_light", finished(), DOWNLOADING_SUBTITLE)
 
     @Test
+    @Category(Screenshot::class)
     fun theRunningDownloadAtTwoHundredPercentInLight() = captureRecording(
         "recording_downloading_320_font200_light",
         finished(),
@@ -414,9 +428,11 @@ class CallDetailScreenshotTest {
     )
 
     @Test
+    @Category(Screenshot::class)
     fun theRecordingCardSaysSavedOnlyOnceTheFileIsHere() = captureRecording("recording_saved_411_light", savedRecording(), SAVED_SUBTITLE)
 
     @Test
+    @Category(Screenshot::class)
     fun theSavedRecordingAtTwoHundredPercentInLight() = captureRecording(
         "recording_saved_320_font200_light",
         savedRecording(),
