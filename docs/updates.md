@@ -81,7 +81,7 @@ The copy written by `--serve` (the `dist/` copy keeps `https://` sources and no 
 | `apk.signingCertSha256` | app | SHA-256 of the signing certificate. The archive's signers must equal the installed app's and include this certificate. |
 | `apk.minSdk` | app | A release above the phone's `Build.VERSION.SDK_INT` is shown as incompatible. |
 | `module.url`, `module.file` | app | The app-facing source of the same zip: `daemon:module` plus the served basename, or an https URL. The phone currently rebuilds the zip from its running APK and does not download this copy. |
-| `module.sha256` | manager | Digest of the published module zip (the app rebuilds its own from the running APK). |
+| `module.sha256` | people | Digest of the published module zip, for checking a download by hand. The app only checks that the value is a digest, and the root manager never reads it. |
 | `module.schemaVersion` | app | Payload schema. The app applies a release only when `schemaVersion <= MODULE_SCHEMA_VERSION` (currently `1`). |
 | `module.requiresReboot` | app | The release needs a boot. Every module release currently does. |
 | `module.permissions` | app | Privileged grants in the allowlist. A grant the installed app does not hold forces a reboot even if `requiresReboot` were false, and makes the module install wait for the app update: the phone rebuilds the zip from the running APK. |
@@ -122,7 +122,8 @@ verifies:
    rollback is for).
 
 The previous APK is copied to `filesDir/updates/previous.apk` (with a small metadata file) before
-the installer runs, so a failed or bad update always leaves a rollback.
+the installer runs, so a failed install can be undone by reinstalling that copy. If the copy cannot
+be made, the install still runs and the rollback card later reports that no APK was kept.
 
 Installation uses a `PackageInstaller` session with `setRequestUpdateOwnership(true)`. With the
 module installed the app holds `INSTALL_SELF_UPDATES`, so there is no user prompt; the session
@@ -138,8 +139,26 @@ The service restarts through `MY_PACKAGE_REPLACED`.
 `filesDir/updates/previous.apk` is reinstalled as root: the APK is copied to `/data/local/tmp` with
 the allowlisted `cp` command, then `pm install -r -d` runs through `RootShell`. Root is what allows
 the version code to go backwards; without root the rollback action reports that instead of trying.
-The published module zip or `mise run phone:install --zip dist/<older>.zip` remain the module-level
-rollback.
+
+That install alone only works while the module has not mounted a newer APK on the system image.
+Android compares a downgrade against the version mounted there, so once the module has put a newer
+priv-app on the image, the previous module has to go back first. The app then runs the combined
+rollback: it asks for the published previous-module archive, stages that archive as root, and hands
+the rest to a detached root script, because removing this app's own update freezes and kills its
+process. The next boot is checked against the rollback's module version, module digest and app
+version; anything else is reported as a pending rollback with a retry.
+
+A rollback is only available for an update the app performed itself. The previous APK is kept
+before an app update, and the previous module archive is captured from the mounted APK before a
+module update. A module update installed directly through the root manager replaces both without
+either copy, so an in-app rollback afterwards is not guaranteed: the app offers what the copies on
+the phone allow and otherwise names the blocker — no kept APK, no previous module archive, an
+archive that is not older than the mounted module, an archive whose digest does not match its
+metadata, a mounted version or root storage it cannot read, or a running app that is not newer than
+the kept one.
+
+For a module rollback without the app, install an older module zip:
+`mise run phone:install --zip dist/<older>.zip`.
 
 ## Module updates
 
@@ -148,8 +167,10 @@ The Module row's action rebuilds the zip on the phone with `ModuleZipBuilder`: t
 and `module.prop`, `customize.sh`, `action.sh`, the WebUI and the privapp allowlist come from the
 assets copied out of `android/magisk/`. The rebuild embeds `updateJsonUrl` as `updateJson`.
 
-The published `module.sha256` is what the root manager checks when it downloads `zipUrl`; the
-phone's own rebuild is deliberately different because it embeds the APK that is running there.
+The published `module.sha256` is the digest of the zip `zipUrl` serves, for checking a download by
+hand. The root manager's update document carries only `version`, `versionCode`, `zipUrl` and
+`changelog`, so it never reads the digest. The phone's own rebuild is deliberately different
+because it embeds the APK that is running there.
 
 The zip is then installed through the detected provider (`magisk --install-module`,
 `ksud module install`, `apd module install`) and the phone is rebooted
