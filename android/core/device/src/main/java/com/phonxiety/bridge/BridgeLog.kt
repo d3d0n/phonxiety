@@ -1,7 +1,8 @@
 package com.phonxiety.bridge
 
-import java.text.SimpleDateFormat
-import java.util.Date
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -30,11 +31,14 @@ object BridgeLog {
         val tag: String,
         val message: String
     ) {
-        fun format(): String = "${TIME.format(Date(atEpochMs))} ${levelLetter(level)}/$tag: $message"
+        fun format(): String {
+            val at = TIME.format(Instant.ofEpochMilli(atEpochMs).atZone(ZoneId.systemDefault()))
+            return "$at ${levelLetter(level)}/$tag: $message"
+        }
     }
 
     private const val CAPACITY = 2_000
-    private val TIME = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
+    private val TIME = DateTimeFormatter.ofPattern("HH:mm:ss.SSS", Locale.US)
     private val lines = ArrayDeque<Line>(CAPACITY)
     private val _revision = MutableStateFlow(0)
 

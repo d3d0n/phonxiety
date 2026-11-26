@@ -6,8 +6,9 @@ import android.content.Context
 import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
-import java.text.SimpleDateFormat
-import java.util.Date
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -61,11 +62,11 @@ object CrashReports {
                 Kind.EXIT -> "exit"
             }
             val memory = if (memoryLimiter) ", memory limiter (${description.orEmpty()})" else ""
-            return "$what at ${TIME.format(Date(atEpochMs))} ($reason$memory)"
+            return "$what at ${TIME.format(Instant.ofEpochMilli(atEpochMs).atZone(ZoneId.systemDefault()))} ($reason$memory)"
         }
     }
 
-    private val TIME = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+    private val TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss", Locale.US)
     private val installed = AtomicBoolean(false)
     private val lock = Any()
 
