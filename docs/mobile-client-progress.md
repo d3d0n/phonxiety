@@ -25,7 +25,7 @@ What each phase of [`mobile-client-plan.md`](mobile-client-plan.md) produced on 
   - Copy: US English, sentence case, status colors as fixed tokens, units with a no-break space, numbers and dates in the phone's locale.
   - Raw daemon text appears only under Details, verbatim and selectable.
   - Layout: a card's status moves under its title from 150% text; chip rows wrap instead of scrolling off the edge.
-- **Gate.** Every captured state is rendered at 411 dp in light, dark and dynamic color, and at 320 dp with 200% text. Every capture passes one shared accessibility check: Roborazzi with the Accessibility Test Framework at Warning, in `core/designsystem` test fixtures. Its only exemption is text inside a disabled control (WCAG 1.4.3).
+- **Gate.** Each screen's main states are rendered at 411 dp in light, dark and dynamic color and at 320 dp with 200% text; the remaining states are rendered at 411 dp light only. Each test file lists which states get the full matrix (e.g. `UpdatesScreenshotTest` `MATRIX_STATES`). Every capture passes one shared accessibility check: Roborazzi with the Accessibility Test Framework at Warning, in `core/designsystem` test fixtures. Its only exemption is text inside a disabled control (WCAG 1.4.3).
 - **Phone pass at 556a9d2.** 25 screens were captured on the Pixel and compared with the pre-pass build. The findings were fixed in 7e69aa0:
   - call previews lost their ellipsis;
   - Doctor showed raw diagnostics and exit codes;
