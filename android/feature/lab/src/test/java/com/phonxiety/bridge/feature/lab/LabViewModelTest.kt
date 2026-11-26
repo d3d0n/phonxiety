@@ -179,9 +179,9 @@ class LabViewModelTest {
         val vm = viewModel()
         vm.toggleProbeCandidate("lan")
         vm.runProbe()
-        withTimeout(5_000) { vm.state.first { it.probe.candidates.isNotEmpty() } }
+        withTimeout(5_000) { vm.state.first { it.probe.rows.isNotEmpty() } }
         assertEquals(setOf("iroh", "tailscale"), vm.state.value.probe.selected)
-        assertEquals(2, vm.state.value.probe.candidates.size)
+        assertEquals(2, vm.state.value.probe.rows.size)
         assertNull(vm.state.value.probe.error)
     }
 
@@ -206,13 +206,17 @@ class LabViewModelTest {
         vm.toggleProbeCandidate("iroh")
         vm.toggleProbeCandidate("tailscale")
         vm.runProbe()
-        withTimeout(5_000) { vm.state.first { it.probe.candidates.isNotEmpty() } }
-        val row = vm.state.value.probe.candidates.single()
-        assertTrue(row.reachable)
-        assertEquals(9.0, row.rttMs)
-        assertEquals(url, row.address)
-        assertNull(row.reason)
-        assertTrue(row.detail.orEmpty().contains("this phone: tls+auth to $url in 9 ms"))
+        withTimeout(5_000) { vm.state.first { it.probe.rows.isNotEmpty() } }
+        val row = vm.state.value.probe.rows.single()
+        // The handshake is the measurement: the daemon's stale "no listener" is not repeated.
+        assertEquals(ProbeVerdict.REACHED, row.verdict)
+        assertEquals(9L, row.rttMs)
+        assertEquals("192.0.2.10:18763", row.endpoint)
+        assertEquals(
+            UiText.Res(R.string.lab_probe_note_reached, listOf("192.0.2.10:18763", "9\u00A0ms")),
+            row.note
+        )
+        assertNull(row.listenerNote)
         assertEquals(listOf(url), lanCheck.calls.single().first)
         assertEquals(pin, lanCheck.calls.single().second)
         assertEquals("dev-token", lanCheck.calls.single().third)
@@ -240,17 +244,16 @@ class LabViewModelTest {
         vm.toggleProbeCandidate("iroh")
         vm.toggleProbeCandidate("tailscale")
         vm.runProbe()
-        withTimeout(5_000) { vm.state.first { it.probe.candidates.isNotEmpty() } }
-        val row = vm.state.value.probe.candidates.single()
-        assertFalse(row.reachable)
+        withTimeout(5_000) { vm.state.first { it.probe.rows.isNotEmpty() } }
+        val row = vm.state.value.probe.rows.single()
+        assertEquals(ProbeVerdict.NOT_REACHED, row.verdict)
         assertNull(row.rttMs)
-        assertEquals("unreachable_from_phone", row.reason)
-        assertTrue(row.detail.orEmpty().contains("this phone could not reach $url"))
-        assertTrue(row.detail.orEmpty().contains("the daemon's listener answers on its own LAN address"))
+        assertEquals(UiText.Res(R.string.lab_probe_note_unreached, listOf("192.0.2.10:18763")), row.note)
+        assertEquals(UiText.Res(R.string.lab_probe_listener_answers), row.listenerNote)
     }
 
     @Test
-    fun `without a LAN address the daemon's row is kept and says why`() = runBlocking<Unit> {
+    fun `without a LAN address the row says it was not checked and why`() = runBlocking<Unit> {
         api.probeHandler = {
             ApiOutcome.Ok(
                 200,
@@ -265,10 +268,11 @@ class LabViewModelTest {
         vm.toggleProbeCandidate("iroh")
         vm.toggleProbeCandidate("tailscale")
         vm.runProbe()
-        withTimeout(5_000) { vm.state.first { it.probe.candidates.isNotEmpty() } }
-        val row = vm.state.value.probe.candidates.single()
-        assertFalse(row.reachable)
-        assertTrue(row.detail.orEmpty().contains("the daemon reports no LAN address"))
+        withTimeout(5_000) { vm.state.first { it.probe.rows.isNotEmpty() } }
+        val row = vm.state.value.probe.rows.single()
+        assertEquals(ProbeVerdict.NOT_CHECKED, row.verdict)
+        assertEquals(UiText.Res(R.string.lab_probe_note_no_lan), row.note)
+        assertEquals(UiText.Res(R.string.lab_probe_listener_silent), row.listenerNote)
         assertTrue(lanCheck.calls.isEmpty())
     }
 
@@ -288,11 +292,12 @@ class LabViewModelTest {
         vm.toggleProbeCandidate("iroh")
         vm.toggleProbeCandidate("tailscale")
         vm.runProbe()
-        withTimeout(5_000) { vm.state.first { it.probe.candidates.isNotEmpty() } }
-        val row = vm.state.value.probe.candidates.single()
-        assertFalse(row.reachable)
-        assertEquals(null, row.rttMs)
-        assertEquals("inconclusive", row.reason)
+        withTimeout(5_000) { vm.state.first { it.probe.rows.isNotEmpty() } }
+        val row = vm.state.value.probe.rows.single()
+        // Unmeasured is not unreachable: the daemon's "reachable" never becomes a 3 ms readout.
+        assertEquals(ProbeVerdict.NOT_CHECKED, row.verdict)
+        assertNull(row.rttMs)
+        assertEquals(UiText.Res(R.string.lab_probe_note_no_info), row.note)
         assertTrue(lanCheck.calls.isEmpty())
     }
 

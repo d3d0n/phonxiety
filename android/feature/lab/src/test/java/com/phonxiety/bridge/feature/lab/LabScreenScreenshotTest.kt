@@ -155,6 +155,8 @@ class LabScreenScreenshotTest {
     @Test
     fun theTestCallConfirmation() {
         setScreen(previewLabState().copy(testCall = previewLabState().testCall.copy(confirming = true)))
+        // Let the dialog's enter animation finish: a half-faded scrim is a different image.
+        composeRule.mainClock.advanceTimeBy(1_000)
         composeRule.waitForIdle()
         composeRule.onNodeWithTag(SCREEN_TAG).assertAccessible()
         // The dialog is captured on its own node: the scrim behind it animates, the dialog does not.
