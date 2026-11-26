@@ -186,11 +186,13 @@ class UpdatesViewModelTest {
     }
 
     @Test
-    fun `an app only rollback failure stays in the rollback section`() = runTest(testDispatcher.scheduler) {
+    fun `an app only rollback failure stays in the rollback section and retries as a rollback`() = runTest(testDispatcher.scheduler) {
         val service = FakeUpdatesService().apply { rollbackPlan.value = UpdatesSamples.appOnlyRollback() }
         val viewModel = UpdatesViewModel(service, bridge)
         backgroundScope.launch { viewModel.state.collect {} }
         advanceUntilIdle()
+        // Online: the check carries a manifest, so an update retry would have something to install.
+        assertNotNull(viewModel.state.value.check?.manifest)
 
         viewModel.rollback()
         advanceUntilIdle()
@@ -201,6 +203,16 @@ class UpdatesViewModelTest {
         advanceUntilIdle()
 
         assertEquals(failure, viewModel.state.value.rollbackAppInstall)
+        // The app row shows nothing: its "Install again" would put the update over the kept APK.
+        assertEquals(AppInstallState.Idle, viewModel.state.value.appInstall)
+
+        // The rollback section's retry asks again and runs the rollback, never an update install.
+        viewModel.rollback()
+        advanceUntilIdle()
+        viewModel.confirmRollback()
+        advanceUntilIdle()
+        assertEquals(2, service.rollbackCalls)
+        assertEquals(null, service.installedManifest)
     }
 
     @Test

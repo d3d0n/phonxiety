@@ -29,6 +29,10 @@ import kotlinx.coroutines.launch
 data class UpdatesUiState(
     val loading: Boolean = false,
     val check: UpdateCheck? = null,
+    /**
+     * An update install's progress and failure, for the app row. While an app-only rollback runs it
+     * stays idle: the row's retry would install the update over the APK the rollback restores.
+     */
     val appInstall: AppInstallState = AppInstallState.Idle,
     val moduleInstall: ModuleInstallState = ModuleInstallState.Idle,
     val rollbackPlan: RollbackPlan? = null,
@@ -113,7 +117,7 @@ class UpdatesViewModel @Inject constructor(
         UpdatesUiState(
             loading = localState.loading,
             check = checked,
-            appInstall = current.appInstall,
+            appInstall = current.appInstall.takeUnless { localState.appRollback } ?: AppInstallState.Idle,
             moduleInstall = current.moduleInstall,
             rollbackPlan = current.rollbackPlan,
             rollbackRecovery = current.rollbackRecovery,

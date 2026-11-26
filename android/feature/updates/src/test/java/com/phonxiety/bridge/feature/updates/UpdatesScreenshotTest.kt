@@ -196,35 +196,12 @@ class UpdatesDialogScreenshotTest(private val case: UpdatesDialogCase) {
 
         @JvmStatic
         @ParameterizedRobolectricTestRunner.Parameters(name = "{0}")
-        fun cases(): List<Array<Any>> = listOf(
-            arrayOf<Any>(
-                UpdatesDialogCase(
-                    state = UpdatesDialogState.MODULE,
-                    widthDp = 411,
-                    dark = false,
-                    fontScale = 1f,
-                    slug = "411_light"
-                )
-            ),
-            arrayOf<Any>(
-                UpdatesDialogCase(
-                    state = UpdatesDialogState.APP_ONLY,
-                    widthDp = 411,
-                    dark = false,
-                    fontScale = 1f,
-                    slug = "411_light"
-                )
-            ),
-            arrayOf<Any>(
-                UpdatesDialogCase(
-                    state = UpdatesDialogState.APP_ONLY,
-                    widthDp = 320,
-                    dark = true,
-                    fontScale = 2f,
-                    slug = "320_font200_dark"
-                )
+        fun cases(): List<Array<Any>> = UpdatesDialogState.entries.flatMap { state ->
+            listOf(
+                UpdatesDialogCase(state, widthDp = 411, dark = false, fontScale = 1f, slug = "411_light"),
+                UpdatesDialogCase(state, widthDp = 320, dark = true, fontScale = 2f, slug = "320_font200_dark")
             )
-        )
+        }.map { arrayOf<Any>(it) }
     }
 }
 
@@ -313,7 +290,8 @@ class UpdatesLowerSectionTest {
                 }
             }
         }
-        composeRule.onNodeWithText("Rollback unfinished").performScrollTo()
+        // Scroll to the recovery's actions, not its title: the capture must show the buttons.
+        composeRule.onNodeWithText("Finish the rollback").performScrollTo()
         composeRule.onNodeWithTag(LOWER_TAG).assertAccessible()
         composeRule.onNodeWithTag(LOWER_TAG)
             .captureRoboImage("src/test/screenshots/updates_rollback_unfinished_lower_411_light.png")
