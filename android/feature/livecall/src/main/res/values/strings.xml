@@ -52,9 +52,11 @@
     </plurals>
     <string name="live_call_transcript_working">The agent is working</string>
     <string name="live_call_transcript_waiting">Waiting for the first turn</string>
+    <string name="live_call_transcript_in_progress">First turn in progress</string>
     <string name="live_call_transcript_starts">The transcript starts when someone speaks</string>
     <string name="live_call_waiting_next_turn">Waiting for the next turn…</string>
     <string name="live_call_jump_to_live">Jump to live</string>
+    <string name="live_call_jump_to_end">Jump to the end</string>
     <string name="live_call_agent_paused">Agent paused</string>
     <string name="live_call_agent_listening">Agent listening</string>
 

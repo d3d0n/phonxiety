@@ -158,6 +158,22 @@ class LabViewModelTest {
     }
 
     @Test
+    fun `after the call ends the audio card asks for a call again`() = runTest(testDispatcher) {
+        val vm = viewModel()
+        bridge.flow.value = BridgeState(call = CallState("call-1", "+1•••23", CallPhase.ACTIVE, 0L))
+        withTimeout(5_000) { vm.state.first { it.callPhase == "active" } }
+        assertTrue(vm.state.value.audioEnabled)
+        assertNull(vm.state.value.audioDisabledReason)
+
+        // The bridge keeps the call it last saw. That ended record is no call to run audio inside,
+        // so the card goes back to asking for a call, not for an active one.
+        bridge.flow.value = BridgeState(call = CallState("call-1", "+1•••23", CallPhase.ENDED, 0L))
+        withTimeout(5_000) { vm.state.first { it.callPhase == "ended" } }
+        assertFalse(vm.state.value.audioEnabled)
+        assertEquals(UiText.Res(R.string.lab_audio_reason_no_call), vm.state.value.audioDisabledReason)
+    }
+
+    @Test
     fun `the test call only uses the configured number`() = runTest(testDispatcher) {
         var requested: TestCallRequest? = null
         api.testCallHandler = { request ->

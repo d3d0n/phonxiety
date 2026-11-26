@@ -57,7 +57,13 @@ data class LiveCallUiState(
     val summary: String? = null,
     val summaryFields: JsonObject? = null,
     val audioCodec: String? = null,
+    /** The record's own connect time; null until a snapshot or event carries `connected_at`. */
     val connectedAtMs: Long? = null,
+    /**
+     * The moment this screen saw the phone report its call active. It stands in for the record's
+     * connect time until that answers, so the header counts the conversation rather than the ring.
+     */
+    val phoneConnectedAtMs: Long? = null,
     val createdAtMs: Long? = null,
     /** When the call stopped, so the timer stops with it. */
     val endedAtMs: Long? = null,
@@ -87,9 +93,15 @@ data class LiveCallUiState(
     /** The daemon's word wins, except where the phone is provably ahead of a stale record. */
     val phase: String? get() = reconcilePhase(state, daemonCallState(localPhase))
 
+    /**
+     * When the call connected: the record's time, else the moment this screen saw the phone
+     * active. Before either exists the timer counts from when the call was placed.
+     */
+    val connectedStartMs: Long? get() = connectedAtMs ?: phoneConnectedAtMs
+
     val callSecondsElapsed: Long?
         get() {
-            val start = connectedAtMs ?: createdAtMs ?: return null
+            val start = connectedStartMs ?: createdAtMs ?: return null
             val end = (if (ended) endedAtMs else null) ?: System.currentTimeMillis()
             return ((end - start).coerceAtLeast(0)) / 1000
         }
@@ -268,7 +280,18 @@ class LiveCallViewModel @Inject constructor(
             bridgeState.state.collect { bridge ->
                 val bound = boundCallId
                 val localPhase = bridge.call?.takeIf { bound != null && it.callId == bound }?.phase
-                _state.update { it.copy(audio = bridge.audio, localPhase = localPhase) }
+                // The phone's own ACTIVE is this screen's one sighting of the line connecting. It
+                // stands in for the record's `connected_at` until that answers over the link; the
+                // first sighting is kept, and the record's time replaces it once it arrives.
+                val phoneActiveAtMs = System.currentTimeMillis()
+                    .takeIf { localPhase == CallPhase.ACTIVE }
+                _state.update {
+                    it.copy(
+                        audio = bridge.audio,
+                        localPhase = localPhase,
+                        phoneConnectedAtMs = it.phoneConnectedAtMs ?: phoneActiveAtMs
+                    )
+                }
             }
         }
     }
