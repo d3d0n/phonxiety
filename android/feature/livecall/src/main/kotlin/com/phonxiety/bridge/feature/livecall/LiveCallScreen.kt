@@ -616,6 +616,12 @@ internal fun transcriptSubtitle(state: LiveCallUiState, resources: Resources): S
  * Newest turn at the bottom. Following is a property of the scroll position: as soon as the user
  * scrolls up the list stops moving, and the jump pill brings it back to live. The heading is item
  * zero of this same list, so the transcript text owns every pixel the screen can spare.
+ *
+ * The unconfirmed-end message is the second row, at the top. When the list enters that state the
+ * row is brought into view once, and the list stops following the newest turn: a reader who was at
+ * the bottom, or who opens an already unconfirmed call, sees why the end is unconfirmed instead of
+ * the newest line. Manual scrolling and the jump pill keep working, and leaving the state restores
+ * ordinary following.
  */
 @Composable
 private fun TranscriptList(state: LiveCallUiState, onReload: () -> Unit, modifier: Modifier) {
@@ -631,8 +637,21 @@ private fun TranscriptList(state: LiveCallUiState, onReload: () -> Unit, modifie
     val headerCount = if (unknownCard) 2 else 1
     // The last transcript item is the last item of the list.
     val lastIndex = headerCount + itemCount - 1
-    LaunchedEffect(itemCount, following, unknownCard) {
-        if (itemCount > 0 && following) listState.scrollToItem(lastIndex)
+    // The unconfirmed end sits under the heading, so this is the row that must be seen.
+    val unknownCardIndex = 1
+    // One reveal per unconfirmed end: after it the reader owns the position, so a turn arriving
+    // cannot drag the list back to the bottom and hide the message again.
+    var unknownRevealed by remember { mutableStateOf(false) }
+    LaunchedEffect(unknownCard, itemCount, following) {
+        if (unknownCard) {
+            if (!unknownRevealed) {
+                listState.scrollToItem(unknownCardIndex)
+                unknownRevealed = true
+            }
+        } else {
+            unknownRevealed = false
+            if (itemCount > 0 && following) listState.scrollToItem(lastIndex)
+        }
     }
     // The jump control sits under the list, never over a line the reader is trying to read.
     Column(modifier = modifier.fillMaxWidth()) {
