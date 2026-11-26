@@ -61,7 +61,10 @@ class DoctorPolicyTest {
         }
     }
 
-    /** The provider decides only the wording: Magisk and APatch mount system/ themselves. */
+    /**
+     * The provider decides only the wording: Magisk mounts system/ itself, while KernelSU and an
+     * APatch whose apd supports metamodules ask for one when the probe says it is missing.
+     */
     @Test
     fun theOverlayCopyNamesAMetamoduleOnlyForAProviderThatNeedsOne() {
         val magisk = requireNotNull(

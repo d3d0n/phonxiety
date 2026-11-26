@@ -61,6 +61,33 @@ class FileDoctorChangeLogTest {
     }
 
     @Test
+    fun anEmptyArgumentKeepsItsPosition() {
+        val log = store()
+        log.record(DoctorChangeEntry(atEpochMs = 1, event = DoctorLogEvent.REBOOT_FAILED, args = listOf("")))
+        log.record(DoctorChangeEntry(atEpochMs = 2, event = DoctorLogEvent.REBOOTED))
+
+        val entries = log.entries()
+        assertEquals(listOf(""), entries.first().args)
+        assertEquals(emptyList<String>(), entries.last().args)
+    }
+
+    @Test
+    fun aLegacyLineIsReadAndWrittenVerbatim() {
+        val file = File(folder.root, "doctor.log")
+        val oldText = "The daemon printed C:\\temp | exit \\f and \\a here"
+        file.writeText("123|The daemon printed C:\\temp | exit \\f and \\a here\n")
+
+        val log = store(file)
+        assertEquals(oldText, log.entries().single().legacyText)
+
+        // Recording a new event rewrites the file; the old payload must come back byte for byte.
+        log.record(DoctorChangeEntry(atEpochMs = 456, event = DoctorLogEvent.BRIDGE_RESTARTED))
+        val reloaded = store(file).entries()
+        assertEquals(oldText, reloaded.first { it.event == null }.legacyText)
+        assertEquals(DoctorLogEvent.BRIDGE_RESTARTED, reloaded.last().event)
+    }
+
+    @Test
     fun theLogKeepsItsNewestEntries() {
         val log = FileDoctorChangeLog(File(folder.root, "doctor.log"), limit = 2)
         repeat(3) { index ->

@@ -251,6 +251,51 @@ class SettingsViewModelTest {
     }
 
     @Test
+    fun `a bulk revert of repeated changes to one key ends at the value auto-tune first found`() = runBlocking<Unit> {
+        prefs.settings.value = PhoneSettings(maxBitrate = 32_000)
+        val log = AutoTuneLogStore(File(context.filesDir, "settings/auto-tune.json"))
+        log.append(
+            AutoTuneLogEntry(id = "first", atMs = 1, key = TuneKey.MAX_BITRATE.key, from = "32000", to = "16000")
+        )
+        log.append(
+            AutoTuneLogEntry(id = "second", atMs = 2, key = TuneKey.MAX_BITRATE.key, from = "16000", to = "64000")
+        )
+        prefs.settings.value = PhoneSettings(maxBitrate = 64_000)
+        val vm = viewModel()
+        withTimeout(5_000) { vm.state.first { it.autoTune.changes.size == 2 } }
+
+        vm.revertEverything()
+        withTimeout(5_000) { vm.state.first { state -> state.autoTune.changes.all { it.reverted } } }
+        assertEquals("the newest entry is not the value to restore", 32_000, prefs.settings.value.maxBitrate)
+
+        vm.undoRevertEverything()
+        withTimeout(5_000) { vm.state.first { state -> state.autoTune.changes.none { it.reverted } } }
+        assertEquals(64_000, prefs.settings.value.maxBitrate)
+    }
+
+    @Test
+    fun `undo restores a manual adjustment made before the bulk revert`() = runBlocking<Unit> {
+        prefs.settings.value = PhoneSettings(maxBitrate = 32_000)
+        val log = AutoTuneLogStore(File(context.filesDir, "settings/auto-tune.json"))
+        log.append(
+            AutoTuneLogEntry(id = "only", atMs = 1, key = TuneKey.MAX_BITRATE.key, from = "32000", to = "64000")
+        )
+        prefs.settings.value = PhoneSettings(maxBitrate = 64_000)
+        val vm = viewModel()
+        withTimeout(5_000) { vm.state.first { it.autoTune.changes.size == 1 } }
+
+        // The user moves the value by hand after auto-tune; the revert and its undo must respect it.
+        prefs.update { it.copy(maxBitrate = 48_000) }
+        vm.revertEverything()
+        withTimeout(5_000) { vm.state.first { state -> state.autoTune.changes.all { it.reverted } } }
+        assertEquals(32_000, prefs.settings.value.maxBitrate)
+
+        vm.undoRevertEverything()
+        withTimeout(5_000) { vm.state.first { state -> state.autoTune.changes.none { it.reverted } } }
+        assertEquals(48_000, prefs.settings.value.maxBitrate)
+    }
+
+    @Test
     fun `auto-tune off means no evaluation`() = runBlocking<Unit> {
         prefs.settings.value = PhoneSettings(wifiLowLatency = true, autoTuneEnabled = false)
         bridge.flow.value = BridgeState(device = DeviceState(thermal = "SEVERE"))

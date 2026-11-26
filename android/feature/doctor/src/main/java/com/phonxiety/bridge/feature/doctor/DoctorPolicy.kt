@@ -7,8 +7,8 @@ import com.phonxiety.bridge.designsystem.UiText
  * whether Doctor may act on its own. Nothing here touches a device, so every cell of the table is
  * unit-tested.
  *
- * [FixContext] changes only the wording: Magisk and APatch mount `system/` themselves, while a
- * KernelSU install without a metamodule needs one before any module is mounted.
+ * [FixContext] changes only the wording: Magisk mounts `system/` itself, while KernelSU and an
+ * APatch whose `apd` supports metamodules need one before any module is mounted.
  */
 object DoctorPolicy {
     /**

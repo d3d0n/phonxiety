@@ -36,7 +36,10 @@ class FileDoctorChangeLog(
 
     private fun format(entry: DoctorChangeEntry): String {
         val event = entry.event
-        if (event == null) return "${entry.atEpochMs}|${escape(entry.legacyText.orEmpty())}"
+        // A legacy line was written verbatim by an older build: keep its bytes, escaping only the
+        // structured form, so a backslash or a pipe it contains survives every later append.
+        if (event == null) return "${entry.atEpochMs}|${entry.legacyText.orEmpty()}"
+        if (entry.args.isEmpty()) return "${entry.atEpochMs}|${event.name}"
         val args = entry.args.joinToString(ARG_SEPARATOR.toString()) { escape(it) }
         return "${entry.atEpochMs}|${event.name}|$args"
     }
@@ -49,11 +52,13 @@ class FileDoctorChangeLog(
         val second = rest.indexOf(FIELD_SEPARATOR)
         val head = if (second < 0) rest else rest.substring(0, second)
         val event = DoctorLogEvent.entries.firstOrNull { it.name == head }
-            ?: return DoctorChangeEntry(atEpochMs = at, legacyText = unescape(rest))
+            ?: return DoctorChangeEntry(atEpochMs = at, legacyText = rest)
+        // Keep every position, an empty one included: a fix that produced no output still carries
+        // its single empty argument, and dropping it makes the rendered template lose its value.
         val args = if (second < 0) {
             emptyList()
         } else {
-            rest.substring(second + 1).split(ARG_SEPARATOR).filter { it.isNotEmpty() }.map(::unescape)
+            rest.substring(second + 1).split(ARG_SEPARATOR).map(::unescape)
         }
         return DoctorChangeEntry(atEpochMs = at, event = event, args = args)
     }

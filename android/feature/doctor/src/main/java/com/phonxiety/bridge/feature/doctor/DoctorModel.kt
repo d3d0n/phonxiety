@@ -15,7 +15,7 @@ enum class DoctorGroup(@param:StringRes val titleRes: Int) {
     DAEMON(R.string.doctor_group_daemon)
 }
 
-/** How bad a row is; colour and the summary derive from it. */
+/** How bad a row is; color and the summary derive from it. */
 enum class DoctorSeverity { OK, WARN, FAIL, UNKNOWN }
 
 /** The check a row reports; the decision tree in [DoctorPolicy] is keyed by it. */

@@ -14,8 +14,9 @@ import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import com.github.takahirom.roborazzi.captureRoboImage
+import androidx.compose.ui.test.performScrollTo
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -89,7 +90,37 @@ class DoctorScreenBehaviourTest {
         composeRule.onNodeWithText("Reinstall the module?").assertIsDisplayed()
         composeRule.onNodeWithText("Reinstall the module and reboot").assertIsDisplayed()
         composeRule.onNode(isDialog()).assertAccessible()
-        composeRule.onNode(isDialog())
-            .captureRoboImage("src/test/screenshots/doctor_confirm_dialog.png")
+    }
+
+    /**
+     * The persisted zero-output reboot failure used to lose its empty argument on reload, and
+     * rendering the template with no value threw while the log card was composed.
+     */
+    @Test
+    fun aRebootFailureSavedWithoutOutputStillRendersAfterAReload() {
+        val file = File.createTempFile("doctor-log", ".log").also { it.deleteOnExit() }
+        val log = FileDoctorChangeLog(file)
+        log.record(DoctorChangeEntry(1_796_500_000_000, DoctorLogEvent.REBOOT_FAILED, listOf("")))
+        log.record(
+            DoctorChangeEntry(1_796_500_001_000, DoctorLogEvent.REBOOT_FAILED, listOf("su: not found"))
+        )
+
+        composeRule.setContent {
+            PhonxietyTheme(dynamicColor = false) {
+                Surface(color = MaterialTheme.colorScheme.background) {
+                    DoctorScreen(
+                        state = DoctorSamples.allGreen().copy(changeLog = log.entries()),
+                        callbacks = DoctorCallbacks()
+                    )
+                }
+            }
+        }
+
+        composeRule.onNodeWithText("The reboot request failed before the phone answered.", substring = true)
+            .performScrollTo()
+            .assertIsDisplayed()
+        composeRule.onNodeWithText("The reboot request failed: su: not found", substring = true)
+            .performScrollTo()
+            .assertIsDisplayed()
     }
 }

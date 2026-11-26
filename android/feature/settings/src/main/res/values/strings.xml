@@ -43,6 +43,7 @@
     </plurals>
     <string name="settings_connection_addresses_split">%1$d on the LAN, %2$d in the tailnet</string>
     <string name="settings_connection_addresses_error_title">Addresses</string>
+    <string name="settings_connection_addresses_error_message">The app could not read the daemon\'s other addresses. Check that it is running, then reload.</string>
     <string name="settings_connection_reload">Reload from the daemon</string>
     <string name="settings_connection_reading">Reading…</string>
 
@@ -91,6 +92,7 @@
     <string name="settings_daemon_status_edited">Edited</string>
     <string name="settings_daemon_status_loaded">Loaded</string>
     <string name="settings_daemon_error_title">The daemon did not answer</string>
+    <string name="settings_daemon_error_message">Check that the daemon is running on the computer, then reload.</string>
     <string name="settings_daemon_applied">Applied changes</string>
     <plurals name="settings_daemon_restart_needed">
         <item quantity="one">Restart the daemon to apply %1$d change</item>

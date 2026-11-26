@@ -178,6 +178,13 @@ object DoctorSamples {
 
     fun duringCall(): DoctorUiState = severalFailures().copy(callActive = true)
 
+    /** The same failures with one recorded repair, so the change log is never an empty state. */
+    fun withChangeLog(): DoctorUiState = severalFailures().copy(
+        changeLog = listOf(
+            DoctorChangeEntry(atEpochMs = CHECKED_AT, event = DoctorLogEvent.BRIDGE_RESTARTED)
+        )
+    )
+
     private fun daemonFixes(probe: DaemonProbe): List<DaemonFixOffer> = (probe as? DaemonProbe.Reached)?.report?.fixes.orEmpty().map { fix ->
         DaemonFixOffer(
             fix = fix.fix,

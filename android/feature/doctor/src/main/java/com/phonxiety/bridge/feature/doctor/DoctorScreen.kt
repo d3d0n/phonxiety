@@ -282,7 +282,8 @@ private fun SummaryCard(state: DoctorUiState, callbacks: DoctorCallbacks) {
 
             state.readError != null -> ErrorCard(
                 title = stringResource(R.string.doctor_read_error_title),
-                message = requireNotNull(state.readError).asString(),
+                message = stringResource(R.string.doctor_read_error_message),
+                output = requireNotNull(state.readError).asString(),
                 actionLabel = stringResource(R.string.doctor_action_run_checks),
                 onAction = callbacks.onRefresh
             )
@@ -623,13 +624,19 @@ private fun DoctorChangeEntry.text(): String = when (event) {
 
     DoctorLogEvent.REBOOTED -> stringResource(R.string.doctor_log_rebooted)
 
-    DoctorLogEvent.FIX_FAILED -> if (args.isEmpty()) {
+    DoctorLogEvent.FIX_FAILED -> if (args.firstOrNull().isNullOrBlank()) {
         stringResource(R.string.doctor_log_fix_failed_no_output)
     } else {
-        stringResource(R.string.doctor_log_fix_failed, args[0])
+        stringResource(R.string.doctor_log_fix_failed, args.first())
     }
 
-    DoctorLogEvent.REBOOT_FAILED -> stringResource(R.string.doctor_log_reboot_failed, *args.toTypedArray())
+    // A reboot request can fail before the phone prints anything: say that in words rather than
+    // rendering a sentence with a hole in it.
+    DoctorLogEvent.REBOOT_FAILED -> if (args.firstOrNull().isNullOrBlank()) {
+        stringResource(R.string.doctor_log_reboot_failed_no_output)
+    } else {
+        stringResource(R.string.doctor_log_reboot_failed, args.first())
+    }
 
     DoctorLogEvent.PAIRING_RECOVERY_OPENED -> stringResource(R.string.doctor_log_pairing_opened)
 
@@ -739,7 +746,12 @@ private fun ConfirmFixDialog(request: FixRequest, onConfirm: () -> Unit, onDismi
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.doctor_confirm_title, label)) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            // At 200 % font on a 320 dp phone the body is taller than the dialog: scroll it rather
+            // than clip the rollback sentence.
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
                 Text(
                     text = stringResource(R.string.doctor_confirm_check_failed, request.checkTitle.asString()),
                     style = MaterialTheme.typography.bodySmall,

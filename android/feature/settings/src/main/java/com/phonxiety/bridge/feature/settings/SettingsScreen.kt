@@ -292,7 +292,8 @@ private fun ConnectionCard(phone: PhoneSettings, connection: ConnectionUi, callb
         connection.error?.let {
             ErrorCard(
                 title = stringResource(R.string.settings_connection_addresses_error_title),
-                message = it.asString()
+                message = stringResource(R.string.settings_connection_addresses_error_message),
+                output = it.asString()
             )
         }
         if (connection.candidates.isEmpty()) {
@@ -494,7 +495,8 @@ private fun DaemonCard(daemon: DaemonSettingsUi, callbacks: SettingsCallbacks) {
         daemon.error?.let {
             ErrorCard(
                 title = stringResource(R.string.settings_daemon_error_title),
-                message = it.asString()
+                message = stringResource(R.string.settings_daemon_error_message),
+                output = it.asString()
             )
         }
         if (daemon.changesApplied.isNotEmpty()) {

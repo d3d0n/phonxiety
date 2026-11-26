@@ -67,6 +67,16 @@ class SettingsViewModel @Inject constructor(
     /** The entries a bulk revert just undid, so its snackbar can put them back. */
     private var lastReverted: List<AutoTuneLogEntry> = emptyList()
 
+    /** The affected preferences as they were just before a bulk revert; Undo restores them as is. */
+    private var lastRevertedSnapshot: RevertSnapshot? = null
+
+    /** Only the keys the bulk revert touched; a null value means that key is untouched. */
+    private data class RevertSnapshot(
+        val codec: String?,
+        val maxBitrate: Int?,
+        val wifiLowLatency: Boolean?
+    )
+
     init {
         viewModelScope.launch {
             phonePreferences.settings.collect { settings ->
@@ -421,9 +431,16 @@ class SettingsViewModel @Inject constructor(
                 }
                 return@launch
             }
-            for (entry in pending.asReversed()) revert(entry)
+            // The values just before the revert are what Undo puts back: replaying the log would
+            // guess the order of repeated changes and lose a manual adjustment made meanwhile.
+            val snapshot = snapshotFor(pending)
+            // One write per key, back to the `from` of its oldest pending change, so a key that
+            // changed twice in a row ends at the value auto-tune first found.
+            val targets = TuneKey.entries.mapNotNull { key -> pending.lastOrNull { TuneKey.of(it.key) == key } }
+            for (entry in targets) revert(entry)
             val log = changeLog.markReverted(pending.map { it.id }.toSet())
             lastReverted = pending
+            lastRevertedSnapshot = snapshot
             _state.update {
                 it.copy(
                     autoTune = it.autoTune.copy(changes = log),
@@ -438,10 +455,18 @@ class SettingsViewModel @Inject constructor(
     fun undoRevertEverything() {
         viewModelScope.launch {
             val undone = lastReverted
-            if (undone.isEmpty()) return@launch
-            for (entry in undone) reapply(entry)
+            val snapshot = lastRevertedSnapshot
+            if (undone.isEmpty() || snapshot == null) return@launch
+            phonePreferences.update { settings ->
+                settings.copy(
+                    preferredCodec = snapshot.codec ?: settings.preferredCodec,
+                    maxBitrate = snapshot.maxBitrate ?: settings.maxBitrate,
+                    wifiLowLatency = snapshot.wifiLowLatency ?: settings.wifiLowLatency
+                )
+            }
             val log = changeLog.markReverted(undone.map { it.id }.toSet(), reverted = false)
             lastReverted = emptyList()
+            lastRevertedSnapshot = null
             _state.update {
                 it.copy(
                     autoTune = it.autoTune.copy(changes = log),
@@ -450,6 +475,16 @@ class SettingsViewModel @Inject constructor(
                 )
             }
         }
+    }
+
+    private suspend fun snapshotFor(entries: List<AutoTuneLogEntry>): RevertSnapshot {
+        val keys = entries.mapNotNull { TuneKey.of(it.key) }.toSet()
+        val current = phonePreferences.settings.first()
+        return RevertSnapshot(
+            codec = current.preferredCodec.takeIf { TuneKey.CODEC in keys },
+            maxBitrate = current.maxBitrate.takeIf { TuneKey.MAX_BITRATE in keys },
+            wifiLowLatency = current.wifiLowLatency.takeIf { TuneKey.WIFI_LOW_LATENCY in keys }
+        )
     }
 
     private suspend fun revert(entry: AutoTuneLogEntry) {
@@ -461,21 +496,6 @@ class SettingsViewModel @Inject constructor(
             }
 
             TuneKey.WIFI_LOW_LATENCY -> phonePreferences.update { it.copy(wifiLowLatency = entry.from == "true") }
-
-            null -> Unit
-        }
-    }
-
-    /** Puts a reverted change back: the value it set is the value to write again. */
-    private suspend fun reapply(entry: AutoTuneLogEntry) {
-        when (TuneKey.of(entry.key)) {
-            TuneKey.CODEC -> phonePreferences.update { it.copy(preferredCodec = PhoneCodec.normalize(entry.to)) }
-
-            TuneKey.MAX_BITRATE -> entry.to.toIntOrNull()?.let { to ->
-                phonePreferences.update { it.copy(maxBitrate = to) }
-            }
-
-            TuneKey.WIFI_LOW_LATENCY -> phonePreferences.update { it.copy(wifiLowLatency = entry.to == "true") }
 
             null -> Unit
         }

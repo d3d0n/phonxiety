@@ -29,6 +29,7 @@
     </plurals>
     <string name="doctor_summary_reading">Reading the phone and the daemon…</string>
     <string name="doctor_read_error_title">The phone could not be read</string>
+    <string name="doctor_read_error_message">Check that the root manager is running, then run the checks again.</string>
     <string name="doctor_action_run_checks">Run checks again</string>
     <string name="doctor_running">Running: %1$s</string>
     <string name="doctor_loading_report">Reading the daemon\'s report…</string>
@@ -208,7 +209,7 @@
     <string name="doctor_confirm_cancel">Cancel</string>
 
     <!-- Risk classes -->
-    <string name="doctor_risk_automatic">Runs on open</string>
+    <string name="doctor_risk_automatic">Runs without confirmation</string>
     <string name="doctor_risk_confirm">Asks first</string>
     <string name="doctor_risk_never">Blocked in a call</string>
 
@@ -226,7 +227,7 @@
     <!-- Recovery -->
     <string name="doctor_card_recovery">Recovery guides</string>
     <string name="doctor_recovery_subtitle">Commands are filled in for %1$s.</string>
-    <string name="doctor_recovery_subtitle_unknown">Commands use the safe mode and flags every root manager honours.</string>
+    <string name="doctor_recovery_subtitle_unknown">Commands use the safe mode and flags every root manager honors.</string>
     <string name="doctor_recovery_what_happened">What happened</string>
     <string name="doctor_recovery_on_phone">On the phone</string>
     <string name="doctor_recovery_from_computer">From the computer</string>
@@ -312,6 +313,7 @@
     <string name="doctor_log_fix_failed">The fix failed: %1$s</string>
     <string name="doctor_log_fix_failed_no_output">The fix failed: the provider printed nothing</string>
     <string name="doctor_log_reboot_failed">The reboot request failed: %1$s</string>
+    <string name="doctor_log_reboot_failed_no_output">The reboot request failed before the phone answered.</string>
     <string name="doctor_log_pairing_opened">Opened pairing recovery</string>
     <string name="doctor_log_daemon_fix">The daemon applied %1$s</string>
     <string name="doctor_log_daemon_fix_more">The daemon applied %1$s (%2$s)</string>

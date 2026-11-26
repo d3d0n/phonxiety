@@ -29,7 +29,7 @@ data class RecoveryPage(
 
 /**
  * The recovery table, with the provider's own commands filled in. A provider that is
- * not detected gets the flag-file and `adb` forms every manager honours, never a command invented
+ * not detected gets the flag-file and `adb` forms every manager honors, never a command invented
  * for it.
  */
 object RecoveryBook {
