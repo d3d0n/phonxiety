@@ -3,9 +3,7 @@ package com.phonxiety.bridge.feature.lab
 import com.phonxiety.bridge.model.LinkTestResult
 
 /** The Opus profiles and PCM a codec trial compares, cheapest first. */
-data class CodecProfile(val codec: String, val bitrate: Int?) {
-    val label: String get() = if (codec == "opus" && bitrate != null) "Opus ${bitrate / 1000} kbit/s" else "PCM"
-}
+data class CodecProfile(val codec: String, val bitrate: Int?)
 
 val TRIAL_PROFILES: List<CodecProfile> = listOf(
     CodecProfile("opus", 16_000),

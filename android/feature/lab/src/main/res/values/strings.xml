@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The test lab. One word per concept: "bridge" is the daemon, "far end" is the person
+         on the other side, and a daemon token is shown as words. -->
+
+    <string name="lab_title">Test lab</string>
+    <string name="lab_show_all">Show all</string>
+    <string name="lab_show_less">Show less</string>
+    <string name="lab_none">—</string>
+    <string name="lab_share_failed">No app accepted the file</string>
+
+    <!-- Link test -->
+    <string name="lab_link_title">Link test</string>
+    <string name="lab_link_subtitle">Frames sized like a real call, both ways. The numbers are measured, not estimated.</string>
+    <string name="lab_codec_auto">Auto</string>
+    <string name="lab_codec_opus">Opus</string>
+    <string name="lab_codec_pcm">PCM</string>
+    <string name="lab_codec_opus_rate">Opus %1$s&#160;kbit/s</string>
+    <string name="lab_transport_stream">Stream</string>
+    <string name="lab_transport_datagram">Datagram</string>
+    <string name="lab_link_duration">Test duration</string>
+    <string name="lab_link_duration_state">%1$d&#160;s</string>
+    <string name="lab_link_run">Run link test</string>
+    <string name="lab_link_running">Measuring…</string>
+    <string name="lab_link_sending">Sending frames for %1$d&#160;s</string>
+    <string name="lab_link_failed">Link test didn\'t finish</string>
+    <string name="lab_stat_median">Median</string>
+    <string name="lab_stat_p95">p95</string>
+    <string name="lab_stat_worst">Worst</string>
+    <string name="lab_stat_loss">Loss</string>
+    <string name="lab_stat_p95_caption">19 of 20 frames arrived faster</string>
+    <string name="lab_link_path">Path</string>
+    <string name="lab_link_transport">Transport</string>
+    <string name="lab_link_throughput">Throughput</string>
+    <string name="lab_link_frames">Frames echoed</string>
+    <string name="lab_link_frames_value">%1$d of %2$d</string>
+    <string name="lab_history_title">History</string>
+    <string name="lab_history_row">%1$s · p95 %2$s · loss %3$s</string>
+    <string name="lab_verdict_good">Good</string>
+    <string name="lab_verdict_poor">Poor</string>
+    <string name="lab_verdict_failed">Failed</string>
+    <string name="lab_chart_caption">%1$s %2$s</string>
+    <string name="lab_chart_description">Median %1$s, p95 %2$s, worst %3$s</string>
+    <string name="lab_history_chart_description">p95 of recent runs, newest %1$s</string>
+
+    <!-- Path probe -->
+    <string name="lab_probe_title">Path probe</string>
+    <string name="lab_probe_subtitle">What this phone can reach. Each path is measured on its own.</string>
+    <string name="lab_probe_paths">Paths</string>
+    <string name="lab_path_iroh">iroh</string>
+    <string name="lab_path_lan">LAN</string>
+    <string name="lab_path_tailscale">Tailscale</string>
+    <string name="lab_probe_run">Probe selected paths</string>
+    <string name="lab_probe_running">Probing…</string>
+    <string name="lab_probe_connecting">Connecting to each path</string>
+    <string name="lab_probe_failed">Path probe didn\'t finish</string>
+    <string name="lab_probe_checked">Checked %1$s</string>
+    <string name="lab_probe_reached">Reached</string>
+    <string name="lab_probe_not_reached">Not reached</string>
+    <string name="lab_probe_not_checked">Not checked</string>
+    <string name="lab_probe_note_no_info">This phone couldn\'t read the bridge\'s LAN addresses.</string>
+    <string name="lab_probe_note_no_lan">The bridge reports no LAN address.</string>
+    <string name="lab_probe_note_unpaired">This phone isn\'t paired, so it can\'t authenticate a probe.</string>
+    <string name="lab_probe_note_check_failed">The phone\'s own check failed.</string>
+    <string name="lab_probe_note_no_result">The phone\'s own check returned no result.</string>
+    <string name="lab_probe_note_reached">This phone reached %1$s in %2$s.</string>
+    <string name="lab_probe_note_unreached">This phone couldn\'t reach %1$s.</string>
+    <string name="lab_probe_note_bridge_reached">The bridge reached it in %1$s.</string>
+    <string name="lab_probe_listener_answers">The bridge\'s own listener answers there.</string>
+    <string name="lab_probe_listener_silent">The bridge\'s listener doesn\'t answer there either.</string>
+    <string name="lab_probe_reason_not_installed">Not set up on this phone.</string>
+    <string name="lab_probe_reason_not_measured">The bridge didn\'t measure this path.</string>
+    <string name="lab_probe_reason_no_lan_address">The bridge reports no LAN address.</string>
+    <string name="lab_probe_reason_listener">The listener didn\'t answer.</string>
+    <string name="lab_probe_reason_unreachable_phone">This phone couldn\'t reach it.</string>
+    <string name="lab_probe_reason_unchecked">This phone couldn\'t run its own check.</string>
+    <string name="lab_probe_reason_none">This phone has no such path.</string>
+
+    <!-- Loopback and tone -->
+    <string name="lab_audio_title">Loopback and tone</string>
+    <string name="lab_audio_subtitle">Both run inside a call you own, so the audio path is the real one.</string>
+    <string name="lab_audio_reason_none">This build of the app offers neither loopback nor a tone.</string>
+    <string name="lab_audio_reason_no_call">Start a call first. Loopback and the tone run inside a call you own.</string>
+    <string name="lab_audio_reason_not_active">The call has to be active before audio can loop back.</string>
+    <string name="lab_audio_loopback">Echo the far end back</string>
+    <string name="lab_audio_loopback_detail">The far end hears their own voice, slightly delayed.</string>
+    <string name="lab_audio_tone_frequency">Tone frequency</string>
+    <string name="lab_audio_tone_level">Tone level</string>
+    <string name="lab_audio_hz">%1$s&#160;Hz</string>
+    <string name="lab_audio_dbfs">%1$s&#160;dBFS</string>
+    <string name="lab_audio_play">Play tone</string>
+    <string name="lab_audio_play_busy">Working…</string>
+    <string name="lab_audio_play_supporting">The far end hears the tone for %1$d&#160;s.</string>
+    <string name="lab_audio_on">Loopback is on: the far end hears their own voice.</string>
+    <string name="lab_audio_played">The tone played to the far end for %1$d&#160;s.</string>
+    <string name="lab_audio_failed">The audio tool didn\'t start</string>
+
+    <!-- Test call -->
+    <string name="lab_test_title">Test call</string>
+    <string name="lab_test_subtitle">A real call with the fixed test script. It ends on its own.</string>
+    <string name="lab_test_number">Test number</string>
+    <string name="lab_test_number_hint">The lab only dials the number set here.</string>
+    <string name="lab_test_place">Place test call</string>
+    <string name="lab_test_placing">Placing…</string>
+    <string name="lab_test_need_number">Set the test number first.</string>
+    <string name="lab_test_placed">Placed · %1$s</string>
+    <string name="lab_test_failed">The test call wasn\'t placed</string>
+    <string name="lab_test_dialog_title">Place the test call?</string>
+    <string name="lab_test_dialog_body">Calls %1$s with the fixed test script. It ends on its own and is never retried.</string>
+    <string name="lab_test_dialog_confirm">Place test call</string>
+    <string name="lab_test_dialog_cancel">Cancel</string>
+    <string name="lab_test_placed_message">Test call placed</string>
+
+    <!-- Codec trial -->
+    <string name="lab_trial_title">Codec trial</string>
+    <string name="lab_trial_subtitle">The same probe at Opus 16, 32 and 64&#160;kbit/s, then PCM. The best run is kept.</string>
+    <string name="lab_trial_run">Compare codecs</string>
+    <string name="lab_trial_step_opus">Measuring Opus %1$s&#160;kbit/s</string>
+    <string name="lab_trial_step_opus_plain">Measuring Opus</string>
+    <string name="lab_trial_step_pcm">Measuring PCM</string>
+    <string name="lab_trial_failed">The codec trial stopped</string>
+    <string name="lab_trial_row">p95 %1$s · loss %2$s</string>
+    <string name="lab_trial_recommendation">Recommendation: %1$s</string>
+    <string name="lab_trial_keep">Keep %1$s</string>
+    <string name="lab_trial_kept">The next call uses the profile you kept.</string>
+
+    <!-- Diagnostics -->
+    <string name="lab_diagnostics_title">Diagnostics</string>
+    <string name="lab_diagnostics_subtitle">The bridge\'s own view: versions, paths, counters and redacted settings.</string>
+    <string name="lab_diagnostics_load">Load</string>
+    <string name="lab_diagnostics_loading">Reading…</string>
+    <string name="lab_diagnostics_export">Export bundle</string>
+    <string name="lab_diagnostics_building">Building…</string>
+    <string name="lab_diagnostics_failed">Diagnostics didn\'t load</string>
+    <string name="lab_diagnostics_bundle">Bundle %1$s downloaded and shared</string>
+    <string name="lab_diagnostics_bundle_title">Phonxiety diagnostics %1$s</string>
+
+    <!-- App log -->
+    <string name="lab_log_title">App log</string>
+    <string name="lab_log_subtitle">The bridge\'s most recent log lines.</string>
+    <string name="lab_log_filter">Filter</string>
+    <string name="lab_log_copy">Copy log</string>
+    <string name="lab_log_export">Export log</string>
+    <string name="lab_log_writing">Writing…</string>
+    <string name="lab_log_empty">Nothing logged at this level yet</string>
+    <string name="lab_log_copied">Log copied</string>
+    <string name="lab_log_chooser">Phonxiety phone log</string>
+    <string name="lab_log_share_title">Phonxiety phone log</string>
+    <plurals name="lab_log_lines">
+        <item quantity="one">%1$d line</item>
+        <item quantity="other">%1$d lines</item>
+    </plurals>
+    <string name="lab_level_debug">Debug</string>
+    <string name="lab_level_info">Info</string>
+    <string name="lab_level_warn">Warn</string>
+    <string name="lab_level_error">Error</string>
+</resources>

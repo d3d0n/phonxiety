@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- History and one call's record. One word per concept: "bridge" is the daemon,
+         "far end" is the person on the other side, and a daemon token is shown as words. -->
+
+    <string name="calls_title">Calls</string>
+    <string name="calls_search">Search calls</string>
+    <string name="calls_clear_search">Clear the search</string>
+    <string name="calls_filter_reached">Reached</string>
+    <string name="calls_filter_all">All</string>
+    <string name="calls_filter_clear">Clear filters</string>
+    <string name="calls_retry">Retry</string>
+    <string name="calls_refresh_failed">The history couldn\'t be refreshed</string>
+    <string name="calls_loading">Reading the history</string>
+    <string name="calls_offline">Can\'t reach the bridge. Showing the calls saved on this phone.</string>
+    <string name="calls_end_of_history">You\'ve reached the end of the history.</string>
+    <string name="calls_unknown_number">Unknown number</string>
+    <string name="calls_no_summary">No summary yet</string>
+    <string name="calls_recording_available">Recording</string>
+    <string name="calls_place_call">Place a call</string>
+    <string name="calls_status_unknown">Unknown</string>
+
+    <string name="calls_empty_title">No calls yet</string>
+    <string name="calls_empty_body">Calls you start from the bridge appear here with their summary.</string>
+    <string name="calls_empty_filtered_title">Nothing matches</string>
+    <string name="calls_empty_filtered_body">Relax the filter or clear the search.</string>
+
+    <plurals name="calls_marks">
+        <item quantity="one">%1$d mark</item>
+        <item quantity="other">%1$d marks</item>
+    </plurals>
+
+    <string name="calls_outcome_answered">Answered</string>
+    <string name="calls_outcome_no_answer">No answer</string>
+    <string name="calls_outcome_busy">Busy</string>
+    <string name="calls_outcome_declined">Declined</string>
+    <string name="calls_outcome_disconnected">Disconnected</string>
+    <string name="calls_outcome_canceled">Canceled</string>
+    <string name="calls_outcome_failed">Failed</string>
+
+    <string name="calls_far_end_person">Person</string>
+    <string name="calls_far_end_ivr">IVR</string>
+    <string name="calls_far_end_voicemail">Voicemail</string>
+
+    <string name="calls_state_preparing">Preparing</string>
+    <string name="calls_state_dialing">Dialing</string>
+    <string name="calls_state_ringing">Ringing</string>
+    <string name="calls_live">Live</string>
+    <string name="calls_state_in_progress">In progress</string>
+    <string name="calls_state_ending">Ending</string>
+    <string name="calls_state_ended">Ended</string>
+    <string name="calls_state_canceled">Canceled</string>
+    <string name="calls_state_failed">Failed</string>
+    <string name="calls_state_unknown">Unknown</string>
+
+    <string name="call_detail_fallback_title">Call</string>
+    <string name="call_detail_back">Back</string>
+    <string name="call_detail_missing_title">This call is gone</string>
+    <string name="call_detail_missing_body">It was deleted from the bridge, or the id never existed.</string>
+    <string name="call_detail_loading">Reading the call</string>
+    <string name="call_detail_read_failed">The call couldn\'t be read</string>
+    <string name="call_detail_read_failed_body">The bridge didn\'t answer.</string>
+    <string name="call_detail_retry">Retry</string>
+    <string name="call_detail_offline">Showing the copy saved on this phone.</string>
+    <string name="call_detail_refresh">Refresh</string>
+
+    <string name="call_detail_live_title">Live call</string>
+    <string name="call_detail_live_body">This call is still running. You can listen in and end it on the live call screen.</string>
+    <string name="call_detail_open_live">Open the live call</string>
+
+    <string name="call_detail_result_title">Result</string>
+    <string name="call_detail_summary_pending">The summary appears when the call ends.</string>
+    <string name="call_detail_summary_absent">No summary was produced.</string>
+    <string name="call_detail_result_ready">Summary ready</string>
+    <string name="call_detail_result_pending">Summary pending</string>
+    <string name="call_detail_result_failed">Summary failed</string>
+
+    <string name="call_detail_brief_title">The brief</string>
+    <string name="call_detail_number">Number</string>
+    <string name="call_detail_context">Context</string>
+    <string name="call_detail_constraints">Constraints</string>
+    <string name="call_detail_reported_fields">Reported fields</string>
+    <string name="call_detail_longest_call">Longest call</string>
+    <string name="call_detail_ring_timeout">Ring timeout</string>
+
+    <string name="call_detail_timing_title">Timing</string>
+    <string name="call_detail_requested">Requested</string>
+    <string name="call_detail_connected">Connected</string>
+    <string name="call_detail_ended">Ended</string>
+    <string name="call_detail_duration">Duration</string>
+    <string name="call_detail_disconnected_by">Disconnected by</string>
+    <string name="call_detail_cause_this_phone">This phone</string>
+    <string name="call_detail_cause_far_end">The far end</string>
+    <string name="call_detail_cause_ring_timeout">Ring timeout</string>
+
+    <string name="call_detail_details_show">Show technical details</string>
+    <string name="call_detail_details_hide">Hide technical details</string>
+    <string name="call_detail_details_title">Details</string>
+    <string name="call_detail_call_id">Call ID</string>
+    <string name="call_detail_raw_state">State code</string>
+    <string name="call_detail_raw_outcome">Outcome code</string>
+    <string name="call_detail_raw_result">Result code</string>
+    <string name="call_detail_counters_title">Counters</string>
+    <string name="call_detail_counters_subtitle">Reported by the phone during the call</string>
+
+    <string name="call_detail_marks_title">Marks</string>
+    <string name="call_detail_marks_empty">Nothing marked</string>
+    <plurals name="call_detail_marks_count">
+        <item quantity="one">%1$d marked</item>
+        <item quantity="other">%1$d marked</item>
+    </plurals>
+    <string name="call_detail_mark_agreed">Agreed</string>
+    <string name="call_detail_mark_refused">Refused</string>
+    <string name="call_detail_mark_follow_up">Follow-up</string>
+
+    <string name="call_detail_recording_title">Recording</string>
+    <string name="call_detail_recording_subtitle">The recording, saved on this phone.</string>
+    <string name="call_detail_recording_downloading">Downloading from the bridge…</string>
+    <string name="call_detail_recording_download">Download the recording</string>
+    <string name="call_detail_recording_play">Play</string>
+    <string name="call_detail_recording_pause">Pause</string>
+    <string name="call_detail_recording_position">Recording position</string>
+    <string name="call_detail_recording_position_state">%1$s of %2$s</string>
+    <string name="call_detail_share_audio">Share the audio</string>
+    <string name="call_detail_failed_pill">Failed</string>
+
+    <string name="call_detail_transcript_title">Transcript</string>
+    <string name="call_detail_transcript_empty">No turns were recorded</string>
+    <plurals name="call_detail_turns">
+        <item quantity="one">%1$d turn</item>
+        <item quantity="other">%1$d turns</item>
+    </plurals>
+    <plurals name="call_detail_turns_first">
+        <item quantity="one">The first %1$d turn</item>
+        <item quantity="other">The first %1$d turns</item>
+    </plurals>
+    <string name="call_detail_load_more_turns">Load more turns</string>
+    <string name="call_detail_role_agent">Agent</string>
+    <string name="call_detail_role_far_end">Far end</string>
+
+    <string name="call_detail_action_call_again">Call again</string>
+    <string name="call_detail_action_share">Share</string>
+
+    <string name="call_detail_delete_title">Delete</string>
+    <string name="call_detail_delete_subtitle">Removes the record, the transcript and the recording from the bridge.</string>
+    <string name="call_detail_delete_action">Delete this call</string>
+    <string name="call_detail_deleting">Deleting…</string>
+    <string name="call_detail_delete_confirm_title">Delete this call?</string>
+    <string name="call_detail_delete_confirm_body">The bridge removes its archive. This can\'t be undone, and the phone\'s copy goes with it.</string>
+    <string name="call_detail_delete_confirm">Delete</string>
+    <string name="call_detail_delete_keep">Keep it</string>
+</resources>

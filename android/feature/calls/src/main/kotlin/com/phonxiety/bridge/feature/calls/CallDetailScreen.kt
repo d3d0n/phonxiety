@@ -1,8 +1,9 @@
 package com.phonxiety.bridge.feature.calls
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -43,13 +44,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.phonxiety.bridge.data.Speaker
 import com.phonxiety.bridge.data.speakerOf
+import com.phonxiety.bridge.designsystem.asString
 import com.phonxiety.bridge.designsystem.component.EmptyState
 import com.phonxiety.bridge.designsystem.component.ErrorCard
 import com.phonxiety.bridge.designsystem.component.KeyValueRow
@@ -57,6 +64,9 @@ import com.phonxiety.bridge.designsystem.component.LoadingState
 import com.phonxiety.bridge.designsystem.component.SectionCard
 import com.phonxiety.bridge.designsystem.component.StatusPill
 import com.phonxiety.bridge.designsystem.component.StatusTone
+import com.phonxiety.bridge.designsystem.formatDuration
+import com.phonxiety.bridge.designsystem.formatElapsedTime
+import com.phonxiety.bridge.designsystem.formatPhoneNumber
 import com.phonxiety.bridge.model.CallMark
 import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.TranscriptTurn
@@ -121,133 +131,198 @@ fun CallDetailScreen(
     modifier: Modifier = Modifier
 ) {
     val snapshot = state.snapshot
-    Box(
+    Surface(
         modifier = modifier
             .fillMaxSize()
-            .windowInsetsPadding(WindowInsets.safeDrawing)
+            .windowInsetsPadding(WindowInsets.safeDrawing),
+        color = MaterialTheme.colorScheme.background,
+        contentColor = MaterialTheme.colorScheme.onBackground
     ) {
         when {
             state.missing -> Column {
                 DetailHeader(state = state, onBack = onBack)
                 EmptyState(
-                    title = "This call is gone",
-                    message = "It was deleted from the daemon, or the id never existed."
+                    title = stringResource(R.string.call_detail_missing_title),
+                    message = stringResource(R.string.call_detail_missing_body)
                 )
             }
 
             snapshot == null && state.loading -> Column {
                 DetailHeader(state = state, onBack = onBack)
-                LoadingState(message = "Reading the call")
+                LoadingState(message = stringResource(R.string.call_detail_loading))
             }
 
             snapshot == null -> Column {
                 DetailHeader(state = state, onBack = onBack)
+                val failure = state.error
                 ErrorCard(
-                    title = "The call could not be read",
-                    message = state.error ?: "The daemon did not answer.",
-                    actionLabel = "Retry",
+                    title = stringResource(R.string.call_detail_read_failed),
+                    message = failure?.message?.asString() ?: stringResource(R.string.call_detail_read_failed_body),
+                    output = failure?.code,
+                    actionLabel = stringResource(R.string.call_detail_retry),
                     onAction = onRefresh,
                     modifier = Modifier.padding(16.dp)
                 )
             }
 
-            else -> LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                item { DetailHeader(state = state, onBack = onBack) }
-                if (state.offline) {
-                    item { OfflineNote(onRefresh = onRefresh) }
-                }
-                if (state.live) {
-                    item {
-                        SectionCard(title = "In progress", status = { StatusPill("Live", StatusTone.ACCENT, pulse = true) }) {
-                            Text(
-                                text = "This call is still running. Supervision and the hang-up live on the live call screen.",
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                            FilledTonalButton(onClick = { onOpenLive(state.callId) }) {
-                                Text("Open the live call")
-                            }
-                        }
-                    }
-                }
-                item { ResultCard(state) }
-                item { RequestCard(state) }
-                item { TimingCard(state) }
-                val counters = snapshot.counters
-                if (counters != null && counters.isNotEmpty()) {
-                    item { CountersCard(counters) }
-                }
-                item { MarksCard(state = state, onMark = onMark) }
-                item { RecordingCard(state = state, onDownload = onDownloadAudio, onToggle = onTogglePlayback, onSeek = onSeek, onShare = onShareAudio) }
-                item { TranscriptCard(state = state, onLoadMore = onLoadMoreTranscript) }
-                item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilledTonalButton(
-                            onClick = { state.brief?.let(onCallAgain) },
-                            enabled = state.brief != null,
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("Call again")
-                        }
-                        FilledTonalButton(
-                            onClick = onShareTranscript,
-                            enabled = state.transcript.isNotEmpty(),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Share transcript")
-                        }
-                    }
-                }
-                item { DeleteCard(state = state, onDelete = onDelete) }
-                item { Spacer(Modifier.width(4.dp)) }
-            }
+            else -> CallDetailBody(
+                state = state,
+                snapshot = snapshot,
+                onBack = onBack,
+                onRefresh = onRefresh,
+                onLoadMoreTranscript = onLoadMoreTranscript,
+                onMark = onMark,
+                onCallAgain = onCallAgain,
+                onOpenLive = onOpenLive,
+                onDownloadAudio = onDownloadAudio,
+                onTogglePlayback = onTogglePlayback,
+                onSeek = onSeek,
+                onShareAudio = onShareAudio,
+                onShareTranscript = onShareTranscript,
+                onDelete = onDelete
+            )
         }
     }
 }
 
 @Composable
+private fun CallDetailBody(
+    state: CallDetailUiState,
+    snapshot: CallSnapshot,
+    onBack: () -> Unit,
+    onRefresh: () -> Unit,
+    onLoadMoreTranscript: () -> Unit,
+    onMark: (String) -> Unit,
+    onCallAgain: (CallBrief) -> Unit,
+    onOpenLive: (String) -> Unit,
+    onDownloadAudio: () -> Unit,
+    onTogglePlayback: () -> Unit,
+    onSeek: (Long) -> Unit,
+    onShareAudio: () -> Unit,
+    onShareTranscript: () -> Unit,
+    onDelete: () -> Unit
+) {
+    var showDetails by rememberSaveable { mutableStateOf(false) }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        item { DetailHeader(state = state, onBack = onBack) }
+        if (state.live) {
+            item { LiveCard(callId = state.callId, onOpenLive = onOpenLive) }
+        }
+        if (state.offline) {
+            item { OfflineNote(onRefresh = onRefresh) }
+        }
+        item { ResultCard(state) }
+        item { RequestCard(state) }
+        item { TimingCard(state) }
+        item {
+            TextButton(onClick = { showDetails = !showDetails }) {
+                Text(
+                    stringResource(
+                        if (showDetails) R.string.call_detail_details_hide else R.string.call_detail_details_show
+                    )
+                )
+            }
+        }
+        if (showDetails) {
+            item { DetailsCard(snapshot) }
+        }
+        item { MarksCard(state = state, onMark = onMark) }
+        item {
+            RecordingCard(
+                state = state,
+                onDownload = onDownloadAudio,
+                onToggle = onTogglePlayback,
+                onSeek = onSeek,
+                onShare = onShareAudio
+            )
+        }
+        item { TranscriptCard(state = state, onLoadMore = onLoadMoreTranscript) }
+        item { DetailActions(state = state, onCallAgain = onCallAgain, onShareTranscript = onShareTranscript) }
+        item { DeleteCard(state = state, onDelete = onDelete) }
+        item { Spacer(Modifier.width(4.dp)) }
+    }
+}
+
+@Composable
 private fun DetailHeader(state: CallDetailUiState, onBack: () -> Unit) {
-    Row(
+    val snapshot = state.snapshot
+    val number = snapshot?.destination?.let(::formatPhoneNumber)
+        ?: stringResource(R.string.call_detail_fallback_title)
+    val subtitle = listOfNotNull(
+        snapshot?.farEnd?.takeIf { it.isNotBlank() },
+        stateLabel(snapshot?.state)
+    ).joinToString(" · ")
+    val live = state.live
+    val pill = if (live) {
+        stringResource(R.string.calls_live)
+    } else {
+        outcomeLabel(snapshot?.callOutcome)
+            ?: stateLabel(snapshot?.state)
+            ?: stringResource(R.string.calls_status_unknown)
+    }
+    val tone = if (live) StatusTone.ACCENT else outcomeTone(snapshot?.callOutcome)
+    // At 200 % text the number, the subtitle and the pill cannot share a row without one of them
+    // shrinking to a character a line, so the header stacks instead.
+    val stacked = LocalDensity.current.fontScale >= STACKED_AT_FONT_SCALE
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(vertical = 6.dp)
     ) {
-        IconButton(onClick = onBack) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "Back",
-                modifier = Modifier.size(22.dp)
-            )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(R.string.call_detail_back),
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = number, style = MaterialTheme.typography.titleLarge, maxLines = 3)
+                if (subtitle.isNotBlank() && !stacked) {
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2
+                    )
+                }
+            }
+            if (!stacked) {
+                StatusPill(label = pill, tone = tone, pulse = live)
+            }
         }
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = state.snapshot?.destination?.let(::maskNumber) ?: "Call",
-                style = MaterialTheme.typography.titleLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = listOfNotNull(
-                    state.snapshot?.farEnd?.takeIf { it.isNotBlank() },
-                    state.snapshot?.callId,
-                    state.snapshot?.state
-                ).joinToString(" · "),
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.Monospace,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1
-            )
+        if (stacked) {
+            if (subtitle.isNotBlank()) {
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+            }
+            StatusPill(label = pill, tone = tone, pulse = live, modifier = Modifier.padding(start = 16.dp, top = 4.dp))
         }
-        StatusPill(
-            label = (state.snapshot?.callOutcome ?: state.snapshot?.state ?: "unknown").replace('_', ' '),
-            tone = outcomeTone(state.snapshot?.callOutcome)
+    }
+}
+
+@Composable
+private fun LiveCard(callId: String, onOpenLive: (String) -> Unit) {
+    SectionCard(title = stringResource(R.string.call_detail_live_title)) {
+        Text(
+            text = stringResource(R.string.call_detail_live_body),
+            style = MaterialTheme.typography.bodyMedium
         )
+        FilledTonalButton(onClick = { onOpenLive(callId) }) {
+            Text(stringResource(R.string.call_detail_open_live))
+        }
     }
 }
 
@@ -259,33 +334,46 @@ private fun OfflineNote(onRefresh: () -> Unit) {
         color = MaterialTheme.colorScheme.secondaryContainer
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+            modifier = Modifier.padding(start = 14.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Showing the copy cached on this phone.",
+                text = stringResource(R.string.call_detail_offline),
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.weight(1f)
             )
-            TextButton(onClick = onRefresh) { Text("Refresh") }
+            TextButton(
+                onClick = onRefresh,
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSecondaryContainer)
+            ) {
+                Text(stringResource(R.string.call_detail_refresh))
+            }
         }
     }
 }
 
 @Composable
 private fun ResultCard(state: CallDetailUiState) {
-    val summary = state.snapshot?.summary
+    val snapshot = state.snapshot
+    val summary = snapshot?.summary
     val fields = state.summaryFields
     SectionCard(
-        title = "Result",
-        subtitle = state.snapshot?.taskOutcome?.replace('_', ' '),
-        status = {
-            state.snapshot?.resultStatus?.let { StatusPill(it, if (it == "ready") StatusTone.POSITIVE else StatusTone.NEUTRAL) }
-        }
+        title = stringResource(R.string.call_detail_result_title),
+        subtitle = snapshot?.taskOutcome?.takeIf { it.isNotBlank() }?.let(::humanize)
     ) {
+        // The pill is in the content, not the title row: "Summary ready" beside "Result" leaves
+        // the title one character wide at 200 % text.
+        resultLabel(snapshot?.resultStatus)?.let { label ->
+            StatusPill(
+                label = label,
+                tone = if (snapshot?.resultStatus == "ready") StatusTone.POSITIVE else StatusTone.NEUTRAL
+            )
+        }
         if (summary.isNullOrBlank() && fields.isEmpty()) {
             Text(
-                text = "No summary was produced.",
+                text = stringResource(
+                    if (state.live) R.string.call_detail_summary_pending else R.string.call_detail_summary_absent
+                ),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -294,9 +382,9 @@ private fun ResultCard(state: CallDetailUiState) {
             Text(text = summary, style = MaterialTheme.typography.bodyLarge)
         }
         fields.entries.forEach { (key, value) ->
-            KeyValueRow(label = key.replace('_', ' '), value = value.render(), mono = true)
+            KeyValueRow(label = humanize(key), value = value.render(), mono = true)
         }
-        state.snapshot?.error?.let { error ->
+        snapshot?.error?.let { error ->
             Text(
                 text = error,
                 style = MaterialTheme.typography.bodySmall,
@@ -309,73 +397,125 @@ private fun ResultCard(state: CallDetailUiState) {
 @Composable
 private fun RequestCard(state: CallDetailUiState) {
     val request = state.snapshot?.request ?: return
-    SectionCard(title = "The brief") {
-        request.text("destination")?.let { KeyValueRow(label = "Number", value = it, mono = true) }
+    SectionCard(title = stringResource(R.string.call_detail_brief_title)) {
+        request.text("destination")?.let {
+            KeyValueRow(label = stringResource(R.string.call_detail_number), value = formatPhoneNumber(it), mono = true)
+        }
         request.text("goal")?.let { Text(text = it, style = MaterialTheme.typography.bodyLarge) }
         request.text("context")?.let { value ->
-            KeyValueRow(label = "Context", value = value)
+            KeyValueRow(label = stringResource(R.string.call_detail_context), value = value)
         }
         request.text("constraints")?.let { value ->
-            KeyValueRow(label = "Constraints", value = value)
+            KeyValueRow(label = stringResource(R.string.call_detail_constraints), value = value)
         }
         val fields = state.resultFields
         if (fields.isNotEmpty()) {
-            KeyValueRow(label = "Fields", value = fields.joinToString(", "))
+            KeyValueRow(
+                label = stringResource(R.string.call_detail_reported_fields),
+                value = fields.joinToString(", ") { humanize(it) }
+            )
         }
         val limits = request["limits"] as? JsonObject
-        limits?.text("max_duration_s")?.let { KeyValueRow(label = "Max duration", value = formatDuration(it.toDoubleOrNull() ?: 0.0), mono = true) }
-        limits?.text("ring_timeout_s")?.let { KeyValueRow(label = "Ring timeout", value = "$it s", mono = true) }
+        limits?.text("max_duration_s")?.toLongOrNull()?.let {
+            KeyValueRow(label = stringResource(R.string.call_detail_longest_call), value = formatDuration(it), mono = true)
+        }
+        limits?.text("ring_timeout_s")?.toLongOrNull()?.let {
+            KeyValueRow(label = stringResource(R.string.call_detail_ring_timeout), value = formatDuration(it), mono = true)
+        }
     }
 }
 
 @Composable
 private fun TimingCard(state: CallDetailUiState) {
     val snapshot = state.snapshot ?: return
-    SectionCard(title = "Timing") {
-        snapshot.createdAt?.let { KeyValueRow(label = "Requested", value = formatDate(it)) }
-        snapshot.connectedAt?.let { KeyValueRow(label = "Connected", value = formatDate(it)) }
-        snapshot.endedAt?.let { KeyValueRow(label = "Ended", value = formatDate(it)) }
+    SectionCard(title = stringResource(R.string.call_detail_timing_title)) {
+        snapshot.createdAt?.let { KeyValueRow(label = stringResource(R.string.call_detail_requested), value = formatDate(it)) }
+        snapshot.connectedAt?.let { KeyValueRow(label = stringResource(R.string.call_detail_connected), value = formatDate(it)) }
+        snapshot.endedAt?.let { KeyValueRow(label = stringResource(R.string.call_detail_ended), value = formatDate(it)) }
         val duration = snapshot.computedDurationSeconds()
         if (duration != null) {
-            KeyValueRow(label = "Duration", value = formatDuration(duration), mono = true)
+            KeyValueRow(
+                label = stringResource(R.string.call_detail_duration),
+                value = formatElapsedTime(duration.toLong()),
+                mono = true
+            )
         }
         snapshot.disconnectCause?.let { cause ->
-            KeyValueRow(label = "Disconnected by", value = cause.text("reason") ?: cause.toString())
+            KeyValueRow(
+                label = stringResource(R.string.call_detail_disconnected_by),
+                value = causeLabel(cause.text("reason"))
+            )
         }
     }
 }
 
+/** The evidence behind the words: the id, the raw codes and the per-call counters. */
 @Composable
-private fun CountersCard(counters: JsonObject) {
-    SectionCard(title = "Counters", subtitle = "Reported by the phone during the call") {
-        counters.entries.forEach { (key, value) ->
-            KeyValueRow(label = key.replace('_', ' '), value = value.render(), mono = true)
+private fun DetailsCard(snapshot: CallSnapshot) {
+    SectionCard(title = stringResource(R.string.call_detail_details_title)) {
+        KeyValueRow(label = stringResource(R.string.call_detail_call_id), value = snapshot.callId, mono = true)
+        snapshot.state?.let { KeyValueRow(label = stringResource(R.string.call_detail_raw_state), value = it, mono = true) }
+        snapshot.callOutcome?.let { KeyValueRow(label = stringResource(R.string.call_detail_raw_outcome), value = it, mono = true) }
+        snapshot.resultStatus?.let { KeyValueRow(label = stringResource(R.string.call_detail_raw_result), value = it, mono = true) }
+        val counters = snapshot.counters
+        if (counters != null && counters.isNotEmpty()) {
+            HorizontalDivider()
+            Text(
+                text = stringResource(R.string.call_detail_counters_title),
+                style = MaterialTheme.typography.titleSmall
+            )
+            Text(
+                text = stringResource(R.string.call_detail_counters_subtitle),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            counters.entries.forEach { (key, value) ->
+                KeyValueRow(label = humanize(key), value = value.render(), mono = true)
+            }
         }
     }
 }
 
 @Composable
 private fun MarksCard(state: CallDetailUiState, onMark: (String) -> Unit) {
+    val count = state.marks.size
     SectionCard(
-        title = "Marks",
-        subtitle = if (state.marks.isEmpty()) "Nothing marked" else "${state.marks.size} marked"
+        title = stringResource(R.string.call_detail_marks_title),
+        subtitle = if (count == 0) {
+            stringResource(R.string.call_detail_marks_empty)
+        } else {
+            pluralStringResource(R.plurals.call_detail_marks_count, count, count)
+        }
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRowChips {
             DETAIL_MARKS.forEach { kind ->
+                val selected = state.marks.any { it.mark == kind }
                 FilterChip(
-                    selected = state.marks.any { it.mark == kind },
+                    selected = selected,
                     onClick = { onMark(kind) },
-                    label = { Text(kind.replace('-', ' ').replaceFirstChar { it.uppercase() }) },
+                    label = { Text(markLabel(kind)) },
+                    leadingIcon = { SelectedCheck(selected) },
                     enabled = !state.marking
                 )
             }
         }
         state.marks.forEach { mark: CallMark ->
             KeyValueRow(
-                label = mark.note ?: mark.mark.replace('-', ' '),
-                value = mark.at?.let(::formatDate) ?: mark.mark
+                label = mark.note ?: markLabel(mark.mark),
+                value = mark.at?.let(::formatDate) ?: markLabel(mark.mark)
             )
         }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun FlowRowChips(content: @Composable () -> Unit) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        content()
     }
 }
 
@@ -388,66 +528,94 @@ private fun RecordingCard(
     onShare: () -> Unit
 ) {
     if (!state.hasRecording) return
+    val failure = state.audio.error
     SectionCard(
-        title = "Recording",
-        subtitle = "The .m4a share copy, downloaded to this phone",
+        title = stringResource(R.string.call_detail_recording_title),
+        subtitle = stringResource(R.string.call_detail_recording_subtitle),
         status = {
-            if (state.audio.error != null) StatusPill("Failed", StatusTone.NEGATIVE)
+            if (failure != null) StatusPill(stringResource(R.string.call_detail_failed_pill), StatusTone.NEGATIVE)
         }
     ) {
         if (state.audio.downloading) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             Text(
-                text = "Downloading from the daemon…",
+                text = stringResource(R.string.call_detail_recording_downloading),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         } else if (state.audio.filePath == null) {
-            FilledTonalButton(onClick = onDownload) { Text("Download the recording") }
+            FilledTonalButton(onClick = onDownload) { Text(stringResource(R.string.call_detail_recording_download)) }
         } else {
+            val position = formatElapsedTime(state.audio.positionMs / 1000)
+            val total = formatElapsedTime((state.audio.durationMs ?: 0L) / 1000)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onToggle, enabled = state.audio.prepared) {
                     Icon(
                         imageVector = Icons.Filled.PlayArrow,
-                        contentDescription = if (state.audio.playing) "Pause" else "Play",
+                        contentDescription = stringResource(
+                            if (state.audio.playing) {
+                                R.string.call_detail_recording_pause
+                            } else {
+                                R.string.call_detail_recording_play
+                            }
+                        ),
                         modifier = Modifier.size(22.dp)
                     )
                 }
                 val duration = (state.audio.durationMs ?: 0L).coerceAtLeast(1L)
+                val name = stringResource(R.string.call_detail_recording_position)
+                val positionState = stringResource(R.string.call_detail_recording_position_state, position, total)
                 Slider(
                     value = (state.audio.positionMs.toFloat() / duration).coerceIn(0f, 1f),
                     onValueChange = { fraction -> onSeek((fraction * duration).toLong()) },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .semantics {
+                            contentDescription = name
+                            stateDescription = positionState
+                        },
                     enabled = state.audio.prepared
                 )
                 Text(
-                    text = "${formatMillis(state.audio.positionMs)} / ${formatMillis(state.audio.durationMs)}",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace
+                    text = "$position / $total",
+                    style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"),
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = onShare) {
-                    Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Share the audio")
-                }
+            TextButton(onClick = onShare) {
+                Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(stringResource(R.string.call_detail_share_audio))
             }
         }
-        state.audio.error?.let { message ->
-            Text(text = message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        if (failure != null) {
+            Text(
+                text = failure.message.asString(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+            failure.code?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }
 
 @Composable
 private fun TranscriptCard(state: CallDetailUiState, onLoadMore: () -> Unit) {
+    val count = state.transcript.size
     SectionCard(
-        title = "Transcript",
+        title = stringResource(R.string.call_detail_transcript_title),
         subtitle = when {
-            state.transcript.isEmpty() -> "No turns were recorded"
-            state.hasMoreTranscript -> "The first ${state.transcript.size} turns"
-            else -> "${state.transcript.size} turns"
+            count == 0 -> stringResource(R.string.call_detail_transcript_empty)
+            state.hasMoreTranscript -> pluralStringResource(R.plurals.call_detail_turns_first, count, count)
+            else -> pluralStringResource(R.plurals.call_detail_turns, count, count)
         }
     ) {
         state.transcript.forEach { turn ->
@@ -457,7 +625,9 @@ private fun TranscriptCard(state: CallDetailUiState, onLoadMore: () -> Unit) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
         if (state.hasMoreTranscript) {
-            TextButton(onClick = onLoadMore, enabled = !state.loadingTranscript) { Text("Load more turns") }
+            TextButton(onClick = onLoadMore, enabled = !state.loadingTranscript) {
+                Text(stringResource(R.string.call_detail_load_more_turns))
+            }
         }
     }
 }
@@ -469,8 +639,8 @@ private fun DetailTurn(turn: TranscriptTurn) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
             text = when (speaker) {
-                Speaker.AGENT -> "Agent"
-                Speaker.FAR_END -> "Far end"
+                Speaker.AGENT -> stringResource(R.string.call_detail_role_agent)
+                Speaker.FAR_END -> stringResource(R.string.call_detail_role_far_end)
                 Speaker.OTHER -> turn.role ?: "—"
             },
             style = MaterialTheme.typography.labelSmall,
@@ -481,10 +651,32 @@ private fun DetailTurn(turn: TranscriptTurn) {
     }
 }
 
+/** One filled action, one tonal: "Call again" is what most people came for. */
+@Composable
+private fun DetailActions(
+    state: CallDetailUiState,
+    onCallAgain: (CallBrief) -> Unit,
+    onShareTranscript: () -> Unit
+) {
+    FlowRowChips {
+        Button(onClick = { state.brief?.let(onCallAgain) }, enabled = state.brief != null) {
+            Text(stringResource(R.string.call_detail_action_call_again))
+        }
+        FilledTonalButton(onClick = onShareTranscript, enabled = state.transcript.isNotEmpty()) {
+            Icon(Icons.Filled.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(stringResource(R.string.call_detail_action_share))
+        }
+    }
+}
+
 @Composable
 private fun DeleteCard(state: CallDetailUiState, onDelete: () -> Unit) {
     var confirming by rememberSaveable { mutableStateOf(false) }
-    SectionCard(title = "Delete", subtitle = "Removes the record, the transcript and the recording from the daemon") {
+    SectionCard(
+        title = stringResource(R.string.call_detail_delete_title),
+        subtitle = stringResource(R.string.call_detail_delete_subtitle)
+    ) {
         Button(
             onClick = { confirming = true },
             enabled = !state.deleting,
@@ -495,14 +687,18 @@ private fun DeleteCard(state: CallDetailUiState, onDelete: () -> Unit) {
         ) {
             Icon(Icons.Filled.Delete, contentDescription = null, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(6.dp))
-            Text(if (state.deleting) "Deleting…" else "Delete this call")
+            Text(
+                stringResource(
+                    if (state.deleting) R.string.call_detail_deleting else R.string.call_detail_delete_action
+                )
+            )
         }
     }
     if (confirming) {
         AlertDialog(
             onDismissRequest = { confirming = false },
-            title = { Text("Delete this call?") },
-            text = { Text("The daemon removes its archive. This cannot be undone, and the phone's cache copy goes with it.") },
+            title = { Text(stringResource(R.string.call_detail_delete_confirm_title)) },
+            text = { Text(stringResource(R.string.call_detail_delete_confirm_body)) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -510,11 +706,11 @@ private fun DeleteCard(state: CallDetailUiState, onDelete: () -> Unit) {
                         onDelete()
                     }
                 ) {
-                    Text("Delete")
+                    Text(stringResource(R.string.call_detail_delete_confirm))
                 }
             },
             dismissButton = {
-                TextButton(onClick = { confirming = false }) { Text("Keep it") }
+                TextButton(onClick = { confirming = false }) { Text(stringResource(R.string.call_detail_delete_keep)) }
             }
         )
     }
@@ -535,10 +731,7 @@ internal fun CallSnapshot.computedDurationSeconds(): Double? {
     return ((ended - connected).coerceAtLeast(0.0) * 10).toLong() / 10.0
 }
 
-internal fun formatMillis(ms: Long?): String {
-    if (ms == null || ms <= 0) return "0:00"
-    val total = ms / 1000
-    return "${total / 60}:${(total % 60).toString().padStart(2, '0')}"
-}
-
 internal val DETAIL_MARKS: List<String> = listOf("agreed", "refused", "follow-up")
+
+/** Above this font scale a header row would squeeze its own title, so it stacks. */
+private const val STACKED_AT_FONT_SCALE = 1.5f

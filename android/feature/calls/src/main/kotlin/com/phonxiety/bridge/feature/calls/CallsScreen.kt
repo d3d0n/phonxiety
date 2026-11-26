@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -22,15 +23,19 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -40,17 +45,24 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.phonxiety.bridge.designsystem.asString
 import com.phonxiety.bridge.designsystem.component.EmptyState
 import com.phonxiety.bridge.designsystem.component.ErrorCard
 import com.phonxiety.bridge.designsystem.component.LoadingState
 import com.phonxiety.bridge.designsystem.component.PrimaryActionButton
 import com.phonxiety.bridge.designsystem.component.StatusPill
 import com.phonxiety.bridge.designsystem.component.StatusTone
+import com.phonxiety.bridge.designsystem.formatElapsedTime
+import com.phonxiety.bridge.designsystem.formatPhoneNumber
 import com.phonxiety.bridge.model.CallSummary
 import java.text.DateFormat
 import java.util.Date
@@ -78,7 +90,7 @@ fun CallsRoute(
     )
 }
 
-/** The list: every call the daemon kept, filterable, searchable, and readable offline. */
+/** The list: every call the bridge kept, filterable, searchable, and readable offline. */
 @Composable
 fun CallsScreen(
     state: CallsUiState,
@@ -92,16 +104,20 @@ fun CallsScreen(
     onNewCall: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Box(
+    Surface(
         modifier = modifier
             .fillMaxSize()
-            .windowInsetsPadding(WindowInsets.safeDrawing)
+            .windowInsetsPadding(WindowInsets.safeDrawing),
+        color = MaterialTheme.colorScheme.background,
+        contentColor = MaterialTheme.colorScheme.onBackground
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             Text(
-                text = "Calls",
+                text = stringResource(R.string.calls_title),
                 style = MaterialTheme.typography.headlineMedium,
-                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp)
+                modifier = Modifier
+                    .padding(start = 16.dp, end = 16.dp, top = 12.dp)
+                    .semantics { heading() }
             )
             SearchField(query = state.filter.query, onQueryChange = onQueryChange)
             FilterRows(
@@ -113,12 +129,14 @@ fun CallsScreen(
             if (state.offline) {
                 OfflineBanner(onRefresh = onRefresh)
             }
-            if (state.error != null && !state.offline) {
+            val failure = state.error
+            if (failure != null && !state.offline) {
                 ErrorCard(
-                    title = "The history could not be refreshed",
-                    message = state.error,
+                    title = stringResource(R.string.calls_refresh_failed),
+                    message = failure.message.asString(),
+                    output = failure.code,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    actionLabel = "Retry",
+                    actionLabel = stringResource(R.string.calls_retry),
                     onAction = onRefresh
                 )
             }
@@ -130,21 +148,21 @@ fun CallsScreen(
                     .fillMaxWidth()
             ) {
                 when {
-                    !state.loaded -> LoadingState(message = "Reading the history")
+                    !state.loaded -> LoadingState(message = stringResource(R.string.calls_loading))
 
                     state.calls.isEmpty() -> EmptyState(
-                        title = if (state.filtered) "Nothing matches" else "No calls yet",
-                        message = if (state.filtered) {
-                            "Relax the filter or clear the search."
-                        } else {
-                            "Calls placed from this phone or from the computer appear here with their transcript."
-                        },
+                        title = stringResource(
+                            if (state.filtered) R.string.calls_empty_filtered_title else R.string.calls_empty_title
+                        ),
+                        message = stringResource(
+                            if (state.filtered) R.string.calls_empty_filtered_body else R.string.calls_empty_body
+                        ),
                         action = {
                             if (state.filtered) {
-                                TextButton(onClick = onClearFilters) { Text("Clear the filters") }
+                                TextButton(onClick = onClearFilters) { Text(stringResource(R.string.calls_filter_clear)) }
                             } else {
                                 PrimaryActionButton(
-                                    label = "Place a call",
+                                    label = stringResource(R.string.calls_place_call),
                                     onClick = onNewCall,
                                     modifier = Modifier.widthIn(max = 260.dp)
                                 )
@@ -171,20 +189,32 @@ private fun SearchField(query: String, onQueryChange: (String) -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 8.dp),
-        placeholder = { Text("Search a summary, a number or a name") },
+        placeholder = { Text(stringResource(R.string.calls_search)) },
         leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(20.dp)) },
         trailingIcon = {
             if (query.isNotEmpty()) {
                 IconButton(onClick = { onQueryChange("") }) {
-                    Icon(Icons.Filled.Close, contentDescription = "Clear the search", modifier = Modifier.size(18.dp))
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = stringResource(R.string.calls_clear_search),
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(22.dp)
+                    )
                 }
             }
         },
         singleLine = true,
-        shape = MaterialTheme.shapes.medium
+        shape = MaterialTheme.shapes.medium,
+        colors = OutlinedTextFieldDefaults.colors(
+            unfocusedBorderColor = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     )
 }
 
+/**
+ * Two rows of filters, each named: the call's outcome, and what answered at the far end. The chip
+ * label is the word a person reads; the stored value stays the daemon's key.
+ */
 @Composable
 private fun FilterRows(
     state: CallsUiState,
@@ -198,21 +228,26 @@ private fun FilterRows(
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
                 .padding(horizontal = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             FilterChip(
                 selected = state.filter.outcome == null,
                 onClick = { onOutcomeChange(null) },
-                label = { Text("All") }
+                label = { Text(stringResource(R.string.calls_filter_all)) },
+                leadingIcon = { SelectedCheck(state.filter.outcome == null) }
             )
             state.outcomes.forEach { outcome ->
+                val selected = state.filter.outcome == outcome
                 FilterChip(
-                    selected = state.filter.outcome == outcome,
-                    onClick = {
-                        onOutcomeChange(if (state.filter.outcome == outcome) null else outcome)
-                    },
-                    label = { Text(outcome.replace('_', ' ')) }
+                    selected = selected,
+                    onClick = { onOutcomeChange(if (selected) null else outcome) },
+                    label = { Text(outcomeLabel(outcome) ?: humanize(outcome)) },
+                    leadingIcon = { SelectedCheck(selected) }
                 )
+            }
+            if (state.filtered) {
+                TextButton(onClick = onClearFilters) { Text(stringResource(R.string.calls_filter_clear)) }
             }
         }
         if (state.farEnds.isNotEmpty()) {
@@ -224,20 +259,35 @@ private fun FilterRows(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                state.farEnds.take(MAX_FAR_END_CHIPS).forEach { farEnd ->
+                Text(
+                    text = stringResource(R.string.calls_filter_reached),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(end = 2.dp)
+                )
+                state.farEnds.forEach { farEnd ->
+                    val selected = state.filter.farEnd == farEnd
                     FilterChip(
-                        selected = state.filter.farEnd == farEnd,
-                        onClick = {
-                            onFarEndChange(if (state.filter.farEnd == farEnd) null else farEnd)
-                        },
-                        label = { Text(farEnd, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        selected = selected,
+                        onClick = { onFarEndChange(if (selected) null else farEnd) },
+                        label = { Text(farEndLabel(farEnd)) },
+                        leadingIcon = { SelectedCheck(selected) }
                     )
-                }
-                if (state.filtered) {
-                    TextButton(onClick = onClearFilters) { Text("Clear") }
                 }
             }
         }
+    }
+}
+
+/** Selection is a shape as well as a tint, so a chip never relies on colour alone. */
+@Composable
+internal fun SelectedCheck(selected: Boolean) {
+    if (selected) {
+        Icon(
+            imageVector = Icons.Filled.Check,
+            contentDescription = null,
+            modifier = Modifier.size(FilterChipDefaults.IconSize)
+        )
     }
 }
 
@@ -251,15 +301,20 @@ private fun OfflineBanner(onRefresh: () -> Unit) {
         color = MaterialTheme.colorScheme.secondaryContainer
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+            modifier = Modifier.padding(start = 14.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "No link to the computer: showing the calls cached on this phone.",
+                text = stringResource(R.string.calls_offline),
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.weight(1f)
             )
-            TextButton(onClick = onRefresh) { Text("Retry") }
+            TextButton(
+                onClick = onRefresh,
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSecondaryContainer)
+            ) {
+                Text(stringResource(R.string.calls_retry))
+            }
         }
     }
 }
@@ -298,7 +353,7 @@ private fun CallsList(
         } else {
             item {
                 Text(
-                    text = "That is every call on the daemon.",
+                    text = stringResource(R.string.calls_end_of_history),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(vertical = 12.dp)
@@ -310,73 +365,88 @@ private fun CallsList(
 
 @Composable
 private fun CallRow(call: CallSummary, onClick: () -> Unit) {
-    Row(
+    // At 200 % text a pill beside the number leaves it three groups a line; the pill moves under
+    // the text instead of squeezing it.
+    val stacked = LocalDensity.current.fontScale >= STACKED_AT_FONT_SCALE
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(vertical = 12.dp)
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = call.destination?.let(::maskNumber) ?: "Unknown number",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 1
-                )
-                if (call.live) {
-                    Spacer(Modifier.width(8.dp))
-                    StatusPill(label = "Live", tone = StatusTone.ACCENT, pulse = true)
-                }
+        if (stacked) {
+            CallText(call)
+            Spacer(Modifier.height(6.dp))
+            CallStatusPill(call)
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                CallText(call, Modifier.weight(1f))
+                Spacer(Modifier.width(8.dp))
+                CallStatusPill(call)
             }
-            call.farEnd?.takeIf { it.isNotBlank() }?.let { farEnd ->
-                Text(
-                    text = farEnd,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
+        }
+    }
+}
+
+@Composable
+private fun CallText(call: CallSummary, modifier: Modifier = Modifier) {
+    Column(modifier = modifier) {
+        Text(
+            text = call.destination?.let(::formatPhoneNumber) ?: stringResource(R.string.calls_unknown_number),
+            style = MaterialTheme.typography.titleMedium,
+            fontFamily = FontFamily.Monospace
+        )
+        call.farEnd?.takeIf { it.isNotBlank() }?.let { farEnd ->
             Text(
-                text = call.summary ?: call.goal ?: "No summary yet",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = listOfNotNull(
-                    call.createdAt?.let(::formatDate),
-                    call.durationSeconds?.let(::formatDuration),
-                    call.marks.takeIf { it > 0 }?.let { marks -> if (marks == 1) "1 mark" else "$marks marks" },
-                    if (call.hasRecording) "recording" else null
-                ).joinToString(" · "),
-                style = MaterialTheme.typography.labelSmall,
+                text = farEndLabel(farEnd),
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        Spacer(Modifier.width(8.dp))
-        StatusPill(
-            label = (call.callOutcome ?: call.state ?: "unknown").replace('_', ' '),
-            tone = outcomeTone(call.callOutcome)
+        Text(
+            text = call.summary ?: call.goal ?: stringResource(R.string.calls_no_summary),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 2
+        )
+        val marks = call.marks
+        Text(
+            text = listOfNotNull(
+                call.createdAt?.let(::formatDate),
+                call.durationSeconds?.let { formatElapsedTime(it.toLong()) },
+                marks.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.calls_marks, it, it) },
+                stringResource(R.string.calls_recording_available).takeIf { call.hasRecording }
+            ).joinToString(" · "),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
 
-internal fun maskNumber(destination: String): String {
-    val digits = destination.filter { it.isDigit() }
-    if (digits.length < 5) return destination
-    val country = if (destination.trimStart().startsWith("+")) "+${digits.take(3)}" else ""
-    val tail = digits.takeLast(2)
-    return if (country.isEmpty()) "·· $tail" else "$country ·· $tail"
+/** One pill per row: the live phase, or what the call's record says it became. */
+@Composable
+private fun CallStatusPill(call: CallSummary) {
+    if (call.live) {
+        StatusPill(
+            label = stringResource(R.string.calls_live),
+            tone = StatusTone.ACCENT,
+            pulse = true
+        )
+        return
+    }
+    val label = outcomeLabel(call.callOutcome)
+        ?: stateLabel(call.state)
+        ?: stringResource(R.string.calls_status_unknown)
+    StatusPill(label = label, tone = outcomeTone(call.callOutcome))
 }
 
 internal fun outcomeTone(outcome: String?): StatusTone = when (outcome) {
     "answered" -> StatusTone.POSITIVE
     "no_answer", "busy", "declined" -> StatusTone.WARNING
-    "cancelled", "disconnected", "failed" -> StatusTone.NEGATIVE
+    "cancelled", "canceled", "disconnected", "failed" -> StatusTone.NEGATIVE
     else -> StatusTone.NEUTRAL
 }
 
@@ -385,11 +455,5 @@ internal fun formatDate(epochSeconds: Double): String {
     return DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(millis))
 }
 
-internal fun formatDuration(seconds: Double): String {
-    val total = seconds.toLong()
-    val minutes = total / 60
-    val rest = total % 60
-    return if (minutes == 0L) "${rest}s" else "${minutes}m ${rest.toString().padStart(2, '0')}s"
-}
-
-private const val MAX_FAR_END_CHIPS = 4
+/** Above this font scale a pill beside a row's text would squeeze it, so the pill moves under. */
+private const val STACKED_AT_FONT_SCALE = 1.5f

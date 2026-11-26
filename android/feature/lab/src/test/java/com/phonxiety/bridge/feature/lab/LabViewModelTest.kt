@@ -9,6 +9,7 @@ import com.phonxiety.bridge.PhonePreferences
 import com.phonxiety.bridge.PhoneSettings
 import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.BridgeStateRepository
+import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.model.CallPhase
 import com.phonxiety.bridge.model.CallState
@@ -293,6 +294,30 @@ class LabViewModelTest {
         assertEquals(null, row.rttMs)
         assertEquals("inconclusive", row.reason)
         assertTrue(lanCheck.calls.isEmpty())
+    }
+
+    @Test
+    fun `a path the bridge did not measure stays not checked`() = runBlocking<Unit> {
+        api.probeHandler = {
+            ApiOutcome.Ok(
+                200,
+                ProbeResult(
+                    candidates = listOf(
+                        ProbeCandidate("iroh", available = true, reachable = false, rttMs = null, reason = "not_measured")
+                    ),
+                    checkedAt = "2026-11-26T10:00:00+00:00"
+                )
+            )
+        }
+        val vm = viewModel()
+        vm.toggleProbeCandidate("lan")
+        vm.toggleProbeCandidate("tailscale")
+        vm.runProbe()
+        withTimeout(5_000) { vm.state.first { it.probe.rows.isNotEmpty() } }
+        val row = vm.state.value.probe.rows.single()
+        assertEquals(ProbeVerdict.NOT_CHECKED, row.verdict)
+        assertNull(row.rttMs)
+        assertEquals(UiText.Res(R.string.lab_probe_reason_not_measured), row.note)
     }
 
     @Test

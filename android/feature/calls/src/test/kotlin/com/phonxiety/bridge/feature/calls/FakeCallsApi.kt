@@ -177,18 +177,21 @@ fun summary(
 
 fun detailSnapshot(
     callId: String = "call-1",
+    destination: String = "+998901234567",
     transcript: List<TranscriptTurn> = listOf(TranscriptTurn(1, "agent", "Hello", 1_764_000_006.0, true)),
     marks: List<CallMark> = emptyList(),
-    live: Boolean = false
+    live: Boolean = false,
+    summary: String? = if (live) null else "Table for two on Thursday",
+    fields: JsonObject = if (live) JsonObject(emptyMap()) else JsonObject(mapOf("time" to JsonPrimitive("20:00")))
 ): CallSnapshot = CallSnapshot(
     callId = callId,
-    destination = "+998901234567",
+    destination = destination,
     state = if (live) "active" else "ended",
     callOutcome = if (live) null else "answered",
     taskOutcome = if (live) null else "complete",
     resultStatus = if (live) null else "ready",
-    summary = if (live) null else "Table for two on Thursday",
-    fields = JsonObject(mapOf("time" to JsonPrimitive("20:00"))),
+    summary = summary,
+    fields = fields,
     createdAt = 1_764_000_000.0,
     connectedAt = 1_764_000_005.0,
     endedAt = if (live) null else 1_764_000_065.0,

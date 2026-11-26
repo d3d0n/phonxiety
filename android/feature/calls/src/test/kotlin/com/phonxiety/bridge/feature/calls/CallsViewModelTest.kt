@@ -8,6 +8,7 @@ import com.phonxiety.bridge.data.calls.CallFilter
 import com.phonxiety.bridge.data.calls.CallPageResult
 import com.phonxiety.bridge.data.calls.CallsRepository
 import com.phonxiety.bridge.data.calls.TranscriptResult
+import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.CallSummary
 import com.phonxiety.bridge.model.DeleteCallResult
@@ -105,7 +106,8 @@ class CallsViewModelTest {
         val state = viewModel.state.value
         assertTrue(state.offline)
         assertEquals(listOf("cached"), state.calls.map { it.callId })
-        assertEquals("the bridge service is not running (link_down)", state.error)
+        assertEquals(UiText.Literal("the bridge service is not running"), state.error?.message)
+        assertEquals("link_down", state.error?.code)
     }
 
     @Test
