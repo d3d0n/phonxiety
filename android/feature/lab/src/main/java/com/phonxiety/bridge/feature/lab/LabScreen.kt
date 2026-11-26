@@ -3,14 +3,12 @@ package com.phonxiety.bridge.feature.lab
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.FlowRowScope
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -46,6 +44,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -67,6 +66,7 @@ import com.phonxiety.bridge.designsystem.component.ActionEmphasis
 import com.phonxiety.bridge.designsystem.component.ErrorCard
 import com.phonxiety.bridge.designsystem.component.KeyValueRow
 import com.phonxiety.bridge.designsystem.component.PrimaryActionButton
+import com.phonxiety.bridge.designsystem.component.STACK_AT_FONT_SCALE
 import com.phonxiety.bridge.designsystem.component.ScreenScaffold
 import com.phonxiety.bridge.designsystem.component.SectionCard
 import com.phonxiety.bridge.designsystem.component.StatTile
@@ -278,12 +278,12 @@ private fun LinkTestCard(link: LinkTestUi, callbacks: LabCallbacks) {
             }
         }
     ) {
-        ChipRow {
+        WrapRow {
             CodecChoice(stringResource(R.string.lab_codec_auto), link.codec == null) { callbacks.onLinkCodec(null) }
             CodecChoice(stringResource(R.string.lab_codec_opus), link.codec == "opus") { callbacks.onLinkCodec("opus") }
             CodecChoice(stringResource(R.string.lab_codec_pcm), link.codec == "pcm") { callbacks.onLinkCodec("pcm") }
         }
-        ChipRow {
+        WrapRow {
             CodecChoice(stringResource(R.string.lab_transport_stream), link.transport == "stream") {
                 callbacks.onLinkTransport("stream")
             }
@@ -344,42 +344,71 @@ private fun LinkTestCard(link: LinkTestUi, callbacks: LabCallbacks) {
     }
 }
 
-/** Four measurements, two per row: the tiles keep their labels at 200 % text instead of colliding. */
+/**
+ * Four measurements: two per row while a half-width tile still holds its caption, one per row from
+ * [STACK_AT_FONT_SCALE], where the p95 caption would otherwise wrap a word or two per line.
+ */
 @Composable
 private fun LatencyStats(result: LinkTestResult) {
+    val stacked = LocalDensity.current.fontScale >= STACK_AT_FONT_SCALE
+    val readings = listOf(
+        LatencyReading(
+            label = stringResource(R.string.lab_stat_median),
+            value = result.p50?.let(::monoMillis) ?: stringResource(R.string.lab_none)
+        ),
+        LatencyReading(
+            label = stringResource(R.string.lab_stat_p95),
+            value = result.p95?.let(::monoMillis) ?: stringResource(R.string.lab_none),
+            tone = result.p95Tone(),
+            caption = stringResource(R.string.lab_stat_p95_caption)
+        ),
+        LatencyReading(
+            label = stringResource(R.string.lab_stat_worst),
+            value = result.max?.let(::monoMillis) ?: stringResource(R.string.lab_none)
+        ),
+        LatencyReading(
+            label = stringResource(R.string.lab_stat_loss),
+            value = result.loss?.let(::percentText) ?: stringResource(R.string.lab_none)
+        )
+    )
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            StatTile(
-                label = stringResource(R.string.lab_stat_median),
-                value = result.p50?.let(::monoMillis) ?: stringResource(R.string.lab_none),
-                mono = true,
-                modifier = Modifier.weight(1f)
-            )
-            StatTile(
-                label = stringResource(R.string.lab_stat_p95),
-                value = result.p95?.let(::monoMillis) ?: stringResource(R.string.lab_none),
-                mono = true,
-                tone = result.p95Tone(),
-                caption = stringResource(R.string.lab_stat_p95_caption),
-                modifier = Modifier.weight(1f)
-            )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            StatTile(
-                label = stringResource(R.string.lab_stat_worst),
-                value = result.max?.let(::monoMillis) ?: stringResource(R.string.lab_none),
-                mono = true,
-                modifier = Modifier.weight(1f)
-            )
-            StatTile(
-                label = stringResource(R.string.lab_stat_loss),
-                value = result.loss?.let(::percentText) ?: stringResource(R.string.lab_none),
-                mono = true,
-                modifier = Modifier.weight(1f)
-            )
+        if (stacked) {
+            readings.forEach { reading ->
+                StatTile(
+                    label = reading.label,
+                    value = reading.value,
+                    mono = true,
+                    tone = reading.tone,
+                    caption = reading.caption,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        } else {
+            readings.chunked(2).forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    row.forEach { reading ->
+                        StatTile(
+                            label = reading.label,
+                            value = reading.value,
+                            mono = true,
+                            tone = reading.tone,
+                            caption = reading.caption,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
         }
     }
 }
+
+/** One latency measurement, collected before layout so both arrangements draw the same facts. */
+private data class LatencyReading(
+    val label: String,
+    val value: String,
+    val tone: StatTone = StatTone.NEUTRAL,
+    val caption: String? = null
+)
 
 @Composable
 private fun HistoryRow(run: LinkTestResult) {
@@ -439,7 +468,7 @@ private fun ProbeCard(probe: ProbeUi, callbacks: LabCallbacks) {
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        ChipRow {
+        WrapRow {
             PROBE_PATHS.forEach { name ->
                 val selected = name in probe.selected
                 FilterChip(
@@ -774,22 +803,26 @@ private fun TestToneSecondsSlider(seconds: Int, enabled: Boolean, onSeconds: (In
  */
 @Composable
 private fun TestCallResultCard(result: TestCallResultUi, onOpenCall: (String) -> Unit) {
+    // Resolved before the slot: a null slot adds no row and no gap, an empty one still would.
+    val outcomeLabel = testOutcomeLabel(result.outcome)
     SectionCard(
         title = stringResource(R.string.lab_test_result_title),
-        subtitle = stringResource(R.string.lab_test_result_subtitle)
-    ) {
-        // The pill is in the content, not the title row: beside a two-word title it would leave the
-        // title one word wide at 200 % text.
-        testOutcomeLabel(result.outcome)?.let { label ->
-            StatusPill(
-                label = label,
-                tone = if (result.outcome?.lowercase(Locale.US) == "answered") {
-                    StatusTone.POSITIVE
-                } else {
-                    StatusTone.WARNING
-                }
-            )
+        subtitle = stringResource(R.string.lab_test_result_subtitle),
+        status = if (outcomeLabel != null) {
+            {
+                StatusPill(
+                    label = outcomeLabel,
+                    tone = if (result.outcome?.lowercase(Locale.US) == "answered") {
+                        StatusTone.POSITIVE
+                    } else {
+                        StatusTone.WARNING
+                    }
+                )
+            }
+        } else {
+            null
         }
+    ) {
         result.durationSeconds?.let {
             KeyValueRow(
                 label = stringResource(R.string.lab_test_result_duration),
@@ -923,7 +956,7 @@ private fun DiagnosticsCard(diagnostics: DiagnosticsUi, callbacks: LabCallbacks)
         title = stringResource(R.string.lab_diagnostics_title),
         subtitle = stringResource(R.string.lab_diagnostics_subtitle)
     ) {
-        ActionRow {
+        WrapRow {
             TextButton(onClick = callbacks.onLoadDiagnostics, enabled = !diagnostics.loading) {
                 Text(
                     stringResource(
@@ -978,7 +1011,7 @@ private fun LogCard(logs: LogUi, callbacks: LabCallbacks) {
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
-        ChipRow {
+        WrapRow {
             PhoneSettings.LOG_LEVELS.forEach { level ->
                 val selected = level == logs.level
                 FilterChip(
@@ -989,7 +1022,7 @@ private fun LogCard(logs: LogUi, callbacks: LabCallbacks) {
                 )
             }
         }
-        ActionRow {
+        WrapRow {
             TextButton(onClick = callbacks.onCopyLogs, enabled = logs.lines.isNotEmpty()) {
                 Text(stringResource(R.string.lab_log_copy))
             }
@@ -1043,22 +1076,10 @@ private fun PreviewText(
     }
 }
 
-@Composable
-private fun ChipRow(content: @Composable RowScope.() -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        content = content
-    )
-}
-
-/** Buttons wrap instead of scrolling: a clipped label reads as a broken control, not as content. */
+/** Chips and buttons wrap instead of scrolling: a clipped label reads as a broken control, not as content. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ActionRow(content: @Composable FlowRowScope.() -> Unit) {
+private fun WrapRow(content: @Composable FlowRowScope.() -> Unit) {
     FlowRow(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),

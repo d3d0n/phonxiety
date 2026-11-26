@@ -11,6 +11,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
@@ -29,9 +30,15 @@ import com.phonxiety.bridge.data.calls.CallFilter
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
 import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.designsystem.formatPhoneNumber
+import com.phonxiety.bridge.designsystem.testing.assertAccessible
+import com.phonxiety.bridge.designsystem.testing.pinAnimationFrame
 import com.phonxiety.bridge.model.CallSummary
+import java.util.Locale
+import java.util.TimeZone
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -50,6 +57,21 @@ import org.robolectric.annotation.GraphicsMode
 class CallsScreenshotTest {
     @get:Rule
     val composeRule = createComposeRule()
+
+    private val originalLocale: Locale = Locale.getDefault()
+    private val originalTimeZone: TimeZone = TimeZone.getDefault()
+
+    @Before
+    fun pinLocaleAndTimeZone() {
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
+        Locale.setDefault(Locale.US)
+    }
+
+    @After
+    fun restoreLocaleAndTimeZone() {
+        TimeZone.setDefault(originalTimeZone)
+        Locale.setDefault(originalLocale)
+    }
 
     private fun setScreen(
         state: CallsUiState,
@@ -95,6 +117,7 @@ class CallsScreenshotTest {
         content()
         beforeCapture()
         composeRule.waitForIdle()
+        composeRule.pinAnimationFrame()
         composeRule.onNodeWithTag(SCREEN_TAG).captureRoboImage("src/test/screenshots/calls_$name.png")
         composeRule.onNodeWithTag(SCREEN_TAG).assertAccessible()
     }
@@ -159,6 +182,37 @@ class CallsScreenshotTest {
         setScreen(filled(), onOutcomeChange = { requested = it })
         composeRule.onNodeWithText("Declined").performClick()
         assertEquals("declined", requested)
+    }
+
+    @Test
+    fun theFilterChipsWrapInsteadOfRunningOffTheEdge() {
+        setScreen(filled(), fontScale = 2f, width = 320.dp)
+        // A label cut at the edge reads as a broken control; the chips are the only nodes these
+        // words exist on in this sample.
+        for (label in listOf("Declined", "Disconnected")) {
+            val bounds = composeRule.onNodeWithText(label).getUnclippedBoundsInRoot()
+            assertTrue("$label stays inside the screen", bounds.right.value <= 320f)
+        }
+    }
+
+    @Test
+    fun clearFiltersStaysReachableBeforeTheListLoads() {
+        // A filtered list that never loaded (here the refresh failed offline) has no empty state to
+        // carry the action, so the filter row keeps it.
+        setScreen(CallsUiState(filter = CallFilter(outcome = "declined"), loaded = false, offline = true))
+        composeRule.onAllNodesWithText("Clear filters").assertCountEquals(1)
+    }
+
+    @Test
+    fun aLoadedFilteredEmptyListOffersClearFiltersOnce() {
+        setScreen(CallsUiState(filter = CallFilter(outcome = "declined"), loaded = true))
+        composeRule.onAllNodesWithText("Clear filters").assertCountEquals(1)
+    }
+
+    @Test
+    fun aLoadedFilteredListKeepsClearFiltersInTheRow() {
+        setScreen(filled().copy(filter = CallFilter(outcome = "no_answer")))
+        composeRule.onAllNodesWithText("Clear filters").assertCountEquals(1)
     }
 
     @Test

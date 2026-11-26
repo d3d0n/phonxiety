@@ -19,6 +19,8 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
+import com.phonxiety.bridge.designsystem.testing.assertAccessible
+import com.phonxiety.bridge.designsystem.testing.pinAnimationFrame
 import java.util.Locale
 import java.util.TimeZone
 import org.junit.After
@@ -100,6 +102,7 @@ class UpdatesScreenshotTest(private val matrixCase: UpdatesMatrixCase) {
         setScreen(matrixCase.state.build())
         composeRule.waitForIdle()
         composeRule.onNodeWithTag(CAPTURE_TAG).assertAccessible()
+        composeRule.pinAnimationFrame()
         composeRule.onNodeWithTag(CAPTURE_TAG)
             .captureRoboImage(
                 "src/test/screenshots/updates_${matrixCase.state.slug}_${matrixCase.variant.slug}.png"
@@ -145,12 +148,22 @@ class UpdatesScreenshotTest(private val matrixCase: UpdatesMatrixCase) {
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "w411dp-h1400dp-xxhdpi")
 class UpdatesDialogScreenshotTest(private val case: UpdatesDialogCase) {
+    private val originalTimeZone: TimeZone = TimeZone.getDefault()
+    private val originalLocale: Locale = Locale.getDefault()
+
     @get:Rule
     val composeRule = createComposeRule()
 
     @Before
     fun pinLocale() {
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
         Locale.setDefault(Locale.US)
+    }
+
+    @After
+    fun restoreLocale() {
+        TimeZone.setDefault(originalTimeZone)
+        Locale.setDefault(originalLocale)
     }
 
     @Test
@@ -158,6 +171,9 @@ class UpdatesDialogScreenshotTest(private val case: UpdatesDialogCase) {
         // A dialog is its own window, so it reads the configuration's font scale, not a density
         // override inside the screen's composition: set both here or the 200 % case is a lie.
         RuntimeEnvironment.setQualifiers("w${case.widthDp}dp-h1400dp-xxhdpi")
+        // A device-configuration change can reset the process defaults; re-pin before composing.
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
+        Locale.setDefault(Locale.US)
         val application = RuntimeEnvironment.getApplication()
         val configuration = Configuration(application.resources.configuration)
         configuration.fontScale = case.fontScale
@@ -187,6 +203,7 @@ class UpdatesDialogScreenshotTest(private val case: UpdatesDialogCase) {
         composeRule.mainClock.advanceTimeBy(1_000)
         composeRule.waitForIdle()
         composeRule.onAllNodes(isDialog()).onLast().assertAccessible()
+        composeRule.pinAnimationFrame()
         composeRule.onAllNodes(isDialog()).onLast()
             .captureRoboImage("src/test/screenshots/updates_${case.state.slug}_${case.slug}.png")
     }
@@ -266,8 +283,23 @@ enum class UpdatesDialogState(val slug: String, private val observation: () -> U
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "w411dp-h891dp-xxhdpi")
 class UpdatesLowerSectionTest {
+    private val originalTimeZone: TimeZone = TimeZone.getDefault()
+    private val originalLocale: Locale = Locale.getDefault()
+
     @get:Rule
     val composeRule = createComposeRule()
+
+    @Before
+    fun pinLocaleAndTimeZone() {
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
+        Locale.setDefault(Locale.US)
+    }
+
+    @After
+    fun restoreLocaleAndTimeZone() {
+        TimeZone.setDefault(originalTimeZone)
+        Locale.setDefault(originalLocale)
+    }
 
     @Test
     fun rendersTheLowerSections() {
@@ -294,6 +326,7 @@ class UpdatesLowerSectionTest {
         // Scroll to the recovery's actions, not its title: the capture must show the buttons.
         composeRule.onNodeWithText("Finish the rollback").performScrollTo()
         composeRule.onNodeWithTag(LOWER_TAG).assertAccessible()
+        composeRule.pinAnimationFrame()
         composeRule.onNodeWithTag(LOWER_TAG)
             .captureRoboImage("src/test/screenshots/updates_rollback_unfinished_lower_411_light.png")
     }

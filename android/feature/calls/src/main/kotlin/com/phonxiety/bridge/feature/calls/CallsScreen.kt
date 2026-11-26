@@ -1,10 +1,11 @@
 package com.phonxiety.bridge.feature.calls
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -21,7 +22,6 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -216,6 +216,7 @@ private fun SearchField(query: String, onQueryChange: (String) -> Unit) {
  * Two rows of filters, each named: the call's outcome, and what answered at the far end. The chip
  * label is the word a person reads; the stored value stays the daemon's key.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun FilterRows(
     state: CallsUiState,
@@ -224,13 +225,13 @@ private fun FilterRows(
     onClearFilters: () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Row(
+        // Chips wrap instead of scrolling: a label cut at the edge reads as a broken control.
+        FlowRow(
             modifier = Modifier
                 .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
                 .padding(horizontal = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             FilterChip(
                 selected = state.filter.outcome == null,
@@ -247,24 +248,24 @@ private fun FilterRows(
                     leadingIcon = { SelectedCheck(selected) }
                 )
             }
-            if (state.filtered) {
+            // A loaded list with nothing matching shows the same action in its empty state: one button,
+            // one word. Before the list has loaded (or after a failed refresh) only this row offers it.
+            if (state.filtered && (!state.loaded || state.calls.isNotEmpty())) {
                 TextButton(onClick = onClearFilters) { Text(stringResource(R.string.calls_filter_clear)) }
             }
         }
         if (state.farEnds.isNotEmpty()) {
-            Row(
+            FlowRow(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
                     .padding(horizontal = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Text(
                     text = stringResource(R.string.calls_filter_reached),
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(end = 2.dp)
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 state.farEnds.forEach { farEnd ->
                     val selected = state.filter.farEnd == farEnd

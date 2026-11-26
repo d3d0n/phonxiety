@@ -4,8 +4,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -56,11 +58,19 @@ fun SetupStepList(steps: List<SetupStep>, modifier: Modifier = Modifier) {
             )
             Row(
                 verticalAlignment = Alignment.Top,
-                modifier = Modifier.semantics(mergeDescendants = true) {
-                    stateDescription = stateLabel
-                }
+                // The row is exactly as tall as its text, so the connector spans it: a two-line
+                // title or detail at 200 % no longer ends the line above the next indicator.
+                modifier = Modifier
+                    .height(IntrinsicSize.Min)
+                    .semantics(mergeDescendants = true) {
+                        stateDescription = stateLabel
+                    }
             ) {
-                StepIndicator(state = step.state, showConnector = index < steps.lastIndex)
+                StepIndicator(
+                    state = step.state,
+                    showConnector = index < steps.lastIndex,
+                    modifier = Modifier.fillMaxHeight()
+                )
                 Spacer(Modifier.width(12.dp))
                 Column(modifier = Modifier.padding(top = 2.dp)) {
                     Text(
@@ -81,15 +91,14 @@ fun SetupStepList(steps: List<SetupStep>, modifier: Modifier = Modifier) {
                     }
                 }
             }
-            if (index < steps.lastIndex) Spacer(Modifier.height(2.dp))
         }
     }
 }
 
 @Composable
-private fun StepIndicator(state: SetupStepState, showConnector: Boolean) {
+private fun StepIndicator(state: SetupStepState, showConnector: Boolean, modifier: Modifier = Modifier) {
     val status = LocalStatusColors.current
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         when (state) {
             SetupStepState.ACTIVE -> CircularProgressIndicator(
                 modifier = Modifier.size(18.dp),
@@ -132,10 +141,14 @@ private fun StepIndicator(state: SetupStepState, showConnector: Boolean) {
             )
         }
         if (showConnector) {
+            // The row's remaining height, so the line always ends at the next indicator. The
+            // 2 dp foot is the breathing room the old between-rows spacer gave; weighting cannot
+            // draw through space outside the row, so the gap moves inside the line.
             Box(
                 modifier = Modifier
+                    .weight(1f)
                     .width(2.dp)
-                    .height(18.dp)
+                    .padding(bottom = 2.dp)
                     .background(MaterialTheme.colorScheme.outlineVariant, CircleShape)
             )
         }

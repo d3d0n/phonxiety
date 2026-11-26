@@ -18,9 +18,15 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
+import com.phonxiety.bridge.designsystem.testing.assertAccessible
+import com.phonxiety.bridge.designsystem.testing.pinAnimationFrame
 import com.phonxiety.bridge.root.InstallOperation
 import com.phonxiety.bridge.root.ModuleState
 import com.phonxiety.bridge.root.WizardState
+import java.util.Locale
+import java.util.TimeZone
+import org.junit.After
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -43,6 +49,21 @@ import org.robolectric.annotation.GraphicsMode
 class OnboardingScreenshotTest(private val case: MatrixCase) {
     @get:Rule
     val composeRule = createComposeRule()
+
+    private val originalLocale: Locale = Locale.getDefault()
+    private val originalTimeZone: TimeZone = TimeZone.getDefault()
+
+    @Before
+    fun pinLocaleAndTimeZone() {
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
+        Locale.setDefault(Locale.US)
+    }
+
+    @After
+    fun restoreLocaleAndTimeZone() {
+        TimeZone.setDefault(originalTimeZone)
+        Locale.setDefault(originalLocale)
+    }
 
     /** The height the screen is composed with; a content capture regrows it to fit the page. */
     private var pageHeightDp by mutableStateOf(case.variant.heightDp)
@@ -79,6 +100,7 @@ class OnboardingScreenshotTest(private val case: MatrixCase) {
             composeRule.captureWholeScreen(SCREEN_TAG, FOOTER, { pageHeightDp = it }, "${name}_content.png")
         } else {
             composeRule.onNodeWithTag(SCREEN_TAG).assertAccessible()
+            composeRule.pinAnimationFrame()
             composeRule.onNodeWithTag(SCREEN_TAG).captureRoboImage("$name.png")
         }
     }

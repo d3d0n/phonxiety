@@ -45,6 +45,12 @@ import com.phonxiety.bridge.designsystem.component.StatTone
 import com.phonxiety.bridge.designsystem.component.StatusPill
 import com.phonxiety.bridge.designsystem.component.StatusTone
 import com.phonxiety.bridge.designsystem.component.ToggleRow
+import com.phonxiety.bridge.designsystem.testing.assertAccessible
+import com.phonxiety.bridge.designsystem.testing.pinAnimationFrame
+import java.util.Locale
+import java.util.TimeZone
+import org.junit.After
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -54,7 +60,7 @@ import org.robolectric.annotation.GraphicsMode
 
 /**
  * Every shared component across the decision-10 matrix: 411 dp at 100 %, a deterministic dynamic
- * colour case, and 320 dp at 200 % font scale in light and dark. The accessibility gate runs on
+ * color case, and 320 dp at 200 % font scale in light and dark. The accessibility gate runs on
  * each recorded state before the image is accepted.
  */
 @RunWith(ParameterizedRobolectricTestRunner::class)
@@ -63,6 +69,21 @@ import org.robolectric.annotation.GraphicsMode
 class DesignSystemScreenshotTest(private val matrixCase: MatrixCase) {
     @get:Rule
     val composeRule = createComposeRule()
+
+    private val originalLocale: Locale = Locale.getDefault()
+    private val originalTimeZone: TimeZone = TimeZone.getDefault()
+
+    @Before
+    fun pinLocaleAndTimeZone() {
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
+        Locale.setDefault(Locale.US)
+    }
+
+    @After
+    fun restoreLocaleAndTimeZone() {
+        TimeZone.setDefault(originalTimeZone)
+        Locale.setDefault(originalLocale)
+    }
 
     @Test
     fun rendersOneMatrixState() {
@@ -93,6 +114,7 @@ class DesignSystemScreenshotTest(private val matrixCase: MatrixCase) {
             }
         }
         composeRule.onNodeWithTag(CAPTURE_TAG).assertAccessible()
+        composeRule.pinAnimationFrame()
         composeRule.onNodeWithTag(CAPTURE_TAG)
             .captureRoboImage("src/test/screenshots/designsystem_$matrixCase.png")
     }
@@ -117,7 +139,7 @@ class DesignSystemScreenshotTest(private val matrixCase: MatrixCase) {
     }
 }
 
-enum class Preview { PILLS, METERS, CARDS, STEPS, ACTIONS, ERROR, STATES, CONTROLS }
+enum class Preview { PILLS, METERS, CARDS, STACKING, STEPS, ACTIONS, ERROR, STATES, CONTROLS }
 
 data class Variant(
     val widthDp: Int,
@@ -210,6 +232,17 @@ private fun PreviewBody(preview: Preview) {
                     tone = StatTone.WARNING,
                     modifier = Modifier.widthIn(min = 140.dp)
                 )
+            }
+        }
+
+        Preview.STACKING -> {
+            SectionCard(
+                title = "The phone's privileged permissions",
+                subtitle = "The grants the bridge needs to keep the link alive without a prompt.",
+                status = { StatusPill("Two missing", StatusTone.WARNING) }
+            ) {
+                KeyValueRow(label = "Capture audio output", value = "Granted")
+                KeyValueRow(label = "Control in-call experience", value = "Missing")
             }
         }
 

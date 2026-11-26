@@ -15,6 +15,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -31,7 +32,14 @@ import androidx.compose.ui.unit.dp
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
 import com.phonxiety.bridge.designsystem.UiText
+import com.phonxiety.bridge.designsystem.testing.assertAccessible
+import com.phonxiety.bridge.designsystem.testing.pinAnimationFrame
+import java.util.Locale
+import java.util.TimeZone
+import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -50,6 +58,21 @@ import org.robolectric.annotation.GraphicsMode
 class LabScreenScreenshotTest {
     @get:Rule
     val composeRule = createComposeRule()
+
+    private val originalLocale: Locale = Locale.getDefault()
+    private val originalTimeZone: TimeZone = TimeZone.getDefault()
+
+    @Before
+    fun pinLocaleAndTimeZone() {
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
+        Locale.setDefault(Locale.US)
+    }
+
+    @After
+    fun restoreLocaleAndTimeZone() {
+        TimeZone.setDefault(originalTimeZone)
+        Locale.setDefault(originalLocale)
+    }
 
     private fun setScreen(
         state: LabUiState,
@@ -85,6 +108,7 @@ class LabScreenScreenshotTest {
         content()
         beforeCapture()
         composeRule.waitForIdle()
+        composeRule.pinAnimationFrame()
         composeRule.onNodeWithTag(SCREEN_TAG).captureRoboImage("src/test/screenshots/lab_$name.png")
         composeRule.onNodeWithTag(SCREEN_TAG).assertAccessible()
     }
@@ -156,6 +180,44 @@ class LabScreenScreenshotTest {
     ) { setScreen(previewLabState(), dark = true, fontScale = 2f, width = 320.dp) }
 
     @Test
+    fun theLabChipsWrapInsteadOfRunningOffTheEdge() {
+        setScreen(previewLabState(), fontScale = 2f, width = 320.dp)
+        // A chip cut at the screen edge reads as a broken control; every one of them fits.
+        for (label in listOf("PCM", "Datagram")) {
+            val bounds = composeRule.onNodeWithText(label).getUnclippedBoundsInRoot()
+            assertTrue("$label stays inside the screen", bounds.right.value <= 320f)
+        }
+    }
+
+    @Test
+    fun theLatencyTileStackOnePerRowAtTwoHundredPercent() {
+        setScreen(previewLabState(), fontScale = 2f, width = 320.dp)
+        val labels = listOf("Median", "p95", "Worst", "Loss")
+        val lefts = labels.map { composeRule.onNodeWithText(it).getUnclippedBoundsInRoot().left.value }
+        assertEquals("every tile starts at the content edge", 1, lefts.map { Math.round(it) }.distinct().size)
+        val tops = labels.map { composeRule.onNodeWithText(it).getUnclippedBoundsInRoot().top.value }
+        for (index in 1 until tops.size) {
+            assertTrue("${labels[index]} sits under ${labels[index - 1]}", tops[index] > tops[index - 1])
+        }
+        val caption = composeRule.onNodeWithText("19 of 20 frames arrived faster").getUnclippedBoundsInRoot()
+        // A half-width column would leave this caption about 120 dp; stacked it has the card's width.
+        assertTrue("the caption keeps a readable column", caption.right.value - caption.left.value >= 240f)
+    }
+
+    @Test
+    fun theLatencyTilesKeepTwoPerRowAtNormalText() {
+        setScreen(previewLabState())
+        val median = composeRule.onNodeWithText("Median").getUnclippedBoundsInRoot()
+        val p95 = composeRule.onNodeWithText("p95").getUnclippedBoundsInRoot()
+        val worst = composeRule.onNodeWithText("Worst").getUnclippedBoundsInRoot()
+        val loss = composeRule.onNodeWithText("Loss").getUnclippedBoundsInRoot()
+        assertEquals("the first pair shares a row", median.top.value, p95.top.value, 1f)
+        assertEquals("the second pair shares a row", worst.top.value, loss.top.value, 1f)
+        assertTrue("p95 sits right of the median", p95.left.value > median.left.value)
+        assertTrue("the second pair starts under the first", worst.top.value > median.top.value)
+    }
+
+    @Test
     fun theTestCallConfirmation() {
         setScreen(previewLabState().copy(testCall = previewLabState().testCall.copy(confirming = true)))
         // Let the dialog's enter animation finish: a half-faded scrim is a different image.
@@ -164,6 +226,7 @@ class LabScreenScreenshotTest {
         composeRule.onNodeWithTag(SCREEN_TAG).assertAccessible()
         // The dialog is captured on its own node: the scrim behind it animates, the dialog does not.
         composeRule.onAllNodes(isDialog()).onLast().assertAccessible()
+        composeRule.pinAnimationFrame()
         composeRule.onAllNodes(isDialog()).onLast()
             .captureRoboImage("src/test/screenshots/lab_dialog_411_light.png")
     }
@@ -410,6 +473,29 @@ class LabScreenScreenshotTest {
     }
 
     @Test
+    fun anUnfinishedCallLeavesNoEmptyStatusRowAtTwoHundredPercent() {
+        setScreen(
+            finishedTestCall(
+                testCallResult(resultStatus = null, summary = null).copy(outcome = null, unfinished = true)
+            ),
+            fontScale = 2f,
+            width = 320.dp
+        )
+        composeRule.onNodeWithText("Open the call record").performScrollTo()
+        composeRule.waitForIdle()
+        val subtitle = composeRule
+            .onNodeWithText("The bridge's own record of the call it placed.")
+            .getUnclippedBoundsInRoot()
+        val durationLabel = composeRule.onNodeWithText("Duration").getUnclippedBoundsInRoot()
+        assertEquals(
+            "the content follows the subtitle at the card's own spacing, with no empty status row",
+            10f,
+            (durationLabel.top - subtitle.bottom).value,
+            1f
+        )
+    }
+
+    @Test
     fun theThreeProbeVerdictsStayDistinct() {
         setScreen(previewLabState())
         composeRule.onAllNodesWithText("Reached").assertCountEquals(1)
@@ -517,9 +603,9 @@ class LabScreenScreenshotTest {
     private companion object {
         const val SCREEN_TAG = "lab_capture"
 
-        /** Noon on the samples' day, in the device zone, so their times render as "today". */
+        /** Noon on the samples' day, in the zone every capture renders in. */
         val FIXED_NOW_MILLIS: Long = java.time.LocalDateTime.parse("2026-11-26T12:00:00")
-            .atZone(java.time.ZoneId.systemDefault())
+            .atOffset(java.time.ZoneOffset.UTC)
             .toInstant()
             .toEpochMilli()
     }

@@ -2,6 +2,7 @@ package com.phonxiety.bridge.feature.updates
 
 import com.phonxiety.bridge.data.updates.CompatibilityNote
 import com.phonxiety.bridge.designsystem.UiText
+import com.phonxiety.bridge.designsystem.privilegedTitle
 import java.util.Locale
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -86,7 +87,7 @@ class UpdateTextTest {
     @Test
     fun `a known privileged permission gets a human title`() {
         assertEquals(
-            UiText.Res(R.string.updates_permission_capture_audio),
+            UiText.Res(com.phonxiety.bridge.designsystem.R.string.designsystem_privileged_capture_audio),
             privilegedTitle("android.permission.CAPTURE_AUDIO_OUTPUT")
         )
     }
@@ -94,7 +95,7 @@ class UpdateTextTest {
     @Test
     fun `the background start grant gets a human title`() {
         assertEquals(
-            UiText.Res(R.string.updates_permission_start_after_boot),
+            UiText.Res(com.phonxiety.bridge.designsystem.R.string.designsystem_privileged_start_after_boot),
             privilegedTitle("android.permission.START_FOREGROUND_SERVICES_FROM_BACKGROUND")
         )
     }

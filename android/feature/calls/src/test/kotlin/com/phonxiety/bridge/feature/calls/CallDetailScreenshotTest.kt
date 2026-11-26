@@ -16,6 +16,7 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
@@ -37,13 +38,19 @@ import com.github.takahirom.roborazzi.captureRoboImage
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
 import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.designsystem.formatPhoneNumber
+import com.phonxiety.bridge.designsystem.testing.assertAccessible
+import com.phonxiety.bridge.designsystem.testing.pinAnimationFrame
 import com.phonxiety.bridge.model.CallMark
 import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.TranscriptTurn
+import java.util.Locale
+import java.util.TimeZone
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -62,6 +69,21 @@ import org.robolectric.annotation.GraphicsMode
 class CallDetailScreenshotTest {
     @get:Rule
     val composeRule = createComposeRule()
+
+    private val originalLocale: Locale = Locale.getDefault()
+    private val originalTimeZone: TimeZone = TimeZone.getDefault()
+
+    @Before
+    fun pinLocaleAndTimeZone() {
+        TimeZone.setDefault(TimeZone.getTimeZone("UTC"))
+        Locale.setDefault(Locale.US)
+    }
+
+    @After
+    fun restoreLocaleAndTimeZone() {
+        TimeZone.setDefault(originalTimeZone)
+        Locale.setDefault(originalLocale)
+    }
 
     private fun setScreen(
         state: CallDetailUiState,
@@ -109,6 +131,7 @@ class CallDetailScreenshotTest {
         content()
         beforeCapture()
         composeRule.waitForIdle()
+        composeRule.pinAnimationFrame()
         composeRule.onNodeWithTag(SCREEN_TAG).captureRoboImage("src/test/screenshots/call_detail_$name.png")
         composeRule.onNodeWithTag(SCREEN_TAG).assertAccessible()
     }
@@ -219,6 +242,25 @@ class CallDetailScreenshotTest {
         )
         composeRule.onNodeWithText("No summary was produced.").assertExists()
         composeRule.onNodeWithText("The summary appears when the call ends.").assertDoesNotExist()
+    }
+
+    @Test
+    fun aResultWithoutAStatusLeavesNoEmptyRowAtTwoHundredPercent() {
+        setScreen(
+            finished().copy(snapshot = detailSnapshot().copy(resultStatus = null)),
+            fontScale = 2f,
+            width = 320.dp
+        )
+        scrollToNode("Table for two on Thursday")
+        composeRule.onAllNodesWithText("Summary ready").assertCountEquals(0)
+        val subtitle = composeRule.onNodeWithText("Complete").getUnclippedBoundsInRoot()
+        val summary = composeRule.onNodeWithText("Table for two on Thursday").getUnclippedBoundsInRoot()
+        assertEquals(
+            "the content follows the subtitle at the card's own spacing, with no empty status row",
+            10f,
+            (summary.top - subtitle.bottom).value,
+            1f
+        )
     }
 
     @Test

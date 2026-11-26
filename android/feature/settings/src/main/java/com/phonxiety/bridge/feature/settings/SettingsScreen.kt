@@ -3,13 +3,11 @@ package com.phonxiety.bridge.feature.settings
 import android.text.format.DateFormat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.FlowRowScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -43,7 +41,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -201,35 +198,11 @@ fun SettingsScreen(
     }
 }
 
-/**
- * A card whose status pill drops under the title at large font scales: beside a 200 % title the
- * pill leaves so little width that Compose breaks the title mid-word.
- */
-@Composable
-private fun StatusSectionCard(
-    title: String,
-    subtitle: String? = null,
-    status: (@Composable RowScope.() -> Unit)? = null,
-    content: @Composable ColumnScope.() -> Unit
-) {
-    val stacked = LocalDensity.current.fontScale >= STACK_STATUS_AT_FONT_SCALE
-    SectionCard(
-        title = title,
-        subtitle = subtitle,
-        status = if (stacked) null else status
-    ) {
-        if (stacked && status != null) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), content = status)
-        }
-        content()
-    }
-}
-
 @Composable
 private fun ConnectionCard(phone: PhoneSettings, connection: ConnectionUi, callbacks: SettingsCallbacks) {
     val mode = ConnectionMode.of(phone.connectionMode)
     val relayMode = RelayModeSetting.of(phone.relayMode)
-    StatusSectionCard(
+    SectionCard(
         title = stringResource(R.string.settings_card_connection_title),
         subtitle = stringResource(R.string.settings_card_connection_subtitle),
         status = {
@@ -469,7 +442,7 @@ private fun DeviceCard(phone: PhoneSettings, callbacks: SettingsCallbacks) {
 
 @Composable
 private fun DaemonCard(daemon: DaemonSettingsUi, callbacks: SettingsCallbacks) {
-    StatusSectionCard(
+    SectionCard(
         title = stringResource(R.string.settings_card_daemon_title),
         subtitle = stringResource(R.string.settings_card_daemon_subtitle),
         status = {
@@ -635,7 +608,7 @@ private fun DaemonCard(daemon: DaemonSettingsUi, callbacks: SettingsCallbacks) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AutoTuneCard(autoTune: AutoTuneUi, callbacks: SettingsCallbacks) {
-    StatusSectionCard(
+    SectionCard(
         title = stringResource(R.string.settings_card_autotune_title),
         subtitle = stringResource(R.string.settings_card_autotune_subtitle),
         status = {
@@ -854,7 +827,6 @@ private fun formatKbit(bitsPerSecond: Int): String {
     return "$number\u00A0kbit/s"
 }
 
-private const val STACK_STATUS_AT_FONT_SCALE = 1.5f
 private const val BITRATE_STEP = 4_000
 private const val BITRATE_STEPS = 11
 
