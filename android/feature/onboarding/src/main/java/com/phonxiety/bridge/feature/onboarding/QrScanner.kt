@@ -144,7 +144,7 @@ private fun scannerOptions(): GmsBarcodeScannerOptions = GmsBarcodeScannerOption
 
 private const val SCANNER_LOG_TAG = "QrScanner"
 
-private suspend fun startScan(scanner: GmsBarcodeScanner): PlayScan = suspendCancellableCoroutine { continuation ->
+internal suspend fun startScan(scanner: GmsBarcodeScanner): PlayScan = suspendCancellableCoroutine { continuation ->
     // A task can notify more than one listener and a listener can fire after the screen left; the
     // wait is settled exactly once.
     val settled = AtomicBoolean(false)

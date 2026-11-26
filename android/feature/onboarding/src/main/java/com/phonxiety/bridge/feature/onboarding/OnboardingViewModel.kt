@@ -91,11 +91,14 @@ class OnboardingViewModel internal constructor(
             // the service rewriting its config, or the repository noticing a link change. Reading the
             // cache afresh and dispatching the resume probe is what makes the wizard advance by itself;
             // the coordinator drops the observation if the wizard already moved on, a local attempt is
-            // still running, or the last local attempt was rejected.
+            // still running, or the config is the one a rejected attempt left behind. A cleared
+            // pairing ends that suppression, so the next one counts.
             pairingRepository.paired.collect { paired ->
                 if (paired) {
                     pairingRepository.refresh()
                     coordinator.onPairingObserved()
+                } else {
+                    coordinator.onPairingCleared()
                 }
             }
         }
@@ -183,9 +186,12 @@ class OnboardingViewModel internal constructor(
     /**
      * The stored pairing can move while the app runs and the repository serves a cache, so the
      * probe after a resume re-reads it first — on this dispatcher, never on the caller's thread.
+     * The state is read before that refresh: a refresh can publish a stored pairing, and the
+     * observation it wakes may admit its probe first, in which case this one must stay quiet.
      */
     private suspend fun recheck() {
+        val unpairedAtRequest = coordinator.wizard.value is WizardState.NeedsPairing
         pairingRepository.refresh()
-        coordinator.dispatch(WizardEvent.RecheckRequested)
+        coordinator.probeOnResume(unpairedAtRequest)
     }
 }

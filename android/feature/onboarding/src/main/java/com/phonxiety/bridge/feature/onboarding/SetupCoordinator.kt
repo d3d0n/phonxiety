@@ -80,9 +80,10 @@ class SetupCoordinator(
     private var localPairingInFlight = false
 
     /**
-     * The last local attempt was rejected while the wizard sat at "Unpaired". It may still have left
-     * a readable config behind (the store writes before the service starts), so ambient observations
-     * of that pairing stay ignored; an explicit attempt or a probe re-checks the world.
+     * The last local attempt was rejected after it left a readable config behind (the store writes
+     * before the service starts). Only that config is ignored: an attempt that wrote nothing never
+     * sets this, and [onPairingCleared] ends the suppression when the pairing goes away, so a later
+     * pairing that arrives by any other path still advances the wizard.
      */
     private var localPairingRejected = false
 
@@ -112,10 +113,36 @@ class SetupCoordinator(
         }
     }
 
+    /**
+     * The stored pairing is gone (an unpair, or a config replaced by one this app did not write).
+     * Whatever a rejected attempt left behind is no longer on the phone, so the next pairing is a
+     * new one and its observation must count.
+     */
+    suspend fun onPairingCleared() {
+        mutex.withLock { localPairingRejected = false }
+    }
+
+    /**
+     * The probe a resume runs, admitted together with pairing observations so they cannot both act
+     * on the same stored pairing. [unpairedAtRequest] is the wizard state when the resume was asked
+     * for, read before the refresh: if the wizard was at "Unpaired" then and the observation (or a
+     * pairing attempt) answered it while this call waited for the lock, probing again would repeat
+     * the first link test or emit a second [SetupHostRequest.Finished].
+     */
+    suspend fun probeOnResume(unpairedAtRequest: Boolean) {
+        mutex.withLock {
+            if (unpairedAtRequest && _wizard.value !is WizardState.NeedsPairing) return@withLock
+            handle(WizardEvent.RecheckRequested)
+        }
+    }
+
     /** Validates and stores a `phonxiety://pair` link or a scanned QR payload. */
     suspend fun pair(link: String) {
         mutex.withLock {
             localPairingInFlight = true
+            // Read before the attempt: a stored pairing that appears while it runs is this
+            // attempt's own leftover only if there was none when it started.
+            val storedBefore = pairing.paired.value
             try {
                 val result = runCatching { pairing.pair(link) }
                     .getOrElse { error ->
@@ -131,10 +158,12 @@ class SetupCoordinator(
                     }
 
                     is PairResult.Invalid -> {
-                        // The store writes the config before the service starts, so a rejected
-                        // attempt can leave a readable pairing behind. Only an explicit attempt or
-                        // a probe may act on it; an ambient observation must not.
-                        if (_wizard.value is WizardState.NeedsPairing) localPairingRejected = true
+                        // A rejected attempt that still wrote a readable config leaves a pairing
+                        // behind that this app must not promote. Invalid input writes nothing, and
+                        // that must not suppress a pairing that arrives by any other path.
+                        if (_wizard.value is WizardState.NeedsPairing && !storedBefore && pairing.paired.value) {
+                            localPairingRejected = true
+                        }
                         host(SetupHostRequest.PairingRejected(result.reason))
                     }
                 }

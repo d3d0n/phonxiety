@@ -210,6 +210,113 @@ class WizardPairingObservationTest {
     }
 
     @Test
+    fun aResumeQueuedAfterTheObservationIsAdmittedDoesNotTestOrFinishAgain() = runTest {
+        coordinator.start()
+        pairing.pairedState.value = true
+        appApi.requestGate = CompletableDeferred()
+
+        // The observation wins the lock and keeps it through the first link test.
+        val observation = launch { coordinator.onPairingObserved() }
+        runCurrent()
+        assertEquals(WizardState.FirstLinkTest(MAGISK), coordinator.wizard.value)
+
+        // The resume was asked for while the wizard still showed "Unpaired"; it queues behind.
+        val resume = launch { coordinator.probeOnResume(unpairedAtRequest = true) }
+        runCurrent()
+
+        appApi.requestGate?.complete(Unit)
+        observation.join()
+        resume.join()
+
+        assertEquals(WizardState.Ready, coordinator.wizard.value)
+        assertEquals(1, linkTests())
+        assertEquals(1, serviceStarts)
+        assertEquals(1, hosts.count { it == SetupHostRequest.Finished })
+    }
+
+    @Test
+    fun aResumeAdmittedFirstLeavesAQueuedObservationNothingToDo() = runTest {
+        coordinator.start()
+        pairing.pairedState.value = true
+        backend.detectGate = CompletableDeferred()
+        val probes = backend.detects
+
+        val resume = launch { coordinator.probeOnResume(unpairedAtRequest = true) }
+        runCurrent()
+        val observation = launch { coordinator.onPairingObserved() }
+        runCurrent()
+
+        backend.detectGate?.complete(Unit)
+        resume.join()
+        observation.join()
+
+        assertEquals(WizardState.Ready, coordinator.wizard.value)
+        assertEquals(probes + 1, backend.detects)
+        assertEquals(1, linkTests())
+        assertEquals(1, hosts.count { it == SetupHostRequest.Finished })
+    }
+
+    @Test
+    fun aResumeFromAnyOtherStateStillProbes() = runTest {
+        backend.detection = RootDetection(SuStatus.DENIED, listOf(MAGISK), "Permission denied")
+        coordinator.start()
+        assertTrue(coordinator.wizard.value is WizardState.RootDenied)
+        val probes = backend.detects
+
+        // Root was granted in the manager while the app was away.
+        backend.detection = RootDetection(SuStatus.GRANTED, listOf(MAGISK))
+        backend.module = ModuleState.Enabled("0.3.0", 3)
+        coordinator.probeOnResume(unpairedAtRequest = false)
+
+        assertEquals(probes + 1, backend.detects)
+        assertEquals(WizardState.NeedsPairing(MAGISK), coordinator.wizard.value)
+    }
+
+    @Test
+    fun aValidationFailureDoesNotBlockAPairingFromElsewhere() = runTest {
+        coordinator.start()
+        assertEquals(WizardState.NeedsPairing(MAGISK), coordinator.wizard.value)
+        pairing.pairResult = PairResult.Invalid("the link is not a phonxiety pairing")
+
+        // Typed into the paste field: invalid input writes nothing.
+        coordinator.pair("https://example.invalid/not-a-pairing")
+
+        assertTrue(hosts.any { it == SetupHostRequest.PairingRejected("the link is not a phonxiety pairing") })
+        assertEquals(false, pairing.pairedState.value)
+        assertEquals(WizardState.NeedsPairing(MAGISK), coordinator.wizard.value)
+
+        // The person then pairs by another path while staying on this screen.
+        pairing.pairedState.value = true
+        coordinator.onPairingObserved()
+
+        assertEquals(WizardState.Ready, coordinator.wizard.value)
+        assertEquals(1, linkTests())
+    }
+
+    @Test
+    fun aClearedPairingEndsTheSuppressionOfARejectedAttemptsConfig() = runTest {
+        coordinator.start()
+        pairing.pairResult = PairResult.Invalid("the ticket expired")
+        pairing.writeEvenWhenRejected = true
+
+        // Rejected, but the store wrote a readable config: its own observation stays ignored.
+        coordinator.pair("phonxiety://pair?token=old")
+        coordinator.onPairingObserved()
+        assertEquals(WizardState.NeedsPairing(MAGISK), coordinator.wizard.value)
+
+        // The pairing goes away, then a new one arrives by another path.
+        pairing.pairResult = PairResult.Paired
+        pairing.pairedState.value = false
+        coordinator.onPairingCleared()
+        pairing.pairedState.value = true
+        coordinator.onPairingObserved()
+
+        assertEquals(WizardState.Ready, coordinator.wizard.value)
+        assertEquals(1, linkTests())
+        assertEquals(1, hosts.count { it == SetupHostRequest.Finished })
+    }
+
+    @Test
     fun aRejectedAttemptIsNotPromotedByTheConfigItWrote() = runTest {
         coordinator.start()
         assertEquals(WizardState.NeedsPairing(MAGISK), coordinator.wizard.value)

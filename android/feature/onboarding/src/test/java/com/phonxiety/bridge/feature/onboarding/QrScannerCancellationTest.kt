@@ -1,13 +1,25 @@
 package com.phonxiety.bridge.feature.onboarding
 
 import android.content.ContextWrapper
+import android.os.Looper
+import com.google.android.gms.common.Feature
+import com.google.android.gms.tasks.Task
+import com.google.android.gms.tasks.TaskCompletionSource
+import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.common.MlKitException
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanner
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 /**
@@ -94,5 +106,39 @@ class QrScannerCancellationTest {
             PlayScan.Failed("the scanner activity could not open"),
             scanFailure(IllegalStateException("the scanner activity could not open"))
         )
+    }
+
+    @Test
+    fun aCancelledTaskIsADismissalNotAFailure() = runTest {
+        // What Play services hands back when the person dismisses the scanner out from under it.
+        // Its listeners fire on the main thread, as they do in the app.
+        val scan = async { startScan(TaskScanner(Tasks.forCanceled())) }
+        runCurrent()
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertEquals(PlayScan.Cancelled, scan.await())
+    }
+
+    @Test
+    fun leavingTheScreenCancelsTheWaitAndALateResultChangesNothing() = runTest {
+        val source = TaskCompletionSource<Barcode>()
+        val scan = launch { startScan(TaskScanner(source.task)) }
+        runCurrent()
+
+        scan.cancel()
+        scan.join()
+
+        // Play services answers anyway after the screen left; the settled wait must stay settled.
+        source.setException(MlKitException("Failed to scan code.", MlKitException.INTERNAL))
+        runCurrent()
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertTrue(scan.isCancelled)
+    }
+
+    private class TaskScanner(private val task: Task<Barcode>) : GmsBarcodeScanner {
+        override fun startScan(): Task<Barcode> = task
+
+        override fun getOptionalFeatures(): Array<Feature> = emptyArray()
     }
 }
