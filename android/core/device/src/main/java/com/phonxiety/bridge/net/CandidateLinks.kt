@@ -18,6 +18,19 @@ internal fun interface CandidateProbe {
 /** The candidate the current link was built for; the engine shows it in [com.phonxiety.bridge.model.BridgeState]. */
 internal data class SelectedCandidate(val kind: LinkKind, val host: String?)
 
+/**
+ * Routes attempt outcomes to the iroh factory: only a known-iroh attempt
+ * feeds the endpoint's own recovery accounting.  A LAN or Tailscale failure
+ * says nothing about the phone's endpoint, and an attempt that ended before a
+ * candidate was selected has no transport at all.
+ */
+internal class IrohAttemptOutcomes(private val irohFactory: () -> DeviceLinkFactory?) {
+    fun report(outcome: AttemptOutcome, kind: LinkKind?) {
+        if (kind != LinkKind.IROH) return
+        irohFactory()?.attemptEnded(outcome, kind)
+    }
+}
+
 /** What this phone measured on one daemon LAN address. */
 data class LanPathProbe(
     val address: String,
@@ -91,7 +104,12 @@ internal class CandidateLinkFactory(
     /** The candidate the live link was built for; a live link is its own proof of reachability. */
     @Volatile private var current: Candidate? = null
 
+    // Per-attempt iroh attribution: the attempt's own kind, never `current`.
+    private val outcomes = IrohAttemptOutcomes { irohFactory }
+
     override fun selected(): SelectedCandidate? = selected
+
+    override fun attemptEnded(outcome: AttemptOutcome, kind: LinkKind?) = outcomes.report(outcome, kind)
 
     override fun create(): DeviceLink {
         val plan = plan()
@@ -203,6 +221,8 @@ internal class CandidateLinkFactory(
         private val delegate: DeviceLink
     ) : DeviceLink {
         @Volatile private var openedAt = 0L
+
+        override val kind: LinkKind = candidate.kind
 
         override val backlogBytes: Long get() = delegate.backlogBytes
 
