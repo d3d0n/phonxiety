@@ -209,8 +209,8 @@ fun DoctorScreen(
                         } else {
                             SelectedRowCard(state, callbacks)
                             DaemonFixesCard(state, callbacks)
-                            ChangeLogCard(state)
                             GuidedRecoveryCard(state, callbacks)
+                            ChangeLogCard(state)
                         }
                     }
                 }
@@ -234,8 +234,8 @@ fun DoctorScreen(
                             }
                         }
                         DaemonFixesCard(state, callbacks)
-                        ChangeLogCard(state)
                         GuidedRecoveryCard(state, callbacks)
+                        ChangeLogCard(state)
                     }
                 }
             }
