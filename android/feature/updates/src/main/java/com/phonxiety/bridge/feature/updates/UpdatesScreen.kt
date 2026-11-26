@@ -426,8 +426,10 @@ private fun RollbackSection(
     onDismissRecovery: () -> Unit
 ) {
     val shownRecovery = recovery?.takeUnless { recoveryDismissed }
-    val pending = shownRecovery as? RollbackRecovery.Pending
-    val nothingToOffer = shownRecovery == null && appInstall is AppInstallState.Idle &&
+    // Action ownership comes from the recovery itself, never from whether its notice is visible:
+    // dismissing the notice must not expose a fresh plan while the recorded rollback is pending.
+    val pending = recovery as? RollbackRecovery.Pending
+    val nothingToOffer = recovery == null && appInstall is AppInstallState.Idle &&
         (plan == null || (plan is RollbackPlan.Unavailable && plan.blocker == RollbackBlocker.NO_KEPT_APK))
     if (nothingToOffer) return
 
@@ -450,6 +452,10 @@ private fun RollbackSection(
             onRollback = onRollback,
             onDismiss = onDismiss
         )
+        // A dismissed notice hides the explanation, not the retry that finishes the journal.
+        if (pending != null && shownRecovery == null && rollback == RollbackState.Idle && appInstall is AppInstallState.Idle) {
+            TextButton(onClick = onRollback) { Text("Finish the rollback") }
+        }
     }
 }
 

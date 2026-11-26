@@ -48,6 +48,7 @@ class RollbackStoreTest {
                 "mv -f $generationPath/module-previous.json.tmp $generationPath/module-previous.json",
                 "cp -f ${File(temporary.root, "workspace/current").path} /data/adb/phonxiety/current.tmp",
                 "mv -f /data/adb/phonxiety/current.tmp /data/adb/phonxiety/current",
+                "cat /data/adb/phonxiety/rollback.json",
                 "ls -1 /data/adb/phonxiety"
             ),
             runner.commands
@@ -74,6 +75,135 @@ class RollbackStoreTest {
         assertTrue(runner.commands.contains("rm -rf /data/adb/phonxiety/g-${"b".repeat(64)}"))
         assertFalse(runner.commands.contains("rm -rf /data/adb/phonxiety/$generation"))
         assertFalse(runner.commands.any { it.startsWith("rm -rf") && it.endsWith("rollback.json") })
+    }
+
+    @Test
+    fun `a generation a pending journal names survives cleanup`() = runTest {
+        val recorded = "b".repeat(64)
+        val stale = "c".repeat(64)
+        val runner = FakeRunner().apply {
+            respond = { script ->
+                when (script) {
+                    "cat /data/adb/phonxiety/rollback.json" ->
+                        ShellOutput(stdout = RollbackJournalCodec.write(journal(sha256 = recorded)))
+
+                    "ls -1 /data/adb/phonxiety" ->
+                        ShellOutput(stdout = "g-$recorded\ng-$stale\n$generation\nrollback.json\n")
+
+                    else -> ShellOutput()
+                }
+            }
+        }
+
+        assertTrue(store(runner).publish(temporary.newFile("a.zip"), metadataFile()))
+
+        assertFalse(runner.commands.contains("rm -rf /data/adb/phonxiety/g-$recorded"))
+        assertTrue(runner.commands.contains("rm -rf /data/adb/phonxiety/g-$stale"))
+        assertFalse(runner.commands.contains("rm -rf /data/adb/phonxiety/$generation"))
+    }
+
+    @Test
+    fun `metadata that cannot be published leaves the previous generation current`() = runTest {
+        val previous = PublishedModuleArchive("0.2.0", 2, "c".repeat(64))
+        var publishingSecond = false
+        var pointer: String? = null
+        val runner = FakeRunner().apply {
+            respond = { script ->
+                when {
+                    publishingSecond && script.startsWith("cp -f") && script.endsWith("/module-previous.json.tmp") ->
+                        ShellOutput(exitCode = 1)
+
+                    script == POINTER_RENAME -> {
+                        pointer = File(temporary.root, "workspace/current").readText()
+                        ShellOutput()
+                    }
+
+                    else -> ShellOutput()
+                }
+            }
+        }
+        val store = store(runner)
+        assertTrue(store.publish(temporary.newFile("first.zip"), metadataFile(previous)))
+        val previousPointer = "g-${previous.sha256}\n"
+        assertEquals(previousPointer, pointer)
+
+        publishingSecond = true
+        val before = runner.commands.size
+        assertFalse(store.publish(temporary.newFile("a.zip"), metadataFile()))
+
+        assertEquals(previousPointer, pointer)
+        assertFalse(runner.commands.drop(before).any { it.startsWith("mv -f /data/adb/phonxiety/current.tmp") })
+        assertFalse(runner.commands.drop(before).any { it.startsWith("rm -rf") })
+    }
+
+    @Test
+    fun `a pointer switch that cannot be published leaves the earlier generation current`() = runTest {
+        val previous = PublishedModuleArchive("0.2.0", 2, "c".repeat(64))
+        var publishingSecond = false
+        var pointer: String? = null
+        val runner = FakeRunner().apply {
+            respond = { script ->
+                when {
+                    publishingSecond && script == POINTER_RENAME -> ShellOutput(exitCode = 1)
+
+                    script == POINTER_RENAME -> {
+                        pointer = File(temporary.root, "workspace/current").readText()
+                        ShellOutput()
+                    }
+
+                    else -> ShellOutput()
+                }
+            }
+        }
+        val store = store(runner)
+        assertTrue(store.publish(temporary.newFile("first.zip"), metadataFile(previous)))
+        val previousPointer = "g-${previous.sha256}\n"
+        assertEquals(previousPointer, pointer)
+
+        publishingSecond = true
+        val before = runner.commands.size
+        assertFalse(store.publish(temporary.newFile("a.zip"), metadataFile()))
+
+        assertEquals(previousPointer, pointer)
+        assertFalse(runner.commands.drop(before).any { it.startsWith("rm -rf") })
+    }
+
+    @Test
+    fun `a generation is read by its digest and proves both bytes and identity`() = runTest {
+        fun storeFor(digest: String) = store(
+            FakeRunner().apply {
+                respond = { script ->
+                    when {
+                        script.endsWith("module-previous.json") ->
+                            ShellOutput(stdout = ModuleArchiveMeta.write(archive))
+
+                        script.startsWith("sha256sum") -> ShellOutput(stdout = "$digest  x\n")
+
+                        else -> ShellOutput()
+                    }
+                }
+            }
+        )
+
+        assertEquals(
+            RollbackArchiveState.Present(archive),
+            storeFor(archive.sha256).readGeneration(archive.sha256)
+        )
+        assertEquals(
+            RollbackArchiveState.Mismatch(archive.sha256, "b".repeat(64)),
+            storeFor("b".repeat(64)).readGeneration(archive.sha256)
+        )
+    }
+
+    @Test
+    fun `a recorded generation that is gone is missing, never the pointer's archive`() = runTest {
+        val runner = FakeRunner().apply {
+            respond = { script ->
+                if (script.contains("/current")) ShellOutput(stdout = "$generation\n") else ShellOutput(exitCode = 1)
+            }
+        }
+
+        assertEquals(RollbackArchiveState.Missing, store(runner).readGeneration(archive.sha256))
     }
 
     @Test
@@ -204,6 +334,18 @@ class RollbackStoreTest {
     }
 
     @Test
+    fun `a write inside an existing workspace is an explained failure, never a throw`() = runTest {
+        val workspace = File(temporary.root, "workspace").apply { mkdirs() }
+        // A directory where the journal belongs makes the write fail inside a workspace that exists.
+        File(workspace, RollbackFiles.JOURNAL).mkdirs()
+
+        val result = RootRollbackStore(RootShell(FakeRunner()), workspace).prepareScript(journal())
+
+        assertFalse(result.ok)
+        assertTrue(result.detail!!.contains("could not be written"))
+    }
+
+    @Test
     fun `starting publishes the prepared files and then starts the script detached`() = runTest {
         val runner = FakeRunner()
         var publishedJournal: RollbackJournal? = null
@@ -262,19 +404,25 @@ class RollbackStoreTest {
         assertTrue(runner.commands.isEmpty())
     }
 
-    private fun metadataFile(): File = temporary.newFile("module-previous.json")
-        .apply { writeText(ModuleArchiveMeta.write(archive)) }
+    private var metadataFiles = 0
+
+    private companion object {
+        const val POINTER_RENAME: String = "mv -f /data/adb/phonxiety/current.tmp /data/adb/phonxiety/current"
+    }
+
+    private fun metadataFile(forArchive: PublishedModuleArchive = archive): File = File(temporary.root, "module-previous-${metadataFiles++}.json")
+        .apply { writeText(ModuleArchiveMeta.write(forArchive)) }
 
     private fun store(runner: FakeRunner): RootRollbackStore = RootRollbackStore(RootShell(runner), File(temporary.root, "workspace"))
 
-    private fun journal(): RollbackJournal = RollbackJournal(
+    private fun journal(sha256: String = archive.sha256): RollbackJournal = RollbackJournal(
         createdAtMillis = 5L,
         step = RollbackJournalStep.MODULE_STAGED,
         targets = RollbackTargets(
             packageName = "com.phonxiety.bridge",
             moduleVersionName = "0.3.0",
             moduleVersionCode = 3,
-            moduleSha256 = archive.sha256,
+            moduleSha256 = sha256,
             fromAppVersionName = "0.4.0",
             fromAppVersionCode = 4
         )

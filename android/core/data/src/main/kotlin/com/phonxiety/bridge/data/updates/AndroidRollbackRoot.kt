@@ -19,27 +19,22 @@ class AndroidRollbackRoot @Inject constructor(
     override suspend fun prepare(journal: RollbackJournal): RootStepResult = store.prepareScript(journal)
 
     override suspend fun stagePreviousModule(archive: PublishedModuleArchive): RootStepResult {
-        val published = when (val lookup = store.publishedArchive()) {
+        // The generation the rollback decided on, by its digest: a pointer that moved since — or a
+        // pending journal's target that is no longer current — never changes what is staged.
+        val published = when (val lookup = store.publishedGeneration(archive.sha256)) {
             is PublishedArchiveLookup.Found -> lookup.file
 
             PublishedArchiveLookup.Missing ->
-                return RootStepResult(false, "no previous module archive is published under ${RollbackFiles.DIRECTORY}")
+                return RootStepResult(false, "no archive is published for the ${archive.sha256} this rollback targets")
 
             PublishedArchiveLookup.Unreadable ->
-                return RootStepResult(false, "${RollbackFiles.DIRECTORY} could not be read through root")
-        }
-        if (!published.archive.sha256.equals(archive.sha256, ignoreCase = true)) {
-            return RootStepResult(
-                false,
-                "the published archive now carries ${published.archive.versionName ?: published.archive.versionCode}, " +
-                    "not the checked one"
-            )
+                return RootStepResult(false, "the archive for ${archive.sha256} could not be read through root")
         }
         // The digest of the exact bytes root would copy: the app cannot read this file itself.
         val digest = store.digestOf(published.generation)
             ?: return RootStepResult(false, "root could not hash ${published.path}")
         if (!digest.equals(archive.sha256, ignoreCase = true)) {
-            return RootStepResult(false, "${published.path} hashes to $digest, its metadata names ${archive.sha256}")
+            return RootStepResult(false, "${published.path} hashes to $digest, its identity names ${archive.sha256}")
         }
         return when (val result = rootAccess.installPublishedModule(published.path)) {
             ProviderInstall.Installed -> RootStepResult(ok = true)

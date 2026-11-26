@@ -391,28 +391,50 @@ class ModuleRollbackCoordinator(
     private val clock: () -> Long = System::currentTimeMillis,
     /** The archive a pending journal already staged: a retry then only repeats the hand-off. */
     private val stagedArchiveSha256: String? = null,
+    /**
+     * The digest a pending journal recorded. Recovery completes that rollback, so it resolves this
+     * generation by name and refuses a different archive instead of substituting its target.
+     */
+    private val recoverySha256: String? = null,
     private val onState: (RollbackState) -> Unit
 ) {
     suspend fun rollback(expectedPreviousVersionCode: Long): RollbackState {
-        val archive = when (val state = archives.read()) {
+        val state = if (recoverySha256 != null) archives.readGeneration(recoverySha256) else archives.read()
+        val archive = when (state) {
             is RollbackArchiveState.Present -> state.archive
 
             RollbackArchiveState.Missing ->
-                return finish(RollbackFailure.NO_PREVIOUS_MODULE, "no previous module is published")
+                return finish(
+                    RollbackFailure.NO_PREVIOUS_MODULE,
+                    if (recoverySha256 == null) {
+                        "no previous module is published"
+                    } else {
+                        "no archive is published for the $recoverySha256 this rollback recorded"
+                    }
+                )
 
             RollbackArchiveState.Unreadable ->
-                return finish(RollbackFailure.NO_PREVIOUS_MODULE, "the rollback directory could not be read")
+                return finish(
+                    RollbackFailure.NO_PREVIOUS_MODULE,
+                    "the rollback directory could not be read"
+                )
 
             is RollbackArchiveState.Mismatch ->
                 return finish(
                     RollbackFailure.ARCHIVE_MISMATCH,
-                    "the published archive hashes to ${state.actualSha256}, its metadata names ${state.expectedSha256}"
+                    "the archive published as ${state.expectedSha256} hashes to ${state.actualSha256}"
                 )
+        }
+        if (recoverySha256 != null && !archive.sha256.equals(recoverySha256, ignoreCase = true)) {
+            return finish(
+                RollbackFailure.ARCHIVE_MISMATCH,
+                "the archive for the recorded rollback is ${archive.sha256}, not the recorded $recoverySha256"
+            )
         }
         if (archive.versionCode != expectedPreviousVersionCode) {
             return finish(
                 RollbackFailure.ARCHIVE_MISMATCH,
-                "the published archive is ${archive.versionCode}, the checked plan expected $expectedPreviousVersionCode"
+                "the published archive is ${archive.versionCode}, the rollback expected $expectedPreviousVersionCode"
             )
         }
 
@@ -434,7 +456,7 @@ class ModuleRollbackCoordinator(
         val prepared = root.prepare(journal)
         if (!prepared.ok) return finish(RollbackFailure.PREPARATION_FAILED, prepared.detail)
 
-        if (archive.sha256 != stagedArchiveSha256) {
+        if (!archive.sha256.equals(stagedArchiveSha256, ignoreCase = true)) {
             onState(RollbackState.StagingModule)
             val staged = root.stagePreviousModule(archive)
             if (!staged.ok) return finish(RollbackFailure.MODULE_STAGE_FAILED, staged.detail)

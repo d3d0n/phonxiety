@@ -122,5 +122,7 @@ class ModuleArchiveCaptureTest {
         }
 
         override suspend fun read(): RollbackArchiveState = RollbackArchiveState.Missing
+
+        override suspend fun readGeneration(sha256: String): RollbackArchiveState = RollbackArchiveState.Missing
     }
 }

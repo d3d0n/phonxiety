@@ -138,6 +138,68 @@ class RollbackTest {
     }
 
     @Test
+    fun `recovery resolves the archive by the journal's digest, not by the pointer`() = runTest {
+        val other = PublishedModuleArchive("0.3.0", 3, "b".repeat(64))
+        val root = FakeRoot()
+        val result = ModuleRollbackCoordinator(
+            FakePublisher(
+                state = RollbackArchiveState.Present(other),
+                generations = mapOf(archive.sha256 to RollbackArchiveState.Present(archive))
+            ),
+            root,
+            running,
+            stagedArchiveSha256 = archive.sha256,
+            recoverySha256 = archive.sha256
+        ) {}.rollback(expectedPreviousVersionCode = 3)
+
+        assertEquals(RollbackState.Started("0.3.0"), result)
+        assertEquals(listOf("prepare", "start"), root.calls)
+        assertEquals(archive.sha256, root.journal?.targets?.moduleSha256)
+    }
+
+    @Test
+    fun `recovery refuses a same-version archive whose digest is not the recorded one`() = runTest {
+        val other = PublishedModuleArchive("0.3.0", 3, "b".repeat(64))
+        val root = FakeRoot()
+        val result = ModuleRollbackCoordinator(
+            // The pointer names a valid archive of the same version; the recorded generation is gone.
+            FakePublisher(
+                state = RollbackArchiveState.Present(other),
+                generations = mapOf(archive.sha256 to RollbackArchiveState.Mismatch(archive.sha256, other.sha256))
+            ),
+            root,
+            running,
+            stagedArchiveSha256 = null,
+            recoverySha256 = archive.sha256
+        ) {}.rollback(expectedPreviousVersionCode = 3)
+
+        val failure = result as RollbackState.Failed
+        assertEquals(RollbackFailure.ARCHIVE_MISMATCH, failure.code)
+        assertTrue(failure.detail!!.contains(archive.sha256))
+        assertTrue(failure.detail!!.contains(other.sha256))
+        assertTrue(root.calls.isEmpty())
+        // The journal's recorded target is never rewritten to the substitute archive.
+        assertTrue(root.journal == null)
+    }
+
+    @Test
+    fun `recovery never substitutes a pointer archive for a missing recorded generation`() = runTest {
+        val other = PublishedModuleArchive("0.3.0", 3, "b".repeat(64))
+        val root = FakeRoot()
+        val result = ModuleRollbackCoordinator(
+            FakePublisher(state = RollbackArchiveState.Present(other)),
+            root,
+            running,
+            recoverySha256 = archive.sha256
+        ) {}.rollback(expectedPreviousVersionCode = 3)
+
+        val failure = result as RollbackState.Failed
+        assertEquals(RollbackFailure.NO_PREVIOUS_MODULE, failure.code)
+        assertTrue(failure.detail!!.contains(archive.sha256))
+        assertTrue(root.calls.isEmpty())
+    }
+
+    @Test
     fun `a file that cannot be written stops before anything is staged`() = runTest {
         val root = FakeRoot(prepare = RootStepResult(false, "no space left on device"))
         val result = ModuleRollbackCoordinator(
@@ -334,10 +396,15 @@ class RollbackTest {
         archive = archive
     )
 
-    private class FakePublisher(private val state: RollbackArchiveState) : ModuleArchivePublisher {
+    private class FakePublisher(
+        private val state: RollbackArchiveState,
+        private val generations: Map<String, RollbackArchiveState> = emptyMap()
+    ) : ModuleArchivePublisher {
         override suspend fun publish(archive: java.io.File, metadata: java.io.File): Boolean = true
 
         override suspend fun read(): RollbackArchiveState = state
+
+        override suspend fun readGeneration(sha256: String): RollbackArchiveState = generations[sha256] ?: RollbackArchiveState.Missing
     }
 
     private class FakeRoot(

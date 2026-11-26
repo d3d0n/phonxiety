@@ -216,9 +216,10 @@ class DefaultUpdatesService @Inject constructor(
     }
 
     /**
-     * Continues the rollback [journal] recorded: the module is staged again only when the phone is
-     * not already running that module, then the detached script repeats the removal by the journal's
-     * own target. Returns false when the journal was already complete and a fresh plan applies.
+     * Continues the rollback [journal] recorded: the module is staged again only when the phone does
+     * not already hold that exact module — mounted, or staged for the next boot — then the detached
+     * script repeats the removal by the journal's own target. Returns false when the journal was
+     * already complete and a fresh plan applies.
      */
     private suspend fun finishJournal(journal: RollbackJournal): Boolean {
         val recovery = verifyJournal(journal)
@@ -227,16 +228,21 @@ class DefaultUpdatesService @Inject constructor(
             _rollbackRecovery.value = recovery
             return false
         }
-        val stagedSha256 = journal.targets.moduleSha256.takeIf {
-            mountedModuleVersionCode() == journal.targets.moduleVersionCode
+        val targets = journal.targets
+        // A held target is the journal's module by name and code, so the retry only repeats the
+        // preparation and the hand-off. Anything else is staged fresh.
+        val held = moduleState()?.heldModule()
+        val stagedSha256 = targets.moduleSha256.takeIf {
+            held != null && held.second == targets.moduleVersionCode && held.first == targets.moduleVersionName
         }
         val result = ModuleRollbackCoordinator(
             archives = archives,
             root = rollbackRoot,
             app = runningApp(),
             stagedArchiveSha256 = stagedSha256,
+            recoverySha256 = targets.moduleSha256,
             onState = { _moduleRollback.value = it }
-        ).rollback(expectedPreviousVersionCode = journal.targets.moduleVersionCode)
+        ).rollback(expectedPreviousVersionCode = targets.moduleVersionCode)
         if (result !is RollbackState.Started) refreshRollback()
         return true
     }
@@ -287,10 +293,25 @@ class DefaultUpdatesService @Inject constructor(
         )
     }
 
+    private suspend fun moduleState(): ModuleState? = runCatching { rootState.moduleState() }.getOrNull()
+
     /** The module actually mounted on the system image; a staged one has not been applied yet. */
-    private suspend fun mountedModuleVersionCode(): Long? = when (val state = runCatching { rootState.moduleState() }.getOrNull()) {
-        is ModuleState.Enabled -> state.versionCode.toLong()
-        is ModuleState.Disabled -> state.versionCode.toLong()
+    private suspend fun mountedModuleVersionCode(): Long? = moduleState()?.appliedVersionCode()
+
+    private fun ModuleState.appliedVersionCode(): Long? = when (this) {
+        is ModuleState.Enabled -> versionCode.toLong()
+        is ModuleState.Disabled -> versionCode.toLong()
+        else -> null
+    }
+
+    /**
+     * What the phone already holds at the journal's target — mounted, or staged for the next boot —
+     * as its version name and code; null when nothing there matches in shape at all.
+     */
+    private fun ModuleState.heldModule(): Pair<String?, Long>? = when (this) {
+        is ModuleState.Enabled -> version to versionCode.toLong()
+        is ModuleState.Disabled -> version to versionCode.toLong()
+        is ModuleState.Staged -> version to versionCode.toLong()
         else -> null
     }
 

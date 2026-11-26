@@ -39,6 +39,8 @@ class AndroidRollbackRootTest {
         assertEquals(listOf(archivePath), installer.published)
         assertTrue(installer.appSide.isEmpty())
         assertTrue(runner.commands.contains("sha256sum $archivePath"))
+        // Staging is by the archive's digest, never by whatever the pointer names now.
+        assertFalse(runner.commands.any { it.endsWith("/${RollbackFiles.POINTER}") })
     }
 
     @Test
@@ -53,16 +55,25 @@ class AndroidRollbackRootTest {
     }
 
     @Test
-    fun `an archive the pointer does not name is explained, not installed`() = runTest {
+    fun `another archive at the pointer never substitutes the generation the rollback names`() = runTest {
+        val installer = RecordingInstaller()
+        val runner = FakeRunner(pointer = "g-${"c".repeat(64)}")
+
+        val result = AndroidRollbackRoot(installer, store(runner)).stagePreviousModule(archive)
+
+        assertTrue(result.ok)
+        assertEquals(listOf(archivePath), installer.published)
+        assertFalse(runner.commands.any { it.endsWith("/${RollbackFiles.POINTER}") })
+    }
+
+    @Test
+    fun `a generation whose identity is another digest is refused before anything is installed`() = runTest {
         val installer = RecordingInstaller()
         val other = PublishedModuleArchive("0.3.0", 3, "c".repeat(64))
-        val result = AndroidRollbackRoot(
-            installer,
-            store(FakeRunner(pointer = "g-${"c".repeat(64)}", identity = other))
-        ).stagePreviousModule(archive)
+        val result = AndroidRollbackRoot(installer, store(FakeRunner(identity = other, digest = other.sha256)))
+            .stagePreviousModule(archive)
 
         assertFalse(result.ok)
-        assertTrue(result.detail!!.contains("not the checked one"))
         assertTrue(installer.published.isEmpty())
     }
 
@@ -73,7 +84,7 @@ class AndroidRollbackRootTest {
             .stagePreviousModule(archive)
 
         assertFalse(result.ok)
-        assertTrue(result.detail!!.contains("/data/adb/phonxiety"))
+        assertTrue(result.detail!!.contains(archive.sha256))
         assertTrue(installer.published.isEmpty())
     }
 

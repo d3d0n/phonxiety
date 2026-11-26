@@ -29,6 +29,10 @@ class DefaultUpdatesServiceRollbackTest {
     private val context: Context = RuntimeEnvironment.getApplication()
     private val archive = PublishedModuleArchive("0.3.0", 3, "a".repeat(64))
 
+    private companion object {
+        const val SYSTEM_APK: String = "/system/priv-app/phonxiety-bridge/phonxiety-bridge.apk"
+    }
+
     @Test
     fun `a failed removal is finished by its journal, never by an app only install`() = runTest {
         val root = FakeRoot()
@@ -37,10 +41,23 @@ class DefaultUpdatesServiceRollbackTest {
             journal = journal(RollbackJournalStep.FAILED),
             // The manual reboot applied the staged module: the journal's target is what runs.
             moduleState = ModuleState.Enabled("0.3.0", 3),
-            // The kept APK is version 3, so a recomputed plan would be AppOnly.
+            // The mounted system APK and the kept APK are both 3, so a recomputed plan is AppOnly.
+            mounted = MountedSystemApkVersion.Present(SYSTEM_APK, "0.3.0", 3),
             keeper = FakeKeeper(File(context.cacheDir, "previous.apk"), 3),
             root = root,
             privileged = privileged
+        )
+        assertEquals(
+            RollbackPlan.AppOnly("0.3.0", 3),
+            RollbackPlanner.plan(
+                RollbackFacts(
+                    keptApkExists = true,
+                    keptVersionName = "0.3.0",
+                    keptVersionCode = 3,
+                    mounted = MountedSystemApkVersion.Present(SYSTEM_APK, "0.3.0", 3),
+                    archive = RollbackArchiveState.Present(archive)
+                )
+            )
         )
 
         service.rollbackApp()
@@ -49,6 +66,107 @@ class DefaultUpdatesServiceRollbackTest {
         assertEquals(listOf("prepare", "start"), root.calls)
         assertEquals(3L, root.journal?.targets?.moduleVersionCode)
         assertEquals(RollbackState.Started("0.3.0"), service.moduleRollback.value)
+    }
+
+    @Test
+    fun `a staged journal target is not reinstalled before the hand-off`() = runTest {
+        val root = FakeRoot()
+        val service = service(
+            journal = journal(RollbackJournalStep.FAILED),
+            // The reboot has not happened yet: the journal's target waits in modules_update.
+            moduleState = ModuleState.Staged("0.3.0", 3),
+            keeper = FakeKeeper(null, 0),
+            root = root
+        )
+
+        service.rollbackApp()
+
+        assertEquals(listOf("prepare", "start"), root.calls)
+        assertEquals(3L, root.journal?.targets?.moduleVersionCode)
+        assertEquals(archive.sha256, root.journal?.targets?.moduleSha256)
+        assertEquals(RollbackState.Started("0.3.0"), service.moduleRollback.value)
+    }
+
+    @Test
+    fun `a staged module that is not the journal's target is staged again`() = runTest {
+        val root = FakeRoot()
+        val service = service(
+            journal = journal(RollbackJournalStep.FAILED),
+            moduleState = ModuleState.Staged("0.3.0", 4),
+            keeper = FakeKeeper(null, 0),
+            root = root
+        )
+
+        service.rollbackApp()
+
+        assertEquals(listOf("prepare", "stage", "start"), root.calls)
+    }
+
+    @Test
+    fun `recovery reads the journal's generation even when the pointer names another digest`() = runTest {
+        val other = PublishedModuleArchive("0.3.0", 3, "b".repeat(64))
+        val root = FakeRoot()
+        val service = service(
+            journal = journal(RollbackJournalStep.FAILED),
+            moduleState = ModuleState.Enabled("0.3.0", 3),
+            keeper = FakeKeeper(null, 0),
+            root = root,
+            archives = FakeArchives(RollbackArchiveState.Present(other)) { sha256 ->
+                if (sha256 == archive.sha256) RollbackArchiveState.Present(archive) else RollbackArchiveState.Missing
+            }
+        )
+
+        service.rollbackApp()
+
+        assertEquals(listOf("prepare", "start"), root.calls)
+        assertEquals(archive.sha256, root.journal?.targets?.moduleSha256)
+    }
+
+    @Test
+    fun `a same version archive with a different digest is refused, never written into the journal`() = runTest {
+        val other = PublishedModuleArchive("0.3.0", 3, "b".repeat(64))
+        val journals = FakeJournalStore(journal(RollbackJournalStep.FAILED))
+        val root = FakeRoot()
+        val service = service(
+            journalStore = journals,
+            moduleState = ModuleState.Enabled("0.3.0", 3),
+            keeper = FakeKeeper(null, 0),
+            root = root,
+            archives = FakeArchives(RollbackArchiveState.Present(other)) {
+                RollbackArchiveState.Mismatch(archive.sha256, other.sha256)
+            }
+        )
+
+        service.rollbackApp()
+
+        val failed = service.moduleRollback.value as RollbackState.Failed
+        assertEquals(RollbackFailure.ARCHIVE_MISMATCH, failed.code)
+        assertTrue(failed.detail!!.contains(archive.sha256))
+        assertTrue(failed.detail!!.contains(other.sha256))
+        assertTrue(root.calls.isEmpty())
+        assertEquals(archive.sha256, journals.journal?.targets?.moduleSha256)
+    }
+
+    @Test
+    fun `a recorded generation that is gone is never replaced by the pointer's archive`() = runTest {
+        val other = PublishedModuleArchive("0.3.0", 3, "b".repeat(64))
+        val journals = FakeJournalStore(journal(RollbackJournalStep.FAILED))
+        val root = FakeRoot()
+        val service = service(
+            journalStore = journals,
+            moduleState = ModuleState.Enabled("0.3.0", 3),
+            keeper = FakeKeeper(null, 0),
+            root = root,
+            archives = FakeArchives(RollbackArchiveState.Present(other))
+        )
+
+        service.rollbackApp()
+
+        val failed = service.moduleRollback.value as RollbackState.Failed
+        assertEquals(RollbackFailure.NO_PREVIOUS_MODULE, failed.code)
+        assertTrue(failed.detail!!.contains(archive.sha256))
+        assertTrue(root.calls.isEmpty())
+        assertEquals(archive.sha256, journals.journal?.targets?.moduleSha256)
     }
 
     @Test
@@ -127,7 +245,11 @@ class DefaultUpdatesServiceRollbackTest {
         moduleState: ModuleState = ModuleState.Absent,
         keeper: PreviousApkKeeper = FakeKeeper(null, 0),
         root: FakeRoot = FakeRoot(),
-        privileged: PrivilegedApkInstaller = RecordingPrivilegedInstaller()
+        privileged: PrivilegedApkInstaller = RecordingPrivilegedInstaller(),
+        mounted: MountedSystemApkVersion = MountedSystemApkVersion.Present(SYSTEM_APK, "0.4.0", 4),
+        archives: ModuleArchivePublisher = FakeArchives(RollbackArchiveState.Present(archive)) {
+            RollbackArchiveState.Present(archive)
+        }
     ): DefaultUpdatesService {
         val daemon: DaemonApi = DefaultDaemonApi(DownAppApi(), context)
         return DefaultUpdatesService(
@@ -141,10 +263,8 @@ class DefaultUpdatesServiceRollbackTest {
             privilegedInstaller = privileged,
             moduleGateway = UnusedModuleGateway,
             previousModule = PreviousModuleCapture { CaptureResult.NothingToCapture },
-            mountedApk = MountedSystemApk {
-                MountedSystemApkVersion.Present("/system/priv-app/phonxiety-bridge/phonxiety-bridge.apk", "0.4.0", 4)
-            },
-            archives = FakeArchives(RollbackArchiveState.Present(archive)),
+            mountedApk = MountedSystemApk { mounted },
+            archives = archives,
             journalStore = journalStore,
             rollbackRoot = root,
             rootState = RootModuleState { moduleState }
@@ -185,10 +305,15 @@ class DefaultUpdatesServiceRollbackTest {
         }
     }
 
-    private class FakeArchives(private val state: RollbackArchiveState) : ModuleArchivePublisher {
+    private class FakeArchives(
+        private val state: RollbackArchiveState,
+        private val generation: (String) -> RollbackArchiveState = { RollbackArchiveState.Missing }
+    ) : ModuleArchivePublisher {
         override suspend fun publish(archive: File, metadata: File): Boolean = true
 
         override suspend fun read(): RollbackArchiveState = state
+
+        override suspend fun readGeneration(sha256: String): RollbackArchiveState = generation(sha256)
     }
 
     private class FakeRoot(private val start: RootStepResult = RootStepResult(true)) : RollbackRootSteps {

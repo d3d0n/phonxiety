@@ -34,7 +34,14 @@ class RollbackScriptTest {
         bin = temporary.newFolder("bin")
         log = File(temporary.root, "pm.log")
         rebootMarker = File(temporary.root, "rebooted")
-        File(bin, "sync").write(sh("exit 0"))
+        File(bin, "sync").write(sh("exit \"\${FAKE_SYNC_STATUS:-0}\""))
+        // The journal's atomic publish: a failure here must stop the script before the reboot.
+        File(bin, "mv").write(
+            sh(
+                "if [ \"\${FAKE_MV_FAIL:-}\" = \"1\" ]; then exit 1; fi\n" +
+                    "exec /bin/mv \"\$@\""
+            )
+        )
         File(bin, "reboot").write(sh("touch \"\$FAKE_REBOOT_MARKER\""))
         File(bin, "pm").write(
             sh(
@@ -145,6 +152,29 @@ class RollbackScriptTest {
         assertFalse(rebootMarker.isFile)
     }
 
+    @Test
+    fun `a journal that cannot be renamed is not rebooted`() {
+        writeJournal()
+
+        val exit = run(uninstallOutput = "Success", uninstallStatus = 1, moveFails = true)
+
+        assertEquals(1, exit)
+        assertEquals(step(), "module_staged")
+        assertFalse(rebootMarker.isFile)
+    }
+
+    @Test
+    fun `a journal that cannot be synced stops before the reboot`() {
+        writeJournal()
+
+        val exit = run(uninstallOutput = "Success", uninstallStatus = 1, syncStatus = 1)
+
+        assertEquals(1, exit)
+        // The step reached the file, but the script treats a failed sync as nothing recorded.
+        assertEquals(step(), "removed")
+        assertFalse(rebootMarker.isFile)
+    }
+
     private fun runScript(uninstallOutput: String, uninstallStatus: Int): Int {
         writeJournal()
         return run(uninstallOutput, uninstallStatus)
@@ -170,7 +200,12 @@ class RollbackScriptTest {
         )
     }
 
-    private fun run(uninstallOutput: String, uninstallStatus: Int): Int {
+    private fun run(
+        uninstallOutput: String,
+        uninstallStatus: Int,
+        syncStatus: Int = 0,
+        moveFails: Boolean = false
+    ): Int {
         val script = File(temporary.root, "rollback.sh")
         if (!script.isFile) script.writeText(RollbackScript.TEXT)
         val builder = ProcessBuilder("/bin/sh", script.absolutePath).redirectErrorStream(true)
@@ -184,6 +219,8 @@ class RollbackScriptTest {
             put("FAKE_PM_AFTER", after.absolutePath)
             put("FAKE_PM_UNINSTALL_OUTPUT", uninstallOutput)
             put("FAKE_PM_UNINSTALL_STATUS", uninstallStatus.toString())
+            put("FAKE_SYNC_STATUS", syncStatus.toString())
+            put("FAKE_MV_FAIL", if (moveFails) "1" else "")
         }
         return builder.start().waitFor()
     }

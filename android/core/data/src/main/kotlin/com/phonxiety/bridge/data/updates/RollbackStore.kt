@@ -75,6 +75,12 @@ interface ModuleArchivePublisher {
 
     /** The published archive's state, as root lets the app read it. */
     suspend fun read(): RollbackArchiveState
+
+    /**
+     * The generation published for [sha256], asked by its own name instead of through the pointer:
+     * a pending rollback is finished by the archive it recorded, never by whatever is current now.
+     */
+    suspend fun readGeneration(sha256: String): RollbackArchiveState
 }
 
 /**
@@ -131,6 +137,40 @@ class RootRollbackStore(
         } else {
             RollbackArchiveState.Mismatch(published.archive.sha256, digest)
         }
+    }
+
+    override suspend fun readGeneration(sha256: String): RollbackArchiveState {
+        val wanted = sha256.trim().lowercase()
+        val published = when (val lookup = publishedGeneration(wanted)) {
+            is PublishedArchiveLookup.Found -> lookup.file
+            PublishedArchiveLookup.Missing -> return RollbackArchiveState.Missing
+            PublishedArchiveLookup.Unreadable -> return RollbackArchiveState.Unreadable
+        }
+        val digest = digestOf(published.generation) ?: return RollbackArchiveState.Unreadable
+        // Both the bytes and the identity inside the generation must be the recorded archive.
+        return if (digest.equals(wanted, ignoreCase = true)) {
+            RollbackArchiveState.Present(published.archive)
+        } else {
+            RollbackArchiveState.Mismatch(wanted, digest)
+        }
+    }
+
+    /** The generation named [sha256] itself, never the one the pointer names. */
+    suspend fun publishedGeneration(sha256: String): PublishedArchiveLookup {
+        val wanted = sha256.trim().lowercase()
+        val generation = RootCommand.rollbackGenerationName(wanted) ?: return PublishedArchiveLookup.Unreadable
+        val meta = shell.exec(RootCommand.readRollbackGenerationFile(generation, RollbackFiles.ARCHIVE_META))
+        if (!meta.ok) return PublishedArchiveLookup.Missing
+        val identity = ModuleArchiveMeta.parse(meta.stdout) ?: return PublishedArchiveLookup.Unreadable
+        // A generation is named after its bytes; metadata naming another digest is not that archive.
+        if (!identity.sha256.equals(wanted, ignoreCase = true)) return PublishedArchiveLookup.Unreadable
+        return PublishedArchiveLookup.Found(
+            PublishedArchiveFile(
+                generation = generation,
+                path = RootCommand.rollbackGenerationFilePath(generation, RollbackFiles.ARCHIVE),
+                archive = identity
+            )
+        )
     }
 
     /** The generation the pointer names, with the identity its own metadata carries. */
@@ -235,10 +275,14 @@ class RootRollbackStore(
         return shell.exec(RootCommand.renameRollbackFile(name)).ok
     }
 
-    /** Best effort: a generation the pointer no longer names is dead weight, never a rollback. */
+    /**
+     * Best effort: a generation neither the pointer nor a pending journal names is dead weight,
+     * never a rollback. The journal's generation is kept so a retry can still resolve it.
+     */
     private suspend fun removeOtherGenerations(current: String) {
+        val recorded = readJournal()?.targets?.moduleSha256?.let { RootCommand.rollbackGenerationName(it) }
         for (entry in list(RollbackFiles.DIRECTORY).orEmpty()) {
-            if (entry == current || !RootCommand.ROLLBACK_GENERATION.matches(entry)) continue
+            if (entry == current || entry == recorded || !RootCommand.ROLLBACK_GENERATION.matches(entry)) continue
             shell.exec(RootCommand.removeRollbackGeneration(entry))
         }
     }
