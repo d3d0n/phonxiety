@@ -93,6 +93,13 @@ internal class LinkSupervisor(
     }
 
     private val lock = Any()
+
+    /**
+     * Whether the calling thread is inside a supervisor transition. Attempt outcomes must be
+     * applied there, in transition order; the tests assert it rather than racing threads.
+     */
+    internal fun inTransition(): Boolean = Thread.holdsLock(lock)
+
     private var running = false
     private var closed = false
     private var link: DeviceLink? = null
