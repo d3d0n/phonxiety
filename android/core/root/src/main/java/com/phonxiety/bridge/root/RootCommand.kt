@@ -87,6 +87,45 @@ class RootCommand private constructor(
             return RootCommand(argv)
         }
 
+        /**
+         * `mkdir -p /data/adb/phonxiety`: the root-owned directory a rollback has to survive an
+         * app-data clear in, so it cannot live in the app's own files.
+         */
+        fun createRollbackDirectory(): RootCommand = RootCommand(listOf("mkdir", "-p", ROLLBACK_DIR))
+
+        /** `cp -f <source> /data/adb/phonxiety/<name>.tmp`, published by [renameRollbackFile]. */
+        fun copyIntoRollbackDirectory(sourcePath: String, name: String): RootCommand = RootCommand(
+            listOf("cp", "-f", absolutePath(sourcePath, "source"), "$ROLLBACK_DIR/${safeName(name, "rollback file")}.tmp")
+        )
+
+        /** `mv -f <name>.tmp <name>`: the atomic publish of a rollback file. */
+        fun renameRollbackFile(name: String): RootCommand {
+            val file = safeName(name, "rollback file")
+            return RootCommand(listOf("mv", "-f", "$ROLLBACK_DIR/$file.tmp", "$ROLLBACK_DIR/$file"))
+        }
+
+        /** `cat /data/adb/phonxiety/<name>`: the journal and the archive's metadata. */
+        fun readRollbackFile(name: String): RootCommand = RootCommand(listOf("cat", "$ROLLBACK_DIR/${safeName(name, "rollback file")}"))
+
+        /** `rm -f /data/adb/phonxiety/<name>`. */
+        fun removeRollbackFile(name: String): RootCommand = RootCommand(listOf("rm", "-f", "$ROLLBACK_DIR/${safeName(name, "rollback file")}"))
+
+        /**
+         * The detached rollback script: `nohup sh … >log 2>&1 &`. `pm uninstall-system-updates`
+         * freezes and kills this app's process, so the removal, its verification, the journal
+         * entry and the reboot all have to run outside it.
+         */
+        fun startRollbackScript(): RootCommand = RootCommand(
+            listOf(
+                "nohup",
+                "sh",
+                "$ROLLBACK_DIR/$ROLLBACK_SCRIPT",
+                ">$ROLLBACK_DIR/$ROLLBACK_LOG",
+                "2>&1",
+                "&"
+            )
+        )
+
         /** `reboot`, the fallback when `android.permission.REBOOT` is not granted. */
         fun reboot(): RootCommand = RootCommand(listOf("reboot"))
 
@@ -94,6 +133,11 @@ class RootCommand private constructor(
         const val MODULES_DIR: String = "$ADB_ROOT/modules"
         const val MODULES_UPDATE_DIR: String = "$ADB_ROOT/modules_update"
         const val STAGING_DIR: String = "/data/local/tmp"
+
+        /** Root-owned home of the rollback archive, its journal and the detached script. */
+        const val ROLLBACK_DIR: String = "$ADB_ROOT/phonxiety"
+        const val ROLLBACK_SCRIPT: String = "rollback.sh"
+        const val ROLLBACK_LOG: String = "rollback.log"
 
         private val SAFE_NAME = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
         private val SAFE_ABSOLUTE_PATH = Regex("/[A-Za-z0-9._/-]{1,255}")

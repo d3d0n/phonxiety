@@ -6,6 +6,11 @@ import com.phonxiety.bridge.data.updates.DaemonRelease
 import com.phonxiety.bridge.data.updates.InstallFailure
 import com.phonxiety.bridge.data.updates.InstalledVersions
 import com.phonxiety.bridge.data.updates.ModuleRelease
+import com.phonxiety.bridge.data.updates.RollbackBlocker
+import com.phonxiety.bridge.data.updates.RollbackPendingReason
+import com.phonxiety.bridge.data.updates.RollbackPlan
+import com.phonxiety.bridge.data.updates.RollbackRecovery
+import com.phonxiety.bridge.data.updates.RollbackState
 import com.phonxiety.bridge.data.updates.UpdateCheck
 import com.phonxiety.bridge.data.updates.UpdateCompat
 import com.phonxiety.bridge.data.updates.UpdateManifest
@@ -110,6 +115,49 @@ object UpdatesSamples {
             InstallFailure.SIGNING_CERT_MISMATCH,
             "installed aaaabbbb…, archive 9999ffff…"
         ),
-        rollbackAvailable = true
+        rollbackPlan = appOnlyRollback()
+    )
+
+    fun appOnlyRollback(): RollbackPlan.AppOnly = RollbackPlan.AppOnly(keptVersionName = "0.3.0", keptVersionCode = 3)
+
+    fun moduleRollback(): RollbackPlan.WithPreviousModule = RollbackPlan.WithPreviousModule(
+        moduleVersionName = "0.4.0",
+        moduleVersionCode = 4,
+        previousVersionName = "0.3.0",
+        previousVersionCode = 3,
+        previousSha256 = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+    )
+
+    fun rollbackAppOnly(): UpdatesUiState = upToDate().copy(rollbackPlan = appOnlyRollback())
+
+    fun rollbackWithModule(): UpdatesUiState = upToDate().copy(rollbackPlan = moduleRollback())
+
+    fun rollbackConfirming(): UpdatesUiState = rollbackWithModule().copy(
+        rollbackConfirmation = moduleRollback()
+    )
+
+    fun rollbackBlocked(): UpdatesUiState = upToDate().copy(
+        rollbackPlan = RollbackPlan.Unavailable(
+            blocker = RollbackBlocker.NO_PREVIOUS_MODULE,
+            moduleVersion = "0.4.0",
+            moduleVersionCode = 4,
+            keptVersionName = "0.3.0",
+            keptVersionCode = 3
+        )
+    )
+
+    fun rollbackUnfinished(): UpdatesUiState = rollbackWithModule().copy(
+        rollbackRecovery = RollbackRecovery.Pending(
+            reason = RollbackPendingReason.REMOVAL_FAILED,
+            detail = "Failure [DELETE_FAILED_INTERNAL_ERROR]"
+        )
+    )
+
+    fun rollbackCompleted(): UpdatesUiState = rollbackAppOnly().copy(
+        rollbackRecovery = RollbackRecovery.Completed(versionName = "0.3.0")
+    )
+
+    fun rollbackStarted(): UpdatesUiState = rollbackWithModule().copy(
+        moduleRollback = RollbackState.Started(versionName = "0.3.0")
     )
 }

@@ -67,6 +67,34 @@ class RootCommandTest {
     }
 
     @Test
+    fun rollbackScriptsStayInsideTheRollbackDirectory() {
+        assertEquals("mkdir -p /data/adb/phonxiety", RootCommand.createRollbackDirectory().script)
+        assertEquals(
+            "cp -f /data/user/0/com.phonxiety.bridge/cache/rollback.json /data/adb/phonxiety/rollback.json.tmp",
+            RootCommand.copyIntoRollbackDirectory(
+                "/data/user/0/com.phonxiety.bridge/cache/rollback.json",
+                "rollback.json"
+            ).script
+        )
+        assertEquals(
+            "mv -f /data/adb/phonxiety/rollback.json.tmp /data/adb/phonxiety/rollback.json",
+            RootCommand.renameRollbackFile("rollback.json").script
+        )
+        assertEquals("cat /data/adb/phonxiety/rollback.json", RootCommand.readRollbackFile("rollback.json").script)
+        assertEquals("rm -f /data/adb/phonxiety/rollback.json", RootCommand.removeRollbackFile("rollback.json").script)
+        assertEquals(
+            "nohup sh /data/adb/phonxiety/rollback.sh >/data/adb/phonxiety/rollback.log 2>&1 &",
+            RootCommand.startRollbackScript().script
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            RootCommand.copyIntoRollbackDirectory("/data/user/0/x; reboot", "rollback.json")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            RootCommand.readRollbackFile("../../etc/hosts")
+        }
+    }
+
+    @Test
     fun stagingAndModuleReads() {
         assertEquals(
             "cp -f /data/user/0/com.phonxiety.bridge/cache/module.zip /data/local/tmp/phonxiety_bridge.zip",

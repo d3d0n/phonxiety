@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -29,6 +30,13 @@ import com.phonxiety.bridge.data.updates.AppInstallState
 import com.phonxiety.bridge.data.updates.InstallFailure
 import com.phonxiety.bridge.data.updates.ModuleInstallFailure
 import com.phonxiety.bridge.data.updates.ModuleInstallState
+import com.phonxiety.bridge.data.updates.RollbackBlocker
+import com.phonxiety.bridge.data.updates.RollbackFailure
+import com.phonxiety.bridge.data.updates.RollbackPendingReason
+import com.phonxiety.bridge.data.updates.RollbackPlan
+import com.phonxiety.bridge.data.updates.RollbackRecovery
+import com.phonxiety.bridge.data.updates.RollbackState
+import com.phonxiety.bridge.data.updates.RollbackStep
 import com.phonxiety.bridge.data.updates.UpdateCheck
 import com.phonxiety.bridge.data.updates.UpdateCheckError
 import com.phonxiety.bridge.data.updates.UpdateRowState
@@ -59,6 +67,8 @@ fun UpdatesRoute(
         onInstallApp = viewModel::installApp,
         onInstallModule = viewModel::installModule,
         onRollback = viewModel::rollback,
+        onConfirmRollback = viewModel::confirmRollback,
+        onDismissRollback = viewModel::dismissRollbackConfirmation,
         onDismiss = viewModel::dismiss,
         modifier = modifier
     )
@@ -77,6 +87,8 @@ fun UpdatesScreen(
     onInstallApp: () -> Unit,
     onInstallModule: () -> Unit,
     onRollback: () -> Unit,
+    onConfirmRollback: () -> Unit,
+    onDismissRollback: () -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -131,9 +143,6 @@ fun UpdatesScreen(
                         }
                     )
                     DaemonCard(verdict.daemon)
-                    if (state.rollbackAvailable && !state.appInstall.busy) {
-                        RollbackCard(onRollback)
-                    }
                     TextButton(onClick = onRefresh) { Text("Check again") }
                 }
 
@@ -142,6 +151,22 @@ fun UpdatesScreen(
                     message = "The daemon answered without a release to compare against."
                 )
             }
+            // The rollback reads the phone, not the daemon, so it stays usable when the check fails.
+            RollbackSection(
+                plan = state.rollbackPlan,
+                recovery = state.rollbackRecovery,
+                rollback = state.moduleRollback,
+                appBusy = state.appInstall.busy,
+                onRollback = onRollback,
+                onDismiss = onDismiss
+            )
+        }
+        state.rollbackConfirmation?.let { confirmation ->
+            ConfirmRollbackDialog(
+                plan = confirmation,
+                onConfirm = onConfirmRollback,
+                onDismiss = onDismissRollback
+            )
         }
     }
 }
@@ -271,7 +296,9 @@ private fun AppAction(
             PrimaryActionButton(
                 label = "Install ${row.availableVersion ?: "the update"}",
                 onClick = onInstall,
-                supportingText = "The SHA-256 and the signing certificate are checked before the install."
+                supportingText = "The SHA-256 and the signing certificate are checked before the install. " +
+                    "Android may also ask to scan the file or confirm with your screen lock; that is expected " +
+                    "for an app installed from a file."
             )
         }
 
@@ -376,20 +403,235 @@ private fun DaemonCard(row: UpdateRowState) {
     }
 }
 
+/**
+ * The Rollback card: what the phone can go back to, any unfinished rollback from a previous boot,
+ * and the one action the plan allows. A plan that cannot work is explained instead of offered.
+ */
 @Composable
-private fun RollbackCard(onRollback: () -> Unit) {
-    SectionCard(
-        title = "Rollback",
-        subtitle = "The previous app is kept on this phone"
-    ) {
-        Text(
+private fun RollbackSection(
+    plan: RollbackPlan?,
+    recovery: RollbackRecovery?,
+    rollback: RollbackState,
+    appBusy: Boolean,
+    onRollback: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val nothingToOffer = recovery == null &&
+        (plan == null || (plan is RollbackPlan.Unavailable && plan.blocker == RollbackBlocker.NO_KEPT_APK))
+    if (nothingToOffer) return
+
+    SectionCard(title = "Rollback", subtitle = rollbackSubtitle(plan)) {
+        // While the detached script owns the removal, the journal's module_staged step is expected.
+        if (rollback !is RollbackState.Started) recovery?.let { RecoveryBlock(it) }
+        plan?.let { PlanExplanation(it) }
+        ActionState(
+            plan = plan,
+            rollback = rollback,
+            appBusy = appBusy,
+            onRollback = onRollback,
+            onDismiss = onDismiss
+        )
+    }
+}
+
+@Composable
+private fun PlanExplanation(plan: RollbackPlan) {
+    when (plan) {
+        is RollbackPlan.AppOnly -> Text(
             text = "The APK replaced by the last update is kept in app files. Reinstalling it is a downgrade, " +
                 "which needs root.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        TextButton(onClick = onRollback) { Text("Reinstall the previous app") }
+
+        is RollbackPlan.WithPreviousModule -> Text(
+            text = "The system image carries module ${plan.moduleVersionName ?: plan.moduleVersionCode}, newer than " +
+                "the version this rollback returns to (${plan.previousVersionName ?: plan.previousVersionCode}), " +
+                "so Android refuses an app-only downgrade. The rollback is one step: reinstall module " +
+                "${plan.previousVersionName ?: plan.previousVersionCode} as root, remove the app update that " +
+                "shadows it, then reboot this phone.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        is RollbackPlan.Unavailable -> Text(
+            text = plan.blocker.explanation(plan),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
+}
+
+@Composable
+private fun ActionState(
+    plan: RollbackPlan?,
+    rollback: RollbackState,
+    appBusy: Boolean,
+    onRollback: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    if (appBusy) return
+    when (rollback) {
+        RollbackState.Idle -> when (plan) {
+            is RollbackPlan.AppOnly -> TextButton(onClick = onRollback) { Text("Reinstall the previous app") }
+
+            is RollbackPlan.WithPreviousModule -> PrimaryActionButton(
+                label = "Roll back to ${plan.previousVersionName ?: "the previous module"}",
+                onClick = onRollback,
+                supportingText = "One step that ends with a reboot. The phone asks before starting it."
+            )
+
+            is RollbackPlan.Unavailable, null -> Unit
+        }
+
+        RollbackState.StagingModule -> PrimaryActionButton(
+            label = "Staging the previous module…",
+            onClick = {},
+            busy = true
+        )
+
+        RollbackState.StartingRemoval -> PrimaryActionButton(
+            label = "Starting the removal…",
+            onClick = {},
+            busy = true
+        )
+
+        is RollbackState.Started -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            StatusPill("Rollback started", StatusTone.WARNING)
+            Text(
+                text = "Module ${rollback.versionName ?: "of the previous version"} is staged. The app update is " +
+                    "removed in the background and the phone reboots once that is verified. If the phone does " +
+                    "not reboot, open Updates again to see what the script recorded.",
+                style = MaterialTheme.typography.bodyMedium
+            )
+        }
+
+        is RollbackState.Failed -> ErrorCard(
+            title = rollback.code.title(),
+            message = rollback.message(),
+            output = rollback.detail,
+            actionLabel = "Dismiss",
+            onAction = onDismiss
+        )
+    }
+}
+
+@Composable
+private fun RecoveryBlock(recovery: RollbackRecovery) {
+    when (recovery) {
+        is RollbackRecovery.Completed -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            StatusPill("Rolled back", StatusTone.POSITIVE)
+            Text(
+                text = "The phone runs ${recovery.versionName ?: "the previous version"}: the module and the " +
+                    "selected app match the rollback target.",
+                style = MaterialTheme.typography.bodyMedium
+            )
+        }
+
+        is RollbackRecovery.Pending -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            StatusPill("Rollback unfinished", StatusTone.WARNING)
+            Text(text = recovery.sentence(), style = MaterialTheme.typography.bodyMedium)
+            Text(
+                text = "Retry the rollback below before rebooting: the previous module is staged, and a reboot " +
+                    "now can leave the older module next to the newer app.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+    }
+}
+
+@Composable
+private fun ConfirmRollbackDialog(
+    plan: RollbackPlan.WithPreviousModule,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val previous = plan.previousVersionName ?: plan.previousVersionCode.toString()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Roll back to $previous?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Reinstalls module $previous as root, removes the app update installed on this phone so the " +
+                        "module's copy is used again, and reboots once the removal is verified."
+                )
+                Text(
+                    text = "Rollback: install ${plan.moduleVersionName ?: "the current release"} again from " +
+                        "Updates to return to it.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "Removing the app update can erase this app's data, which means pairing this phone " +
+                        "again. Newer data is usually kept because the versions match, but a reset is possible.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "The phone reboots, so a call in progress ends.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("Roll back and reboot") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Not now") } }
+    )
+}
+
+private fun rollbackSubtitle(plan: RollbackPlan?): String = when (plan) {
+    is RollbackPlan.WithPreviousModule -> "One step, then a reboot"
+    is RollbackPlan.AppOnly -> "The previous app is kept on this phone"
+    is RollbackPlan.Unavailable -> "Not available on this phone"
+    null -> "Reading this phone"
+}
+
+private fun RollbackBlocker.explanation(plan: RollbackPlan.Unavailable): String {
+    val system = plan.moduleVersion ?: plan.moduleVersionCode?.toString() ?: "a newer version"
+    val kept = plan.keptVersionName ?: plan.keptVersionCode.toString()
+    return when (this) {
+        RollbackBlocker.NO_KEPT_APK -> "No previous APK is kept, so there is nothing to roll back to."
+
+        RollbackBlocker.NO_PREVIOUS_MODULE ->
+            "The system image carries module $system, newer than the kept app $kept. Android refuses an app-only " +
+                "downgrade below the system image, and this phone has no archive of the previous module to put " +
+                "back. Install the previous release's module from the update document (or flash it in the root " +
+                "manager), then check again."
+
+        RollbackBlocker.STORAGE_UNREADABLE ->
+            "The rollback archive under /data/adb/phonxiety could not be read. Grant root to Phonxiety, then " +
+                "check again."
+
+        RollbackBlocker.SYSTEM_VERSION_UNKNOWN ->
+            "The APK the module mounted on the system image could not be read, so the downgrade floor is " +
+                "unknown. Reinstall the module from the update document, then check again."
+
+        RollbackBlocker.STALE_ARCHIVE ->
+            "The kept module archive is not older than the system image's copy ($system), so reinstalling it " +
+                "would roll nothing back. Nothing is offered."
+    }
+}
+
+private fun RollbackRecovery.Pending.sentence(): String {
+    val head = when (reason) {
+        RollbackPendingReason.REMOVAL_NOT_STARTED ->
+            "The previous module is staged, but the app update was not removed: the script never recorded a result."
+
+        RollbackPendingReason.REMOVAL_FAILED ->
+            "The previous module is staged, but removing the app update failed."
+
+        RollbackPendingReason.REMOVAL_UNVERIFIED ->
+            "The previous module is staged, but the removal could not be verified, so nothing was rebooted."
+
+        RollbackPendingReason.OLD_APP_NOT_SELECTED ->
+            "The removal was recorded, but the data-partition app copy is still what runs."
+
+        RollbackPendingReason.VERSION_MISMATCH ->
+            "The removal was recorded, but the phone does not match the rollback target."
+    }
+    return listOfNotNull(head, detail?.takeIf { it.isNotBlank() }?.let { "Details: $it" }).joinToString(" ")
 }
 
 private fun UpdateTarget.title(): String = when (this) {
@@ -454,6 +696,49 @@ internal fun InstallFailure.message(): String = when (this) {
     InstallFailure.ROOT_UNAVAILABLE -> "Root access is needed to install an older version."
     InstallFailure.ROLLBACK_FAILED -> "`pm install` did not accept the kept APK."
     InstallFailure.DOWNLOAD_FAILED -> "The release could not be downloaded."
+}
+
+internal fun RollbackFailure.title(): String = when (this) {
+    RollbackFailure.NO_KEPT_APK -> "No previous app is kept"
+    RollbackFailure.NO_PREVIOUS_MODULE -> "No previous module is kept"
+    RollbackFailure.SYSTEM_VERSION_UNKNOWN -> "The system image's version is unknown"
+    RollbackFailure.STORAGE_UNREADABLE -> "The rollback archive cannot be read"
+    RollbackFailure.STALE_ARCHIVE -> "The kept module is not older"
+    RollbackFailure.ARCHIVE_MISMATCH -> "The kept module changed since the check"
+    RollbackFailure.MODULE_STAGE_FAILED -> "The previous module was not staged"
+    RollbackFailure.REMOVAL_NOT_STARTED -> "The removal script did not start"
+}
+
+/** The sentence a failed rollback shows, always naming what the phone already changed. */
+internal fun RollbackState.Failed.message(): String = when (code) {
+    RollbackFailure.NO_KEPT_APK -> "No previous APK is kept, so there is nothing to roll back to."
+
+    RollbackFailure.NO_PREVIOUS_MODULE ->
+        "The system image is newer than the kept app and no archive of the previous module is kept, so nothing " +
+            "can be put back. Nothing on the phone changed."
+
+    RollbackFailure.SYSTEM_VERSION_UNKNOWN ->
+        "The APK mounted on the system image could not be read, so the downgrade floor is unknown. Nothing on " +
+            "the phone changed."
+
+    RollbackFailure.STORAGE_UNREADABLE ->
+        "The rollback archive under /data/adb/phonxiety could not be read. Nothing on the phone changed."
+
+    RollbackFailure.STALE_ARCHIVE ->
+        "The kept module archive is not older than the system image's copy, so it is not a rollback. Nothing " +
+            "on the phone changed."
+
+    RollbackFailure.ARCHIVE_MISMATCH ->
+        "The published archive is not the one this check planned for. Nothing on the phone changed; check again " +
+            "before rolling back."
+
+    RollbackFailure.MODULE_STAGE_FAILED ->
+        "The module installer refused the previous zip, so nothing on the phone changed."
+
+    RollbackFailure.REMOVAL_NOT_STARTED ->
+        "The previous module is staged, but the removal script could not start: the app update is still " +
+            "installed, and a reboot now can leave the older module next to the newer app. Retry the rollback " +
+            "before rebooting."
 }
 
 internal fun ModuleInstallFailure.title(): String = when (this) {

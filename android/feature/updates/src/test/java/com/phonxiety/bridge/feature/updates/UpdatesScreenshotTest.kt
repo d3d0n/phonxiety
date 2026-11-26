@@ -35,6 +35,8 @@ class UpdatesScreenshotTest {
                         onInstallApp = {},
                         onInstallModule = {},
                         onRollback = {},
+                        onConfirmRollback = {},
+                        onDismissRollback = {},
                         onDismiss = {}
                     )
                 }
@@ -57,4 +59,32 @@ class UpdatesScreenshotTest {
 
     @Test
     fun failed() = capture("failed", UpdatesSamples.failed())
+
+    @Test
+    @Config(sdk = [35], qualifiers = "w411dp-h1400dp-xxhdpi")
+    fun rollbackAppOnly() = capture("rollback_app_only", UpdatesSamples.rollbackAppOnly())
+
+    @Test
+    @Config(sdk = [35], qualifiers = "w411dp-h1400dp-xxhdpi")
+    fun rollbackWithModule() = capture("rollback_with_module", UpdatesSamples.rollbackWithModule())
+
+    @Test
+    @Config(sdk = [35], qualifiers = "w411dp-h1400dp-xxhdpi")
+    fun rollbackConfirming() = capture("rollback_confirm", UpdatesSamples.rollbackConfirming())
+
+    @Test
+    @Config(sdk = [35], qualifiers = "w411dp-h1400dp-xxhdpi")
+    fun rollbackBlocked() = capture("rollback_blocked", UpdatesSamples.rollbackBlocked())
+
+    @Test
+    @Config(sdk = [35], qualifiers = "w411dp-h1400dp-xxhdpi")
+    fun rollbackUnfinished() = capture("rollback_unfinished", UpdatesSamples.rollbackUnfinished())
+
+    @Test
+    @Config(sdk = [35], qualifiers = "w411dp-h1400dp-xxhdpi")
+    fun rollbackCompleted() = capture("rollback_completed", UpdatesSamples.rollbackCompleted())
+
+    @Test
+    @Config(sdk = [35], qualifiers = "w411dp-h1400dp-xxhdpi")
+    fun rollbackStarted() = capture("rollback_started", UpdatesSamples.rollbackStarted())
 }
