@@ -98,12 +98,12 @@ internal suspend fun scanWithPlayServices(
     }
 } catch (cancelled: CancellationException) {
     throw cancelled
-} catch (error: Throwable) {
+} catch (error: Exception) {
     PlayScan.Unavailable(scanFailureReason(error))
 }
 
 /** A reason the wizard can show: what failed, plus the platform message when there is one. */
-private fun scanFailureReason(error: Throwable): String {
+private fun scanFailureReason(error: Exception): String {
     val detail = error.message?.takeIf { it.isNotBlank() }
         ?: return "the Google code scanner could not start"
     return "the Google code scanner could not start: $detail"

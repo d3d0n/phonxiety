@@ -62,6 +62,17 @@ class QrScannerFallbackTest {
     }
 
     @Test
+    fun aFatalErrorIsNotTurnedIntoAFallback() = runTest {
+        val fatal = OutOfMemoryError("no room for the scanner")
+        val thrown = runCatching {
+            scanWithPlayServices(context, PlayScannerFactory { _ -> throw fatal })
+        }
+
+        // An Error is not a scanner outcome: opening the CameraX fallback would only allocate more.
+        assertTrue(thrown.exceptionOrNull() === fatal)
+    }
+
+    @Test
     fun aScanThatThrowsIsUnavailableInsteadOfCrashing() = runTest {
         val scanner = object : PlayScanner {
             override suspend fun scan(): PlayScan = throw IllegalStateException(
