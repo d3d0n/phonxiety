@@ -91,8 +91,10 @@ class LiveCallTruthTest {
         // A daemon phase the phone cannot contradict stays as recorded.
         assertEquals("ending", LiveCallUiState(state = "ending", localPhase = CallPhase.ACTIVE).phase)
         assertEquals("dialing", LiveCallUiState(state = "dialing", localPhase = CallPhase.DIALING).phase)
-        // A phone that already ended the call is not still "Preparing" it either.
-        assertEquals("ended", LiveCallUiState(state = "preparing", localPhase = CallPhase.ENDED).phase)
+        // Only a non-terminal phone phase advances the record: its own end is not a recorded end,
+        // with no end time, timer freeze or result to go with it.
+        assertEquals("preparing", LiveCallUiState(state = "preparing", localPhase = CallPhase.ENDING).phase)
+        assertEquals("preparing", LiveCallUiState(state = "preparing", localPhase = CallPhase.ENDED).phase)
     }
 
     @Test

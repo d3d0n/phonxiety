@@ -36,7 +36,8 @@
     <string name="live_call_phase_loading">Loading</string>
 
     <string name="live_call_status_unknown_title">Call status unknown</string>
-    <string name="live_call_status_unknown_message">The connection to the computer was lost. The final call status could not be confirmed.</string>
+    <string name="live_call_status_unknown_message">The final call status could not be confirmed.</string>
+    <string name="live_call_status_unknown_link_lost">The connection to the computer was lost. The final call status could not be confirmed.</string>
     <string name="live_call_status_refresh">Refresh status</string>
 
     <string name="live_call_reconnect_banner">The link dropped. The transcript will catch up from the call record.</string>

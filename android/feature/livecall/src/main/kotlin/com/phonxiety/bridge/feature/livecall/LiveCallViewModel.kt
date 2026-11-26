@@ -98,8 +98,10 @@ data class LiveCallUiState(
 /**
  * The phase of the one call, from the daemon's state and the phone's own. Telecom dials the moment
  * the phone places the call, so a record still saying "preparing" while the phone reports dialing or
- * a connection is a stale snapshot, not a newer fact: the phone's phase advances it. Every terminal
- * daemon state stays the authority, because it is the call's own recorded end.
+ * a connection is a stale snapshot, not a newer fact: the phone's phase advances it. A terminal
+ * daemon state stays the authority, and so does a terminal phase from the phone here: the record's
+ * own end, its end time, its timer and its controls travel together, so the screen may only show
+ * "Ended" from the daemon's terminal snapshot or event, never from this reconciliation.
  */
 internal fun reconcilePhase(daemon: String?, phone: String?): String? = when {
     daemon == null -> phone
@@ -108,8 +110,8 @@ internal fun reconcilePhase(daemon: String?, phone: String?): String? = when {
     else -> daemon
 }
 
-/** The phases Telecom reports for a call the phone already placed, past the daemon's preparation. */
-private val PHONE_PHASES_THAT_ADVANCE_PREPARING = setOf("dialing", "active", "ending", "ended")
+/** The non-terminal phases Telecom reports for a call the phone already placed. */
+private val PHONE_PHASES_THAT_ADVANCE_PREPARING = setOf("dialing", "active")
 
 /**
  * The live call. The transcript, the state and the agent's activity all arrive through the

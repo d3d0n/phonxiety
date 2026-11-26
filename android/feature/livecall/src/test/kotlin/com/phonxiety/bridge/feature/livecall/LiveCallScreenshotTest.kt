@@ -15,6 +15,8 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -24,6 +26,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
@@ -44,6 +47,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -235,6 +239,25 @@ class LiveCallScreenshotTest {
         composeRule.onNodeWithText("Preparing").assertDoesNotExist()
     }
 
+    /**
+     * The phone's own hang-up is not a recorded end: the record still says preparing, so the screen
+     * keeps its running timer and offers Hang up rather than announcing an end it cannot show.
+     */
+    @Test
+    fun aPhonesHangUpDoesNotEndAStalePreparingRecord() {
+        setScreen(
+            state = LiveCallSamples.live.copy(
+                state = "preparing",
+                localPhase = CallPhase.ENDED,
+                partials = emptyList()
+            )
+        )
+        composeRule.onNodeWithText("Preparing").assertExists()
+        composeRule.onNodeWithText("Ended").assertDoesNotExist()
+        composeRule.onNodeWithText("Hang up").assertExists()
+        composeRule.onNodeWithText("Open record").assertDoesNotExist()
+    }
+
     @Test
     fun aPreparingCallDoesNotClaimTheAgentIsListening() {
         setScreen(
@@ -253,31 +276,44 @@ class LiveCallScreenshotTest {
     }
 
     @Test
-    fun theUnconfirmedEndExplainsItself() = render("status_unknown_411_light") {
-        setScreen(state = LiveCallSamples.ended.copy(state = "unknown", statusUnknownError = UNCONFIRMED_REASON))
-    }
+    fun theUnconfirmedEndExplainsItself() = render(
+        "status_unknown_411_light",
+        beforeCapture = { scrollTranscriptTo("Call status unknown") }
+    ) { setScreen(state = unknownEndedCapture(UNCONFIRMED_REASON)) }
 
     @Test
-    fun theUnconfirmedEndInDark() = render("status_unknown_411_dark") {
-        setScreen(state = LiveCallSamples.ended.copy(state = "unknown", statusUnknownError = UNCONFIRMED_REASON), dark = true)
-    }
+    fun theUnconfirmedEndInDark() = render(
+        "status_unknown_411_dark",
+        beforeCapture = { scrollTranscriptTo("Call status unknown") }
+    ) { setScreen(state = unknownEndedCapture(UNCONFIRMED_REASON), dark = true) }
 
     @Test
-    fun theUnconfirmedEndAtTwoHundredPercent() = render("status_unknown_320_font200_light") {
-        setScreen(
-            state = LiveCallSamples.ended.copy(state = "unknown", statusUnknownError = UNCONFIRMED_REASON),
-            fontScale = 2f,
-            width = 320.dp
-        )
-    }
+    fun theUnconfirmedEndAtTwoHundredPercent() = render(
+        "status_unknown_320_font200_light",
+        beforeCapture = { scrollTranscriptTo("Call status unknown") }
+    ) { setScreen(state = unknownEndedCapture(UNCONFIRMED_REASON), fontScale = 2f, width = 320.dp) }
+
+    @Test
+    fun theUnconfirmedEndExpandedAtTwoHundredPercent() = render(
+        "status_unknown_expanded_320_font200_light",
+        beforeCapture = {
+            scrollTranscriptTo("Call status unknown")
+            composeRule.onNodeWithText("Show details").performScrollTo().performClick()
+            composeRule.waitForIdle()
+            composeRule.onNodeWithText(UNCONFIRMED_REASON).performScrollTo()
+            composeRule.waitForIdle()
+        }
+    ) { setScreen(state = unknownEndedCapture(UNCONFIRMED_REASON), fontScale = 2f, width = 320.dp) }
 
     @Test
     fun anUnconfirmedEndSaysWhyAndKeepsItsEvidence() {
-        setScreen(state = LiveCallSamples.ended.copy(state = "unknown", statusUnknownError = UNCONFIRMED_REASON))
+        setScreen(state = unknownEnded(UNCONFIRMED_REASON))
         composeRule.onNodeWithText("Call status unknown").assertExists()
+        composeRule.onNodeWithText("The final call status could not be confirmed.").assertExists()
+        // A refused acknowledgement leaves the phone connected: the card never claims a lost link.
         composeRule
-            .onNodeWithText("The connection to the computer was lost. The final call status could not be confirmed.")
-            .assertExists()
+            .onNodeWithText("The connection to the computer was lost.", substring = true)
+            .assertDoesNotExist()
         // The call is never called over: no screen word says the end was recorded.
         composeRule.onNodeWithText("Ended", substring = false).assertDoesNotExist()
         composeRule.onNodeWithText("Refresh status").assertExists()
@@ -285,6 +321,55 @@ class LiveCallScreenshotTest {
         composeRule.onNodeWithText(UNCONFIRMED_REASON).assertDoesNotExist()
         composeRule.onNodeWithText("Show details").performClick()
         composeRule.onNodeWithText(UNCONFIRMED_REASON).assertExists()
+    }
+
+    @Test
+    fun onlyTheDaemonsLinkLossNamesALostConnection() {
+        setScreen(state = unknownEnded(LINK_LOST_ERROR))
+        composeRule
+            .onNodeWithText("The connection to the computer was lost. The final call status could not be confirmed.")
+            .assertExists()
+        // The raw code stays evidence, behind Details.
+        composeRule.onNodeWithText(LINK_LOST_ERROR).assertDoesNotExist()
+        composeRule.onNodeWithText("Show details").performClick()
+        composeRule.onNodeWithText(LINK_LOST_ERROR).assertExists()
+    }
+
+    /**
+     * The card is content, not a slab above it: at 320 dp and 200 % the transcript still scrolls,
+     * Details still expands, and the pinned action never needs the scroll.
+     */
+    @Test
+    fun theUnknownCardKeepsTheTranscriptAndThePinnedActionReachable() {
+        setScreen(state = unknownEnded(UNCONFIRMED_REASON), fontScale = 2f, width = 320.dp)
+        // The pinned action sits outside the transcript's scroll, so no scroll hides it.
+        val screen = composeRule.onNodeWithTag(SCREEN_TAG).getUnclippedBoundsInRoot()
+        val action = composeRule.onNodeWithText("Open the call record").getUnclippedBoundsInRoot()
+        assertTrue("the pinned action starts inside the screen", action.top < screen.bottom)
+        scrollTranscriptTo("Call status unknown")
+        composeRule.onNodeWithText("Call status unknown").assertIsDisplayed()
+        scrollTranscriptTo("Transcript")
+        composeRule.onNodeWithText("Transcript").assertIsDisplayed()
+        scrollTranscriptTo("Call status unknown")
+        composeRule.onNodeWithText("Show details").performScrollTo().performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText(UNCONFIRMED_REASON).assertExists()
+        composeRule.onNodeWithText("Open the call record").assertExists()
+    }
+
+    /** The captures keep the real transcript, so the scroll that reaches the card is proven. */
+    private fun unknownEndedCapture(reason: String): LiveCallUiState = LiveCallSamples.ended.copy(state = "unknown", statusUnknownError = reason)
+
+    /**
+     * The unconfirmed card without turns: the list opens on the card instead of the newest turn,
+     * so a wording assertion does not need a scroll.
+     */
+    private fun unknownEnded(reason: String): LiveCallUiState = LiveCallSamples.ended.copy(state = "unknown", statusUnknownError = reason, turns = emptyList())
+
+    /** The transcript composes by viewport: reach an item that is not on screen. */
+    private fun scrollTranscriptTo(text: String) {
+        composeRule.onNodeWithTag(TRANSCRIPT_LIST_TAG).performScrollToNode(hasText(text))
+        composeRule.waitForIdle()
     }
 
     @Test

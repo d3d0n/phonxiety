@@ -60,6 +60,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -219,7 +220,7 @@ private fun LiveCallBody(
     nowEpochMs: Long
 ) {
     val transcript = @Composable { modifier: Modifier ->
-        TranscriptCard(state = state, modifier = modifier)
+        TranscriptCard(state = state, onReload = onReload, modifier = modifier)
     }
     val controls = @Composable { modifier: Modifier, showError: Boolean ->
         ControlsColumn(
@@ -250,15 +251,6 @@ private fun LiveCallBody(
             if (state.reconnecting) {
                 ReconnectingBanner(onReload = onReload)
             }
-            // A record whose end was never confirmed says so where the phase cannot: the phone lost
-            // the link while the call was being ended, and only the daemon's own reason explains it.
-            if (state.phase == "unknown") {
-                UnknownStatusCard(
-                    reason = state.statusUnknownError,
-                    onReload = onReload,
-                    modifier = Modifier.padding(top = 8.dp)
-                )
-            }
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 if (wide) {
                     Row(
@@ -276,8 +268,10 @@ private fun LiveCallBody(
                     }
                 } else {
                     // Only a running call folds its controls away: once it has ended the result is
-                    // the reason the screen is open, so it stays on screen without a tap.
-                    val folded = !state.ended
+                    // the reason the screen is open, so it stays on screen without a tap. A call
+                    // whose end was never confirmed has no result either: its card and transcript
+                    // are the content, and the controls fold like a running call's.
+                    val folded = !state.ended || state.phase == "unknown"
                     Column(modifier = Modifier.fillMaxSize()) {
                         // A failure (a refused hang-up, a dropped instruction) is never behind the
                         // fold: it explains why the pinned action did not do what it promised.
@@ -474,7 +468,8 @@ private fun LiveCallHeader(state: LiveCallUiState, onBack: () -> Unit, nowEpochM
 /**
  * The call whose end the daemon recorded as unconfirmed. The reason it gives is evidence, so it
  * sits behind Details in monospace; the card says what is and is not known and offers the one
- * useful action, reading the record again.
+ * useful action, reading the record again. Only the daemon's own link-loss reason names a lost
+ * connection: an unacknowledged hang-up leaves the phone connected, so its copy stays neutral.
  */
 @Composable
 private fun UnknownStatusCard(
@@ -484,13 +479,31 @@ private fun UnknownStatusCard(
 ) {
     ErrorCard(
         title = stringResource(R.string.live_call_status_unknown_title),
-        message = stringResource(R.string.live_call_status_unknown_message),
+        message = stringResource(
+            if (isLinkLoss(reason)) {
+                R.string.live_call_status_unknown_link_lost
+            } else {
+                R.string.live_call_status_unknown_message
+            }
+        ),
         output = reason,
         actionLabel = stringResource(R.string.live_call_status_refresh),
         onAction = onReload,
         modifier = modifier
     )
 }
+
+/** The daemon's own name for a call whose phone link died; see `controller._fail`. */
+internal const val LINK_LOST_ERROR = "device_disconnected"
+
+/** The transcript's scroll container, so tests reach a card that is not in the first viewport. */
+internal const val TRANSCRIPT_LIST_TAG = "live_call_transcript"
+
+/**
+ * Whether the record's error is the daemon's link loss. Any other reason (an unacknowledged
+ * hang-up, a voice failure) says nothing about the connection and must not claim it.
+ */
+internal fun isLinkLoss(reason: String?): Boolean = reason?.trim() == LINK_LOST_ERROR
 
 @Composable
 private fun ReconnectingBanner(onReload: () -> Unit) {
@@ -522,6 +535,7 @@ private fun ReconnectingBanner(onReload: () -> Unit) {
 @Composable
 private fun TranscriptCard(
     state: LiveCallUiState,
+    onReload: () -> Unit,
     modifier: Modifier
 ) {
     Surface(
@@ -529,7 +543,7 @@ private fun TranscriptCard(
         shape = MaterialTheme.shapes.large,
         color = MaterialTheme.colorScheme.surfaceContainerLow
     ) {
-        TranscriptList(state = state, modifier = Modifier.fillMaxSize())
+        TranscriptList(state = state, onReload = onReload, modifier = Modifier.fillMaxSize())
     }
 }
 
@@ -604,16 +618,20 @@ internal fun transcriptSubtitle(state: LiveCallUiState, resources: Resources): S
  * zero of this same list, so the transcript text owns every pixel the screen can spare.
  */
 @Composable
-private fun TranscriptList(state: LiveCallUiState, modifier: Modifier) {
+private fun TranscriptList(state: LiveCallUiState, onReload: () -> Unit, modifier: Modifier) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val following by remember {
         derivedStateOf { !listState.canScrollForward || listState.layoutInfo.visibleItemsInfo.isEmpty() }
     }
     val itemCount = state.turns.size + state.partials.size
-    // Index zero is the heading; the last transcript item therefore sits at index [itemCount].
-    val lastIndex = itemCount
-    LaunchedEffect(itemCount, following) {
+    // An unconfirmed end is part of the content, not a card above it: the same scroll keeps it,
+    // the transcript and the pinned action reachable at 200 % text.
+    val unknownCard = state.phase == "unknown"
+    val headerCount = if (unknownCard) 2 else 1
+    // The last transcript item is the last item of the list.
+    val lastIndex = headerCount + itemCount - 1
+    LaunchedEffect(itemCount, following, unknownCard) {
         if (itemCount > 0 && following) listState.scrollToItem(lastIndex)
     }
     // The jump control sits under the list, never over a line the reader is trying to read.
@@ -622,11 +640,15 @@ private fun TranscriptList(state: LiveCallUiState, modifier: Modifier) {
             state = listState,
             modifier = Modifier
                 .weight(1f)
-                .fillMaxWidth(),
+                .fillMaxWidth()
+                .testTag(TRANSCRIPT_LIST_TAG),
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             item { TranscriptHeading(state) }
+            if (unknownCard) {
+                item { UnknownStatusCard(reason = state.statusUnknownError, onReload = onReload) }
+            }
             items(state.turns.size) { index -> TranscriptRow(state.turns[index]) }
             items(state.partials.size) { index -> PartialRow(state.partials[index]) }
             if (itemCount == 0) {
