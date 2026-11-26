@@ -11,6 +11,7 @@ import com.phonxiety.bridge.IdleLinkAction
 import com.phonxiety.bridge.model.AttachmentControl
 import com.phonxiety.bridge.model.ControlEnvelope
 import com.phonxiety.bridge.model.DeviceAuth
+import com.phonxiety.bridge.model.LinkKind
 import computer.iroh.Connection
 import computer.iroh.Endpoint
 import computer.iroh.EndpointAddr
@@ -45,6 +46,171 @@ import kotlinx.serialization.json.Json
 import okio.ByteString.Companion.toByteString
 
 /**
+ * One pending fresh-bind request as seen by one attempt.  [pending] is a plain
+ * read of the shared budget; [consume] runs under the attempt's own lifecycle
+ * monitor and consumes the request only while that attempt is still live.
+ * Both are non-suspending and are called under the endpoint bind mutex.
+ */
+internal interface FreshBind {
+    /** True while a trip's fresh-bind request has not been consumed. */
+    fun pending(): Boolean
+
+    /**
+     * Runs [act] under the lifecycle monitor and consumes the request when this
+     * attempt is still live; null when it is not, and [act] did not run.
+     */
+    fun <T> consume(act: () -> T): T?
+}
+
+/** The attempt's view of the factory's shared budget, refusing to consume once it ended. */
+internal class BudgetFreshBind(
+    private val budget: IrohFailureBudget,
+    private val lifecycle: IrohLinkLifecycle
+) : FreshBind {
+    override fun pending(): Boolean = budget.pending()
+
+    override fun <T> consume(act: () -> T): T? = lifecycle.whenLive {
+        if (budget.consume()) act() else null
+    }
+}
+
+/**
+ * The process-wide cached endpoint behind [IrohSupport].
+ *
+ * Generic in the bound handle so the fresh-bind section can be driven on the
+ * JVM without the native library.  [mutex] serializes binds; [state] guards the
+ * cached handle and its generation, so [detach] and [detach] by generation are
+ * not serialized with a bind, exactly as before.
+ *
+ * Only the fresh-bind section is: under [mutex], a still-live attempt consumes
+ * its pending request and the cached handle is detached in one non-suspending
+ * step; the new bind then runs outside that step but still under [mutex].  A
+ * retired attempt can therefore never detach the endpoint a replacement bound.
+ *
+ * [onDetach] stops one detached handle and must not block.
+ */
+internal class IrohEndpointCache<T : Any>(private val onDetach: (T, String) -> Unit) {
+    private companion object {
+        const val TAG = "PhonxietyBridge"
+    }
+
+    private val mutex = Mutex()
+
+    /** Guards [current] and [sequence]. */
+    private val state = Any()
+
+    private var current: T? = null
+    private var sequence = 0L
+
+    /** The cached handle, or a new one built by [bind] under a fresh generation. */
+    suspend fun acquire(bind: suspend (Long) -> T): T {
+        synchronized(state) { current }?.let { return it }
+        return mutex.withLock { bindLocked(bind) }
+    }
+
+    /**
+     * A fresh-bind attempt's view: the cached handle unless its [fresh] request
+     * is pending, in which case a still-live attempt detaches that handle,
+     * consumes the request and binds a new one.  The detach runs inside the
+     * attempt's own monitor section, so a cancellation that won the race leaves
+     * both the handle and the request untouched.
+     */
+    suspend fun acquire(fresh: FreshBind, bind: suspend (Long) -> T): T {
+        if (!fresh.pending()) {
+            synchronized(state) { current }?.let { return it }
+        }
+        return mutex.withLock {
+            val detached = fresh.consume {
+                synchronized(state) { current.also { current = null } }
+            }
+            if (detached != null) {
+                onDetach(detached, "phonxiety-iroh-fresh")
+                BridgeLog.w(TAG, "iroh endpoint recycled after 3 failed attempts")
+            }
+            bindLocked(bind)
+        }
+    }
+
+    /** Caller holds [mutex]. */
+    private suspend fun bindLocked(bind: suspend (Long) -> T): T {
+        synchronized(state) { current }?.let { return it }
+        val generation = synchronized(state) { ++sequence }
+        return bind(generation).also { bound -> synchronized(state) { current = bound } }
+    }
+
+    /** Detaches the cached handle, if any; the caller stops it. */
+    fun detach(): T? = synchronized(state) { current.also { current = null } }
+
+    /** Detaches only when [generation] is still the cached one; otherwise null. */
+    fun detach(generation: Long, generationOf: (T) -> Long): T? = synchronized(state) {
+        val live = current ?: return null
+        if (generationOf(live) != generation) return null
+        current = null
+        live
+    }
+}
+
+/**
+ * The iroh endpoint's recovery account: consecutive attempts that failed before
+ * opening, and the pending request to rebind the endpoint.
+ *
+ * Trips at [TRIP_AFTER] consecutive failures; an accepted open resets the
+ * streak.  The first trip needs no history and is allowed immediately, even
+ * with the clock at zero.  Further trips wait [COOLDOWN_MS] after the *actual*
+ * recycle — the bind that consumed the request — not after the request.  A trip
+ * only sets a pending request, which stays pending until a live bind consumes
+ * it, so an attempt that never binds cannot lose it.
+ */
+internal class IrohFailureBudget(private val clock: () -> Long) {
+    companion object {
+        /** Consecutive iroh failures before the endpoint is rebound. */
+        const val TRIP_AFTER = 3
+
+        /** At most one recycle per window, measured from the actual recycle. */
+        const val COOLDOWN_MS = 60_000L
+    }
+
+    private val lock = Any()
+    private var consecutive = 0
+    private var pending = false
+    private var lastRecycleAt: Long? = null
+
+    /** One iroh attempt opened: the failure streak is over. */
+    fun opened() {
+        synchronized(lock) { consecutive = 0 }
+    }
+
+    /** One iroh attempt failed before opening; true when it trips a fresh-bind request. */
+    fun failed(): Boolean = synchronized(lock) {
+        consecutive++
+        if (consecutive < TRIP_AFTER || pending) return false
+        val last = lastRecycleAt
+        if (last != null && clock() - last < COOLDOWN_MS) return false
+        pending = true
+        true
+    }
+
+    /** Feeds one attempt outcome into the account. */
+    fun note(outcome: AttemptOutcome) {
+        when (outcome) {
+            AttemptOutcome.OPENED -> opened()
+            AttemptOutcome.FAILED_BEFORE_OPEN -> failed()
+        }
+    }
+
+    /** True while a trip's fresh-bind request has not been consumed. */
+    fun pending(): Boolean = synchronized(lock) { pending }
+
+    /** A bind consumed the pending request: the cooldown starts at the actual recycle. */
+    fun consume(): Boolean = synchronized(lock) {
+        if (!pending) return false
+        pending = false
+        lastRecycleAt = clock()
+        true
+    }
+}
+
+/**
  * Process-wide scope for iroh calls that must never block their caller:
  * endpoint shutdown, endpoint recycle and connection close.  Callers include
  * the main thread when the service stops, so none of this may run there.
@@ -77,35 +243,37 @@ object IrohSupport {
     val ALPN: ByteArray = "phonxiety/device/2".toByteArray(Charsets.UTF_8)
 
     private val contextInstalled = AtomicBoolean(false)
-    private val endpointMutex = Mutex()
 
-    /** Guards [current] and [generationSeq]: one endpoint, one generation at a time. */
-    private val endpointState = Any()
+    /** The one cached endpoint: its mutex serializes binds, its state guards the handle. */
+    private val endpoints = IrohEndpointCache<IrohEndpoint> { bound, name ->
+        stopAsync(bound.endpoint, name)
+    }
 
     /** Relays the phone's endpoint uses; [RelayModeSetting.DEFAULT] leaves the preset in charge. */
     @Volatile private var relayMode: RelayModeSetting = RelayModeSetting.DEFAULT
 
     @Volatile private var relayUrls: List<String> = emptyList()
 
-    @Volatile private var current: IrohEndpoint? = null
-
-    private var generationSeq = 0L
-
     /**
      * The endpoint and the generation it was bound under.  A link remembers
      * its generation so it can recycle only the endpoint it dialled through,
      * never the one a newer link bound after a replacement.
+     *
+     * [fresh] is the attempt's view of a pending fresh-bind request: while the
+     * request is pending and this attempt is still live, the cached endpoint is
+     * detached and the attempt binds a new one, both decided inside the bind
+     * mutex.
      */
-    internal suspend fun binding(context: Context): IrohEndpoint {
-        current?.let { return it }
-        return endpointMutex.withLock {
-            current ?: bind(context.applicationContext).also { bound ->
-                synchronized(endpointState) { current = bound }
-            }
+    internal suspend fun binding(context: Context, fresh: FreshBind? = null): IrohEndpoint {
+        val appContext = context.applicationContext
+        return if (fresh == null) {
+            endpoints.acquire { generation -> bind(appContext, generation) }
+        } else {
+            endpoints.acquire(fresh) { generation -> bind(appContext, generation) }
         }
     }
 
-    private suspend fun bind(context: Context): IrohEndpoint {
+    private suspend fun bind(context: Context, generation: Long): IrohEndpoint {
         installAndroidContext(context)
         val key = secretKey(context)
         val endpoint = withContext(Dispatchers.IO) {
@@ -118,7 +286,7 @@ object IrohSupport {
                 )
             )
         }
-        return IrohEndpoint(endpoint, synchronized(endpointState) { ++generationSeq })
+        return IrohEndpoint(endpoint, generation)
     }
 
     /**
@@ -235,9 +403,7 @@ object IrohSupport {
 
     /** Shuts the endpoint down without blocking the caller. */
     fun shutdownAsync() {
-        val bound = synchronized(endpointState) {
-            current.also { current = null }
-        } ?: return
+        val bound = endpoints.detach() ?: return
         stopAsync(bound.endpoint, "phonxiety-iroh-close")
     }
 
@@ -247,11 +413,12 @@ object IrohSupport {
      * default network changes: an endpoint bound on the old network can stay on
      * the relay or wedged in reconnects (iroh#4588, iroh#4476), a fresh one finds
      * the paths of the new network.
+     *
+     * Detaches under the cache's state guard, not its bind mutex: like the
+     * generation-scoped variant, this is not serialized with a bind.
      */
     fun recycleEndpoint() {
-        val bound = synchronized(endpointState) {
-            current.also { current = null }
-        } ?: return
+        val bound = endpoints.detach() ?: return
         stopAsync(bound.endpoint, "phonxiety-iroh-recycle")
     }
 
@@ -261,12 +428,7 @@ object IrohSupport {
      * must never close the endpoint a newer link dialled through.
      */
     fun recycleEndpoint(generation: Long): Boolean {
-        val bound = synchronized(endpointState) {
-            val live = current ?: return false
-            if (live.generation != generation) return false
-            current = null
-            live
-        }
+        val bound = endpoints.detach(generation) { it.generation } ?: return false
         stopAsync(bound.endpoint, "phonxiety-iroh-recycle")
         return true
     }
@@ -377,6 +539,18 @@ internal class IrohLinkLifecycle(
     /** The link is finished; a later action must not touch the endpoint. */
     fun close() {
         synchronized(monitor) { closed = true }
+    }
+
+    /**
+     * Runs [act] under the monitor while this link is still a live attempt, and
+     * returns its result; null when it already ended.  Non-suspending, so an
+     * attempt's decision and its effect cannot be split by a cancellation.
+     */
+    fun <T> whenLive(act: () -> T): T? {
+        synchronized(monitor) {
+            if (closed || isClosed()) return null
+            return act()
+        }
     }
 
     /**
@@ -491,16 +665,27 @@ internal class IrohLinkFactory(
     private val context: Context,
     private val config: BridgeConfig.Iroh,
     private val ownsCall: () -> Boolean,
-    private val beginIdleLinkAction: () -> IdleLinkAction?
+    private val beginIdleLinkAction: () -> IdleLinkAction?,
+    clock: () -> Long = { System.nanoTime() / 1_000_000L }
 ) : DeviceLinkFactory {
     /**
      * Escalation history for the paired endpoint: one instance outlives every
      * link this factory creates and every endpoint recycle, so the recycle
      * window and the cooldown are measured across reconnects.
      */
-    private val policy = IrohEscalationPolicy(clock = { System.nanoTime() / 1_000_000L })
+    private val policy = IrohEscalationPolicy(clock = clock)
 
-    override fun create(): DeviceLink = IrohLink(context, config, ownsCall, beginIdleLinkAction, policy)
+    /**
+     * Recovery history for an endpoint that never opens: one instance outlives
+     * every link this factory creates, so the failure streak, the pending
+     * fresh-bind request and the recycle cooldown span reconnects.
+     */
+    private val budget = IrohFailureBudget(clock)
+
+    override fun create(): DeviceLink = IrohLink(context, config, ownsCall, beginIdleLinkAction, policy, budget)
+
+    /** Only iroh outcomes reach this factory; each one feeds the endpoint's one account. */
+    override fun attemptEnded(outcome: AttemptOutcome, kind: LinkKind?) = budget.note(outcome)
 
     override fun shutdown() {
         IrohSupport.shutdownAsync()
@@ -525,7 +710,8 @@ private class IrohLink(
     private val config: BridgeConfig.Iroh,
     private val ownsCall: () -> Boolean,
     private val beginIdleLinkAction: () -> IdleLinkAction?,
-    private val policy: IrohEscalationPolicy
+    private val policy: IrohEscalationPolicy,
+    private val budget: IrohFailureBudget
 ) : DeviceLink {
     private companion object {
         const val TAG = "PhonxietyBridge"
@@ -564,6 +750,11 @@ private class IrohLink(
         isClosed = { cancelled.get() || downOnce.get() }
     )
 
+    /** This attempt's view of the factory's shared failure budget, read at bind. */
+    private val fresh: FreshBind = BudgetFreshBind(budget, lifecycle)
+
+    override val kind: LinkKind = LinkKind.IROH
+
     override val backlogBytes: Long get() = backlog.get()
 
     override val supportsAttachments: Boolean get() = true
@@ -593,7 +784,7 @@ private class IrohLink(
     private suspend fun connect(listener: DeviceLink.Listener) {
         try {
             if (cancelled.get()) return
-            val bound = IrohSupport.binding(context)
+            val bound = IrohSupport.binding(context, fresh)
             lifecycle.bind(bound.generation)
             val endpoint = bound.endpoint
             val link = EndpointTicket.fromString(config.ticket).use { ticket ->

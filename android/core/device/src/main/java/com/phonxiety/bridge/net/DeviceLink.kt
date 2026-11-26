@@ -1,5 +1,6 @@
 package com.phonxiety.bridge.net
 
+import com.phonxiety.bridge.model.LinkKind
 import okio.ByteString
 
 /**
@@ -40,6 +41,13 @@ internal interface DeviceLink {
     /** Route for the UI; null for transports without one. */
     fun route(): Route?
 
+    /**
+     * The transport this attempt was built for, captured when it was created or
+     * selected; null when no candidate was ever chosen.  Recovery accounting
+     * reads this per attempt instead of a factory's mutable current candidate.
+     */
+    val kind: LinkKind? get() = null
+
     /** True when the transport can carry a phone-opened bulk stream. */
     val supportsAttachments: Boolean get() = false
 
@@ -65,6 +73,15 @@ internal sealed interface AttachmentFrame {
     data class Error(val code: String, val message: String) : AttachmentFrame
 }
 
+/** How one accepted link attempt ended, for the transport's recovery accounting. */
+internal enum class AttemptOutcome {
+    /** The attempt opened and the supervisor accepted it. */
+    OPENED,
+
+    /** The attempt ended without ever opening. */
+    FAILED_BEFORE_OPEN
+}
+
 /**
  * Creates links for one pairing and releases whatever outlives a single link
  * (the OkHttp pool, the process-wide iroh endpoint).
@@ -74,6 +91,13 @@ internal interface DeviceLinkFactory {
 
     /** Called once when the engine closes. */
     fun shutdown()
+
+    /**
+     * One accepted attempt's outcome, exactly once per attempt.  [kind] is the
+     * transport that attempt was built for, or null when it ended before one
+     * was selected.  Default: no recovery accounting.
+     */
+    fun attemptEnded(outcome: AttemptOutcome, kind: LinkKind?) {}
 
     /**
      * The candidate the last created link was built for; null for factories

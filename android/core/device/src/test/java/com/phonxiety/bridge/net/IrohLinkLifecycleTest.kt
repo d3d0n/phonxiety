@@ -4,6 +4,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -183,5 +184,32 @@ class IrohLinkLifecycleTest {
         lifecycle.close()
         assertEquals(IrohActionOutcome.LINK_CLOSED, lifecycle.run(recycle = false) { reports++ })
         assertEquals(1, reports)
+    }
+
+    @Test
+    fun whenLiveActsOnlyWhileTheLinkCanStillAct() {
+        var closed = false
+        var acted = 0
+        val lifecycle = IrohLinkLifecycle(
+            recycleEndpoint = { false },
+            isClosed = { closed }
+        )
+
+        val live = lifecycle.whenLive {
+            acted++
+            7
+        }
+        assertEquals(7, live)
+        assertEquals(1, acted)
+
+        // A cancellation from the link's own failure path wins before the act.
+        lifecycle.close()
+        assertNull(lifecycle.whenLive { acted++ })
+        assertEquals(1, acted)
+
+        // So does a terminal state reported from elsewhere.
+        closed = true
+        assertNull(lifecycle.whenLive { acted++ })
+        assertEquals(1, acted)
     }
 }

@@ -93,6 +93,13 @@ internal class LinkSupervisor(
     }
 
     private val lock = Any()
+
+    /**
+     * Whether the calling thread is inside a supervisor transition. Attempt outcomes must be
+     * applied there, in transition order; the tests assert it rather than racing threads.
+     */
+    internal fun inTransition(): Boolean = Thread.holdsLock(lock)
+
     private var running = false
     private var closed = false
     private var link: DeviceLink? = null
@@ -262,6 +269,9 @@ internal class LinkSupervisor(
             // Building one attempt — a candidate plan or a probe — is itself an
             // attempt: a throw moves to the next dial instead of ending here.
             BridgeLog.w(TAG, "link attempt creation failed: ${t.javaClass.simpleName}")
+            // No candidate was selected, so the transport is unknown and this
+            // never feeds a transport's own recovery accounting.
+            factory.attemptEnded(AttemptOutcome.FAILED_BEFORE_OPEN, null)
             scheduleReconnect()
             return
         }
@@ -324,6 +334,7 @@ internal class LinkSupervisor(
     private fun expireAttempt(owner: DeviceLink) {
         val notify = synchronized(lock) {
             if (!running || linkUp || link !== owner) return
+            noteOutcomeLocked(AttemptOutcome.FAILED_BEFORE_OPEN, owner)
             retireCurrentLocked()
         }
         if (!notify) return
@@ -349,6 +360,31 @@ internal class LinkSupervisor(
         lastHostActivity = 0L
         clearAttemptDeadlineLocked()
         return running
+    }
+
+    /**
+     * Feeds one attempt's outcome to the transport's recovery account.
+     *
+     * Callers hold [lock] and call this in the very critical section as the
+     * state transition it classifies, so outcomes are applied in transition
+     * order.  A report made after the lock is released can be delayed past the
+     * attempts that follow: an `OPENED` landing between their failures resets
+     * the streak those newer attempts built, and three consecutive failures
+     * then never trip.  Carrying a per-attempt sequence number and dropping
+     * stale outcomes would need a new parameter through [DeviceLinkFactory] and
+     * [IrohAttemptOutcomes] plus a second piece of budget state; applying the
+     * report here gets the same order for free.
+     *
+     * Safe under the lock: the production path is
+     * [CandidateLinkFactory.attemptEnded] → [IrohAttemptOutcomes.report] →
+     * [IrohLinkFactory.attemptEnded] → [IrohFailureBudget.note], which takes
+     * only its own short-lived monitor and reads the injected clock — no I/O,
+     * no suspension, and nothing that calls back into this supervisor.  The
+     * lock order is supervisor → budget only, so no cycle (deadlock) is
+     * possible.
+     */
+    private fun noteOutcomeLocked(outcome: AttemptOutcome, owner: DeviceLink) {
+        factory.attemptEnded(outcome, owner.kind)
     }
 
     /** Binds one transport attempt to its own callbacks. */
@@ -377,6 +413,13 @@ internal class LinkSupervisor(
                 reconnectDelayMs = RECONNECT_BASE_MS
                 lastHostActivity = clock()
                 clearAttemptDeadlineLocked()
+                // This attempt's one outcome: it opened.  A later down is not a
+                // second classification, and the accepted-open state it carries
+                // is what keeps a post-open failure out of the transport's
+                // recovery accounting.  Applied inside this accept, so a report
+                // can never arrive after the failures of the attempts that
+                // replace this one.
+                noteOutcomeLocked(AttemptOutcome.OPENED, owner)
                 true
             }
         }
@@ -424,6 +467,11 @@ internal class LinkSupervisor(
             // surfaces late (e.g. after its deadline) is no longer the link, and
             // a replaced one must not disturb its successor.
             if (link !== owner) return
+            // Read before the retirement clears it: an attempt that was accepted
+            // as open has already reported that one outcome, whatever reason
+            // brings it down now — `hello_failed` and `connect_failed` can both
+            // arrive after QUIC connected.
+            if (!linkUp) noteOutcomeLocked(AttemptOutcome.FAILED_BEFORE_OPEN, owner)
             retireCurrentLocked()
         }
         if (!notify) return
