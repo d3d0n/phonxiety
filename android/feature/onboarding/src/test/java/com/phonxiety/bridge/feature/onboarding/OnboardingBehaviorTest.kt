@@ -5,21 +5,26 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
@@ -63,6 +68,7 @@ class OnboardingBehaviorTest {
                 PhonxietyTheme(dynamicColor = false) {
                     Box(
                         modifier = Modifier
+                            .testTag(CONTENT_TAG)
                             .width(widthDp.dp)
                             .fillMaxSize()
                             .background(MaterialTheme.colorScheme.background)
@@ -155,6 +161,7 @@ class OnboardingBehaviorTest {
     @Test
     fun actionLabelsAreWholeAtTwoHundredPercent() {
         host(fontScale = 2f, widthDp = 320)
+        val container = contentContainer()
         val labels = linkedMapOf(
             "ready_to_install" to "Install module",
             "provider_prep" to "Install metamodule",
@@ -166,42 +173,50 @@ class OnboardingBehaviorTest {
         )
         labels.forEach { (stateName, label) ->
             show(OnboardingUiState(wizard = sample(stateName)))
-            // Existence proves nothing: a clipped label keeps its text. What a clipped or
-            // ellipsized label actually shows is caught below, on the rendered text layout and on
-            // the node's visible bounds rather than on a height cap.
-            val node = composeRule
-                .onNodeWithText(label, useUnmergedTree = true)
-                .fetchSemanticsNode()
-            val layouts = mutableListOf<TextLayoutResult>()
-            requireNotNull(node.config[SemanticsActions.GetTextLayoutResult].action) {
-                "$label has no text layout"
-            }.invoke(layouts)
-            val layout = layouts.single()
-            // Compose lays a centred label's paragraph out at the full available width, so
-            // TextLayoutResult.didOverflowWidth reads true even when every glyph fits (the
-            // paragraph spans the constraint while the node is only as wide as the text). The
-            // reliable evidence of a clipped label is an ellipsis, a vertically squeezed layout,
-            // or a node that sits outside the screen.
-            assertFalse("$label overflows its height at 200%", layout.didOverflowHeight)
-            assertTrue(
-                "$label is wider than its visible bounds: ${layout.size} vs ${node.size}",
-                layout.size.width <= node.size.width
-            )
-            assertTrue(
-                "$label is taller than its visible bounds: ${layout.size} vs ${node.size}",
-                layout.size.height <= node.size.height
-            )
-            (0 until layout.lineCount).forEach { line ->
-                assertFalse("$label is ellipsized on line $line", layout.isLineEllipsized(line))
-            }
-            val screen = composeRule.onRoot().fetchSemanticsNode().size
-            val bounds = node.boundsInRoot
-            assertTrue(
-                "$label sits outside the screen: $bounds in $screen",
-                bounds.left >= 0f && bounds.top >= 0f &&
-                    bounds.right <= screen.width.toFloat() && bounds.bottom <= screen.height.toFloat()
+            assertWholeLabel(
+                label,
+                composeRule.onNodeWithText(label, useUnmergedTree = true).fetchSemanticsNode(),
+                container
             )
         }
+    }
+
+    /**
+     * The check above is only worth its false. A label laid out with room it does not have keeps its
+     * text, has no ellipsis and a layout no taller than the node, so nothing but the glyph extents
+     * can tell it apart from a whole one.
+     */
+    @Test
+    fun aHorizontallyClippedLabelIsRejected() {
+        composeRule.setContent {
+            PhonxietyTheme(dynamicColor = false) {
+                Box(
+                    modifier = Modifier
+                        .testTag(CONTENT_TAG)
+                        .width(320.dp)
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.background)
+                ) {
+                    Text(
+                        text = "Scan QR code or paste the pairing link",
+                        modifier = Modifier.width(120.dp),
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Clip
+                    )
+                }
+            }
+        }
+        val failure = runCatching {
+            assertWholeLabel(
+                "clipped fixture",
+                composeRule
+                    .onNodeWithText("Scan QR code or paste the pairing link", useUnmergedTree = true)
+                    .fetchSemanticsNode(),
+                contentContainer()
+            )
+        }.exceptionOrNull()
+        assertTrue("a horizontally clipped label must fail the check, got $failure", failure is AssertionError)
     }
 
     @Test
@@ -311,5 +326,77 @@ class OnboardingBehaviorTest {
         val apatch = OnboardingSamples.apatch.copy(version = "e8e4651")
         show(OnboardingUiState(wizard = WizardState.ReadyToInstall(apatch)))
         composeRule.onAllNodesWithText("APatch").onFirst().assertExists()
+    }
+
+    private fun contentContainer(): Rect = composeRule.onNodeWithTag(CONTENT_TAG).fetchSemanticsNode().boundsInRoot
+
+    /**
+     * Proves the label's glyphs sit inside the label's own text bounds and inside the content
+     * container. `TextLayoutResult.size` cannot: it is the constrained size, and Compose lays a
+     * centred button's paragraph out at the full available width, so a clipped line still fills it
+     * while its glyphs run past the edge. What carries the evidence is where each line's glyphs
+     * actually start and end: a line laid out with room it does not have is wider than the label's
+     * visible bounds, and its right edge crosses the paragraph it was laid out in.
+     */
+    private fun assertWholeLabel(label: String, node: SemanticsNode, container: Rect) {
+        val layouts = mutableListOf<TextLayoutResult>()
+        requireNotNull(node.config[SemanticsActions.GetTextLayoutResult].action) {
+            "$label has no text layout"
+        }.invoke(layouts)
+        val layout = layouts.single()
+        assertFalse("$label overflows its height at 200%", layout.didOverflowHeight)
+        assertTrue(
+            "$label is taller than its visible bounds: ${layout.size} vs ${node.size}",
+            layout.size.height <= node.size.height
+        )
+
+        val visibleWidth = node.size.width.toFloat()
+        val paragraphWidth = layout.multiParagraph.width
+        var glyphLeft = Float.MAX_VALUE
+        var glyphRight = -Float.MAX_VALUE
+        layout.layoutInput.text.indices.forEach { offset ->
+            val box = layout.getBoundingBox(offset)
+            if (box.width > 0f && box.height > 0f) {
+                glyphLeft = minOf(glyphLeft, box.left)
+                glyphRight = maxOf(glyphRight, box.right)
+            }
+        }
+        assertTrue(
+            "$label is ${glyphRight - glyphLeft}px of glyphs, wider than its ${visibleWidth}px text bounds",
+            glyphRight - glyphLeft <= visibleWidth + TOLERANCE
+        )
+
+        (0 until layout.lineCount).forEach { line ->
+            assertFalse("$label is ellipsized on line $line", layout.isLineEllipsized(line))
+            val left = layout.getLineLeft(line)
+            val right = layout.getLineRight(line)
+            val width = layout.multiParagraph.getLineWidth(line)
+            assertTrue(
+                "$label line $line is ${width}px wide, wider than its ${visibleWidth}px text bounds",
+                width <= visibleWidth + TOLERANCE
+            )
+            assertTrue(
+                "$label line $line starts at ${left}px, left of the $paragraphWidth px paragraph",
+                left >= -TOLERANCE
+            )
+            assertTrue(
+                "$label line $line ends at ${right}px, past the $paragraphWidth px paragraph",
+                right <= paragraphWidth + TOLERANCE
+            )
+        }
+
+        val bounds = node.boundsInRoot
+        assertTrue(
+            "$label sits outside the content container: $bounds in $container",
+            bounds.left >= container.left && bounds.top >= container.top &&
+                bounds.right <= container.right && bounds.bottom <= container.bottom
+        )
+    }
+
+    private companion object {
+        const val CONTENT_TAG = "onboarding_content"
+
+        /** Sub-pixel rounding in glyph boxes is not a clipped label. */
+        const val TOLERANCE = 0.5f
     }
 }

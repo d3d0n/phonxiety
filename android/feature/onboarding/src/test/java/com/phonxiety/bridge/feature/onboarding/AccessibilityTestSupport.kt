@@ -1,15 +1,20 @@
 package com.phonxiety.bridge.feature.onboarding
 
 import androidx.compose.ui.test.SemanticsNodeInteraction
+import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.junit4.ComposeContentTestRule
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import com.github.takahirom.roborazzi.ExperimentalRoborazziApi
 import com.github.takahirom.roborazzi.RoborazziATFAccessibilityCheckOptions
 import com.github.takahirom.roborazzi.RoborazziATFAccessibilityChecker
+import com.github.takahirom.roborazzi.captureRoboImage
 import com.github.takahirom.roborazzi.checkRoboAccessibility
 import com.google.android.apps.common.testing.accessibility.framework.AccessibilityViewCheckResult
 import com.google.android.apps.common.testing.accessibility.framework.checks.TextContrastCheck
 import com.google.android.apps.common.testing.accessibility.framework.uielement.ViewHierarchyElement
+import kotlin.math.ceil
 import org.hamcrest.Description
-import org.hamcrest.Matchers.anyOf
 import org.hamcrest.TypeSafeMatcher
 
 /**
@@ -26,21 +31,6 @@ private object DisabledTextContrast : TypeSafeMatcher<AccessibilityViewCheckResu
 
     override fun describeTo(description: Description) {
         description.appendText("text contrast of a disabled control")
-    }
-}
-
-/**
- * A text cut by a scroll viewport's edge is reported as a contrast failure, because the framework
- * samples a background the text does not sit on. Decision 10 requires a phone-height viewport, so one
- * such clipped line per captured screen is expected; the text's own colours are checked wherever it
- * is fully visible. Only the results the framework itself marks as partially visible are dropped.
- */
-private object ClippedTextContrast : TypeSafeMatcher<AccessibilityViewCheckResult>() {
-    override fun matchesSafely(item: AccessibilityViewCheckResult): Boolean = item.accessibilityHierarchyCheck == TextContrastCheck::class.java &&
-        item.message?.contains("partially visible") == true
-
-    override fun describeTo(description: Description) {
-        description.appendText("text contrast of a text clipped by a scroll viewport")
     }
 }
 
@@ -61,9 +51,7 @@ private fun ViewHierarchyElement?.insideDisabledControl(): Boolean {
  */
 @OptIn(ExperimentalRoborazziApi::class)
 private fun accessibilityGateOptions(): RoborazziATFAccessibilityCheckOptions = RoborazziATFAccessibilityCheckOptions(
-    checker = RoborazziATFAccessibilityChecker(
-        suppressions = anyOf(DisabledTextContrast, ClippedTextContrast)
-    ),
+    checker = RoborazziATFAccessibilityChecker(suppressions = DisabledTextContrast),
     failureLevel = RoborazziATFAccessibilityChecker.CheckLevel.Warning
 )
 
@@ -72,3 +60,38 @@ private fun accessibilityGateOptions(): RoborazziATFAccessibilityCheckOptions = 
 internal fun SemanticsNodeInteraction.assertAccessible() {
     checkRoboAccessibility(accessibilityGateOptions())
 }
+
+/**
+ * Records and checks a screen whose content is taller than the recorded phone-height viewport.
+ * The page is regrown to the height its own content needs before the gate runs, so no line is ever
+ * cut by a viewport edge: the framework would sample the wrong background there, and suppressing
+ * that result would also hide a real contrast failure on the same line. The resulting image covers
+ * every section in one unsuppressed capture.
+ *
+ * @param pageHeightDp sets the height the screen is composed with, in dp.
+ */
+@OptIn(ExperimentalRoborazziApi::class)
+internal fun ComposeContentTestRule.captureWholeScreen(
+    screenTag: String,
+    footerText: String,
+    pageHeightDp: (Int) -> Unit,
+    name: String
+) {
+    // Tall enough for the longest state, so the footer's own position is never constrained.
+    pageHeightDp(MEASUREMENT_DP)
+    waitForIdle()
+    val screen = onNodeWithTag(screenTag).fetchSemanticsNode()
+    val footer = onNodeWithText(footerText, substring = true).fetchSemanticsNode()
+    val scroll = onNode(hasScrollAction()).fetchSemanticsNode()
+    val density = footer.layoutInfo.density.density
+    // The screen's bottom padding, plus the sticky action bar that sits below the scroller.
+    val bottomPaddingPx = 20f * density
+    val actionBarPx = screen.size.height - scroll.size.height
+    val contentHeightDp = ceil((footer.boundsInRoot.bottom + bottomPaddingPx + actionBarPx) / density).toInt()
+    pageHeightDp(contentHeightDp)
+    waitForIdle()
+    onNodeWithTag(screenTag).assertAccessible()
+    onNodeWithTag(screenTag).captureRoboImage(name)
+}
+
+private const val MEASUREMENT_DP = 4000

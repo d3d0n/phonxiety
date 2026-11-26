@@ -6,14 +6,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.test.hasScrollAction
-import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.github.takahirom.roborazzi.captureRoboImage
@@ -39,10 +39,13 @@ import org.robolectric.annotation.GraphicsMode
  */
 @RunWith(ParameterizedRobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(sdk = [35], qualifiers = "w411dp-h2600dp-xxhdpi")
+@Config(sdk = [35], qualifiers = "w411dp-h4000dp-xxhdpi")
 class OnboardingScreenshotTest(private val case: MatrixCase) {
     @get:Rule
     val composeRule = createComposeRule()
+
+    /** The height the screen is composed with; a content capture regrows it to fit the page. */
+    private var pageHeightDp by mutableStateOf(case.variant.heightDp)
 
     @Test
     fun rendersOneMatrixState() {
@@ -59,7 +62,7 @@ class OnboardingScreenshotTest(private val case: MatrixCase) {
                         modifier = Modifier
                             .testTag(SCREEN_TAG)
                             .width(case.variant.widthDp.dp)
-                            .height(case.variant.heightDp.dp)
+                            .height(pageHeightDp.dp)
                             .background(MaterialTheme.colorScheme.background)
                     ) {
                         OnboardingScreen(state = case.state, callbacks = OnboardingCallbacks())
@@ -68,17 +71,15 @@ class OnboardingScreenshotTest(private val case: MatrixCase) {
             }
         }
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag(SCREEN_TAG).assertAccessible()
         val name = "src/test/screenshots/wizard_${case.stateName}_${case.variant.slug}"
-        composeRule.onNodeWithTag(SCREEN_TAG).captureRoboImage("$name.png")
-        if (case.variant.lowerSection) {
-            // Decision 10: a phone-height viewport shows only the first screen, so the lower
-            // sections are recorded as well, by scrolling to the page's last line.
-            composeRule.onNode(hasScrollAction())
-                .performScrollToNode(hasText(FOOTER, substring = true))
-            composeRule.waitForIdle()
+        if (case.variant.phoneViewport) {
+            // The phone-height viewport as a person sees it, then the same screen at its own content
+            // height: only there is every line whole, so only there does the gate run.
+            composeRule.onNodeWithTag(SCREEN_TAG).captureRoboImage("$name.png")
+            composeRule.captureWholeScreen(SCREEN_TAG, FOOTER, { pageHeightDp = it }, "${name}_content.png")
+        } else {
             composeRule.onNodeWithTag(SCREEN_TAG).assertAccessible()
-            composeRule.onNodeWithTag(SCREEN_TAG).captureRoboImage("${name}_scrolled.png")
+            composeRule.onNodeWithTag(SCREEN_TAG).captureRoboImage("$name.png")
         }
     }
 
@@ -96,8 +97,8 @@ class OnboardingScreenshotTest(private val case: MatrixCase) {
         val dark: Boolean,
         val fontScale: Float,
         val dynamic: Boolean,
-        /** Whether the phone-height viewport also records its lower sections. */
-        val lowerSection: Boolean = false,
+        /** Whether the height is a phone viewport, which also needs a whole-content capture. */
+        val phoneViewport: Boolean = false,
         val slug: String
     )
 
@@ -105,9 +106,10 @@ class OnboardingScreenshotTest(private val case: MatrixCase) {
         private const val SCREEN_TAG = "onboarding_screen"
 
         /**
-         * 411 dp is captured as one full page, as before. 320 dp at 200 % uses a phone's own height
-         * (891 dp) instead of a 2600 dp sheet, because that is the viewport the layout has to survive;
-         * its lower sections come from a second, scrolled capture.
+         * 411 dp is captured as one full page. 320 dp at 200 % uses a phone's own height (891 dp)
+         * instead of a long sheet, because that is the viewport the layout has to survive; it also
+         * gets a whole-content capture, which is the only one the gate checks because a viewport
+         * edge cuts lines.
          */
         private val allVariants = listOf(
             Variant(411, heightDp = FULL_PAGE_DP, dark = false, fontScale = 1f, dynamic = false, slug = "411_light"),
@@ -119,13 +121,21 @@ class OnboardingScreenshotTest(private val case: MatrixCase) {
                 dark = false,
                 fontScale = 2f,
                 dynamic = false,
-                lowerSection = true,
+                phoneViewport = true,
                 slug = "320_font200_light"
             ),
-            Variant(320, heightDp = PHONE_DP, dark = true, fontScale = 2f, dynamic = false, slug = "320_font200_dark")
+            Variant(
+                widthDp = 320,
+                heightDp = PHONE_DP,
+                dark = true,
+                fontScale = 2f,
+                dynamic = false,
+                phoneViewport = true,
+                slug = "320_font200_dark"
+            )
         )
 
-        /** The page's last line; scrolling to it is what makes the lower sections reachable. */
+        /** The page's last line; the whole-content capture measures the page by it. */
         private const val FOOTER = "No cloud, no analytics"
 
         private const val PHONE_DP = 891

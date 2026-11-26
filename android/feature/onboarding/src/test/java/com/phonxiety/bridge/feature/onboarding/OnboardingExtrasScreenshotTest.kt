@@ -2,16 +2,17 @@ package com.phonxiety.bridge.feature.onboarding
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
-import androidx.compose.ui.test.hasScrollAction
-import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onLast
@@ -19,7 +20,6 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
@@ -45,6 +45,9 @@ class OnboardingExtrasScreenshotTest {
     @get:Rule
     val composeRule = createComposeRule()
 
+    /** The height the screen is composed with; a content capture regrows it to fit the page. */
+    private var pageHeightDp by mutableStateOf(PHONE_DP)
+
     private fun setScreen(
         state: OnboardingUiState,
         callbacks: OnboardingCallbacks = OnboardingCallbacks(),
@@ -61,7 +64,7 @@ class OnboardingExtrasScreenshotTest {
                         modifier = Modifier
                             .testTag(SCREEN_TAG)
                             .width(widthDp.dp)
-                            .fillMaxSize()
+                            .height(pageHeightDp.dp)
                             .background(MaterialTheme.colorScheme.background)
                     ) {
                         OnboardingScreen(state = state, callbacks = callbacks)
@@ -72,17 +75,25 @@ class OnboardingExtrasScreenshotTest {
     }
 
     @Test
+    @Config(sdk = [35], qualifiers = "w411dp-h4000dp-xxhdpi")
     fun theOpenStepPlan() {
         setScreen(OnboardingUiState(wizard = requireNotNull(OnboardingSamples.states["verify_failed"])))
         // A semantics click starts no ripple, so the capture does not depend on animation timing.
         composeRule.onNodeWithText("Show steps").performSemanticsAction(SemanticsActions.OnClick)
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag(SCREEN_TAG).assertAccessible()
         composeRule.onNodeWithTag(SCREEN_TAG)
             .captureRoboImage("src/test/screenshots/wizard_steps_expanded_411_light.png")
+        // The expanded plan runs past a phone's height; the gate needs every line whole.
+        composeRule.captureWholeScreen(
+            SCREEN_TAG,
+            FOOTER,
+            { pageHeightDp = it },
+            "src/test/screenshots/wizard_steps_expanded_411_light_content.png"
+        )
     }
 
     @Test
+    @Config(sdk = [35], qualifiers = "w411dp-h4000dp-xxhdpi")
     fun theOpenStepPlanAtTwoHundredPercent() {
         setScreen(
             OnboardingUiState(wizard = requireNotNull(OnboardingSamples.states["verify_failed"])),
@@ -91,26 +102,32 @@ class OnboardingExtrasScreenshotTest {
         )
         composeRule.onNodeWithText("Show steps").performSemanticsAction(SemanticsActions.OnClick)
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag(SCREEN_TAG).assertAccessible()
         composeRule.onNodeWithTag(SCREEN_TAG)
             .captureRoboImage("src/test/screenshots/wizard_steps_expanded_320_font200_light.png")
-        // A phone-height viewport at 200 % cuts the plan in half; the rest is recorded as well.
-        composeRule.onNode(hasScrollAction())
-            .performScrollToNode(hasText("No cloud, no analytics", substring = true))
-        composeRule.waitForIdle()
-        composeRule.onNodeWithTag(SCREEN_TAG).assertAccessible()
-        composeRule.onNodeWithTag(SCREEN_TAG)
-            .captureRoboImage("src/test/screenshots/wizard_steps_expanded_320_font200_light_scrolled.png")
+        // A phone-height viewport at 200 % cuts the plan in half; the whole content is what the gate
+        // sees and what the second image records.
+        composeRule.captureWholeScreen(
+            SCREEN_TAG,
+            FOOTER,
+            { pageHeightDp = it },
+            "src/test/screenshots/wizard_steps_expanded_320_font200_light_content.png"
+        )
     }
 
     @Test
+    @Config(sdk = [35], qualifiers = "w411dp-h4000dp-xxhdpi")
     fun theScrolledLowerSection() {
         setScreen(OnboardingUiState(wizard = requireNotNull(OnboardingSamples.states["ready_to_install"])))
         composeRule.onNodeWithText("Show steps").performScrollTo()
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag(SCREEN_TAG).assertAccessible()
         composeRule.onNodeWithTag(SCREEN_TAG)
             .captureRoboImage("src/test/screenshots/wizard_lower_411_light.png")
+        composeRule.captureWholeScreen(
+            SCREEN_TAG,
+            FOOTER,
+            { pageHeightDp = it },
+            "src/test/screenshots/wizard_lower_411_light_content.png"
+        )
     }
 
     @Test
@@ -153,5 +170,7 @@ class OnboardingExtrasScreenshotTest {
 
     private companion object {
         const val SCREEN_TAG = "onboarding_screen"
+        const val FOOTER = "No cloud, no analytics"
+        const val PHONE_DP = 891
     }
 }
