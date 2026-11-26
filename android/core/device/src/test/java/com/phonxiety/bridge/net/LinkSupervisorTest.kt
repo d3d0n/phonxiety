@@ -1,7 +1,10 @@
 package com.phonxiety.bridge.net
 
 import com.phonxiety.bridge.model.LinkKind
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.concurrent.thread
 import kotlinx.coroutines.runBlocking
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
@@ -584,6 +587,80 @@ class LinkSupervisorTest {
         assertEquals(listOf(1L), detached)
     }
 
+    /**
+     * The ordering race behind the recovery budget: an accepted attempt's
+     * `OPENED` report is held back while the engine moves the link to another
+     * candidate and two replacements fail before opening.
+     *
+     * With the report made after the supervisor lock is released, the held-back
+     * `OPENED` lands between those newer failures, resets the streak they built
+     * and the third failure never trips.  With it applied inside the accept's
+     * critical section the driving thread cannot get in while the report is
+     * held: the hold expires, `OPENED` is first in transition order, and the
+     * three newer failures trip exactly one request.
+     *
+     * The hold's timeout cannot change the verdict: the release is counted by
+     * synchronous work on the driving thread (microseconds), and while the
+     * report is held the driver can only proceed once the supervisor lock is
+     * free — which is the property under test.
+     */
+    @Test
+    fun aHeldBackOpenedReportNeverResetsNewerFailures() {
+        val budget = IrohFailureBudget { clock.now }
+        val reportEntered = CountDownLatch(1)
+        val newerFailures = CountDownLatch(2)
+        val openedApplied = CountDownLatch(1)
+        val factory = BudgetFactory(budget, LinkKind.IROH).also { f ->
+            f.beforeBudget = { outcome ->
+                if (outcome == AttemptOutcome.OPENED) {
+                    reportEntered.countDown()
+                    newerFailures.await(1, TimeUnit.SECONDS)
+                }
+            }
+            f.afterBudget = { outcome ->
+                if (outcome == AttemptOutcome.OPENED) openedApplied.countDown()
+            }
+        }
+        val supervisor = supervisor(factory)
+        supervisor.start()
+
+        // The transport opens on its own thread, as a real one does.
+        val opening = factory.last()
+        val opener = thread(name = "attempt-open") { opening.open() }
+        assertTrue(reportEntered.await(5, TimeUnit.SECONDS))
+
+        // The engine moves the live link to another candidate; the replacement
+        // attempts fail before opening.
+        assertTrue(supervisor.reconnect("connection_mode"))
+        scheduler.advance(scheduler.reconnectDelays.last())
+        factory.last().down("connect_failed")
+        newerFailures.countDown()
+        scheduler.advance(scheduler.reconnectDelays.last())
+        factory.last().down("connect_failed")
+        newerFailures.countDown()
+
+        // Only now may the held-back report of the first attempt land.
+        assertTrue(openedApplied.await(5, TimeUnit.SECONDS))
+        opener.join(5_000)
+
+        // The third consecutive failure of a successor is what trips.
+        scheduler.advance(scheduler.reconnectDelays.last())
+        factory.last().down("connect_failed")
+
+        assertEquals(
+            listOf(
+                AttemptOutcome.OPENED,
+                AttemptOutcome.FAILED_BEFORE_OPEN,
+                AttemptOutcome.FAILED_BEFORE_OPEN,
+                AttemptOutcome.FAILED_BEFORE_OPEN
+            ),
+            factory.outcomes.map { it.first }
+        )
+        assertTrue(budget.pending())
+        assertTrue(budget.consume())
+        assertFalse(budget.consume())
+    }
+
     // ------------------------------------------------------------------
     // Fakes
     // ------------------------------------------------------------------
@@ -727,13 +804,23 @@ class LinkSupervisorTest {
         val outcomes = mutableListOf<Pair<AttemptOutcome, LinkKind?>>()
         var throwCreate = false
 
+        /** Runs inside the report, before the budget sees the outcome: holds one back. */
+        var beforeBudget: ((AttemptOutcome) -> Unit)? = null
+
+        /** Runs inside the report, after the budget saw the outcome. */
+        var afterBudget: ((AttemptOutcome) -> Unit)? = null
+
         private val router = IrohAttemptOutcomes {
             object : DeviceLinkFactory {
                 override fun create(): DeviceLink = error("the router only reports outcomes")
 
                 override fun shutdown() = Unit
 
-                override fun attemptEnded(outcome: AttemptOutcome, kind: LinkKind?) = budget.note(outcome)
+                override fun attemptEnded(outcome: AttemptOutcome, kind: LinkKind?) {
+                    beforeBudget?.invoke(outcome)
+                    budget.note(outcome)
+                    afterBudget?.invoke(outcome)
+                }
             }
         }
 
