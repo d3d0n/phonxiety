@@ -113,6 +113,7 @@ class BridgeService : Service() {
     }
 
     override fun onDestroy() {
+        slot.close()
         val current = engine
         engine = null
         card?.cancel()
@@ -129,7 +130,7 @@ class BridgeService : Service() {
     /** The explicit cancel an ongoing card must have, whatever ended the service (F13). */
     private fun tearDownForeground() {
         foregroundReady = false
-        slot.remove()
+        slot.close()
         stopForeground(Service.STOP_FOREGROUND_REMOVE)
     }
 }

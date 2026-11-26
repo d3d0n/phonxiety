@@ -270,26 +270,42 @@ object Notifications {
 /**
  * One notification surface: a single ID, an update only when the rendered value changed, and the
  * explicit removal an ongoing card must have.  [build] returning null removes the card.
+ *
+ * Posting and [close] take the same lock: a teardown either waits out a post that is already
+ * posting and then removes the card, or closes the slot first and every later post is dropped.
+ * A collector that outlives the service can therefore never recreate the card (F13).
  */
 class NotificationSlot<T>(
     private val manager: NotificationManager?,
     private val id: Int
 ) {
+    private val lock = Any()
+    private var closed = false
+
     fun follow(items: Flow<T>, scope: CoroutineScope, build: (T) -> Notification?): Job = scope.launch {
         items.distinctUntilChanged().collect { item ->
-            val notification = build(item)
-            if (notification == null) {
-                remove()
-            } else {
-                // The system may refuse while the process is being torn down; the service's
-                // lifecycle, not the card, decides whether the link is alive.
-                runCatching { manager?.notify(id, notification) }
-            }
+            // Built outside the lock: a slow builder must not hold the teardown.
+            post(build(item))
         }
     }
 
-    fun remove() {
-        runCatching { manager?.cancel(id) }
+    /** Teardown: removes the card, and no post already building can land after this returns. */
+    fun close() {
+        synchronized(lock) {
+            closed = true
+            runCatching { manager?.cancel(id) }
+        }
+    }
+
+    private fun post(notification: Notification?) {
+        synchronized(lock) {
+            if (closed) return
+            // The system may refuse while the process is being torn down; the service's
+            // lifecycle, not the card, decides whether the link is alive.
+            runCatching {
+                if (notification == null) manager?.cancel(id) else manager?.notify(id, notification)
+            }
+        }
     }
 }
 

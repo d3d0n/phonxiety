@@ -19,7 +19,8 @@ import kotlinx.coroutines.launch
  * There is no second way to end a call from the app.
  */
 class NotificationActions(
-    private val endCall: suspend (Context) -> Unit = CallEnd::hangUp
+    private val scope: CoroutineScope = WorkScope,
+    private val endCall: suspend (Context) -> Unit = { CallEnd.hangUp(it) }
 ) : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Notifications.ACTION_HANG_UP) return
@@ -44,6 +45,6 @@ class NotificationActions(
         const val TAG = "PhonxietyNotify"
 
         /** The work outlives [onReceive]; [goAsync] gives it the broadcast's grace window. */
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val WorkScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     }
 }

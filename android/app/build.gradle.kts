@@ -191,4 +191,8 @@ dependencies {
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.junit)
+    // The entry-point tests render the real activity and read the destination it drew.
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    // The hang-up tests speak the daemon's outcome type through CallEnd's seam.
+    testImplementation(project(":core:data"))
 }

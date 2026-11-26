@@ -53,10 +53,10 @@ class BridgeInCallService : InCallService() {
         if (BridgeRuntime.inCallService === this) {
             BridgeRuntime.inCallService = null
         }
+        slot.close()
         card?.cancel()
         card = null
         scope.cancel()
-        slot.remove()
         runCatching { stopForeground(Service.STOP_FOREGROUND_REMOVE) }
         super.onDestroy()
     }

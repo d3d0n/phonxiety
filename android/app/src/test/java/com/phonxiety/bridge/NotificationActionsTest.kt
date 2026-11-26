@@ -4,12 +4,21 @@ import android.app.Application
 import android.content.Context
 import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
+import com.phonxiety.bridge.data.ApiOutcome
+import com.phonxiety.bridge.feature.widgets.CallEnd
 import com.phonxiety.bridge.model.CallPhase
 import com.phonxiety.bridge.model.CallState
 import java.io.IOException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.job
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -24,8 +33,8 @@ import org.robolectric.annotation.Config
  * receiver does when the hang-up work fails.
  *
  * The Telecom half of `CallEnd` (`Call.disconnect()`) cannot run on the JVM — `android.telecom.Call`
- * is final and has no public constructor, so no test can hand it a call to disconnect. These tests
- * cover the receiver's own contract; the disconnect itself belongs to the device pass.
+ * is final and has no public constructor — so the enders are the seams: the tests prove the daemon
+ * failure is contained, the receiver completes, and the Telecom fallback is the one attempted.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -56,17 +65,92 @@ class NotificationActionsTest {
     }
 
     @Test
-    fun aDaemonFailureDoesNotEscapeTheReceiver() {
-        val ran = CountDownLatch(1)
-        val receiver = NotificationActions {
-            ran.countDown()
-            throw IOException("the daemon did not answer")
-        }
+    fun aThrowingDaemonStillFallsBackToTelecomThroughTheReceiverAndFinishes() {
+        val scheduler = TestCoroutineScheduler()
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(scheduler))
+        val telecom = AtomicInteger(0)
 
-        // The broadcast returns first; the work runs on the receiver's own scope and is contained.
+        val receiver = NotificationActions(
+            endCall = { appContext ->
+                CallEnd.hangUp(
+                    appContext,
+                    callId = "call-1",
+                    daemon = { throw IOException("the daemon did not answer") },
+                    telecom = { telecom.incrementAndGet() }
+                )
+            },
+            scope = scope
+        )
+
         receiver.onReceive(context, hangUp)
+        scheduler.advanceUntilIdle()
 
-        assertTrue("the hang-up did not run", ran.await(5, TimeUnit.SECONDS))
+        assertEquals("the Telecom fallback was not attempted", 1, telecom.get())
+        assertTrue(
+            "the receiver left work running",
+            scope.coroutineContext.job.children.none { it.isActive }
+        )
+    }
+
+    @Test
+    fun aDaemonAnswerEndsTheCallWithoutTouchingTelecom() = runTest {
+        val telecom = AtomicInteger(0)
+
+        CallEnd.hangUp(
+            context,
+            callId = "call-1",
+            daemon = { ApiOutcome.Ok(200, Unit) },
+            telecom = { telecom.incrementAndGet() }
+        )
+
+        assertEquals(0, telecom.get())
+    }
+
+    @Test
+    fun aThrowingDaemonFallsBackToTelecom() = runTest {
+        val telecom = AtomicInteger(0)
+
+        CallEnd.hangUp(
+            context,
+            callId = "call-1",
+            daemon = { throw IOException("the daemon did not answer") },
+            telecom = { telecom.incrementAndGet() }
+        )
+
+        assertEquals(1, telecom.get())
+    }
+
+    @Test
+    fun aDaemonFailureOutcomeFallsBackToTelecom() = runTest {
+        val telecom = AtomicInteger(0)
+
+        CallEnd.hangUp(
+            context,
+            callId = "call-1",
+            daemon = { ApiOutcome.Failure(500, "daemon_error", "no") },
+            telecom = { telecom.incrementAndGet() }
+        )
+
+        assertEquals(1, telecom.get())
+    }
+
+    @Test
+    fun withNoCallThereIsNothingTheDaemonCouldEndSoTelecomIsUsed() = runTest {
+        val telecom = AtomicInteger(0)
+        val daemon = AtomicInteger(0)
+
+        CallEnd.hangUp(
+            context,
+            callId = null,
+            daemon = {
+                daemon.incrementAndGet()
+                ApiOutcome.Ok(200, Unit)
+            },
+            telecom = { telecom.incrementAndGet() }
+        )
+
+        assertEquals(0, daemon.get())
+        assertEquals(1, telecom.get())
     }
 
     @Test

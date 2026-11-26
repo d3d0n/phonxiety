@@ -12,6 +12,7 @@ import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.components.SingletonComponent
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.withTimeoutOrNull
 
 /** The Hilt graph the surfaces reach without an activity: the typed daemon client. */
@@ -44,14 +45,32 @@ object WidgetStateStore {
 /**
  * Ends the running call: the daemon's own `hangup` when the app API answers, and the Telecom call
  * the engine supervises when it does not. Either way the engine reports the end through the state.
+ *
+ * [callId], [daemon] and [telecom] are the seams the Hang up receiver's tests use to prove that a
+ * throwing daemon still falls through to Telecom; the app calls it with the live ones.
  */
 object CallEnd {
-    suspend fun hangUp(context: Context) {
-        val callId = BridgeRuntime.state.value.call?.callId
+    suspend fun hangUp(
+        context: Context,
+        callId: String? = BridgeRuntime.state.value.call?.callId,
+        daemon: suspend () -> ApiOutcome<*>? = { callId?.let { id -> daemonApiOrNull(context)?.hangup(id) } },
+        telecom: suspend () -> Unit = ::disconnectSupervised
+    ) {
         if (callId != null) {
-            val outcome = withTimeoutOrNull(HANGUP_TIMEOUT_MS) { daemonApiOrNull(context)?.hangup(callId) }
+            val outcome = try {
+                withTimeoutOrNull(HANGUP_TIMEOUT_MS) { daemon() }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // The daemon's end failed; the call Telecom owns is still there to end.
+                null
+            }
             if (outcome is ApiOutcome.Ok) return
         }
+        telecom()
+    }
+
+    private suspend fun disconnectSupervised() {
         BridgeRuntime.currentCalls().forEach { call ->
             runCatching { call.disconnect() }
         }

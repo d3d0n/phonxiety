@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
 import androidx.navigation3.runtime.NavBackStack
@@ -150,7 +151,9 @@ fun PhonxietyNavigationHost(
     ) {
         NavDisplay(
             backStack = backStack,
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .testTag(destinationTag(backStack.lastOrNull())),
             onBack = onBack,
             entryDecorators = listOf(
                 rememberSaveableStateHolderNavEntryDecorator(),
@@ -248,6 +251,12 @@ private fun navigationSuiteType(): NavigationSuiteType {
     val wide = width.value >= WIDE_DP || width >= height
     return if (wide) NavigationSuiteType.NavigationRail else NavigationSuiteType.NavigationBar
 }
+
+/**
+ * The destination the host is drawing. The entry-point tests assert this tag on the rendered host
+ * instead of rebuilding a back stack of their own.
+ */
+internal fun destinationTag(key: NavKey?): String = "phonxiety:screen:${key ?: "none"}"
 
 /** The one place an [AppSignal] becomes a screen, shared by a cold start and `onNewIntent`. */
 internal fun MutableList<NavKey>.openSignal(signal: AppSignal) {

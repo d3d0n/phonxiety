@@ -263,8 +263,29 @@ class NotificationCardsTest {
         assertEquals("Call in progress", shadowOf(manager).getNotification(Notifications.CALL_ID).title())
         assertEquals(1, shadowOf(manager).allNotifications.size)
 
-        slot.remove()
+        slot.close()
         assertNull(shadowOf(manager).getNotification(Notifications.CALL_ID))
+    }
+
+    @Test
+    fun aPostThatWasBuildingWhenTeardownRanNeverLandsAfterTheRemoval() {
+        val slot = NotificationSlot<Int>(manager, Notifications.CALL_ID)
+        val building = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+
+        val job = slot.follow(kotlinx.coroutines.flow.flowOf(0), CoroutineScope(Dispatchers.Default)) {
+            building.countDown()
+            assertTrue("the test never released the post", release.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            Notifications.call(context, call(CallPhase.ACTIVE))
+        }
+
+        assertTrue("the post never started", building.await(5, java.util.concurrent.TimeUnit.SECONDS))
+        // Exactly what both services do in onDestroy, with the post still in flight.
+        slot.close()
+        release.countDown()
+        kotlinx.coroutines.runBlocking { job.join() }
+
+        assertNull("a post that outlived teardown recreated the card", shadowOf(manager).getNotification(Notifications.CALL_ID))
     }
 
     @Test
