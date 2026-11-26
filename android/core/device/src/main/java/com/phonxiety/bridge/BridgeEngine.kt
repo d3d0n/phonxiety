@@ -2287,33 +2287,38 @@ class BridgeEngine(
         // Telecom's connect time is the base the system's call chip uses; the store records it
         // once, so the live screen can count the conversation whenever it opens.
         val connectTimeMillis = call.call?.let(::detailsOf)?.connectTimeMillis?.takeIf { it > 0 }
-        var repeat = false
+        var decided: StateReportDispatch.Plan? = null
         synchronized(lock) {
             if (call.finished && state != "ended") return
             call.state = state
-            if (call.reportedState == state) {
-                if (state != "ended") {
-                    // The wire already has this phase, but the store may still lack the answer:
-                    // a call restored from the ledger is adopted here, and this is the first
-                    // moment Telecom's own connect time exists. The store keeps a stamp it has,
-                    // so replaying costs nothing.
-                    repeat = true
-                } else {
-                    if (causeKey == null) return
-                    if (call.reportedCauseKey == causeKey) return
-                }
-            } else {
+            val plan = StateReportDispatch.plan(
+                prevState = call.reportedState,
+                prevCauseKey = call.reportedCauseKey,
+                state = state,
+                causeKey = causeKey
+            ) ?: return
+            decided = plan
+            if (plan.recordState) {
                 call.reportedState = state
-                call.reportedCauseKey = causeKey
                 try {
                     ledger.markState(call.callId, state)
                 } catch (e: CallLedgerException) {
                     BridgeLog.e(TAG, "call state not durable: ${e.message}")
                 }
             }
+            if (plan.recordCauseKey) call.reportedCauseKey = causeKey
         }
-        if (!repeat) send(DeviceOutbound.CallState(call.callId, state, cause))
-        stateStore.callPhase(callPhaseOf(state), connectTimeMillis = connectTimeMillis)
+        val plan = decided ?: return
+        if (plan.send) send(DeviceOutbound.CallState(call.callId, state, cause))
+        // The wire already has a repeated phase, but the store may still lack the answer: a
+        // call restored from the ledger is adopted here, and this is the first moment Telecom's
+        // own connect time exists. A replay keeps the stamp the store has and never mines one
+        // from the engine's clock at adoption time.
+        if (plan.replay) {
+            stateStore.callPhaseReplayed(callPhaseOf(state), connectTimeMillis = connectTimeMillis)
+        } else {
+            stateStore.callPhase(callPhaseOf(state), connectTimeMillis = connectTimeMillis)
+        }
     }
 
     private fun replyOk(id: String, data: JsonObject? = null) {
@@ -2528,6 +2533,44 @@ class BridgeEngine(
     )
 
     private class CommandException(val code: String) : Exception(code)
+}
+
+/**
+ * What one call-state report does to the wire and to the store.  Kept apart from the engine so
+ * the replay rules can be exercised without a phone: a repeated phase never goes on the wire
+ * unasked, and it reaches the store as a replay, which never stamps a connect time from the
+ * engine's own clock.
+ */
+internal object StateReportDispatch {
+    /**
+     * [send] repeats the state on the wire, [recordState] makes it durable in the ledger,
+     * [recordCauseKey] remembers the report's cause for dedup, and [replay] tells the store this is
+     * not a new phase transition.
+     */
+    internal class Plan(
+        val send: Boolean,
+        val replay: Boolean,
+        val recordState: Boolean,
+        val recordCauseKey: Boolean
+    )
+
+    /**
+     * Null means there is nothing to do: the wire and the ledger already hold this report.  A new
+     * state is sent once and recorded; a repeated phase is only replayed into the store, except
+     * that an ended call reports again when it gains a different disconnect cause, so the
+     * late cause still reaches the daemon.  That cause is remembered, which keeps the next
+     * identical report quiet.
+     */
+    fun plan(prevState: String?, prevCauseKey: String?, state: String, causeKey: String?): Plan? {
+        if (prevState != state) {
+            return Plan(send = true, replay = false, recordState = true, recordCauseKey = true)
+        }
+        if (state != "ended") {
+            return Plan(send = false, replay = true, recordState = false, recordCauseKey = false)
+        }
+        if (causeKey == null || causeKey == prevCauseKey) return null
+        return Plan(send = true, replay = true, recordState = false, recordCauseKey = true)
+    }
 }
 
 /**
