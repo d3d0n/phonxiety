@@ -191,9 +191,14 @@ class DoctorEvaluatorTest {
     @Test
     fun theBackgroundStartGrantFailsWithItsTitleAndReinstallsTheModule() {
         val missing = PrivilegedPermissions.START_FOREGROUND_SERVICES_FROM_BACKGROUND
+        // The app update runs from /data over the module's older system copy, which lacks the grant.
         val rows = TestData.rows(
             snapshot = TestData.snapshot(
-                facts = TestData.facts(granted = PrivilegedPermissions.ALL - missing, updated = true)
+                facts = TestData.facts(
+                    apkPath = "/data/app/~~updated/com.phonxiety.bridge/base.apk",
+                    granted = PrivilegedPermissions.ALL - missing,
+                    updated = true
+                )
             )
         )
 

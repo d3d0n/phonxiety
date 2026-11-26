@@ -45,10 +45,12 @@ class ModuleArchiveCaptureTest {
     }
 
     /**
-     * The transition this card introduces: the app has already updated and asks for a grant the
-     * running module does not have, so the module install has to replace the overlay. The generation
-     * kept before that install is the payload that runs now — its mounted APK and its own copy of
-     * the allowlist — recorded with its identity, never a rebuild from the newer running app.
+     * An app that has already updated asks for a grant the mounted module lacks, so the module
+     * install replaces the overlay. The generation kept before that install holds exactly the bytes
+     * it was built from — the mounted APK and the allowlist it was given — recorded with their
+     * identity, never rebuilt later from the newer running app. Production builds the generation
+     * from the mounted APK and the running app's assets, so its allowlist may already be the newer
+     * one; extra allowlist entries are harmless.
      */
     @Test
     fun `a generation captured before the module update keeps its own apk and allowlist`() = runTest {

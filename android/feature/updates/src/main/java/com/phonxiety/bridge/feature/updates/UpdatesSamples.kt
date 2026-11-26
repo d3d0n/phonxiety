@@ -232,8 +232,8 @@ object UpdatesSamples {
     )
 
     fun rollbackCompleted(): UpdatesUiState = upToDate().copy(
-        // After a completed rollback the phone runs the kept version, so there is nothing left to
-        // offer: that is the device bug this card must not reproduce.
+        // After a completed rollback the phone runs the kept version, so the rollback section has
+        // nothing left to offer; offering to reinstall the previous app here was a bug seen on the phone.
         rollbackPlan = RollbackPlan.Unavailable(
             blocker = RollbackBlocker.APP_NOT_NEWER,
             keptVersionName = "0.3.0",
