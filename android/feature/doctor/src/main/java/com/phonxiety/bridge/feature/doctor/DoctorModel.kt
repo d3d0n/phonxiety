@@ -117,33 +117,62 @@ data class DoctorRow(
  * reads "Reason unavailable": a number in prose tells the reader nothing.
  */
 @StringRes
-fun exitReasonLabel(reason: String?): Int {
+fun exitReasonLabel(reason: String?): Int = when (exitReasonName(reason)) {
+    "anr" -> R.string.doctor_exit_not_responding
+
+    "crash" -> R.string.doctor_exit_crashed
+
+    "crash_native" -> R.string.doctor_exit_crashed_native
+
+    "low_memory" -> R.string.doctor_exit_memory
+
+    "signaled" -> R.string.doctor_exit_signaled
+
+    "exit_self" -> R.string.doctor_exit_self
+
+    "initialization_failure" -> R.string.doctor_exit_startup
+
+    "permission_change" -> R.string.doctor_exit_permission
+
+    "excessive_resource_usage" -> R.string.doctor_exit_resources
+
+    "user_requested" -> R.string.doctor_exit_user
+
+    "user_stopped" -> R.string.doctor_exit_user_stopped
+
+    "dependency_died" -> R.string.doctor_exit_dependency
+
+    "freezer" -> R.string.doctor_exit_frozen
+
+    "package_state_change" -> R.string.doctor_exit_package
+
+    "package_updated" -> R.string.doctor_exit_updated
+
+    // REASON_UNKNOWN and REASON_OTHER name no cause, and so does a value newer than this build.
+    else -> R.string.doctor_exit_unavailable
+}
+
+/** The recorder's name for a death, or the SDK's name for a numeric `reason_<n>`, or null. */
+private fun exitReasonName(reason: String?): String? {
     val key = reason?.trim()?.lowercase().orEmpty()
-    val code = key.takeIf { it.startsWith("reason_") }?.removePrefix("reason_")?.toIntOrNull()
-    return when {
-        key == "anr" || code == ApplicationExitInfo.REASON_ANR -> R.string.doctor_exit_not_responding
-        key == "crash" || code == ApplicationExitInfo.REASON_CRASH -> R.string.doctor_exit_crashed
-        key == "crash_native" || code == ApplicationExitInfo.REASON_CRASH_NATIVE -> R.string.doctor_exit_crashed_native
-        key == "low_memory" || code == ApplicationExitInfo.REASON_LOW_MEMORY -> R.string.doctor_exit_memory
-        key == "signaled" || code == ApplicationExitInfo.REASON_SIGNALED -> R.string.doctor_exit_signaled
-        key == "exit_self" || code == ApplicationExitInfo.REASON_EXIT_SELF -> R.string.doctor_exit_self
-        key == "initialization_failure" || code == ApplicationExitInfo.REASON_INITIALIZATION_FAILURE ->
-            R.string.doctor_exit_startup
-        key == "permission_change" || code == ApplicationExitInfo.REASON_PERMISSION_CHANGE ->
-            R.string.doctor_exit_permission
-        key == "excessive_resource_usage" || code == ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE ->
-            R.string.doctor_exit_resources
-        key == "user_requested" || code == ApplicationExitInfo.REASON_USER_REQUESTED -> R.string.doctor_exit_user
-        key == "user_stopped" || code == ApplicationExitInfo.REASON_USER_STOPPED ->
-            R.string.doctor_exit_user_stopped
-        key == "dependency_died" || code == ApplicationExitInfo.REASON_DEPENDENCY_DIED ->
-            R.string.doctor_exit_dependency
-        key == "freezer" || code == ApplicationExitInfo.REASON_FREEZER -> R.string.doctor_exit_frozen
-        key == "package_state_change" || code == ApplicationExitInfo.REASON_PACKAGE_STATE_CHANGE ->
-            R.string.doctor_exit_package
-        key == "package_updated" || code == ApplicationExitInfo.REASON_PACKAGE_UPDATED -> R.string.doctor_exit_updated
-        // REASON_UNKNOWN and REASON_OTHER name no cause, and so does a value newer than this build.
-        else -> R.string.doctor_exit_unavailable
+    if (!key.startsWith("reason_")) return key.ifEmpty { null }
+    return when (key.removePrefix("reason_").toIntOrNull()) {
+        ApplicationExitInfo.REASON_EXIT_SELF -> "exit_self"
+        ApplicationExitInfo.REASON_SIGNALED -> "signaled"
+        ApplicationExitInfo.REASON_LOW_MEMORY -> "low_memory"
+        ApplicationExitInfo.REASON_CRASH -> "crash"
+        ApplicationExitInfo.REASON_CRASH_NATIVE -> "crash_native"
+        ApplicationExitInfo.REASON_ANR -> "anr"
+        ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> "initialization_failure"
+        ApplicationExitInfo.REASON_PERMISSION_CHANGE -> "permission_change"
+        ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> "excessive_resource_usage"
+        ApplicationExitInfo.REASON_USER_REQUESTED -> "user_requested"
+        ApplicationExitInfo.REASON_USER_STOPPED -> "user_stopped"
+        ApplicationExitInfo.REASON_DEPENDENCY_DIED -> "dependency_died"
+        ApplicationExitInfo.REASON_FREEZER -> "freezer"
+        ApplicationExitInfo.REASON_PACKAGE_STATE_CHANGE -> "package_state_change"
+        ApplicationExitInfo.REASON_PACKAGE_UPDATED -> "package_updated"
+        else -> null
     }
 }
 

@@ -406,7 +406,9 @@ object DoctorEvaluator {
         // Details, in monospace, not in the sentence.
         val details = when (link) {
             is LinkState.Up -> listOfNotNull(link.address?.let(UiText::Literal))
+
             is LinkState.Connecting -> emptyList()
+
             LinkState.Offline -> listOfNotNull(
                 bridge.lastError?.let { UiText.Literal("${it.code}: ${it.message}") }
             )
@@ -439,8 +441,11 @@ object DoctorEvaluator {
                     add(
                         when (status) {
                             "ok" -> UiText.Res(R.string.doctor_evidence_daemon_status_clear)
+
                             "warn" -> UiText.Res(R.string.doctor_evidence_daemon_status_warnings)
+
                             "fail" -> UiText.Res(R.string.doctor_evidence_daemon_status_failures)
+
                             // A status this build does not know is the daemon's word, not ours.
                             else -> UiText.Res(R.string.doctor_evidence_daemon_status_unknown)
                         }

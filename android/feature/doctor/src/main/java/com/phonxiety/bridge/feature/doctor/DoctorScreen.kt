@@ -909,8 +909,10 @@ private fun OverallPill(state: DoctorUiState) {
 private fun ClassPill(risk: FixClass) {
     val (label, tone) = when (risk) {
         FixClass.AUTOMATIC -> R.string.doctor_risk_automatic to StatusTone.NEUTRAL
+
         // Asking first is how a careful fix behaves, not a warning: the tone says so.
         FixClass.CONFIRM -> R.string.doctor_risk_confirm to StatusTone.NEUTRAL
+
         FixClass.NEVER -> R.string.doctor_risk_never to StatusTone.NEGATIVE
     }
     StatusPill(label = stringResource(label), tone = tone)
