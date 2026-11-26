@@ -1,0 +1,24 @@
+One-button setup from scratch on Magisk 31.1, Pixel 6a (Android 17), app 041d1ed, daemon 383f3df, 2026-11-26
+
+Clean slate (adb, root):
+  06:45:23  touch /data/adb/modules/phonxiety_bridge/remove; pm clear; adb uninstall; reboot
+  06:45:44  booted: `pm path com.phonxiety.bridge` empty, module gone, no /data/user_de/0/com.phonxiety.bridge
+
+Wizard:
+  06:46:11  adb install app-release.apk, open the app
+            Detect root: Magisk 31.1 (31100) - "Root is not granted yet" (Magisk 31.1 has no su prompt)
+            Open Magisk -> Superuser -> Grant Superuser -> Phonxiety enabled (06:46:54)
+            back in the app: "Ready to install" lists module phonxiety_bridge, provider, 5 privileged
+            grants (CAPTURE_AUDIO_OUTPUT, MODIFY_PHONE_STATE, CONTROL_INCALL_EXPERIENCE,
+            INSTALL_SELF_UPDATES, REBOOT) and the reboot that follows
+  06:47:20  Install module -> "Reboot pending: One reboot, then everything else is automatic."
+  06:47:43  Reboot now
+  06:48:10  sys.boot_completed (27 s after the tap); module present, app runs from
+            /system/priv-app/phonxiety-bridge, CAPTURE_AUDIO_OUTPUT granted=true
+  06:48:10  `mise run phone:pair -- --serial <phone>` (pairing without the camera: grants the
+            runtime permissions, writes the device-protected config, restarts the bridge)
+  06:48:19  `phonxiety status`: phone connected via iroh, direct, 23 ms; calling ready, opus audio
+            => 9 s from sys.boot_completed to connected (budget 120 s)
+  06:48:3x  the wizard resumed by itself: first link test (5 s), then the dashboard, link direct, RTT 7 ms
+
+User actions: grant root in Magisk (one toggle), Install module, Reboot now, pairing.
