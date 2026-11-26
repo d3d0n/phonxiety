@@ -426,6 +426,61 @@ class LiveCallViewModelTest {
         assertEquals("hangup_unconfirmed: the phone did not answer", state.statusUnknownError)
     }
 
+    /**
+     * The header counts the conversation, not the ring: the phone's own ACTIVE is the connect time
+     * until the record carries `connected_at`, and the record's time then replaces it.
+     */
+    @Test
+    fun theTimerCountsFromTheConnectThePhoneSaw() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        val placedAt = (System.currentTimeMillis() - 600_000) / 1_000.0
+        api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "preparing", createdAt = placedAt, connectedAt = null))
+        val bridge = FakeBridgeState()
+        val viewModel = LiveCallViewModel(api, bridge)
+        viewModel.bind(CALL_ID)
+        runCurrent()
+
+        assertNull("the record has no connect time yet", viewModel.state.value.connectedAtMs)
+        assertTrue(
+            "before the line is up the header counts from placement",
+            viewModel.state.value.callSecondsElapsed!! >= 599
+        )
+
+        // The phone reports the line active before the record's connect time arrives.
+        bridge.emit(BridgeState(call = CallState(CALL_ID, "+998 ·· 67", CallPhase.ACTIVE, 1_000)))
+        runCurrent()
+        assertNotNull(
+            "the phone's own ACTIVE becomes the connect time",
+            viewModel.state.value.phoneConnectedAtMs
+        )
+        assertTrue(
+            "the header counts the conversation from that moment",
+            viewModel.state.value.callSecondsElapsed!! < 5
+        )
+
+        // The daemon's connected_at replaces it: a minute on the line, not ten minutes of ring.
+        val connectedAt = (System.currentTimeMillis() - 60_000) / 1_000.0
+        api.callSnapshot = ApiOutcome.Ok(
+            200,
+            snapshot(state = "active", createdAt = placedAt, connectedAt = connectedAt)
+        )
+        viewModel.reload()
+        runCurrent()
+        assertEquals((connectedAt * 1_000).toLong(), viewModel.state.value.connectedAtMs)
+        assertEquals(60L, viewModel.state.value.callSecondsElapsed)
+
+        // The end keeps the connected duration on the header.
+        api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(endedEvent(1))))
+        advanceUntilIdle()
+        val ended = viewModel.state.value
+        assertTrue(ended.ended)
+        assertEquals(
+            "the ended header is the connected duration",
+            (ended.endedAtMs!! - ended.connectedAtMs!!) / 1_000,
+            ended.callSecondsElapsed
+        )
+    }
+
     private fun viewModel(api: FakeDaemonApi): LiveCallViewModel = LiveCallViewModel(api, FakeBridgeState())
 
     private companion object {
@@ -450,7 +505,9 @@ fun snapshot(
     resultStatus: String? = null,
     summary: String? = null,
     fields: Map<String, String> = emptyMap(),
-    transcript: List<TranscriptTurn> = emptyList()
+    transcript: List<TranscriptTurn> = emptyList(),
+    createdAt: Double = 1_764_000_000.0,
+    connectedAt: Double? = 1_764_000_005.0
 ): CallSnapshot = CallSnapshot(
     callId = "call-2026-11-26",
     destination = "+998901234567",
@@ -460,8 +517,8 @@ fun snapshot(
     resultStatus = resultStatus,
     summary = summary,
     fields = JsonObject(fields.mapValues { (_, value) -> kotlinx.serialization.json.JsonPrimitive(value) }),
-    createdAt = 1_764_000_000.0,
-    connectedAt = 1_764_000_005.0,
+    createdAt = createdAt,
+    connectedAt = connectedAt,
     endedAt = if (state == "ended") 1_764_000_065.0 else null,
     transcript = transcript,
     request = JsonObject(emptyMap())

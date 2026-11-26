@@ -178,6 +178,30 @@ class LiveCallScreenshotTest {
     @Test
     fun theEndedCallWithItsResult() = render("ended_411_light") { setScreen(state = LiveCallSamples.ended) }
 
+    /**
+     * The jump control follows the call: a live call jumps to the newest line, and a recorded end
+     * jumps to its last one, because nothing on that screen is live any more.
+     */
+    @Test
+    fun aLiveCallJumpsToTheNewestLine() {
+        // At 200 % the transcript overflows its viewport, so it scrolls like a long conversation
+        // does; at 411 dp the sample call fits and there is nothing to jump to.
+        setScreen(fontScale = 2f, width = 320.dp)
+        scrollTranscriptTo("Transcript")
+        composeRule.onNodeWithText("Jump to live").assertExists()
+        composeRule.onNodeWithText("Jump to the end").assertDoesNotExist()
+    }
+
+    @Test
+    fun anEndedCallJumpsToItsLastLine() = render(
+        "ended_scrolled_411_light",
+        beforeCapture = {
+            scrollTranscriptTo("Transcript")
+            composeRule.onNodeWithText("Jump to the end").assertExists()
+            composeRule.onNodeWithText("Jump to live").assertDoesNotExist()
+        }
+    ) { setScreen(state = LiveCallSamples.ended) }
+
     @Test
     fun anEndedCallNeverFoldsItsResultAway() {
         setScreen(state = LiveCallSamples.ended)
@@ -278,6 +302,17 @@ class LiveCallScreenshotTest {
         composeRule.onNodeWithText("Preparing").assertExists()
         composeRule.onNodeWithText("Waiting for the first turn").assertExists()
         composeRule.onNodeWithText("Agent listening").assertDoesNotExist()
+    }
+
+    /** The first words are on screen while they are spoken: a turn in progress, not a wait. */
+    @Test
+    fun theFirstPartialTurnIsInProgress() = render("first_turn_411_light") {
+        setScreen(
+            state = LiveCallSamples.live.copy(
+                turns = emptyList(),
+                partials = listOf(PartialTurn("assistant", "Good evening, I would like to book", null))
+            )
+        )
     }
 
     @Test
