@@ -1,7 +1,7 @@
 id=phonxiety_bridge
 name=Phonxiety
-version=0.4.0
-versionCode=4
+version=0.4.1
+versionCode=5
 author=phonxiety
 description=Privileged Android Telecom/audio companion for the phonxiety daemon. No boot scripts, no helper binaries, no default-dialer replacement.
 updateJson=__PHONXIETY_UPDATE_JSON__
