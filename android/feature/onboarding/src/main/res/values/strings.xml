@@ -1,0 +1,267 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The setup wizard. One concept, one word: "metamodule" is the overlay a root manager loads
+         modules through, and "the module" always means Phonxiety's own module. -->
+
+    <string name="onboarding_title">Set up Phonxiety</string>
+    <string name="onboarding_intro">Grant root once, reboot when asked, then pair with your computer.</string>
+    <string name="onboarding_privacy_footer">No cloud, no analytics. Call audio goes between this phone and your computer.</string>
+
+    <!-- The six-step plan, collapsed to one line by default. -->
+    <string name="onboarding_steps_summary">Step %1$d of %2$d · %3$s</string>
+    <plurals name="onboarding_steps_done">
+        <item quantity="one">All %1$d step done</item>
+        <item quantity="other">All %1$d steps done</item>
+    </plurals>
+    <string name="onboarding_steps_show">Show steps</string>
+    <string name="onboarding_steps_hide">Hide steps</string>
+    <string name="onboarding_step_root">Root access</string>
+    <string name="onboarding_step_metamodule">Metamodule</string>
+    <string name="onboarding_step_module">Module</string>
+    <string name="onboarding_step_reboot">Reboot</string>
+    <string name="onboarding_step_permissions">Permissions</string>
+    <string name="onboarding_step_pairing">Pairing</string>
+    <string name="onboarding_step_link_test">Link test</string>
+    <string name="onboarding_step_installed">Installed</string>
+    <string name="onboarding_step_overlay_staged">Overlay staged</string>
+    <string name="onboarding_step_paired">Paired</string>
+    <string name="onboarding_step_failed">Failed</string>
+    <string name="onboarding_step_two_managers">Two root managers</string>
+
+    <!-- Card titles. -->
+    <string name="onboarding_card_checking">Checking this phone</string>
+    <string name="onboarding_card_no_root">No root on this phone</string>
+    <string name="onboarding_card_root_denied">Root is not granted yet</string>
+    <string name="onboarding_card_provider_prep">The root manager needs a metamodule</string>
+    <string name="onboarding_card_ready_to_install">Ready to install</string>
+    <string name="onboarding_card_ready_to_update">Ready to update</string>
+    <string name="onboarding_card_installing">Install in progress</string>
+    <string name="onboarding_card_install_failed">The install stopped</string>
+    <string name="onboarding_card_reboot_pending">Reboot needed</string>
+    <string name="onboarding_card_verify">Checking after the reboot</string>
+    <string name="onboarding_card_needs_runtime">Permissions to grant</string>
+    <string name="onboarding_card_needs_pairing">Pair with your computer</string>
+    <string name="onboarding_card_first_link_test">Testing the link</string>
+    <string name="onboarding_card_ready">Setup complete</string>
+    <string name="onboarding_card_doctor">Setup stopped</string>
+    <string name="onboarding_card_indeterminate">The check did not finish</string>
+    <string name="onboarding_card_conflict">Two root managers</string>
+
+    <!-- Status pills. Every pill reads as a state, never as an action. -->
+    <string name="onboarding_pill_checking">Checking</string>
+    <string name="onboarding_pill_no_root">No root</string>
+    <string name="onboarding_pill_root_denied">Not granted</string>
+    <string name="onboarding_pill_provider_prep">Needs metamodule</string>
+    <string name="onboarding_pill_ready">Ready</string>
+    <string name="onboarding_pill_installing">Installing</string>
+    <string name="onboarding_pill_failed">Failed</string>
+    <string name="onboarding_pill_reboot_needed">Reboot needed</string>
+    <string name="onboarding_pill_verified">Verified</string>
+    <string name="onboarding_pill_not_paired">Not paired</string>
+    <string name="onboarding_pill_testing">Testing</string>
+    <string name="onboarding_pill_doctor">Needs repair</string>
+    <string name="onboarding_pill_unknown">Unknown</string>
+    <string name="onboarding_pill_conflict">Conflict</string>
+    <plurals name="onboarding_pill_permissions">
+        <item quantity="one">%1$d permission to grant</item>
+        <item quantity="other">%1$d permissions to grant</item>
+    </plurals>
+
+    <!-- Checking. -->
+    <string name="onboarding_checking_body">Reading root access, the module and the permissions.</string>
+
+    <!-- No root: the manager guides. -->
+    <string name="onboarding_no_root_body">This phone does not have root. Phonxiety still runs and shows diagnostics; installing the module needs one of these root managers.</string>
+    <string name="onboarding_guide_magisk">Open the Magisk install guide</string>
+    <string name="onboarding_guide_kernelsu">Open the KernelSU install guide</string>
+    <string name="onboarding_guide_kernelsu_next">Open the KernelSU-Next guide</string>
+    <string name="onboarding_guide_apatch">Open the APatch install guide</string>
+
+    <!-- Root granted but the manager is waiting for a grant. -->
+    <string name="onboarding_grant_title">Grant root in %1$s</string>
+    <string name="onboarding_grant_title_any">Grant root access</string>
+    <string name="onboarding_grant_any_manager">Open the root manager\'s Superuser list, grant Phonxiety, then come back.</string>
+    <string name="onboarding_grant_line">%1$s: %2$s</string>
+    <string name="onboarding_grant_resume_note">The check runs again when you come back. Once root works, setup continues.</string>
+    <string name="onboarding_grant_magisk">Open Magisk, tap Superuser, tap +, then choose Phonxiety and enable it. Magisk adds the grant itself; there is no prompt to answer.</string>
+    <string name="onboarding_grant_kernelsu">Open KernelSU, tap Superuser, then open Phonxiety and turn on the Superuser switch. If Phonxiety is missing, force-close the manager and open it again: it caches its app list.</string>
+    <string name="onboarding_grant_kernelsu_next">Open KernelSU-Next, tap Superuser, then open Phonxiety and turn on the Superuser switch. If Phonxiety is missing, force-close the manager and open it again: it caches its app list.</string>
+    <string name="onboarding_grant_apatch">Open APatch, tap Superuser, then open Phonxiety and allow it. If Phonxiety is missing, force-close the manager and open it again: it caches its app list.</string>
+
+    <!-- Provider needs the metamodule first. -->
+    <string name="onboarding_prep_body">%1$s loads modules through a metamodule: a small overlay that mounts system files at boot. Without it, the Phonxiety module installs but never takes effect.</string>
+    <string name="onboarding_prep_install">Install it here. The phone downloads meta-overlayfs %1$s, checks its SHA-256 and installs it. It activates on the next boot; Phonxiety installs after that boot.</string>
+
+    <!-- Ready to install / update. -->
+    <string name="onboarding_changes_heading">Changes to this phone</string>
+    <string name="onboarding_row_module">Module</string>
+    <string name="onboarding_row_provider">Root manager</string>
+    <string name="onboarding_row_reboot_access">Reboot access</string>
+    <string name="onboarding_grant_audio_capture">Audio capture</string>
+    <string name="onboarding_grant_call_state">Call state</string>
+    <string name="onboarding_grant_in_call_control">In-call control</string>
+    <string name="onboarding_grant_self_updates">Self updates</string>
+    <string name="onboarding_grant_reboot">Reboot</string>
+    <string name="onboarding_install_footnote">A reboot follows the install. To remove the module later, the root manager restores the stock overlay on the next boot.</string>
+
+    <!-- Installing. -->
+    <string name="onboarding_installing_module">Installing Phonxiety</string>
+    <string name="onboarding_installing_journal">The install is saved on disk, so a reboot or a restart resumes here.</string>
+    <string name="onboarding_downloading_metamodule">Downloading meta-overlayfs</string>
+    <string name="onboarding_installing_metamodule">Installing the metamodule</string>
+    <string name="onboarding_download_percent">%1$d%%</string>
+    <string name="onboarding_download_size">%1$s of %2$s</string>
+    <string name="onboarding_metamodule_checked">The archive is checked against a pinned SHA-256 before it is installed.</string>
+
+    <!-- Install failure. -->
+    <string name="onboarding_failed_install">Phonxiety was not installed</string>
+    <string name="onboarding_failed_update">The update was not installed</string>
+    <string name="onboarding_failed_rollback">The rollback did not finish</string>
+    <string name="onboarding_failed_metamodule">The metamodule was not installed</string>
+    <string name="onboarding_failed_module_message">The root manager\'s output is below. Retrying is safe: the install starts again and replaces the partial result.</string>
+    <string name="onboarding_failed_metamodule_message">The metamodule download or install stopped. The root manager\'s output is below; retrying checks the archive again.</string>
+
+    <!-- Reboot. -->
+    <string name="onboarding_reboot_metamodule_title">The metamodule activates on the next boot.</string>
+    <string name="onboarding_reboot_module_title">One reboot, and the module is active.</string>
+    <string name="onboarding_reboot_metamodule_body">Phonxiety is installed after the overlay is mounted, so this boot comes first. After the reboot, open Phonxiety; setup continues where it stopped.</string>
+    <string name="onboarding_reboot_module_body">The privileged grants and the system app appear only after the reboot. After the reboot, open Phonxiety; setup continues where it stopped.</string>
+    <string name="onboarding_reboot_why">Why</string>
+    <string name="onboarding_reason_module_install">Module install</string>
+    <string name="onboarding_reason_metamodule_install">Metamodule install</string>
+    <string name="onboarding_reason_module_update">Module update</string>
+    <string name="onboarding_reason_module_rollback">Module rollback</string>
+    <string name="onboarding_reason_user_request">You asked for a reboot</string>
+    <string name="onboarding_reboot_failed_title">The phone did not restart</string>
+    <string name="onboarding_reboot_failed_message">Restart it yourself: hold the power button and tap Restart. Setup continues after the boot.</string>
+
+    <!-- Verify. -->
+    <string name="onboarding_verify_body">Checking the module, the overlay and the privileged grants.</string>
+    <string name="onboarding_verify_failed_note">The failed checks are listed first. The Doctor walks through each fix.</string>
+    <string name="onboarding_check_passed">Passed</string>
+    <string name="onboarding_check_failed">Failed</string>
+    <string name="onboarding_check_not_checked">Not checked</string>
+    <plurals name="onboarding_verify_show_passing">
+        <item quantity="one">Show %1$d passing check</item>
+        <item quantity="other">Show %1$d passing checks</item>
+    </plurals>
+    <string name="onboarding_verify_hide_passing">Hide passing checks</string>
+    <string name="onboarding_check_module_present">Module folder</string>
+    <string name="onboarding_check_module_enabled">Module enabled</string>
+    <string name="onboarding_check_no_disable_flag">No disable flag</string>
+    <string name="onboarding_check_no_remove_flag">No remove flag</string>
+    <string name="onboarding_check_package_is_system">App is a system app</string>
+    <string name="onboarding_check_apk_in_priv_app">App folder in the privileged apps</string>
+    <string name="onboarding_check_privileged_grants">Privileged grants</string>
+
+    <!-- Runtime permissions. -->
+    <string name="onboarding_runtime_body">Each permission has one job. If you skip one, the dashboard keeps showing it.</string>
+    <string name="onboarding_runtime_note">Background use keeps the link alive while the screen is off.</string>
+    <string name="onboarding_permission_microphone">Microphone</string>
+    <string name="onboarding_permission_calls">Phone calls</string>
+    <string name="onboarding_permission_phone_state">Phone state</string>
+    <string name="onboarding_permission_audio_settings">Audio settings</string>
+    <string name="onboarding_permission_notifications">Notifications</string>
+    <string name="onboarding_permission_local_network">Local network</string>
+    <string name="onboarding_permission_microphone_reason">The agent\'s voice and yours travel through this app.</string>
+    <string name="onboarding_permission_calls_reason">The agent places and ends the call.</string>
+    <string name="onboarding_permission_phone_state_reason">To know when the call is ringing, active or gone.</string>
+    <string name="onboarding_permission_audio_settings_reason">To route call audio between the handset and the link.</string>
+    <string name="onboarding_permission_notifications_reason">The call service has to stay visible while it runs.</string>
+    <string name="onboarding_permission_local_network_reason">Without it, the same-network path times out and looks like a network fault.</string>
+
+    <!-- Pairing. -->
+    <string name="onboarding_pair_body">On your computer, run this command. It prints a QR code; scan it with this phone.</string>
+    <string name="onboarding_pair_command">phonxiety pair</string>
+    <string name="onboarding_pair_note">The code carries the address, certificate and token, so you do not type them.</string>
+    <string name="onboarding_pair_sheet_title">Pair with your computer</string>
+    <string name="onboarding_pair_sheet_body">Scan the QR code your computer prints, or paste the pairing link it gives you.</string>
+    <string name="onboarding_pair_scan">Scan QR code</string>
+    <string name="onboarding_pair_camera">Use this phone\'s camera</string>
+    <string name="onboarding_pair_field_label">Pairing link</string>
+    <string name="onboarding_pair_field_placeholder">phonxiety://pair?…</string>
+    <string name="onboarding_pair_field_support">Starts with phonxiety://pair</string>
+    <string name="onboarding_pair_commit">Pair</string>
+    <string name="onboarding_pair_checking">Pairing with the computer…</string>
+    <string name="onboarding_pair_rejected_title">The pairing was rejected</string>
+    <string name="onboarding_pair_code_invalid">That is not a pairing link. Copy it again from phonxiety pair.</string>
+    <string name="onboarding_pair_code_url_missing">The link has no address. Run phonxiety pair again and copy the whole link.</string>
+    <string name="onboarding_pair_code_iroh">The bridge address in the link cannot be read. Run phonxiety pair again.</string>
+    <string name="onboarding_pair_code_token_missing">The link has no token. Run phonxiety pair again.</string>
+    <string name="onboarding_pair_code_store_failed">The link is valid, but this phone could not save it. Try again.</string>
+    <string name="onboarding_pair_code_unknown">The link could not be read. Run phonxiety pair again and copy the whole link.</string>
+
+    <!-- First link test. -->
+    <string name="onboarding_link_test_body">Connecting to the computer can take up to 30 s. The link test itself can then take 25 s more.</string>
+
+    <!-- Ready. -->
+    <string name="onboarding_ready_title">The bridge is running</string>
+    <string name="onboarding_ready_body">The dashboard shows the link and your call history.</string>
+
+    <!-- Doctor. -->
+    <string name="onboarding_doctor_verify_failed">A check after the reboot failed</string>
+    <string name="onboarding_doctor_verify_failed_message">The Doctor walks through each failed check and its fix.</string>
+    <string name="onboarding_doctor_module_disabled">The module is disabled</string>
+    <string name="onboarding_doctor_module_disabled_message">Enable Phonxiety in the root manager, then check again.</string>
+    <string name="onboarding_doctor_module_pending_removal">The module is queued for removal</string>
+    <string name="onboarding_doctor_module_pending_removal_message">Cancel the removal in the root manager, then check again.</string>
+    <string name="onboarding_doctor_link_test_failed">The link test failed</string>
+    <string name="onboarding_doctor_link_test_failed_message">Check that the computer is on and reachable from this phone, then open Doctor.</string>
+
+    <!-- Indeterminate: a check did not answer. The raw diagnostic stays under Details. -->
+    <string name="onboarding_unknown_shell_title">Root did not answer</string>
+    <string name="onboarding_unknown_shell_message">A root command did not answer within 20 seconds. Check again.</string>
+    <string name="onboarding_unknown_no_provider_title">No root manager answered</string>
+    <string name="onboarding_unknown_no_provider_message">Root is granted, but no supported root manager was found. Re-enable Magisk, KernelSU, KernelSU-Next or APatch, then check again.</string>
+    <string name="onboarding_unknown_module_title">The module folder could not be read</string>
+    <string name="onboarding_unknown_module_message">The module folder on this phone could not be read. Check again.</string>
+    <string name="onboarding_unknown_overlay_title">The overlay check did not answer</string>
+    <string name="onboarding_unknown_overlay_message">The check could not tell whether a metamodule is needed, so nothing was installed. Check again.</string>
+    <string name="onboarding_unknown_probe_title">The phone could not be read</string>
+    <string name="onboarding_unknown_probe_message">A check failed before it could answer. Check again.</string>
+
+    <!-- Conflict. -->
+    <string name="onboarding_conflict_title">Uninstall one root manager</string>
+    <string name="onboarding_conflict_message">Two root managers are installed: %1$s. Uninstall one of them, then tap Check again.</string>
+    <string name="onboarding_conflict_note">Nothing is deleted for you; the leftovers of the other manager stay where they are.</string>
+
+    <!-- Actions. One primary action per screen; the secondary never repeats it. -->
+    <string name="onboarding_action_check_again">Check again</string>
+    <string name="onboarding_action_open_manager">Open root manager</string>
+    <string name="onboarding_action_install_metamodule">Install metamodule</string>
+    <string name="onboarding_action_install_module">Install module</string>
+    <string name="onboarding_action_update_module">Update module</string>
+    <string name="onboarding_action_retry">Retry</string>
+    <string name="onboarding_action_reboot_now">Reboot now</string>
+    <string name="onboarding_action_verify_now">Verify now</string>
+    <string name="onboarding_action_grant_permissions">Grant permissions</string>
+    <string name="onboarding_action_scan">Scan QR code</string>
+    <string name="onboarding_action_open_dashboard">Open dashboard</string>
+    <string name="onboarding_action_later">Later</string>
+    <string name="onboarding_action_install_later">Install later</string>
+    <string name="onboarding_action_allow_background">Allow background use</string>
+    <string name="onboarding_action_paste_link">Paste pairing link</string>
+    <string name="onboarding_action_open_doctor">Open Doctor</string>
+    <string name="onboarding_action_dismiss">Dismiss</string>
+
+    <!-- Leftovers of a provider the phone migrated away from. -->
+    <string name="onboarding_leftovers_title">Leftovers from %1$s</string>
+    <string name="onboarding_leftovers_app">The %1$s app is installed.</string>
+    <string name="onboarding_leftovers_app_missing">The %1$s app is not installed.</string>
+
+    <!-- Scanner and snackbars. -->
+    <string name="onboarding_scanner_title">Scan the QR code</string>
+    <string name="onboarding_scanner_permission">The camera permission is needed to scan the code. Allow it in Settings, or paste the pairing link.</string>
+    <string name="onboarding_scanner_open_settings">Open settings</string>
+    <string name="onboarding_scanner_paste">Paste link</string>
+    <string name="onboarding_scanner_failed">The camera could not start. Paste the pairing link instead.</string>
+    <string name="onboarding_cancel">Cancel</string>
+    <string name="onboarding_open_failed">The root manager could not be opened.</string>
+    <string name="onboarding_open_link_failed">The link could not be opened.</string>
+    <string name="onboarding_scanner_unavailable">The system QR scanner is not available. Use this phone\'s camera or paste the pairing link.</string>
+    <string name="onboarding_scanner_did_not_open">The system QR scanner did not open. Use this phone\'s camera or paste the pairing link.</string>
+    <string name="onboarding_pair_paired_message">Paired with the computer.</string>
+    <string name="onboarding_reboot_later_message">Reboot when you are ready. Open Phonxiety after the reboot; setup continues where it stopped.</string>
+    <string name="onboarding_reboot_no_manager_message">No root manager was found. Reboot from the power menu.</string>
+
+</resources>

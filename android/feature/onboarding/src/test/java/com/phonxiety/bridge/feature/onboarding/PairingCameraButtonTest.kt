@@ -43,7 +43,7 @@ class PairingCameraButtonTest {
             }
         }
 
-        composeRule.onNodeWithText("Paste the pairing link").performClick()
+        composeRule.onNodeWithText("Paste pairing link").performClick()
         composeRule.onNodeWithText("Use this phone's camera").performClick()
 
         assertEquals(1, opened)

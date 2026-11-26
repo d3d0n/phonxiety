@@ -16,13 +16,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.core.net.toUri
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.phonxiety.bridge.designsystem.UiText
+import com.phonxiety.bridge.designsystem.asString
 import com.phonxiety.bridge.root.WizardState
 import kotlinx.coroutines.launch
 
@@ -40,11 +44,21 @@ fun OnboardingRoute(
 ) {
     val wizard by viewModel.wizard.collectAsStateWithLifecycle()
     val pairingError by viewModel.pairingError.collectAsStateWithLifecycle()
+    val pairingConfirmed by viewModel.pairingConfirmed.collectAsStateWithLifecycle()
     val detection by viewModel.detection.collectAsStateWithLifecycle()
+    val installPhase by viewModel.installPhase.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var inlineScanner by remember { mutableStateOf(false) }
+    var showPairing by rememberSaveable { mutableStateOf(false) }
+    var pendingMessage by remember { mutableStateOf<UiText?>(null) }
+
+    // Resolved in composition so a locale or font-size change re-reads them.
+    val scannerUnavailable = stringResource(R.string.onboarding_scanner_unavailable)
+    val scannerDidNotOpen = stringResource(R.string.onboarding_scanner_did_not_open)
+    val openFailed = stringResource(R.string.onboarding_open_failed)
+    val openLinkFailed = stringResource(R.string.onboarding_open_link_failed)
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -55,11 +69,14 @@ fun OnboardingRoute(
 
     val scanner = rememberQrScanner(
         onCode = viewModel::pair,
-        onUnavailable = { reason ->
-            scope.launch { snackbar.showSnackbar(reason) }
+        onUnavailable = {
+            // The device's own reason stays in the log; the person gets one sentence and two ways on.
+            scope.launch { snackbar.showSnackbar(scannerUnavailable) }
             inlineScanner = true
         },
-        onFailed = { reason -> scope.launch { snackbar.showSnackbar(reason) } }
+        onFailed = {
+            scope.launch { snackbar.showSnackbar(scannerDidNotOpen) }
+        }
     )
 
     LaunchedEffect(viewModel) {
@@ -77,12 +94,22 @@ fun OnboardingRoute(
                     // a scanner over the next step; the explicit Scan button does not come through here.
                     if (wizard is WizardState.NeedsPairing) scanner()
 
-                is SetupHostRequest.PairingRejected -> snackbar.showSnackbar(request.reason)
+                // The rejection is rendered inline, next to the field and the card, not twice.
+                is SetupHostRequest.PairingRejected -> Unit
 
-                is SetupHostRequest.Message -> snackbar.showSnackbar(request.text)
+                is SetupHostRequest.Message -> pendingMessage = request.text
 
                 SetupHostRequest.Finished -> onFinished()
             }
+        }
+    }
+
+    // Resolved in composition, then shown; the state is cleared so a config change does not repeat it.
+    val messageText = pendingMessage?.asString()
+    LaunchedEffect(messageText) {
+        if (messageText != null) {
+            snackbar.showSnackbar(messageText)
+            pendingMessage = null
         }
     }
 
@@ -101,7 +128,12 @@ fun OnboardingRoute(
                 inlineScanner = false
                 viewModel.pair(raw)
             },
-            onDismiss = { inlineScanner = false }
+            onDismiss = { inlineScanner = false },
+            // The dialog can promise the paste field and deliver it: it opens over the same screen.
+            onPasteRequested = {
+                inlineScanner = false
+                showPairing = true
+            }
         )
     }
 
@@ -110,7 +142,9 @@ fun OnboardingRoute(
             state = OnboardingUiState(
                 wizard = wizard,
                 pairingError = pairingError,
-                leftovers = detection?.leftovers.orEmpty()
+                pairingConfirmed = pairingConfirmed,
+                leftovers = detection?.leftovers.orEmpty(),
+                installPhase = installPhase
             ),
             callbacks = OnboardingCallbacks(
                 onPrimary = viewModel::onPrimary,
@@ -119,12 +153,18 @@ fun OnboardingRoute(
                 onCameraScan = { inlineScanner = true },
                 onPairLink = viewModel::pair,
                 onDismissPairingError = viewModel::dismissPairingError,
-                onOpenManager = { pkg -> openManager(context, pkg, scope, snackbar) },
-                onOpenUrl = { url -> openUrl(context, url, scope, snackbar) },
+                onOpenManager = { pkg ->
+                    openManager(context, pkg, scope, snackbar, openFailed)
+                },
+                onOpenUrl = { url ->
+                    openUrl(context, url, scope, snackbar, openLinkFailed)
+                },
                 onOpenDoctor = onOpenDoctor,
                 onRebootLater = viewModel::onRebootLater,
                 onFinished = onFinished
             ),
+            pairingSheetVisible = showPairing,
+            onPairingSheetVisibleChange = { showPairing = it },
             modifier = modifier.padding(padding)
         )
     }
@@ -142,7 +182,8 @@ private fun openManager(
     context: Context,
     packageName: String,
     scope: kotlinx.coroutines.CoroutineScope,
-    snackbar: SnackbarHostState
+    snackbar: SnackbarHostState,
+    failureMessage: String
 ) {
     val launch = context.packageManager.getLaunchIntentForPackage(packageName)
     try {
@@ -154,7 +195,7 @@ private fun openManager(
             )
         }
     } catch (error: Exception) {
-        scope.launch { snackbar.showSnackbar(error.message ?: "the manager could not be opened") }
+        scope.launch { snackbar.showSnackbar(failureMessage) }
     }
 }
 
@@ -162,11 +203,12 @@ private fun openUrl(
     context: Context,
     url: String,
     scope: kotlinx.coroutines.CoroutineScope,
-    snackbar: SnackbarHostState
+    snackbar: SnackbarHostState,
+    failureMessage: String
 ) {
     try {
         context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri()))
     } catch (error: Exception) {
-        scope.launch { snackbar.showSnackbar(error.message ?: "no browser could open that link") }
+        scope.launch { snackbar.showSnackbar(failureMessage) }
     }
 }

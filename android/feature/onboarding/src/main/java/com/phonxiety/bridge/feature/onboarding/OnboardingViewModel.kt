@@ -7,6 +7,7 @@ import com.phonxiety.bridge.BridgeRuntime
 import com.phonxiety.bridge.BridgeService
 import com.phonxiety.bridge.data.AppApi
 import com.phonxiety.bridge.data.DevicePairingRepository
+import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.LinkState
 import com.phonxiety.bridge.root.FileProgressStore
 import com.phonxiety.bridge.root.ProgressStore
@@ -44,7 +45,7 @@ class OnboardingViewModel internal constructor(
     context: Context,
     private val pairingRepository: DevicePairingRepository,
     appApi: AppApi,
-    backend: RootBackend,
+    private val backend: RootBackend,
     permissions: RuntimePermissionChecker = AndroidPermissionChecker(context),
     linkState: Flow<LinkState> = BridgeRuntime.state.map { it.link }
 ) : ViewModel() {
@@ -64,6 +65,12 @@ class OnboardingViewModel internal constructor(
     private val _pairingError = MutableStateFlow<String?>(null)
     val pairingError: StateFlow<String?> = _pairingError.asStateFlow()
 
+    /**
+     * A stored pairing the repository can read. This is the proof the paste sheet closes on: the
+     * wizard's own "Checking" is only a probe and says nothing about whether a link was accepted.
+     */
+    val pairingConfirmed: StateFlow<Boolean> = pairingRepository.paired
+
     private val coordinator = SetupCoordinator(
         backend = backend,
         pairing = pairingRepository,
@@ -82,6 +89,9 @@ class OnboardingViewModel internal constructor(
     )
 
     val wizard: StateFlow<WizardState> = coordinator.wizard
+
+    /** The metamodule download/install step; null while nothing is being prepared. */
+    val installPhase: StateFlow<SetupInstallPhase?> = backend.installPhase
 
     /** The last detection: the wizard shows the leftovers of a provider the phone migrated away from. */
     val detection: StateFlow<RootDetection?> = coordinator.rootDetection
@@ -143,9 +153,7 @@ class OnboardingViewModel internal constructor(
 
     fun onRebootLater() {
         _requests.tryEmit(
-            SetupHostRequest.Message(
-                "The install is on disk. Reboot whenever you are ready; the wizard resumes here."
-            )
+            SetupHostRequest.Message(UiText.Res(R.string.onboarding_reboot_later_message))
         )
     }
 

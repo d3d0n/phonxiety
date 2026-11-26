@@ -62,7 +62,7 @@ class QrScannerTest {
     }
 
     @Test
-    fun aCancelledWaitReleasesTheListener() = runTest {
+    fun aCanceledWaitReleasesTheListener() = runTest {
         val download = FakeDownload()
         val wait = launch { awaitModuleDownload(60_000, download) }
         runCurrent()

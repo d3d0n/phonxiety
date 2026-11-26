@@ -24,7 +24,7 @@ import org.robolectric.annotation.Config
 
 /**
  * Which scanner outcomes are a dismissal and which are a genuine failure. Play services 16.1.0
- * answers Android Back's empty cancelled activity result with `INTERNAL` (13), "Failed to scan
+ * answers Android Back's empty canceled activity result with `INTERNAL` (13), "Failed to scan
  * code."; the wizard treats that as a dismissal — no install, no rescan, no automatic CameraX and
  * no camera permission prompt — and keeps an explicit in-app scanner in the pairing sheet for a
  * real internal failure.
@@ -53,10 +53,10 @@ class QrScannerCancellationTest {
     @Test
     fun aBackDismissalIsACancellationWithoutAnInstallOrARescan() = runTest {
         val back = MlKitException("Failed to scan code.", MlKitException.INTERNAL)
-        assertEquals(PlayScan.Cancelled, scanFailure(back))
+        assertEquals(PlayScan.Canceled, scanFailure(back))
 
         val scanner = FakeScanner(scanFailure(back))
-        assertEquals(PlayScan.Cancelled, scanWithPlayServices(context) { scanner })
+        assertEquals(PlayScan.Canceled, scanWithPlayServices(context) { scanner })
         assertEquals(1, scanner.scans)
         assertEquals(0, scanner.installs)
     }
@@ -64,7 +64,7 @@ class QrScannerCancellationTest {
     @Test
     fun theCloseButtonIsACancellation() {
         assertEquals(
-            PlayScan.Cancelled,
+            PlayScan.Canceled,
             scanFailure(MlKitException("Failed to scan code.", MlKitException.CODE_SCANNER_CANCELLED))
         )
     }
@@ -109,14 +109,14 @@ class QrScannerCancellationTest {
     }
 
     @Test
-    fun aCancelledTaskIsADismissalNotAFailure() = runTest {
+    fun aCanceledTaskIsADismissalNotAFailure() = runTest {
         // What Play services hands back when the person dismisses the scanner out from under it.
         // Its listeners fire on the main thread, as they do in the app.
         val scan = async { startScan(TaskScanner(Tasks.forCanceled())) }
         runCurrent()
         shadowOf(Looper.getMainLooper()).idle()
 
-        assertEquals(PlayScan.Cancelled, scan.await())
+        assertEquals(PlayScan.Canceled, scan.await())
     }
 
     @Test

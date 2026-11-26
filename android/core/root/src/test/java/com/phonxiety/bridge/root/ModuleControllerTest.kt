@@ -89,7 +89,7 @@ class ModuleControllerTest {
         ).state
 
         assertTrue(state is WizardState.Indeterminate)
-        assertTrue((state as WizardState.Indeterminate).message.contains("20 s"))
+        assertEquals(IndeterminateReason.SHELL_TIMED_OUT, (state as WizardState.Indeterminate).reason)
     }
 
     @Test
