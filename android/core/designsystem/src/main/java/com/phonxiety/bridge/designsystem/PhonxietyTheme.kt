@@ -9,6 +9,7 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalContext
 
 /**
@@ -31,12 +32,15 @@ fun PhonxietyTheme(
         darkTheme -> PhonxietyDarkColors
         else -> PhonxietyLightColors
     }
+    val statusColors = statusColorsFor(colorScheme, darkTheme)
     MaterialExpressiveTheme(
         colorScheme = colorScheme,
         motionScheme = MotionScheme.expressive(),
         shapes = PhonxietyShapes,
         typography = PhonxietyTypography,
-        content = content
+        content = {
+            CompositionLocalProvider(LocalStatusColors provides statusColors, content = content)
+        }
     )
 }
 
@@ -61,6 +65,11 @@ internal val PhonxietyLightColors: ColorScheme = lightColorScheme(
     surface = PhonxietyColors.LightBackground,
     onSurface = PhonxietyColors.LightOnSurface,
     surfaceVariant = PhonxietyColors.LightSurfaceVariant,
+    surfaceContainerLowest = PhonxietyColors.LightSurfaceContainerLowest,
+    surfaceContainerLow = PhonxietyColors.LightSurfaceContainerLow,
+    surfaceContainer = PhonxietyColors.LightSurfaceContainer,
+    surfaceContainerHigh = PhonxietyColors.LightSurfaceContainerHigh,
+    surfaceContainerHighest = PhonxietyColors.LightSurfaceContainerHighest,
     onSurfaceVariant = PhonxietyColors.LightOnSurfaceVariant,
     outline = PhonxietyColors.LightOutline,
     outlineVariant = PhonxietyColors.LightOutlineVariant,
@@ -90,6 +99,11 @@ internal val PhonxietyDarkColors: ColorScheme = darkColorScheme(
     surface = PhonxietyColors.DarkBackground,
     onSurface = PhonxietyColors.DarkOnSurface,
     surfaceVariant = PhonxietyColors.DarkSurfaceVariant,
+    surfaceContainerLowest = PhonxietyColors.DarkSurfaceContainerLowest,
+    surfaceContainerLow = PhonxietyColors.DarkSurfaceContainerLow,
+    surfaceContainer = PhonxietyColors.DarkSurfaceContainer,
+    surfaceContainerHigh = PhonxietyColors.DarkSurfaceContainerHigh,
+    surfaceContainerHighest = PhonxietyColors.DarkSurfaceContainerHighest,
     onSurfaceVariant = PhonxietyColors.DarkOnSurfaceVariant,
     outline = PhonxietyColors.DarkOutline,
     outlineVariant = PhonxietyColors.DarkOutlineVariant,

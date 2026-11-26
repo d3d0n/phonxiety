@@ -16,10 +16,9 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import com.phonxiety.bridge.designsystem.PhonxietyColors
+import com.phonxiety.bridge.designsystem.LocalStatusColors
 import kotlin.math.roundToInt
 
 /** The level a 16-bit VOICE_* frame reports when nothing is audible. */
@@ -37,10 +36,10 @@ fun LevelMeter(
     segments: Int = 24
 ) {
     val fraction = levelDbfs?.let { ((it - METER_FLOOR_DBFS) / -METER_FLOOR_DBFS).coerceIn(0f, 1f) }
-    val dark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+    val status = LocalStatusColors.current
     val offColor = MaterialTheme.colorScheme.surfaceVariant
-    val lowColor = if (dark) PhonxietyColors.LightTeal else PhonxietyColors.Teal
-    val hotColor = MaterialTheme.colorScheme.error
+    val lowColor = status.positiveIndicator
+    val hotColor = status.negativeIndicator
     Column(modifier = modifier) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -49,7 +48,7 @@ fun LevelMeter(
         ) {
             Text(text = label, style = MaterialTheme.typography.labelMedium)
             Text(
-                text = levelDbfs?.let { formatDbfs(it) } ?: "— dBFS",
+                text = levelDbfs?.let { formatDbfs(it) } ?: "—\u00A0dBFS",
                 style = MaterialTheme.typography.labelMedium,
                 fontFamily = FontFamily.Monospace
             )
@@ -82,9 +81,9 @@ fun LevelMeter(
     }
 }
 
-/** `-12 dBFS`, with a Unicode minus so the number lines up in monospace. */
+/** `−12 dBFS`, with a Unicode minus and a no-break space so the value lines up in monospace. */
 fun formatDbfs(value: Float): String {
     val rounded = value.roundToInt()
     val magnitude = if (rounded == 0) "0" else Math.abs(rounded).toString()
-    return "−$magnitude dBFS".takeIf { rounded < 0 } ?: "$magnitude dBFS"
+    return "−$magnitude\u00A0dBFS".takeIf { rounded < 0 } ?: "$magnitude\u00A0dBFS"
 }

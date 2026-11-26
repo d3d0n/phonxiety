@@ -10,22 +10,31 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.phonxiety.bridge.designsystem.LocalStatusColors
+import java.text.NumberFormat
+import java.util.Locale
 
 /** Emphasis of a [StatTile] value; colour is semantic, never decorative. */
 enum class StatTone { NEUTRAL, POSITIVE, WARNING, NEGATIVE }
 
 /**
- * One dashboard card: a title row that may carry a status pill, an optional subtitle, and content
- * that is usually a row of [StatTile]s.
+ * One dashboard card: a heading row that may carry a status pill, an optional subtitle at full
+ * width so a long pill cannot squeeze it, and content that is usually a row of [StatTile]s.
  */
 @Composable
 fun SectionCard(
@@ -45,23 +54,29 @@ fun SectionCard(
             modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(text = title, style = MaterialTheme.typography.titleMedium)
-                    if (subtitle != null) {
-                        Text(
-                            text = subtitle,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier
+                            .weight(1f)
+                            .semantics { heading() }
+                    )
+                    if (status != null) {
+                        Spacer(Modifier.width(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), content = status)
                     }
                 }
-                if (status != null) {
-                    Spacer(Modifier.width(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), content = status)
+                if (subtitle != null) {
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
             content()
@@ -69,7 +84,10 @@ fun SectionCard(
     }
 }
 
-/** A labelled value: the numbers a user checks before trusting the link. */
+/**
+ * A labelled value: the numbers a user checks before trusting the link. [unit] is separate so a
+ * caller never concatenates "78" and "%" and the no-break space stays consistent.
+ */
 @Composable
 fun StatTile(
     label: String,
@@ -77,64 +95,122 @@ fun StatTile(
     modifier: Modifier = Modifier,
     caption: String? = null,
     mono: Boolean = false,
-    tone: StatTone = StatTone.NEUTRAL
+    tone: StatTone = StatTone.NEUTRAL,
+    unit: String? = null
 ) {
+    val status = LocalStatusColors.current
+    val locale = LocalConfiguration.current.locales[0]
+    val valueStyle = MaterialTheme.typography.titleMedium.let { style ->
+        if (mono) style.copy(fontFamily = FontFamily.Monospace, fontFeatureSettings = "tnum") else style
+    }
     Column(modifier = modifier) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Spacer(Modifier.height(2.dp))
         Text(
-            text = value,
-            style = MaterialTheme.typography.titleMedium,
-            fontFamily = if (mono) FontFamily.Monospace else null,
+            text = formatMeasure(value, unit, locale),
+            style = valueStyle,
             color = when (tone) {
                 StatTone.NEUTRAL -> MaterialTheme.colorScheme.onSurface
-                StatTone.POSITIVE -> MaterialTheme.colorScheme.tertiary
-                StatTone.WARNING -> MaterialTheme.colorScheme.secondary
-                StatTone.NEGATIVE -> MaterialTheme.colorScheme.error
+                StatTone.POSITIVE -> status.positiveIndicator
+                StatTone.WARNING -> status.warning.content
+                StatTone.NEGATIVE -> status.negativeIndicator
             },
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
+            modifier = Modifier.widthIn(min = 72.dp)
         )
         if (caption != null) {
             Text(
                 text = caption,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
 }
 
-/** Label/value row with the value right-aligned and optionally monospace. */
+/**
+ * Label/value row with the value right-aligned, tabular in monospace, and at least 96 dp wide so a
+ * changing number never shifts the label. At 150 % font scale and above the pair stacks, because a
+ * two-column row would split a label or a duration mid-word.
+ */
 @Composable
 fun KeyValueRow(
     label: String,
     value: String,
     modifier: Modifier = Modifier,
-    mono: Boolean = false
+    mono: Boolean = false,
+    valueMaxLines: Int = Int.MAX_VALUE
 ) {
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f)
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodyMedium,
-            fontFamily = if (mono) FontFamily.Monospace else null
-        )
+    val valueStyle = MaterialTheme.typography.bodyMedium.let { style ->
+        if (mono) style.copy(fontFamily = FontFamily.Monospace, fontFeatureSettings = "tnum") else style
     }
+    val stacked = LocalDensity.current.fontScale >= STACK_AT_FONT_SCALE
+    if (stacked) {
+        Column(modifier = modifier.fillMaxWidth()) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = value,
+                style = valueStyle,
+                textAlign = TextAlign.End,
+                maxLines = valueMaxLines,
+                softWrap = valueMaxLines != 1,
+                overflow = TextOverflow.Clip,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 2.dp)
+            )
+        }
+    } else {
+        Row(
+            modifier = modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = value,
+                style = valueStyle,
+                textAlign = TextAlign.End,
+                maxLines = valueMaxLines,
+                softWrap = valueMaxLines != 1,
+                overflow = TextOverflow.Clip,
+                modifier = Modifier
+                    .padding(start = 16.dp)
+                    .widthIn(min = 96.dp)
+            )
+        }
+    }
+}
+
+private const val STACK_AT_FONT_SCALE = 1.5f
+
+/**
+ * Joins a value and its unit the way the writing rules ask. A percent goes through the locale's own
+ * percent format ("78%" in English, "78 %" in French and German); every other unit is joined with a
+ * no-break space. A value that is not a number is shown as it is: a missing value never grows a
+ * unit.
+ */
+internal fun formatMeasure(value: String, unit: String?, locale: Locale = Locale.getDefault()): String = when {
+    unit == null -> value
+    unit == "%" -> formatPercent(value, locale)
+    else -> "$value\u00A0$unit"
+}
+
+private fun formatPercent(value: String, locale: Locale): String {
+    val number = value.toDoubleOrNull() ?: return value
+    val format = NumberFormat.getPercentInstance(locale).apply {
+        maximumFractionDigits = value.substringAfter('.', "").length
+    }
+    return format.format(number / 100)
 }
