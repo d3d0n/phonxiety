@@ -1,0 +1,25 @@
+# iroh endpoint recreated after three failed attempts (Pixel 6a, Magisk 31.1, Android 17)
+# date: 2026-11-26 13:12 +05; tree: a56cd39 (module from mise run phone:build, installed, rebooted)
+# script: /tmp/phx_endpoint_fresh_check.py
+#   airplane mode on -> am force-stop + am start-foreground-service (the bridge binds its endpoint
+#   with no network) -> logcat of the new pid -> airplane mode off right after the third failed
+#   attempt -> wait for `phonxiety status` connected
+
+## Run 2: three failures, recycle, recovery
+13:12:04 +  0.1 s  airplane mode on
+13:12:08 +  3.9 s  bridge service restarted without a network (pid 4995)
+13:12:28 + 23.5 s  device link down: connect_timeout
+13:12:49 + 44.6 s  device link down: connect_timeout
+13:13:11 + 66.6 s  device link down: connect_timeout
+13:13:11 + 66.7 s  airplane mode off after 3 failed attempts
+13:13:13 + 68.7 s  RECYCLE: iroh endpoint recycled after 3 failed attempts
+               phone connected 4.3 s after the network came back (about +71 s after the restart)
+               recycle lines seen: 1
+
+## Run 1 (earlier, counted the old process's network_lost as a failure): network back after two
+## failures, no recycle, the same endpoint connected 3.4 s later
+13:10:59 +  0.1 s  airplane mode on
+13:11:22 + 23.6 s  device link down: connect_timeout
+13:11:43 + 44.6 s  device link down: connect_timeout
+13:11:43 + 44.7 s  airplane mode off
+13:11:47 + 48.2 s  phone connected, 3.4 s after the network came back

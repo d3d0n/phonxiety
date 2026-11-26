@@ -1,0 +1,28 @@
+# Boot start holds START_FOREGROUND_SERVICES_FROM_BACKGROUND (Pixel 6a, Magisk 31.1, Android 17)
+# date: 2026-11-26 13:10 +05; tree: a56cd39 (module built by mise run phone:build, installed by mise run phone:install, then reboot)
+
+## Module allowlist in the installed zip
+android.permission.CAPTURE_AUDIO_OUTPUT
+android.permission.CONTROL_INCALL_EXPERIENCE
+android.permission.INSTALL_SELF_UPDATES
+android.permission.MODIFY_PHONE_STATE
+android.permission.REBOOT
+android.permission.START_FOREGROUND_SERVICES_FROM_BACKGROUND
+
+## dumpsys package com.phonxiety.bridge
+android.permission.START_FOREGROUND_SERVICES_FROM_BACKGROUND: granted=true
+codePath=/system/priv-app/phonxiety-bridge
+versionName=0.3.0
+
+## dumpsys activity services com.phonxiety.bridge (start reason after the reboot)
+uidState: RCVR
+code:BACKGROUND_FGS_PERMISSION
+tempAllowListReason:<,reasonCode:SYSTEM_ALLOW_LISTED,duration:9223372036854775807,callingUid:…>
+isForeground=true
+
+## Before this change (same phone, 12:46, module without the grant)
+code:SYSTEM_ALLOW_LISTED (the app is on the user's battery-optimization exemption list: dumpsys deviceidle whitelist -> user,com.phonxiety.bridge)
+
+## Reboot -> connected (python3 /tmp/phx_boot_timer.py --reboot)
+13:09:55 sys.boot_completed (phone uptime 11.38 s)
+13:10:03 phone connected +8.7 s after boot_completed
