@@ -5,6 +5,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.isDialog
@@ -55,6 +56,49 @@ class DoctorScreenBehaviourTest {
         composeRule.onNodeWithText("Rollback").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("Reinstall the module: System overlay applied")
             .assertIsDisplayed()
+    }
+
+    @Test
+    fun theDaemonsOwnWordsStayBehindDetails() {
+        composeRule.setContent {
+            PhonxietyTheme(dynamicColor = false) {
+                Surface(color = MaterialTheme.colorScheme.background) {
+                    DoctorScreen(state = DoctorSamples.severalFailures(), callbacks = DoctorCallbacks())
+                }
+            }
+        }
+
+        // The daemon's pid, relay report and credentials path are not in the reading flow.
+        composeRule.onAllNodesWithText("pid 4211", substring = true).assertCountEquals(0)
+        composeRule.onAllNodesWithText("2 custom relay(s)", substring = true).assertCountEquals(0)
+        composeRule.onAllNodesWithText("/var/lib/phonxiety/auth.json", substring = true).assertCountEquals(0)
+        // The relay row says its title and status; its report is one tap away, whole.
+        composeRule.onNodeWithContentDescription("Details: Relay configuration", substring = true)
+            .performScrollTo()
+            .performClick()
+        composeRule.onAllNodesWithText("2 custom relay(s)", substring = true).onFirst().assertIsDisplayed()
+        composeRule.onAllNodesWithText("pair by address instead", substring = true).onFirst().assertExists()
+    }
+
+    @Test
+    fun theLastProcessExitLeadsWithWordsAndKeepsTheRecordBehindDetails() {
+        composeRule.setContent {
+            PhonxietyTheme(dynamicColor = false) {
+                Surface(color = MaterialTheme.colorScheme.background) {
+                    DoctorScreen(state = DoctorSamples.severalFailures(), callbacks = DoctorCallbacks())
+                }
+            }
+        }
+
+        composeRule.onAllNodesWithText("reason_16", substring = true).assertCountEquals(0)
+        // "Updated" is Android's own reason, then the moment in the phone's locale.
+        composeRule.onAllNodesWithText("Updated · ", substring = true).onFirst().performScrollTo()
+            .assertIsDisplayed()
+
+        composeRule.onNodeWithContentDescription("Details: Last process exit", substring = true)
+            .performScrollTo()
+            .performClick()
+        composeRule.onAllNodesWithText("reason_16", substring = true).onFirst().assertExists()
     }
 
     @Test

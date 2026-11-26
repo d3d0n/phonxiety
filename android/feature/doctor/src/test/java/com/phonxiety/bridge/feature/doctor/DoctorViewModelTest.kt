@@ -40,7 +40,9 @@ import org.robolectric.annotation.Config
 class DoctorViewModelTest {
     private val resources: Resources = ApplicationProvider.getApplicationContext<Context>().resources
 
-    private fun DoctorRow.evidenceText(): String = evidence.joinToString(" · ") { it.asString(resources) }
+    private fun DoctorRow.summaryText(): String = summary.joinToString(" · ") { it.asString(resources) }
+
+    private fun DoctorRow.detailsText(): String = details.joinToString("\n") { it.asString(resources) }
 
     private val dispatcher = StandardTestDispatcher()
 
@@ -114,7 +116,7 @@ class DoctorViewModelTest {
         val state = viewModel.state.value
         val daemonRow = state.row(DoctorEvaluator.ID_DAEMON)
         assertEquals(DoctorSeverity.FAIL, daemonRow?.severity)
-        assertTrue(requireNotNull(daemonRow).evidenceText().contains("link_down"))
+        assertTrue(requireNotNull(daemonRow).detailsText().contains("link_down"))
         assertEquals(DoctorSeverity.UNKNOWN, state.row(DoctorEvaluator.ID_RELAY)?.severity)
         assertFalse(state.rows.any { it.kind == DoctorItemKind.DAEMON_CHECK })
         assertTrue(state.daemonFixes.isEmpty())
@@ -382,7 +384,7 @@ class DoctorViewModelTest {
 
         val before = viewModel.state.value.row(DoctorEvaluator.ID_PAIRING)
         assertEquals(DoctorSeverity.FAIL, before?.severity)
-        assertEquals("No pairing is stored.", before?.evidenceText())
+        assertEquals("No pairing is stored.", before?.summaryText())
 
         // The link does not move: only the cache re-read on IO catches up with the stored config.
         pairing.state.value = true
@@ -390,7 +392,7 @@ class DoctorViewModelTest {
 
         val after = viewModel.state.value.row(DoctorEvaluator.ID_PAIRING)
         assertEquals(DoctorSeverity.OK, after?.severity)
-        assertEquals("A pairing is stored.", after?.evidenceText())
+        assertEquals("A pairing is stored.", after?.summaryText())
     }
 
     private fun TestScope.viewModel(

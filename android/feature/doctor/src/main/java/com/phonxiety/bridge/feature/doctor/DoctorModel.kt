@@ -1,5 +1,6 @@
 package com.phonxiety.bridge.feature.doctor
 
+import android.app.ApplicationExitInfo
 import androidx.annotation.StringRes
 import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.root.Overlay
@@ -90,19 +91,60 @@ data class FixContext(
     val needsMetamodule: Boolean get() = overlay == Overlay.METAMODULE_MISSING
 }
 
-/** One self-check row: state, the evidence behind it, and the repair when it fails. */
+/** One self-check row: state, the plain sentence, the evidence behind it, and the repair. */
 data class DoctorRow(
     val id: String,
     val kind: DoctorItemKind,
     val title: UiText,
     val severity: DoctorSeverity,
-    /** Localised parts joined with " · " by the screen; a part may be a raw daemon value. */
-    val evidence: List<UiText>,
+    /** The plain words the list reads, joined with " · " by the screen; authored copy only. */
+    val summary: List<UiText> = emptyList(),
+    /** A moment the sentence ends with, formatted on the phone in its own locale and zone. */
+    val summaryAtEpochMs: Long? = null,
+    /** The verbatim evidence — daemon text, codes and paths — behind the row's Details. */
+    val details: List<UiText> = emptyList(),
     val subject: String? = null,
     val plan: FixPlan? = null
 ) {
     val needsFix: Boolean
         get() = severity == DoctorSeverity.FAIL || severity == DoctorSeverity.WARN
+}
+
+/**
+ * A process death's reason as one short phrase a person reads. [CrashReports][com.phonxiety.bridge.CrashReports]
+ * stores the `ApplicationExitInfo` name when it knows one and `reason_<n>` for anything newer, so
+ * both forms are read against the SDK's documented values. A reason this build cannot explain
+ * reads "Reason unavailable": a number in prose tells the reader nothing.
+ */
+@StringRes
+fun exitReasonLabel(reason: String?): Int {
+    val key = reason?.trim()?.lowercase().orEmpty()
+    val code = key.takeIf { it.startsWith("reason_") }?.removePrefix("reason_")?.toIntOrNull()
+    return when {
+        key == "anr" || code == ApplicationExitInfo.REASON_ANR -> R.string.doctor_exit_not_responding
+        key == "crash" || code == ApplicationExitInfo.REASON_CRASH -> R.string.doctor_exit_crashed
+        key == "crash_native" || code == ApplicationExitInfo.REASON_CRASH_NATIVE -> R.string.doctor_exit_crashed_native
+        key == "low_memory" || code == ApplicationExitInfo.REASON_LOW_MEMORY -> R.string.doctor_exit_memory
+        key == "signaled" || code == ApplicationExitInfo.REASON_SIGNALED -> R.string.doctor_exit_signaled
+        key == "exit_self" || code == ApplicationExitInfo.REASON_EXIT_SELF -> R.string.doctor_exit_self
+        key == "initialization_failure" || code == ApplicationExitInfo.REASON_INITIALIZATION_FAILURE ->
+            R.string.doctor_exit_startup
+        key == "permission_change" || code == ApplicationExitInfo.REASON_PERMISSION_CHANGE ->
+            R.string.doctor_exit_permission
+        key == "excessive_resource_usage" || code == ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE ->
+            R.string.doctor_exit_resources
+        key == "user_requested" || code == ApplicationExitInfo.REASON_USER_REQUESTED -> R.string.doctor_exit_user
+        key == "user_stopped" || code == ApplicationExitInfo.REASON_USER_STOPPED ->
+            R.string.doctor_exit_user_stopped
+        key == "dependency_died" || code == ApplicationExitInfo.REASON_DEPENDENCY_DIED ->
+            R.string.doctor_exit_dependency
+        key == "freezer" || code == ApplicationExitInfo.REASON_FREEZER -> R.string.doctor_exit_frozen
+        key == "package_state_change" || code == ApplicationExitInfo.REASON_PACKAGE_STATE_CHANGE ->
+            R.string.doctor_exit_package
+        key == "package_updated" || code == ApplicationExitInfo.REASON_PACKAGE_UPDATED -> R.string.doctor_exit_updated
+        // REASON_UNKNOWN and REASON_OTHER name no cause, and so does a value newer than this build.
+        else -> R.string.doctor_exit_unavailable
+    }
 }
 
 /** A fix the daemon offers in its own report; the phone classifies and runs it. */

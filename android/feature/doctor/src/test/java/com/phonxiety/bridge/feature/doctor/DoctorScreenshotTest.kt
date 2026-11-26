@@ -12,8 +12,12 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
@@ -84,6 +88,44 @@ class DoctorScreenshotTest(private val matrixCase: MatrixCase) {
             composeRule.onNodeWithTag(CAPTURE_TAG)
                 .captureRoboImage("src/test/screenshots/doctor_${matrixCase.state.slug}_${variant.slug}.png")
         }
+    }
+
+    /**
+     * The evidence behind Details: the process exit reads as words, and the daemon's own report
+     * opens under the row it belongs to, in monospace.
+     */
+    @Test
+    fun rendersTheEvidenceBehindDetails() {
+        val variant = matrixCase.variant
+        configureWindow(variant)
+        composeRule.setContent {
+            AssertWindowMatches(variant)
+            PhonxietyTheme(darkTheme = variant.dark, dynamicColor = variant.dynamic) {
+                Surface(color = MaterialTheme.colorScheme.background) {
+                    Box(modifier = Modifier.fillMaxSize().testTag(CAPTURE_TAG)) {
+                        DoctorScreen(state = DoctorSamples.severalFailures(), callbacks = DoctorCallbacks())
+                    }
+                }
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("Details: Last process exit", substring = true)
+            .performScrollTo()
+            .performClick()
+        composeRule.waitForIdle()
+        composeRule.onAllNodesWithText("Updated · ", substring = true).onFirst().assertIsDisplayed()
+        composeRule.onNodeWithTag(CAPTURE_TAG).assertAccessible()
+        composeRule.onNodeWithTag(CAPTURE_TAG)
+            .captureRoboImage("src/test/screenshots/doctor_details_exit_${variant.slug}.png")
+
+        composeRule.onNodeWithContentDescription("Details: Relay configuration", substring = true)
+            .performScrollTo()
+            .performClick()
+        composeRule.waitForIdle()
+        composeRule.onAllNodesWithText("2 custom relay(s)", substring = true).onFirst().assertIsDisplayed()
+        composeRule.onNodeWithTag(CAPTURE_TAG).assertAccessible()
+        composeRule.onNodeWithTag(CAPTURE_TAG)
+            .captureRoboImage("src/test/screenshots/doctor_details_relay_${variant.slug}.png")
     }
 
     /**

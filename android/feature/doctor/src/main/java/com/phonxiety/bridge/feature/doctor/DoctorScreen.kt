@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.provider.Settings
 import android.text.format.DateFormat
+import android.text.format.DateUtils
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -43,8 +44,11 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -334,6 +338,7 @@ private fun CheckGroups(state: DoctorUiState, callbacks: DoctorCallbacks) {
 private fun CheckRow(row: DoctorRow, state: DoctorUiState, callbacks: DoctorCallbacks) {
     val selected = state.selected == row.id
     val risk = row.plan?.let { DoctorPolicy.effectiveRisk(it, state.callActive) }
+    val stacked = LocalDensity.current.fontScale >= STACK_STATUS_AT_FONT_SCALE
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -352,21 +357,38 @@ private fun CheckRow(row: DoctorRow, state: DoctorUiState, callbacks: DoctorCall
                 fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                 modifier = Modifier.weight(1f)
             )
-            SeverityBadge(row.severity)
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier
-                    .padding(start = 4.dp)
-                    .size(20.dp)
-            )
+            // Beside a 200 % title the badge leaves so little width that the title breaks
+            // mid-word ("reachab|le"), so at that scale the badge drops under the title instead.
+            if (!stacked) {
+                SeverityBadge(row.severity)
+                RowChevron()
+            }
         }
-        EvidenceText(row)
+        if (stacked) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SeverityBadge(row.severity)
+                RowChevron()
+            }
+        }
+        SummaryText(row)
+        RowDetails(row)
         if (row.needsFix && !selected) {
             RowActionButtons(row, risk, state, callbacks)
         }
     }
+}
+
+/** The row opens its detail card; the chevron says so, and carries no text of its own. */
+@Composable
+private fun RowChevron() {
+    Icon(
+        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier
+            .padding(start = 4.dp)
+            .size(20.dp)
+    )
 }
 
 /** A row's actions carry the check name, so two identical labels never read the same. */
@@ -409,18 +431,55 @@ private fun RowActionButtons(
     }
 }
 
+/** The one plain line a row reads: authored words, never a raw daemon value. */
 @Composable
-private fun EvidenceText(row: DoctorRow) {
-    val parts = ArrayList<String>(row.evidence.size)
-    for (part in row.evidence) parts += part.asString()
-    SelectionContainer {
-        Text(
-            text = parts.joinToString(" · "),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+private fun SummaryText(row: DoctorRow) {
+    if (row.summary.isEmpty() && row.summaryAtEpochMs == null) return
+    val parts = ArrayList<String>(row.summary.size + 1)
+    for (part in row.summary) parts += part.asString()
+    val moment = row.summaryAtEpochMs?.let { formatMoment(it) }
+    if (moment != null) parts += moment
+    Text(
+        text = parts.joinToString(" · "),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+}
+
+/**
+ * The daemon's own evidence, one line per record, in monospace and selectable, closed until asked
+ * for: a raw code or path never sits in the reading flow.
+ */
+@Composable
+private fun RowDetails(row: DoctorRow) {
+    if (row.details.isEmpty()) return
+    var shown by rememberSaveable(row.id) { mutableStateOf(false) }
+    val label = stringResource(if (shown) R.string.doctor_details_hide else R.string.doctor_details_show)
+    // Twenty rows can offer Details: each one says which check it belongs to.
+    val checkName = row.title.asString()
+    TextButton(onClick = { shown = !shown }, modifier = Modifier.semantics { contentDescription = "$label: $checkName" }) {
+        Text(label)
+    }
+    if (shown) {
+        val lines = ArrayList<String>(row.details.size)
+        for (part in row.details) lines += part.asString()
+        SelectionContainer {
+            Text(
+                text = lines.joinToString("\n"),
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
+
+/** A moment in the phone's own locale and zone, never the daemon's ISO stamp. */
+@Composable
+private fun formatMoment(epochMs: Long): String = DateUtils.formatDateTime(
+    LocalContext.current,
+    epochMs,
+    DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_TIME or DateUtils.FORMAT_ABBREV_MONTH
+)
 
 @Composable
 private fun SelectedRowCard(state: DoctorUiState, callbacks: DoctorCallbacks) {
@@ -440,7 +499,8 @@ private fun SelectedRowCard(state: DoctorUiState, callbacks: DoctorCallbacks) {
         title = checkName,
         status = { SeverityBadge(row.severity) }
     ) {
-        EvidenceText(row)
+        SummaryText(row)
+        RowDetails(row)
         val plan = row.plan
         if (plan != null) {
             Text(text = plan.effect.asString(), style = MaterialTheme.typography.bodyMedium)
@@ -849,7 +909,8 @@ private fun OverallPill(state: DoctorUiState) {
 private fun ClassPill(risk: FixClass) {
     val (label, tone) = when (risk) {
         FixClass.AUTOMATIC -> R.string.doctor_risk_automatic to StatusTone.NEUTRAL
-        FixClass.CONFIRM -> R.string.doctor_risk_confirm to StatusTone.ACCENT
+        // Asking first is how a careful fix behaves, not a warning: the tone says so.
+        FixClass.CONFIRM -> R.string.doctor_risk_confirm to StatusTone.NEUTRAL
         FixClass.NEVER -> R.string.doctor_risk_never to StatusTone.NEGATIVE
     }
     StatusPill(label = stringResource(label), tone = tone)
