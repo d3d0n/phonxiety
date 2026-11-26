@@ -21,11 +21,16 @@ set_perm_recursive "$MODPATH/webroot" 0 0 0755 0644
 
 ui_print "- phonxiety bridge is a privileged app; the system partition overlay is active after reboot"
 
-# An update keeps the pairing and settings. Magisk, KernelSU and APatch all keep the installed copy
-# at /data/adb/modules/<id> while staging the new one under /data/adb/modules_update, and MODPATH
-# points at that staged copy, so the module's id directory already existing means this is an update.
+# An update keeps the pairing and settings. Magisk, KernelSU and APatch all build the new module
+# under /data/adb/modules_update/<id> and point MODPATH at that staged copy, so the module.prop this
+# script can see is its own. Only a completed install leaves module.prop in the live
+# /data/adb/modules/<id>: APatch creates that directory empty before this script runs, and Magisk and
+# KernelSU write the file into it after the script ends. An empty directory is therefore a first
+# install. A recovery flash stages straight into the live directory and keeps nothing there to tell
+# the two apart, so it is treated as a first install.
 MODULE_ID="$(basename "$MODPATH")"
-if [ -n "$MODULE_ID" ] && [ -d "/data/adb/modules/$MODULE_ID" ]; then
+LIVE_DIR="/data/adb/modules/$MODULE_ID"
+if [ -n "$MODULE_ID" ] && [ "$MODPATH" != "$LIVE_DIR" ] && [ -f "$LIVE_DIR/module.prop" ]; then
     ui_print "- Update: the pairing and settings are kept"
     ui_print "- The update applies after the reboot"
 else
