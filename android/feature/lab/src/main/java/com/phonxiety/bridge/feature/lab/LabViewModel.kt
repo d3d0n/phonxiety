@@ -168,12 +168,18 @@ class LabViewModel @Inject constructor(
             null
         }
         val answered = probes?.firstOrNull { it.reachable }
+
+        // Without the phone's own measurement the row says so: the daemon's listener answering is
+        // not this phone reaching it.
+        fun inconclusive(note: String) = row.copy(reachable = false, rttMs = null, reason = "inconclusive", detail = row.notes(note))
         val updated = when {
-            urls.isEmpty() -> row.copy(detail = row.notes("the daemon reports no LAN address"))
+            info == null -> inconclusive("the phone could not read the daemon's LAN addresses")
 
-            token == null -> row.copy(detail = row.notes("this phone is not paired, so it cannot authenticate a probe"))
+            urls.isEmpty() -> inconclusive("the daemon reports no LAN address")
 
-            probes == null -> row.copy(detail = row.notes("the phone's own check failed"))
+            token == null -> inconclusive("this phone is not paired, so it cannot authenticate a probe")
+
+            probes == null -> inconclusive("the phone's own check failed")
 
             else -> row.copy(
                 available = true,

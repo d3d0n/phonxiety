@@ -272,6 +272,30 @@ class LabViewModelTest {
     }
 
     @Test
+    fun `a daemon-reachable listener is not shown as reachable when the phone cannot check it`() = runBlocking<Unit> {
+        api.probeHandler = {
+            ApiOutcome.Ok(
+                200,
+                ProbeResult(
+                    candidates = listOf(ProbeCandidate("lan", available = true, reachable = true, rttMs = 3.0)),
+                    checkedAt = "2026-11-26T10:00:00+00:00"
+                )
+            )
+        }
+        api.infoHandler = { ApiOutcome.Failure(503, "link_down", "no link") }
+        val vm = viewModel()
+        vm.toggleProbeCandidate("iroh")
+        vm.toggleProbeCandidate("tailscale")
+        vm.runProbe()
+        withTimeout(5_000) { vm.state.first { it.probe.candidates.isNotEmpty() } }
+        val row = vm.state.value.probe.candidates.single()
+        assertFalse(row.reachable)
+        assertEquals(null, row.rttMs)
+        assertEquals("inconclusive", row.reason)
+        assertTrue(lanCheck.calls.isEmpty())
+    }
+
+    @Test
     fun `diagnostics text renders and the log view honours the filter`() = runBlocking<Unit> {
         api.diagnosticsHandler = {
             ApiOutcome.Ok(
