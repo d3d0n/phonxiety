@@ -16,18 +16,36 @@ import com.google.mlkit.vision.codescanner.GmsBarcodeScanner
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import kotlin.coroutines.resume
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 
 /** What one attempt at the Play services scanner produced. */
-private sealed interface PlayScan {
+internal sealed interface PlayScan {
     data class Code(val value: String) : PlayScan
 
     data object Cancelled : PlayScan
 
     /** No usable scanner: the module is missing, Play services refused, or the camera was denied. */
     data class Unavailable(val reason: String) : PlayScan
+}
+
+/**
+ * One attempt at a code scanner. Production wraps the Google code scanner; a test supplies a
+ * scanner that fails without Play services.
+ */
+internal interface PlayScanner {
+    /** Opens the scanner and reports what the person did with it. */
+    suspend fun scan(): PlayScan
+
+    /** Downloads the on-demand module. True means [scan] may be tried again. */
+    suspend fun installModule(): Boolean
+}
+
+/** Creates [PlayScanner]s. The factory itself may fail before a scanner exists. */
+internal fun interface PlayScannerFactory {
+    suspend fun create(context: Context): PlayScanner
 }
 
 /**
@@ -58,12 +76,53 @@ fun rememberQrScanner(
     }
 }
 
-private suspend fun scanWithPlayServices(context: Context): PlayScan {
-    val scanner = GmsBarcodeScanning.getClient(context, scannerOptions())
-    val first = startScan(scanner)
-    if (first !is PlayScan.Unavailable) return first
-    if (!installScannerModule(context, scanner)) return first
-    return startScan(scanner)
+/**
+ * The whole Google scanner path for one attempt. Anything that goes wrong in it — Play services
+ * missing or broken, a scanner that cannot be constructed, a scan that throws instead of reporting
+ * an error — becomes one [PlayScan.Unavailable], so the host opens the in-app CameraX scanner and
+ * the paste field instead of losing the wizard. Cancellation still propagates: leaving the screen
+ * is not a scanner failure.
+ */
+internal suspend fun scanWithPlayServices(
+    context: Context,
+    factory: PlayScannerFactory = PlayServicesScannerFactory
+): PlayScan = try {
+    val scanner = factory.create(context)
+    val first = scanner.scan()
+    if (first !is PlayScan.Unavailable) {
+        first
+    } else if (!scanner.installModule()) {
+        first
+    } else {
+        scanner.scan()
+    }
+} catch (cancelled: CancellationException) {
+    throw cancelled
+} catch (error: Throwable) {
+    PlayScan.Unavailable(scanFailureReason(error))
+}
+
+/** A reason the wizard can show: what failed, plus the platform message when there is one. */
+private fun scanFailureReason(error: Throwable): String {
+    val detail = error.message?.takeIf { it.isNotBlank() }
+        ?: return "the Google code scanner could not start"
+    return "the Google code scanner could not start: $detail"
+}
+
+private object PlayServicesScannerFactory : PlayScannerFactory {
+    override suspend fun create(context: Context): PlayScanner = PlayServicesScanner(
+        context = context,
+        scanner = GmsBarcodeScanning.getClient(context, scannerOptions())
+    )
+}
+
+private class PlayServicesScanner(
+    private val context: Context,
+    private val scanner: GmsBarcodeScanner
+) : PlayScanner {
+    override suspend fun scan(): PlayScan = startScan(scanner)
+
+    override suspend fun installModule(): Boolean = installScannerModule(context, scanner)
 }
 
 private fun scannerOptions(): GmsBarcodeScannerOptions = GmsBarcodeScannerOptions.Builder()

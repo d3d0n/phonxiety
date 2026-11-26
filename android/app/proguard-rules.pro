@@ -8,7 +8,8 @@
 #      native method up by its exact name and JVM signature;
 #   3. kotlinx.serialization, which reaches serializers through a generated
 #      `Companion`, and SavedState, which restores navigation keys by class;
-#   4. the Android components instantiated from a class name: the Glance widget.
+#   4. the Android components instantiated from a class name: the Glance widget
+#      and the ML Kit component registrars.
 #
 # Compose, Media3, Hilt, Room, OkHttp and kotlinx.coroutines ship their own
 # consumer rules; only what those rules do not cover is repeated here.  The
@@ -70,6 +71,21 @@
 # `GlanceAppWidget` from the generic type at runtime.
 -keep class * extends androidx.glance.appwidget.GlanceAppWidgetReceiver { *; }
 -keep class * extends androidx.glance.appwidget.GlanceAppWidget { <init>(); }
+
+# --- ML Kit component registrars --------------------------------------------
+# ML Kit initialises itself from the merged manifest: `MlKitContext` reads the
+# `<meta-data>` entries of `MlKitComponentDiscoveryService` and instantiates each
+# `ComponentRegistrar` with `Class.getDeclaredConstructor().newInstance()`.
+# firebase-components 16.1.0 only ships `-keep class * implements
+# ComponentRegistrar`, which keeps the class but lets R8 delete the no-arg
+# constructor; the registrar is then dropped with "Invalid component registrar",
+# `MlKitContext` has no `SharedPrefManager`, and the Google code scanner dies in
+# its constructor with the null `SharedPrefManager` (the wizard crash at
+# `GmsBarcodeScanning.getClient`). ML Kit 17.3.0 still pulls firebase-components
+# 16.1.0, so the application has to keep the constructors itself.
+-keep class * implements com.google.firebase.components.ComponentRegistrar {
+    <init>();
+}
 
 # --- Room --------------------------------------------------------------------
 # Entities are instantiated by the generated database implementation, and the
