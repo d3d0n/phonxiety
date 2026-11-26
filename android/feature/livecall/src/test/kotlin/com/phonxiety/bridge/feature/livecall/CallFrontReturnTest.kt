@@ -17,8 +17,11 @@ import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowLooper
 
 /**
- * The lifecycle sequences card G2 names: a placed call is pulled back exactly once, and nothing
- * else — a later cover, a recreated activity, an incoming call, a spent call — brings it forward.
+ * The lifecycle sequences card G3 names: a placed call is pulled back exactly once, only inside the
+ * initial cover, and nothing else — a later cover, a manual return, a late or missing placement
+ * reply, a hangup, an incoming call — brings it forward. Call state stays exactly what production
+ * publishes: when an incoming call covers an owned outgoing call, [BridgeEngine] ignores the
+ * incoming one, so the runtime keeps showing the placed call.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -26,6 +29,7 @@ class CallFrontReturnTest {
     private var call: CallState? = null
     private var interactive = true
     private var returns = 0
+    private var now = 1_000L
 
     @Before
     fun setUp() {
@@ -33,6 +37,7 @@ class CallFrontReturnTest {
         call = null
         interactive = true
         returns = 0
+        now = 1_000L
     }
 
     @After
@@ -44,11 +49,19 @@ class CallFrontReturnTest {
         handler = Handler(Looper.getMainLooper()),
         call = { call },
         screenInteractive = { interactive },
-        openFront = { returns++ }
+        openFront = { returns++ },
+        clock = { now }
     )
 
     private fun idle(millis: Long) {
+        now += millis
         ShadowLooper.idleMainLooper(millis, TimeUnit.MILLISECONDS)
+    }
+
+    /** The composer asked for this call and the daemon already accepted it. */
+    private fun placed(callId: String) {
+        LiveCallFront.expectPlacement(now)
+        LiveCallFront.remember(callId, now)
     }
 
     private fun dialing(callId: String) = CallState(
@@ -60,6 +73,8 @@ class CallFrontReturnTest {
 
     private fun active(callId: String) = dialing(callId).copy(phase = CallPhase.ACTIVE)
 
+    private fun ending(callId: String) = dialing(callId).copy(phase = CallPhase.ENDING)
+
     private fun ended(callId: String) = dialing(callId).copy(phase = CallPhase.ENDED)
 
     @Test
@@ -67,25 +82,25 @@ class CallFrontReturnTest {
         val front = controller()
 
         // The composer asked for the call; Telecom's screen covers the app before the reply lands.
-        LiveCallFront.expectPlacement()
+        LiveCallFront.expectPlacement(now)
         front.onStop(canReturn = true)
         idle(400)
         assertEquals(0, returns)
 
         // The daemon answers: this phone placed call c1, and it is dialing behind the cover.
-        LiveCallFront.remember("c1")
+        LiveCallFront.remember("c1", now)
         call = dialing("c1")
         idle(300)
 
         assertEquals(1, returns)
-        assertNull(LiveCallFront.pendingCallId())
-        assertFalse(LiveCallFront.awaitsCover())
+        assertNull(LiveCallFront.pendingCallId(now))
+        assertFalse(LiveCallFront.awaitsCover(now))
     }
 
     @Test
     fun secondStopDuringActiveDoesNotReturn() {
         val front = controller()
-        LiveCallFront.remember("c1")
+        placed("c1")
         call = dialing("c1")
         front.onStop(canReturn = true)
         idle(400)
@@ -98,13 +113,13 @@ class CallFrontReturnTest {
         idle(4000)
 
         assertEquals(1, returns)
-        assertNull(LiveCallFront.pendingCallId())
+        assertNull(LiveCallFront.pendingCallId(now))
     }
 
     @Test
     fun recreatedActivityDoesNotReturnAgain() {
         val first = controller()
-        LiveCallFront.remember("c1")
+        placed("c1")
         call = dialing("c1")
         first.onStop(canReturn = true)
         idle(400)
@@ -133,29 +148,110 @@ class CallFrontReturnTest {
     }
 
     @Test
-    fun anotherCallWhileAPlacementIsPendingDoesNotReturn() {
+    fun anotherCallWhileThePlacementReplyIsPendingDoesNotReturn() {
         val front = controller()
-        LiveCallFront.remember("c1")
-        call = dialing("incoming")
+        LiveCallFront.expectPlacement(now)
 
+        // An incoming call arrives before the daemon confirms the placement and covers the app.
+        front.onStop(canReturn = true)
+        call = dialing("incoming")
+        idle(4000)
+
+        assertEquals(0, returns)
+        assertNull(LiveCallFront.pendingCallId(now))
+    }
+
+    @Test
+    fun aManualReturnBeforeTheAttemptClosesTheOpportunity() {
+        val front = controller()
+        LiveCallFront.expectPlacement(now)
+        call = dialing("c1")
+
+        front.onStop(canReturn = true)
+        // The user comes back by hand before the delayed attempt runs.
+        front.onResume()
+        // The placement reply lands while the app is in front.
+        LiveCallFront.remember("c1", now)
+        idle(4000)
+
+        assertEquals(0, returns)
+        assertFalse(LiveCallFront.awaitsCover(now))
+
+        // A later cover of the same, still owned call does not schedule anything.
+        front.onStop(canReturn = true)
+        idle(4000)
+        assertEquals(0, returns)
+    }
+
+    @Test
+    fun aReplyThatLandsAfterTheRetriesExpiredDoesNothing() {
+        val front = controller()
+        LiveCallFront.expectPlacement(now)
+        call = dialing("c1")
+
+        // Telecom's screen is up but the daemon's reply never arrives within the wait.
+        front.onStop(canReturn = true)
+        idle(4000)
+        assertEquals(0, returns)
+
+        // The reply lands afterwards; the cover it belonged to is long over.
+        LiveCallFront.remember("c1", now)
+        idle(4000)
+
+        assertEquals(0, returns)
+        assertNull(LiveCallFront.pendingCallId(now))
+        assertFalse(LiveCallFront.awaitsCover(now))
+
+        front.onStop(canReturn = true)
+        idle(4000)
+        assertEquals(0, returns)
+    }
+
+    @Test
+    fun aReplyThatLandsAfterTheOpportunityExpiredDoesNothing() {
+        val front = controller()
+        LiveCallFront.expectPlacement(now)
+        call = dialing("c1")
+        now += LiveCallFront.OPPORTUNITY_TTL_MS + 1
+
+        LiveCallFront.remember("c1", now)
         front.onStop(canReturn = true)
         idle(4000)
 
         assertEquals(0, returns)
-        assertEquals("c1", LiveCallFront.pendingCallId())
+        assertNull(LiveCallFront.pendingCallId(now))
+    }
+
+    @Test
+    fun aHangupBeforeTheReturnLandsDoesNothing() {
+        val front = controller()
+        placed("c1")
+        front.onStop(canReturn = true)
+
+        // The far end hangs up (or the user does) during the wait; BridgeEngine publishes ENDING.
+        call = ending("c1")
+        idle(4000)
+
+        assertEquals(0, returns)
+        assertNull(LiveCallFront.pendingCallId(now))
+        assertNull(LiveCallFront.placedCallId())
+
+        front.onStop(canReturn = true)
+        idle(4000)
+        assertEquals(0, returns)
     }
 
     @Test
     fun callEndedClearsTheToken() {
         val front = controller()
-        LiveCallFront.remember("c1")
+        placed("c1")
         call = ended("c1")
 
         front.onStart()
 
         assertNull(LiveCallFront.placedCallId())
-        assertNull(LiveCallFront.pendingCallId())
-        assertFalse(LiveCallFront.awaitsCover())
+        assertNull(LiveCallFront.pendingCallId(now))
+        assertFalse(LiveCallFront.awaitsCover(now))
 
         front.onStop(canReturn = true)
         idle(4000)
@@ -165,7 +261,7 @@ class CallFrontReturnTest {
     @Test
     fun endedBeforeTheReturnLandsClearsTheToken() {
         val front = controller()
-        LiveCallFront.remember("c1")
+        placed("c1")
         call = dialing("c1")
         front.onStop(canReturn = true)
 
@@ -180,7 +276,7 @@ class CallFrontReturnTest {
     @Test
     fun aDeliberateLeaveIsNotUndone() {
         val front = controller()
-        LiveCallFront.remember("c1")
+        placed("c1")
         call = dialing("c1")
 
         front.onUserLeaveHint()
@@ -188,25 +284,26 @@ class CallFrontReturnTest {
         idle(4000)
 
         assertEquals(0, returns)
+        assertFalse(LiveCallFront.awaitsCover(now))
     }
 
     @Test
     fun aFinishingActivityDoesNotReturn() {
         val front = controller()
-        LiveCallFront.remember("c1")
+        placed("c1")
         call = dialing("c1")
 
         front.onStop(canReturn = false)
         idle(4000)
 
         assertEquals(0, returns)
-        assertEquals("c1", LiveCallFront.pendingCallId())
+        assertEquals("c1", LiveCallFront.pendingCallId(now))
     }
 
     @Test
     fun screenOffSpendsTheTokenWithoutReturning() {
         val front = controller()
-        LiveCallFront.remember("c1")
+        placed("c1")
         call = dialing("c1")
         interactive = false
 
@@ -214,7 +311,7 @@ class CallFrontReturnTest {
         idle(4000)
 
         assertEquals(0, returns)
-        assertNull(LiveCallFront.pendingCallId())
+        assertNull(LiveCallFront.pendingCallId(now))
     }
 
     @Test
