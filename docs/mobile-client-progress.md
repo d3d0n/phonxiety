@@ -54,7 +54,7 @@ What each phase of [`mobile-client-plan.md`](mobile-client-plan.md) produced on 
 - **Found in that pass and fixed:**
   - the phone settings were read before unlock and came up as defaults for the whole process; they now live in device-protected storage, the old file migrates once it is readable and stays for a rollback (`settings-before-unlock.txt`);
   - a leading "+" typed into the Lab test number was erased;
-  - result fields the agent left empty read "null"; they now read "Not reported".
+  - result fields the agent left empty read "null"; they now read "Not reported";
   - the live header timer counted from placing the call, so it disagreed with the system's call chip and jumped back at the end. The bridge now records the answer once, from Telecom's connect time, and keeps it across replays, recovery and a lost link; the screen counts from it. In call `f2d46b55` the header and the system chip both read 00:10 ten seconds after the answer, and the ended header read the 15 s the call lasted (`live-call-timer.png`);
   - the transcript says "First turn in progress" while only a partial turn is on screen, and claims nothing while the link is reconnecting; the jump control reads "Jump to the end" on an ended call and "Jump to latest" on an unconfirmed end; the Lab's loopback card asks for a call again once a test call has ended.
 
