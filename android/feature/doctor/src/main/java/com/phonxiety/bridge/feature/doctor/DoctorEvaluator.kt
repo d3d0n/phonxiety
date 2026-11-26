@@ -367,16 +367,19 @@ object DoctorEvaluator {
                 when {
                     facts == null -> UiText.Res(R.string.doctor_evidence_overlay_no_package_manager)
 
-                    underPrivApp -> UiText.Res(R.string.doctor_evidence_overlay_privapp, listOfNotNull(path))
+                    underPrivApp -> UiText.Res(R.string.doctor_evidence_overlay_privapp)
 
-                    updatedSystem -> UiText.Res(R.string.doctor_evidence_overlay_updated, listOfNotNull(path))
+                    updatedSystem -> UiText.Res(R.string.doctor_evidence_overlay_updated)
 
                     snapshot.overlay == Overlay.METAMODULE_MISSING ->
-                        UiText.Res(R.string.doctor_evidence_overlay_metamodule, listOfNotNull(path))
+                        UiText.Res(R.string.doctor_evidence_overlay_metamodule)
 
-                    else -> UiText.Res(R.string.doctor_evidence_overlay_not_mounted, listOfNotNull(path))
+                    else -> UiText.Res(R.string.doctor_evidence_overlay_not_mounted)
                 }
             ),
+            // Where the package actually lives is evidence: one raw path behind Details, never in
+            // the sentence a person reads down the list.
+            details = listOfNotNull(path?.let(UiText::Literal)),
             plan = DoctorPolicy.planFor(DoctorItemKind.OVERLAY, context)
         )
     }

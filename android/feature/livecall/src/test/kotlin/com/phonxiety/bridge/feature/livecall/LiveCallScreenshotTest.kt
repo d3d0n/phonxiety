@@ -35,6 +35,7 @@ import com.phonxiety.bridge.designsystem.testing.assertAccessible
 import com.phonxiety.bridge.designsystem.testing.pinAnimationFrame
 import com.phonxiety.bridge.model.AudioState
 import com.phonxiety.bridge.model.CallMark
+import com.phonxiety.bridge.model.CallPhase
 import com.phonxiety.bridge.model.PartialTurn
 import com.phonxiety.bridge.model.TranscriptTurn
 import java.util.Locale
@@ -222,6 +223,71 @@ class LiveCallScreenshotTest {
     }
 
     @Test
+    fun thePhoneIsDialingWhileTheRecordStillSaysPreparing() = render("preparing_dialing_411_light") {
+        // Telecom dials before the daemon's snapshot answers: the header follows the phone.
+        setScreen(state = LiveCallSamples.live.copy(state = "preparing", localPhase = CallPhase.DIALING))
+    }
+
+    @Test
+    fun aDialingPhoneIsNotStillPreparing() {
+        setScreen(state = LiveCallSamples.live.copy(state = "preparing", localPhase = CallPhase.ACTIVE))
+        composeRule.onNodeWithText("Live").assertExists()
+        composeRule.onNodeWithText("Preparing").assertDoesNotExist()
+    }
+
+    @Test
+    fun aPreparingCallDoesNotClaimTheAgentIsListening() {
+        setScreen(
+            state = LiveCallSamples.live.copy(
+                state = "preparing",
+                localPhase = null,
+                activity = null,
+                turns = emptyList(),
+                partials = emptyList(),
+                summary = null
+            )
+        )
+        composeRule.onNodeWithText("Preparing").assertExists()
+        composeRule.onNodeWithText("Waiting for the first turn").assertExists()
+        composeRule.onNodeWithText("Agent listening").assertDoesNotExist()
+    }
+
+    @Test
+    fun theUnconfirmedEndExplainsItself() = render("status_unknown_411_light") {
+        setScreen(state = LiveCallSamples.ended.copy(state = "unknown", statusUnknownError = UNCONFIRMED_REASON))
+    }
+
+    @Test
+    fun theUnconfirmedEndInDark() = render("status_unknown_411_dark") {
+        setScreen(state = LiveCallSamples.ended.copy(state = "unknown", statusUnknownError = UNCONFIRMED_REASON), dark = true)
+    }
+
+    @Test
+    fun theUnconfirmedEndAtTwoHundredPercent() = render("status_unknown_320_font200_light") {
+        setScreen(
+            state = LiveCallSamples.ended.copy(state = "unknown", statusUnknownError = UNCONFIRMED_REASON),
+            fontScale = 2f,
+            width = 320.dp
+        )
+    }
+
+    @Test
+    fun anUnconfirmedEndSaysWhyAndKeepsItsEvidence() {
+        setScreen(state = LiveCallSamples.ended.copy(state = "unknown", statusUnknownError = UNCONFIRMED_REASON))
+        composeRule.onNodeWithText("Call status unknown").assertExists()
+        composeRule
+            .onNodeWithText("The connection to the computer was lost. The final call status could not be confirmed.")
+            .assertExists()
+        // The call is never called over: no screen word says the end was recorded.
+        composeRule.onNodeWithText("Ended", substring = false).assertDoesNotExist()
+        composeRule.onNodeWithText("Refresh status").assertExists()
+        // The daemon's own reason stays behind Details, verbatim.
+        composeRule.onNodeWithText(UNCONFIRMED_REASON).assertDoesNotExist()
+        composeRule.onNodeWithText("Show details").performClick()
+        composeRule.onNodeWithText(UNCONFIRMED_REASON).assertExists()
+    }
+
+    @Test
     fun aDroppedLinkNeverReadsAsALiveCall() {
         setScreen(state = LiveCallSamples.live.copy(reconnecting = true))
         composeRule.onNodeWithText("Reconnecting").assertExists()
@@ -353,6 +419,8 @@ class LiveCallScreenshotTest {
 }
 
 /** A call that has been going for a minute, with all three surfaces of the screen occupied. */
+private const val UNCONFIRMED_REASON = "hangup_unconfirmed: the phone did not answer"
+
 object LiveCallSamples {
     val live = LiveCallUiState(
         callId = "call-2026-11-26",

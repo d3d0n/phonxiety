@@ -81,6 +81,30 @@ class LiveCallTruthTest {
     }
 
     @Test
+    fun thePhoneAdvancesAStalePreparingRecord() {
+        // Telecom dials before the daemon's snapshot makes the round trip: a record still saying
+        // "preparing" must not keep "Preparing" on screen while the phone already dials.
+        assertEquals("dialing", LiveCallUiState(state = "preparing", localPhase = CallPhase.DIALING).phase)
+        assertEquals("active", LiveCallUiState(state = "preparing", localPhase = CallPhase.ACTIVE).phase)
+        // A terminal daemon state is the call's own end: the phone cannot advance past it.
+        assertEquals("ended", LiveCallUiState(state = "ended", localPhase = CallPhase.ACTIVE).phase)
+        // A daemon phase the phone cannot contradict stays as recorded.
+        assertEquals("ending", LiveCallUiState(state = "ending", localPhase = CallPhase.ACTIVE).phase)
+        assertEquals("dialing", LiveCallUiState(state = "dialing", localPhase = CallPhase.DIALING).phase)
+        // A phone that already ended the call is not still "Preparing" it either.
+        assertEquals("ended", LiveCallUiState(state = "preparing", localPhase = CallPhase.ENDED).phase)
+    }
+
+    @Test
+    fun anUnconfirmedEndIsNotCalledEnded() {
+        val unknown = LiveCallUiState(state = "unknown", ended = true, turns = ended.turns)
+        assertEquals("Unknown", phaseLabel(unknown, resources))
+        assertEquals("The call's end was not confirmed · 5 turns", transcriptSubtitle(unknown, resources))
+        assertNotEquals(transcriptSubtitle(ended, resources), transcriptSubtitle(unknown, resources))
+        assertEquals("active", LiveCallUiState(state = "active", localPhase = CallPhase.ENDING).phase)
+    }
+
+    @Test
     fun theSpokenDurationIsWordsNotDigits() {
         assertEquals(
             "Call duration 1 minute 9 seconds",

@@ -62,6 +62,7 @@ import com.phonxiety.bridge.designsystem.component.LoadingState
 import com.phonxiety.bridge.designsystem.component.PrimaryActionButton
 import com.phonxiety.bridge.designsystem.component.StatusPill
 import com.phonxiety.bridge.designsystem.component.StatusTone
+import com.phonxiety.bridge.designsystem.farEndLabel
 import com.phonxiety.bridge.designsystem.formatElapsedTime
 import com.phonxiety.bridge.designsystem.formatPhoneNumber
 import com.phonxiety.bridge.model.CallSummary

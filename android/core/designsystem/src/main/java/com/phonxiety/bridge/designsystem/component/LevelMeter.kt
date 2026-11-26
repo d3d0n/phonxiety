@@ -48,7 +48,8 @@ fun LevelMeter(
         ) {
             Text(text = label, style = MaterialTheme.typography.labelMedium)
             Text(
-                text = levelDbfs?.let { formatDbfs(it) } ?: "—\u00A0dBFS",
+                // A missing measurement is "—": a unit would claim a number that is not there.
+                text = levelDbfs?.let { formatDbfs(it) } ?: "—",
                 style = MaterialTheme.typography.labelMedium,
                 fontFamily = FontFamily.Monospace
             )

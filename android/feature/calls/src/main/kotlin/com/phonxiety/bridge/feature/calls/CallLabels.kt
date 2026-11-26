@@ -67,15 +67,6 @@ internal fun causeLabel(cause: String?): String = when (cause?.uppercase()) {
     else -> humanize(cause)
 }
 
-/** What answered at the far end: a person, a menu or a mailbox. */
-@Composable
-internal fun farEndLabel(farEnd: String): String = when (farEnd.lowercase()) {
-    "person" -> stringResource(R.string.calls_far_end_person)
-    "ivr" -> stringResource(R.string.calls_far_end_ivr)
-    "voicemail" -> stringResource(R.string.calls_far_end_voicemail)
-    else -> humanize(farEnd)
-}
-
 /**
  * The recording card's subtitle follows the download: it offers the download while only the bridge
  * has the file, reports the transfer while it runs, and claims the file on this phone only once one

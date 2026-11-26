@@ -272,6 +272,16 @@ class LabScreenScreenshotTest {
     ) { setScreen(finishedTestCall()) }
 
     @Test
+    fun thePlacementConfirmationSeparatesTheStatusFromTheCallId() {
+        setScreen(finishedTestCall())
+        composeRule.onNodeWithText("Test call placed").performScrollTo().assertExists()
+        composeRule.onNodeWithText("Call ID").assertExists()
+        composeRule.onNodeWithText("call-1").assertExists()
+        // The status no longer carries the internal id on the same line.
+        composeRule.onNodeWithText("Placed", substring = true).assertDoesNotExist()
+    }
+
+    @Test
     fun theTestCallResultInDark() = render(
         "test_call_result_411_dark",
         beforeCapture = {

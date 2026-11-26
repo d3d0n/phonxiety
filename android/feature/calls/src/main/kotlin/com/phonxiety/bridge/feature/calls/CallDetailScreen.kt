@@ -69,9 +69,11 @@ import com.phonxiety.bridge.designsystem.component.LoadingState
 import com.phonxiety.bridge.designsystem.component.SectionCard
 import com.phonxiety.bridge.designsystem.component.StatusPill
 import com.phonxiety.bridge.designsystem.component.StatusTone
+import com.phonxiety.bridge.designsystem.farEndLabel
 import com.phonxiety.bridge.designsystem.formatDuration
 import com.phonxiety.bridge.designsystem.formatElapsedTime
 import com.phonxiety.bridge.designsystem.formatPhoneNumber
+import com.phonxiety.bridge.designsystem.resultText
 import com.phonxiety.bridge.model.CallMark
 import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.TranscriptTurn
@@ -79,6 +81,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 
 @Composable
@@ -391,7 +394,13 @@ private fun ResultCard(state: CallDetailUiState) {
             Text(text = summary, style = MaterialTheme.typography.bodyLarge)
         }
         fields.entries.forEach { (key, value) ->
-            KeyValueRow(label = humanize(key), value = value.render(), mono = true)
+            // A boolean answers a question; a sentence is read as a sentence. Only a technical
+            // value keeps tabular monospace.
+            val display = resultText(
+                raw = value.render(),
+                boolean = (value as? JsonPrimitive)?.booleanOrNull
+            )
+            KeyValueRow(label = humanize(key), value = display.text, mono = display.mono)
         }
         snapshot?.error?.let { error ->
             Text(

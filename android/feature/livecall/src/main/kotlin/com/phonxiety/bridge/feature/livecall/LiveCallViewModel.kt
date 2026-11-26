@@ -74,13 +74,18 @@ data class LiveCallUiState(
     val error: UiText? = null,
     /** The daemon's code for [error], shown behind the details disclosure. */
     val errorCode: String? = null,
+    /**
+     * The record's own error on a call whose end could not be confirmed: the evidence behind the
+     * "Call status unknown" card, not another action failure.
+     */
+    val statusUnknownError: String? = null,
     val ended: Boolean = false,
     val missing: Boolean = false
 ) {
     val terminal: Boolean get() = ended
 
-    /** The daemon's word wins; the phone's own phase fills in until the daemon reports one. */
-    val phase: String? get() = state ?: daemonCallState(localPhase)
+    /** The daemon's word wins, except where the phone is provably ahead of a stale record. */
+    val phase: String? get() = reconcilePhase(state, daemonCallState(localPhase))
 
     val callSecondsElapsed: Long?
         get() {
@@ -89,6 +94,22 @@ data class LiveCallUiState(
             return ((end - start).coerceAtLeast(0)) / 1000
         }
 }
+
+/**
+ * The phase of the one call, from the daemon's state and the phone's own. Telecom dials the moment
+ * the phone places the call, so a record still saying "preparing" while the phone reports dialing or
+ * a connection is a stale snapshot, not a newer fact: the phone's phase advances it. Every terminal
+ * daemon state stays the authority, because it is the call's own recorded end.
+ */
+internal fun reconcilePhase(daemon: String?, phone: String?): String? = when {
+    daemon == null -> phone
+    phone == null -> daemon
+    daemon == "preparing" && phone in PHONE_PHASES_THAT_ADVANCE_PREPARING -> phone
+    else -> daemon
+}
+
+/** The phases Telecom reports for a call the phone already placed, past the daemon's preparation. */
+private val PHONE_PHASES_THAT_ADVANCE_PREPARING = setOf("dialing", "active", "ending", "ended")
 
 /**
  * The live call. The transcript, the state and the agent's activity all arrive through the
@@ -297,12 +318,19 @@ class LiveCallViewModel @Inject constructor(
     private fun applySnapshot(snapshot: CallSnapshot) {
         val merged = mergeTurns(snapshot.transcript)
         _state.update {
-            val ended = it.ended || terminalState(it.state ?: snapshot.state)
+            // A terminal state is the call's recorded end: a record read that answers late and
+            // still says "preparing" may not reopen a call the transcript already closed.
+            val state = if (terminalState(it.state) && !terminalState(snapshot.state)) {
+                it.state
+            } else {
+                snapshot.state ?: it.state
+            }
+            val ended = it.ended || terminalState(state)
             it.copy(
                 loaded = true,
                 destination = snapshot.destination ?: it.destination,
                 farEnd = snapshot.farEnd ?: it.farEnd,
-                state = snapshot.state ?: it.state,
+                state = state,
                 callOutcome = snapshot.callOutcome ?: it.callOutcome,
                 resultStatus = snapshot.resultStatus ?: it.resultStatus,
                 summary = snapshot.summary ?: it.summary,
@@ -315,6 +343,12 @@ class LiveCallViewModel @Inject constructor(
                 createdAtMs = snapshot.createdAt?.let { seconds -> (seconds * 1000).toLong() } ?: it.createdAtMs,
                 endedAtMs = snapshot.endedAt?.let { seconds -> (seconds * 1000).toLong() }
                     ?: it.endedAtMs ?: if (ended) System.currentTimeMillis() else null,
+                // The record keeps the reason its end could not be confirmed; a resolved call
+                // drops it rather than leaving a stale card on screen.
+                statusUnknownError = when {
+                    state == "unknown" -> snapshot.error ?: it.statusUnknownError
+                    else -> null
+                },
                 ended = ended,
                 hangingUp = it.hangingUp && !ended
             )

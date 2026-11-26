@@ -221,6 +221,11 @@ private fun PreviewBody(preview: Preview) {
                 }
                 KeyValueRow(label = "Endpoint", value = "6c3a1f9b", mono = true)
                 KeyValueRow(label = "Missing", value = "—", mono = true)
+                // A long answer and its label stack: the label keeps its width at any text size.
+                KeyValueRow(
+                    label = "Menu options heard",
+                    value = "Press one for reservations, two for the kitchen, and hold for the manager after six."
+                )
             }
             SectionCard(title = "Audio", status = { StatusPill("Opus", StatusTone.ACCENT) }) {
                 KeyValueRow(label = "Bitrate", value = "64 kbit/s", mono = true)

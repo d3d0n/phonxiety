@@ -107,14 +107,14 @@
     <string name="lab_test_place">Place test call</string>
     <string name="lab_test_placing">Placing…</string>
     <string name="lab_test_need_number">Set the test number first.</string>
-    <string name="lab_test_placed">Placed · %1$s</string>
+    <string name="lab_test_placed">Test call placed</string>
+    <string name="lab_test_call_id">Call ID</string>
     <string name="lab_test_failed">The test call wasn\'t placed</string>
     <string name="lab_test_dialog_title">Place the test call?</string>
     <string name="lab_test_dialog_body">Calls %1$s with the fixed test script. It ends on its own and is never retried.</string>
     <string name="lab_test_dialog_confirm">Place test call</string>
     <string name="lab_test_dialog_cancel">Cancel</string>
     <string name="lab_test_dialog_body_probes">Calls %1$s with the fixed test script. The bridge starts the audio probes once the far end answers, and the call holds until they finish. It is never retried.</string>
-    <string name="lab_test_placed_message">Test call placed</string>
 
     <!-- Test call audio probes: the far end hears both of them -->
     <string name="lab_test_probes_title">Audio probes</string>

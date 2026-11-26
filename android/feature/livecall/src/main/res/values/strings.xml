@@ -35,11 +35,16 @@
     <string name="live_call_phase_idle">Idle</string>
     <string name="live_call_phase_loading">Loading</string>
 
+    <string name="live_call_status_unknown_title">Call status unknown</string>
+    <string name="live_call_status_unknown_message">The connection to the computer was lost. The final call status could not be confirmed.</string>
+    <string name="live_call_status_refresh">Refresh status</string>
+
     <string name="live_call_reconnect_banner">The link dropped. The transcript will catch up from the call record.</string>
     <string name="live_call_reconnect_action">Sync now</string>
 
     <string name="live_call_transcript_title">Transcript</string>
     <string name="live_call_transcript_ended">Ended · %1$s</string>
+    <string name="live_call_transcript_unconfirmed">The call\'s end was not confirmed · %1$s</string>
     <plurals name="live_call_turns">
         <item quantity="one">%1$d turn</item>
         <item quantity="other">%1$d turns</item>
