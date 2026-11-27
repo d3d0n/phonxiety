@@ -49,19 +49,42 @@ object BridgeRuntime {
     val appToken: StateFlow<String?> = mutableAppToken.asStateFlow()
 
     private val tokenScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+
+    /**
+     * Serializes source replacement with every publication, and names the source a collector
+     * belongs to. A collector cancelled while it is inside its callback has already read its
+     * emission: the generation check is what stops it from landing after the replacement.
+     */
+    private val tokenLock = Any()
+    private var tokenGeneration = 0L
     private var tokenJob: Job? = null
+
+    /** Test seam: runs at the start of a collector's publication, before the generation check. */
+    internal var beforeTokenPublishForTest: ((String?) -> Unit)? = null
 
     /**
      * Follows [source] for the installed engine. Unconfined is enough: mirroring one state flow
      * needs no thread of its own, and each emission lands before the next call returns.
      */
     internal fun followAppToken(source: StateFlow<String?>?) {
-        tokenJob?.cancel()
-        tokenJob = null
-        mutableAppToken.value = source?.value
-        if (source == null) return
-        tokenJob = tokenScope.launch {
-            source.collect { mutableAppToken.value = it }
+        synchronized(tokenLock) {
+            val generation = ++tokenGeneration
+            tokenJob?.cancel()
+            tokenJob = null
+            mutableAppToken.value = source?.value
+            if (source == null) return
+            tokenJob = tokenScope.launch {
+                source.collect { publishAppToken(generation, it) }
+            }
+        }
+    }
+
+    /** Keeps a collector's emission only while its source is still the followed one. */
+    private fun publishAppToken(generation: Long, token: String?) {
+        beforeTokenPublishForTest?.invoke(token)
+        synchronized(tokenLock) {
+            if (generation != tokenGeneration) return
+            mutableAppToken.value = token
         }
     }
 
