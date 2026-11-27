@@ -1,4 +1,4 @@
-# Unreleased
+# Phonxiety bridge 0.5.0
 
 The phone side of Phonxiety: the app and the root module that let the daemon on your computer place
 and run cellular calls through this phone.
@@ -66,6 +66,7 @@ and run cellular calls through this phone.
 - Shared build conventions.
 - Logs that build their messages only when they are kept.
 - A smaller app: fewer null checks compiled in.
-- **Screens redraw less for the same state**: the classes that carry a screen's state tell the compiler they are read-only, so an unchanged state is recognised instead of drawn again.
+- The classes that carry a screen's state are marked read-only, so the compiler now treats them as stable; a test keeps each one that way.
 - The call cache keeps the list apart from each call's record, indexes what the list filters and sorts by, and writes a record together with its transcript.
 - Every screen showing a call reads one shared request stream from the computer, and a call nobody watches is let go after a while.
+- The phone and the computer speak one protocol version only: update both together.
