@@ -27,10 +27,11 @@ import org.robolectric.annotation.Config
 @Config(sdk = [35])
 class DefaultUpdatesServiceRollbackTest {
     private val context: Context = RuntimeEnvironment.getApplication()
-    private val archive = PublishedModuleArchive("0.3.0", 3, "a".repeat(64))
+    private val archive = ARCHIVE
 
     private companion object {
         const val SYSTEM_APK: String = "/system/priv-app/phonxiety-bridge/phonxiety-bridge.apk"
+        val ARCHIVE = PublishedModuleArchive("0.3.0", 3, "a".repeat(64))
     }
 
     @Test
@@ -256,20 +257,44 @@ class DefaultUpdatesServiceRollbackTest {
         return DefaultUpdatesService(
             context = context,
             daemonApi = daemon,
-            inventory = UpdateInventory { InstalledVersions(appVersion = "0.4.0", appVersionCode = 4, deviceSdk = 35) },
-            downloader = ReleaseDownloader { _, _, _ -> error("the rollback never downloads") },
-            verifier = ApkVerifier { _, _, _ -> ApkVerification.NotAnApk },
-            installGateway = ApkInstallGateway { _, _ -> ApkInstallOutcome.Failed(InstallFailure.INSTALL_FAILED, null) },
-            keeper = keeper,
-            privilegedInstaller = privileged,
-            moduleGateway = UnusedModuleGateway,
-            previousModule = PreviousModuleCapture { CaptureResult.NothingToCapture },
-            mountedApk = MountedSystemApk { mounted },
-            archives = archives,
-            journalStore = journalStore,
-            rollbackRoot = root,
-            rootState = RootModuleState { moduleState }
+            app = FakeAppUpdates(keeper = keeper, privilegedInstaller = privileged),
+            module = FakeModuleUpdates(
+                mounted = mounted,
+                archives = archives,
+                journalStore = journalStore,
+                rollbackRoot = root,
+                moduleState = moduleState
+            )
         )
+    }
+
+    /** The app path with every collaborator defaulted; a test names only the one it drives. */
+    private class FakeAppUpdates(
+        override val inventory: UpdateInventory = UpdateInventory { InstalledVersions(appVersion = "0.4.0", appVersionCode = 4, deviceSdk = 35) },
+        override val downloader: ReleaseDownloader = ReleaseDownloader { _, _, _ -> error("the rollback never downloads") },
+        override val verifier: ApkVerifier = ApkVerifier { _, _, _ -> ApkVerification.NotAnApk },
+        override val installGateway: ApkInstallGateway = ApkInstallGateway { _, _ -> ApkInstallOutcome.Failed(InstallFailure.INSTALL_FAILED, null) },
+        override val keeper: PreviousApkKeeper = FakeKeeper(null, 0),
+        override val privilegedInstaller: PrivilegedApkInstaller = RecordingPrivilegedInstaller()
+    ) : AppUpdateSeam
+
+    /** The module path with every collaborator defaulted; the journal tests override what they read. */
+    private class FakeModuleUpdates(
+        override val installGateway: ModuleInstallGateway = UnusedModuleGateway,
+        override val previousModule: PreviousModuleCapture = PreviousModuleCapture { CaptureResult.NothingToCapture },
+        mounted: MountedSystemApkVersion = MountedSystemApkVersion.Present(SYSTEM_APK, "0.4.0", 4),
+        override val archives: ModuleArchivePublisher = FakeArchives(RollbackArchiveState.Present(ARCHIVE)) {
+            RollbackArchiveState.Present(ARCHIVE)
+        },
+        override val journalStore: RollbackJournalStore = FakeJournalStore(null),
+        rollbackRoot: RollbackRootSteps = FakeRoot(),
+        moduleState: ModuleState = ModuleState.Absent
+    ) : ModuleUpdateSeam {
+        override val mountedApk: MountedSystemApk = MountedSystemApk { mounted }
+
+        override val rollbackRoot: RollbackRootSteps = rollbackRoot
+
+        override val rootState: RootModuleState = RootModuleState { moduleState }
     }
 
     private fun journal(step: RollbackJournalStep): RollbackJournal = RollbackJournal(

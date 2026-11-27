@@ -77,23 +77,61 @@ interface UpdatesService {
     fun dismiss()
 }
 
+/**
+ * The app's own update path as one seam: what downloads, verifies and installs the APK, the copy a
+ * rollback restores, and the versions this phone runs. [DefaultAppUpdateSeam] is the production
+ * wiring; a test supplies its own and never touches a package manager.
+ */
+interface AppUpdateSeam {
+    val inventory: UpdateInventory
+    val downloader: ReleaseDownloader
+    val verifier: ApkVerifier
+    val installGateway: ApkInstallGateway
+    val keeper: PreviousApkKeeper
+    val privilegedInstaller: PrivilegedApkInstaller
+}
+
+@Singleton
+class DefaultAppUpdateSeam @Inject constructor(
+    override val inventory: UpdateInventory,
+    override val downloader: ReleaseDownloader,
+    override val verifier: ApkVerifier,
+    override val installGateway: ApkInstallGateway,
+    override val keeper: PreviousApkKeeper,
+    override val privilegedInstaller: PrivilegedApkInstaller
+) : AppUpdateSeam
+
+/**
+ * The module path as one seam: the archive this build publishes, what the phone has mounted, and
+ * the root-owned journal that carries a rollback across a reboot.
+ */
+interface ModuleUpdateSeam {
+    val installGateway: ModuleInstallGateway
+    val previousModule: PreviousModuleCapture
+    val mountedApk: MountedSystemApk
+    val archives: ModuleArchivePublisher
+    val journalStore: RollbackJournalStore
+    val rollbackRoot: RollbackRootSteps
+    val rootState: RootModuleState
+}
+
+@Singleton
+class DefaultModuleUpdateSeam @Inject constructor(
+    override val installGateway: ModuleInstallGateway,
+    override val previousModule: PreviousModuleCapture,
+    override val mountedApk: MountedSystemApk,
+    override val archives: ModuleArchivePublisher,
+    override val journalStore: RollbackJournalStore,
+    override val rollbackRoot: RollbackRootSteps,
+    override val rootState: RootModuleState
+) : ModuleUpdateSeam
+
 @Singleton
 class DefaultUpdatesService @Inject constructor(
     @ApplicationContext context: Context,
     private val daemonApi: DaemonApi,
-    private val inventory: UpdateInventory,
-    private val downloader: ReleaseDownloader,
-    private val verifier: ApkVerifier,
-    private val installGateway: ApkInstallGateway,
-    private val keeper: PreviousApkKeeper,
-    private val privilegedInstaller: PrivilegedApkInstaller,
-    private val moduleGateway: ModuleInstallGateway,
-    private val previousModule: PreviousModuleCapture,
-    private val mountedApk: MountedSystemApk,
-    private val archives: ModuleArchivePublisher,
-    private val journalStore: RollbackJournalStore,
-    private val rollbackRoot: RollbackRootSteps,
-    private val rootState: RootModuleState
+    private val app: AppUpdateSeam,
+    private val module: ModuleUpdateSeam
 ) : UpdatesService {
     private val appContext = context.applicationContext
     private val pendingDirectory = File(appContext.filesDir, PENDING_DIRECTORY)
@@ -136,7 +174,7 @@ class DefaultUpdatesService @Inject constructor(
                 is ManifestParse.Valid -> parsed.manifest
             }
         }
-        val installed = inventory.read()
+        val installed = app.inventory.read()
         return UpdateCheck(
             manifest = manifest,
             verdict = UpdateCompat.evaluate(manifest, installed),
@@ -149,10 +187,10 @@ class DefaultUpdatesService @Inject constructor(
         action.withLock {
             if (_appInstall.value.busy) return
             val coordinator = AppUpdateCoordinator(
-                downloader = downloader,
-                verifier = verifier,
-                installer = installGateway,
-                keeper = keeper,
+                downloader = app.downloader,
+                verifier = app.verifier,
+                installer = app.installGateway,
+                keeper = app.keeper,
                 currentVersionCode = ::installedVersionCode,
                 pendingDirectory = pendingDirectory,
                 onState = { _appInstall.value = it }
@@ -165,7 +203,7 @@ class DefaultUpdatesService @Inject constructor(
     override suspend fun installModule(manifest: UpdateManifest) {
         action.withLock {
             if (_moduleInstall.value.busy) return
-            ModuleUpdateCoordinator(moduleGateway, previousModule) { _moduleInstall.value = it }.install(manifest)
+            ModuleUpdateCoordinator(module.installGateway, module.previousModule) { _moduleInstall.value = it }.install(manifest)
         }
     }
 
@@ -176,21 +214,21 @@ class DefaultUpdatesService @Inject constructor(
             // recorded by its own target, before any fresh plan. Recomputing a plan here would read
             // a data app that is newer than the staged module and choose an app-only install, and
             // the kept APK may be gone with the app's data.
-            val journal = journalStore.readJournal()
+            val journal = module.journalStore.readJournal()
             if (journal != null && finishJournal(journal)) return
             val plan = RollbackPlanner.plan(rollbackFacts())
             _rollbackPlan.value = plan
             when (plan) {
                 is RollbackPlan.AppOnly -> {
-                    AppRollbackCoordinator(keeper, privilegedInstaller) { _appInstall.value = it }.rollback()
+                    AppRollbackCoordinator(app.keeper, app.privilegedInstaller) { _appInstall.value = it }.rollback()
                     refreshRollback()
                 }
 
                 is RollbackPlan.WithPreviousModule -> {
                     // A pending journal never reaches this branch: finishJournal above owns it.
                     val result = ModuleRollbackCoordinator(
-                        archives = archives,
-                        root = rollbackRoot,
+                        archives = module.archives,
+                        root = module.rollbackRoot,
                         app = runningApp(),
                         onState = { _moduleRollback.value = it }
                     ).rollback(plan.previousVersionCode)
@@ -225,7 +263,7 @@ class DefaultUpdatesService @Inject constructor(
     private suspend fun finishJournal(journal: RollbackJournal): Boolean {
         val recovery = verifyJournal(journal)
         if (recovery is RollbackRecovery.Completed) {
-            journalStore.removeJournal()
+            module.journalStore.removeJournal()
             _rollbackRecovery.value = recovery
             return false
         }
@@ -237,8 +275,8 @@ class DefaultUpdatesService @Inject constructor(
             held != null && held.second == targets.moduleVersionCode && held.first == targets.moduleVersionName
         }
         val result = ModuleRollbackCoordinator(
-            archives = archives,
-            root = rollbackRoot,
+            archives = module.archives,
+            root = module.rollbackRoot,
             app = runningApp(),
             stagedArchiveSha256 = stagedSha256,
             recoverySha256 = targets.moduleSha256,
@@ -257,14 +295,14 @@ class DefaultUpdatesService @Inject constructor(
     /** Re-reads the plan and the journal; the rollback card must never depend on the daemon. */
     private suspend fun refreshRollback() {
         _rollbackPlan.value = RollbackPlanner.plan(rollbackFacts())
-        val journal = journalStore.readJournal()
+        val journal = module.journalStore.readJournal()
         // Once the script records a result — or the journal is gone because the rollback completed —
         // "Started" is stale: the recovery block below owns the screen and offers retry or dismiss.
         if (_moduleRollback.value is RollbackState.Started && journal?.step != RollbackJournalStep.MODULE_STAGED) {
             _moduleRollback.value = RollbackState.Idle
         }
         val recovery = journal?.let { verifyJournal(it) }
-        if (recovery is RollbackRecovery.Completed) journalStore.removeJournal()
+        if (recovery is RollbackRecovery.Completed) module.journalStore.removeJournal()
         _rollbackRecovery.value = recovery
     }
 
@@ -276,12 +314,12 @@ class DefaultUpdatesService @Inject constructor(
     )
 
     private suspend fun rollbackFacts(): RollbackFacts = RollbackFacts(
-        keptApkExists = keeper.keptApk() != null,
-        keptVersionName = keeper.keptVersionName(),
-        keptVersionCode = keeper.keptVersionCode(),
+        keptApkExists = app.keeper.keptApk() != null,
+        keptVersionName = app.keeper.keptVersionName(),
+        keptVersionCode = app.keeper.keptVersionCode(),
         runningVersionCode = installedVersionCode(),
-        mounted = mountedApk.read(),
-        archive = archives.read()
+        mounted = module.mountedApk.read(),
+        archive = module.archives.read()
     )
 
     private fun runningApp(): RunningApp {
@@ -295,7 +333,7 @@ class DefaultUpdatesService @Inject constructor(
         )
     }
 
-    private suspend fun moduleState(): ModuleState? = runCatching { rootState.moduleState() }.getOrNull()
+    private suspend fun moduleState(): ModuleState? = runCatching { module.rootState.moduleState() }.getOrNull()
 
     /** The module actually mounted on the system image; a staged one has not been applied yet. */
     private suspend fun mountedModuleVersionCode(): Long? = moduleState()?.appliedVersionCode()

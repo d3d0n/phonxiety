@@ -18,12 +18,16 @@ import com.phonxiety.bridge.data.updates.AndroidRootAccess
 import com.phonxiety.bridge.data.updates.AndroidUpdateInventory
 import com.phonxiety.bridge.data.updates.ApkInstallGateway
 import com.phonxiety.bridge.data.updates.ApkVerifier
+import com.phonxiety.bridge.data.updates.AppUpdateSeam
+import com.phonxiety.bridge.data.updates.DefaultAppUpdateSeam
+import com.phonxiety.bridge.data.updates.DefaultModuleUpdateSeam
 import com.phonxiety.bridge.data.updates.DefaultUpdatesService
 import com.phonxiety.bridge.data.updates.FilePreviousApkKeeper
 import com.phonxiety.bridge.data.updates.ModuleArchiveBuilder
 import com.phonxiety.bridge.data.updates.ModuleArchiveCapture
 import com.phonxiety.bridge.data.updates.ModuleArchivePublisher
 import com.phonxiety.bridge.data.updates.ModuleInstallGateway
+import com.phonxiety.bridge.data.updates.ModuleUpdateSeam
 import com.phonxiety.bridge.data.updates.MountedSystemApk
 import com.phonxiety.bridge.data.updates.PackageInstallerGateway
 import com.phonxiety.bridge.data.updates.PreviousApkKeeper
@@ -129,6 +133,14 @@ abstract class DataModule {
     @Binds
     @Singleton
     abstract fun updatesService(impl: DefaultUpdatesService): UpdatesService
+
+    @Binds
+    @Singleton
+    abstract fun appUpdateSeam(impl: DefaultAppUpdateSeam): AppUpdateSeam
+
+    @Binds
+    @Singleton
+    abstract fun moduleUpdateSeam(impl: DefaultModuleUpdateSeam): ModuleUpdateSeam
 
     companion object {
         @Provides
