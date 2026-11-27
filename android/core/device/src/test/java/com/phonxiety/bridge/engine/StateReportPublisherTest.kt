@@ -34,8 +34,7 @@ class StateReportPublisherTest {
         }
     }
 
-    private fun session(store: FakeCallStore = FakeCallStore()) =
-        CallSession(store, "com.phonxiety.bridge", clock = { 1_000L })
+    private fun session(store: FakeCallStore = FakeCallStore()): CallSession = CallSession(store, "com.phonxiety.bridge", clock = { 1_000L })
 
     private fun call(id: String = "call-1") = CallSession.OwnedCall(
         callId = id,

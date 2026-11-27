@@ -1,5 +1,7 @@
 package com.phonxiety.bridge.engine
 
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -173,12 +175,27 @@ class CallSessionTest {
     fun aDialUnderAnIdleLinkActionWaitsForTheDoor() {
         val session = session()
         val action = session.admission.tryBeginIdleLinkAction { false }
+        val dialStarted = CountDownLatch(1)
 
         val dial = Thread {
-            runCatching { session.dial("call-1", "+998901234567") }
+            runCatching {
+                session.beginDial(
+                    callId = "call-1",
+                    destination = "+998901234567",
+                    phoneAccount = null,
+                    // The dial reads this before it waits for the door: it says the
+                    // attempt is under way without polling or sleeping.
+                    unrelatedCall = {
+                        dialStarted.countDown()
+                        false
+                    },
+                    linkUp = { true },
+                    running = { true }
+                )
+            }
         }
         dial.start()
-        Thread.sleep(20)
+        assertTrue(dialStarted.await(5, TimeUnit.SECONDS))
 
         // The action is still in flight; the dial must not have reserved.
         assertNull(session.owned)
