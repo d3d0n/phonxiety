@@ -29,6 +29,8 @@ import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -173,10 +175,72 @@ class CallDetailViewModelTest {
         assertFalse(viewModel.state.value.loading)
     }
 
+    @Test
+    fun aRefusedRefreshKeepsTheCachedRecordAlreadyOnScreen() = runTest(dispatcher) {
+        val gate = CompletableDeferred<Unit>()
+        repository.detailFlow.value = CACHED
+        // A refused refresh hands back the copy the store had, which is the one on screen here.
+        repository.networkSnapshot = CACHED
+        repository.detailFailure = NOT_FOUND
+        repository.gate = gate
+        val viewModel = viewModel()
+        advanceUntilIdle()
+        assertEquals(CACHED, viewModel.state.value.snapshot)
+
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals("the stored record is not replaced", CACHED, viewModel.state.value.snapshot)
+        assertFalse("a stored record is not a missing call", viewModel.state.value.missing)
+        assertNotNull("the refusal is still reported", viewModel.state.value.error)
+    }
+
+    @Test
+    fun aRefusedRefreshDoesNotHideACachedRecordTheStoreEmitsAfterwards() = runTest(dispatcher) {
+        val gate = CompletableDeferred<Unit>()
+        repository.detailFlow.value = null
+        // The refusal carries the record the store holds, so the screen learns of the copy before
+        // the store's own emission of it arrives.
+        repository.networkSnapshot = CACHED
+        repository.detailFailure = NOT_FOUND
+        repository.gate = gate
+        val viewModel = viewModel()
+        advanceUntilIdle()
+        assertNull("the store's emission has not arrived yet", viewModel.state.value.snapshot)
+
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        assertFalse("the store's copy is not a missing call", viewModel.state.value.missing)
+
+        repository.detailFlow.value = CACHED
+        advanceUntilIdle()
+
+        assertEquals(CACHED, viewModel.state.value.snapshot)
+        assertFalse(viewModel.state.value.missing)
+        assertNotNull(viewModel.state.value.error)
+    }
+
+    @Test
+    fun aRefusedRefreshWithNothingStoredSaysTheCallIsMissing() = runTest(dispatcher) {
+        repository.detailFlow.value = null
+        repository.networkSnapshot = null
+        repository.detailFailure = NOT_FOUND
+        val viewModel = viewModel()
+
+        advanceUntilIdle()
+
+        assertNull(viewModel.state.value.snapshot)
+        assertTrue("no copy to keep: the call is missing", viewModel.state.value.missing)
+        assertFalse(viewModel.state.value.offline)
+        assertNotNull(viewModel.state.value.error)
+    }
+
     private companion object {
         const val CALL_ID = "call-1"
 
         val CALL = CallSnapshot(callId = CALL_ID, destination = "+998901234567", state = "ended", callOutcome = "answered")
+        val NOT_FOUND = ApiOutcome.Failure(404, "call_not_found", "the call is not on the device")
         val CACHED = CALL.copy(summary = "Table for two on Thursday")
         val UPDATED = CALL.copy(summary = "Table moved to Friday")
     }

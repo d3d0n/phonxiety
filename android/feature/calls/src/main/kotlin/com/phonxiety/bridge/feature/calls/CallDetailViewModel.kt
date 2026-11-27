@@ -150,7 +150,12 @@ class CallDetailViewModel @Inject constructor(
         if (refreshJob?.isActive == true) return
         _state.update { it.copy(refreshing = true, error = null) }
         refreshJob = viewModelScope.launch {
-            val failure = repository.detail(callId, refresh = true).failure
+            val result = repository.detail(callId, refresh = true)
+            val failure = result.failure
+            // A refusal only ends the screen when the cache holds no copy: a stored record stays
+            // where it is and the refusal is reported beside it, whichever of the two the screen
+            // hears about first. The answer carries the copy the store had at the refusal.
+            val storedCopy = result.snapshot != null
             _state.update {
                 it.copy(
                     refreshing = false,
@@ -158,7 +163,7 @@ class CallDetailViewModel @Inject constructor(
                     // the wait here, with the cache still on screen when it holds a copy.
                     loading = if (failure != null) false else it.loading,
                     offline = failure != null && failure.code !in MISSING_CODES,
-                    missing = failure != null && failure.code in MISSING_CODES,
+                    missing = failure != null && failure.code in MISSING_CODES && !storedCopy && it.snapshot == null,
                     error = failure?.let { f -> CallsFailure.of(f.message, f.code) }
                 )
             }
