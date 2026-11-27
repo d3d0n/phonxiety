@@ -149,9 +149,13 @@ class DefaultCallsRepository @Inject constructor(
             is ApiOutcome.Ok -> {
                 val page = outcome.value
                 // A turn is only cached under a call whose detail row exists: the transcript
-                // table hangs off it by a foreign key, and only an opened call pages turns.
-                if (page.transcript.isNotEmpty() && cache.detail.exists(callId)) {
-                    cache.transaction { detail.upsertTranscript(page.transcript.map { it.toEntity(callId) }) }
+                // table hangs off it by a foreign key, and only an opened call pages turns. The
+                // check shares the write's transaction, so a delete that lands while the page is
+                // on its way cannot leave turns without a call: it is a quiet no-op instead.
+                if (page.transcript.isNotEmpty()) {
+                    cache.transaction {
+                        if (detail.exists(callId)) detail.upsertTranscript(page.transcript.map { it.toEntity(callId) })
+                    }
                 }
                 TranscriptResult(
                     turns = page.transcript,
