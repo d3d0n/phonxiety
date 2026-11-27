@@ -67,3 +67,4 @@ and run cellular calls through this phone.
 - Logs that build their messages only when they are kept.
 - A smaller app: fewer null checks compiled in.
 - The call cache keeps the list apart from each call's record, indexes what the list filters and sorts by, and writes a record together with its transcript.
+- Every screen showing a call reads one shared request stream from the computer, and a call nobody watches is let go after a while.
