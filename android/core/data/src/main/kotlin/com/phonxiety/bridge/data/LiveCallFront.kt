@@ -139,6 +139,21 @@ object LiveCallFront {
     }
 
     /**
+     * The instant the open answer-cover wait for [callId] expires, or null while that call has no
+     * wait to adopt. The wait is opened by [armAnswerCover] and keeps its deadline across a
+     * configuration change; reading it once here, under the same lock as the predicates, lets the
+     * next activity instance take the wait over with the deadline it opened with. A wait that
+     * already ran out reads as null: there is nothing left to adopt.
+     */
+    fun answerCoverDeadline(callId: String, nowElapsed: Long = SystemClock.elapsedRealtime()): Long? = synchronized(lock) {
+        if (placedCallId == callId && answer == Answer.OPEN && answerStillOpen(nowElapsed)) {
+            answerOpenedAt + ANSWER_TTL_MS
+        } else {
+            null
+        }
+    }
+
+    /**
      * Spends the answer-cover return for [callId]. False for a second cover of the same call (a
      * hold, a reopened dialer), for any other call, once the call ended, and after the wait closed.
      * The permit never opens again for this call.

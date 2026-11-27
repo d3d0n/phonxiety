@@ -181,10 +181,102 @@ class LiveCallViewModelTest {
         advanceUntilIdle()
 
         val controls = viewModel.state.value.controls
-        assertTrue(controls.instruction)
-        assertFalse(controls.pause)
-        assertFalse(controls.dtmf)
-        assertTrue(viewModel.state.value.controlsKnown)
+        assertEquals(ControlAvailability.ENABLED, controls.instruction)
+        assertEquals(ControlAvailability.DISABLED, controls.pause)
+        assertEquals(ControlAvailability.DISABLED, controls.dtmf)
+        assertTrue("the daemon answered for every control", viewModel.state.value.controls.known)
+    }
+
+    @Test
+    fun anInfoThatNeverAnswersLeavesEveryControlUnknown() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        api.info = ApiOutcome.Failure(503, "link_down", "the daemon is not reachable")
+        api.callSnapshot = ApiOutcome.Ok(200, snapshot())
+        api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(endedEvent(1))))
+
+        val viewModel = viewModel(api)
+        viewModel.bind(CALL_ID)
+        advanceUntilIdle()
+
+        val controls = viewModel.state.value.controls
+        assertEquals(ControlAvailability.UNKNOWN, controls.hangup)
+        assertEquals(ControlAvailability.UNKNOWN, controls.instruction)
+        assertFalse("nothing was confirmed", controls.known)
+        assertFalse("an unknown control is not offered", controls.hangup.isEnabled)
+    }
+
+    @Test
+    fun hangUpWaitsForItsConfirmation() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        api.info = ApiOutcome.Ok(200, DaemonInfo(voiceControls = VoiceControls(hangup = true)))
+        api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "active"))
+        api.hangup = ApiOutcome.Ok(200, snapshot(state = "ending"))
+
+        val viewModel = viewModel(api)
+        viewModel.bind(CALL_ID)
+        runCurrent()
+
+        viewModel.requestHangUp()
+        runCurrent()
+        assertTrue("the screen holds the pending confirmation", viewModel.state.value.pendingHangUp)
+        assertEquals("nothing reached the daemon yet", 0, api.hangupCalls)
+
+        viewModel.dismissHangUp()
+        runCurrent()
+        assertFalse(viewModel.state.value.pendingHangUp)
+        assertEquals(0, api.hangupCalls)
+
+        viewModel.requestHangUp()
+        runCurrent()
+        viewModel.confirmHangUp()
+        runCurrent()
+        assertFalse("confirming closes the pending value", viewModel.state.value.pendingHangUp)
+        assertEquals(1, api.hangupCalls)
+        api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(endedEvent(1))))
+        advanceUntilIdle()
+    }
+
+    @Test
+    fun confirmingTwiceHangsUpOnce() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        api.info = ApiOutcome.Ok(200, DaemonInfo(voiceControls = VoiceControls(hangup = true)))
+        api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "active"))
+        api.hangup = ApiOutcome.Ok(200, snapshot(state = "ending"))
+
+        val viewModel = viewModel(api)
+        viewModel.bind(CALL_ID)
+        runCurrent()
+
+        viewModel.requestHangUp()
+        runCurrent()
+        viewModel.confirmHangUp()
+        viewModel.confirmHangUp()
+        runCurrent()
+
+        // The confirmation is single-use: the second confirm consumes nothing and sends nothing.
+        assertEquals(1, api.hangupCalls)
+        api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(endedEvent(1))))
+        advanceUntilIdle()
+    }
+
+    @Test
+    fun anUnknownHangUpCannotBeConfirmed() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        api.info = ApiOutcome.Failure(503, "link_down", "the daemon is not reachable")
+        api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "active"))
+
+        val viewModel = viewModel(api)
+        viewModel.bind(CALL_ID)
+        runCurrent()
+
+        viewModel.requestHangUp()
+        runCurrent()
+        assertFalse("an unconfirmed control is never offered", viewModel.state.value.pendingHangUp)
+        viewModel.confirmHangUp()
+        runCurrent()
+        assertEquals(0, api.hangupCalls)
+        api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(endedEvent(1))))
+        advanceUntilIdle()
     }
 
     @Test
@@ -395,7 +487,7 @@ class LiveCallViewModelTest {
         assertNotNull("the timer still counts the record's running call", state.callSecondsElapsed)
         assertFalse(state.terminal)
         // Hang up stays the offered action: ended and its end time travel only with the record.
-        assertTrue("the record still offers hang-up", state.controls.hangup)
+        assertEquals("the record still offers hang-up", ControlAvailability.ENABLED, state.controls.hangup)
 
         // The daemon's terminal state is the one place the end, its time and the result arrive.
         api.events += ApiOutcome.Ok(200, page(revision = 2, events = listOf(endedEvent(2))))

@@ -15,11 +15,14 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -94,6 +97,8 @@ class LiveCallScreenshotTest {
         fontScale: Float = 1f,
         width: Dp = 411.dp,
         onHangUp: () -> Unit = {},
+        onConfirmHangUp: () -> Unit = {},
+        onDismissHangUp: () -> Unit = {},
         onSendInstruction: () -> Unit = {}
     ) {
         composeRule.setContent {
@@ -119,6 +124,8 @@ class LiveCallScreenshotTest {
                             onDtmf = {},
                             onMark = {},
                             onHangUp = onHangUp,
+                            onConfirmHangUp = onConfirmHangUp,
+                            onDismissHangUp = onDismissHangUp,
                             onReload = {},
                             onOpenDetail = {},
                             nowEpochMs = NOW
@@ -265,9 +272,8 @@ class LiveCallScreenshotTest {
     @Test
     @Category(Screenshot::class)
     fun theHangUpConfirmation() {
-        setScreen()
-        // A semantics click starts no ripple, so the capture does not depend on animation timing.
-        composeRule.onNodeWithText("Hang up").performSemanticsAction(SemanticsActions.OnClick)
+        // The confirmation lives in the screen's state, so the capture opens with it pending.
+        setScreen(state = LiveCallSamples.live.copy(pendingHangUp = true))
         composeRule.waitForIdle()
         composeRule.onNodeWithTag(SCREEN_TAG).assertAccessible()
         composeRule.onAllNodes(isDialog()).onLast().assertAccessible()
@@ -447,14 +453,119 @@ class LiveCallScreenshotTest {
         composeRule.onNodeWithText("Type an instruction, then send.").assertExists()
     }
 
+    /** An unknown control is disabled and says why: it is never an enabled button the daemon refuses. */
+    @Test
+    fun anUnknownControlIsDisabledWithItsReason() {
+        setScreen(state = LiveCallSamples.live.copy(controls = LiveControls()))
+        composeRule.onNodeWithText("Hang up").assertIsNotEnabled()
+        composeRule
+            .onAllNodesWithText("Waiting for the daemon to say what this call supports.")
+            .onFirst()
+            .assertIsDisplayed()
+
+        openControls()
+        // The instruction's field is not editable before its availability is known.
+        composeRule.onNodeWithText("Tell the agent").assertIsNotEnabled()
+        composeRule.onNodeWithText("Instruction").assertDoesNotExist()
+    }
+
+    /**
+     * The confirmation belongs to the screen's state, not to composition memory: an activity
+     * recreated over the same call opens with the dialog still up.
+     */
+    @Test
+    fun theHangUpConfirmationSurvivesRecreation() {
+        val state = LiveCallSamples.live.copy(pendingHangUp = true)
+        val mounted = mutableStateOf(true)
+        composeRule.setContent {
+            PhonxietyTheme(dynamicColor = false) {
+                Box(
+                    modifier = Modifier
+                        .testTag(SCREEN_TAG)
+                        .width(411.dp)
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.background)
+                ) {
+                    if (mounted.value) {
+                        LiveCallScreen(
+                            state = state,
+                            onBack = {},
+                            onInstructionChange = {},
+                            onSendInstruction = {},
+                            onTogglePause = {},
+                            onSummarize = {},
+                            onDtmf = {},
+                            onMark = {},
+                            onHangUp = {},
+                            onConfirmHangUp = {},
+                            onDismissHangUp = {},
+                            onReload = {},
+                            onOpenDetail = {},
+                            nowEpochMs = NOW
+                        )
+                    }
+                }
+            }
+        }
+        composeRule.onNodeWithText("Hang up now?").assertExists()
+
+        // The activity is destroyed and rebuilt; only the ViewModel's state comes back.
+        mounted.value = false
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("Hang up now?").assertDoesNotExist()
+
+        mounted.value = true
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("Hang up now?").assertExists()
+        composeRule.onNodeWithText("Keep talking").assertExists()
+    }
+
+    /** Once `/info` confirms the control, the same screen offers it. */
+    @Test
+    fun aConfirmedControlIsOffered() {
+        setScreen()
+        composeRule.onNodeWithText("Hang up").assertIsEnabled()
+    }
+
     @Test
     fun hangUpAsksFirstAndDismissingChangesNothing() {
         var hangUps = 0
-        setScreen(onHangUp = { hangUps++ })
+        val state = mutableStateOf(LiveCallSamples.live)
+        composeRule.setContent {
+            PhonxietyTheme(dynamicColor = false) {
+                Box(
+                    modifier = Modifier
+                        .testTag(SCREEN_TAG)
+                        .width(411.dp)
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.background)
+                ) {
+                    LiveCallScreen(
+                        state = state.value,
+                        onBack = {},
+                        onInstructionChange = {},
+                        onSendInstruction = {},
+                        onTogglePause = {},
+                        onSummarize = {},
+                        onDtmf = {},
+                        onMark = {},
+                        onHangUp = { state.value = state.value.copy(pendingHangUp = true) },
+                        onConfirmHangUp = {
+                            state.value = state.value.copy(pendingHangUp = false)
+                            hangUps++
+                        },
+                        onDismissHangUp = { state.value = state.value.copy(pendingHangUp = false) },
+                        onReload = {},
+                        onOpenDetail = {},
+                        nowEpochMs = NOW
+                    )
+                }
+            }
+        }
         composeRule.onNodeWithText("Hang up").performSemanticsAction(SemanticsActions.OnClick)
         composeRule.onNodeWithText("Keep talking").performSemanticsAction(SemanticsActions.OnClick)
         composeRule.waitForIdle()
-        assertEquals(0, hangUps)
+        assertEquals("nothing is sent before the confirmation", 0, hangUps)
 
         composeRule.onNodeWithText("Hang up").performSemanticsAction(SemanticsActions.OnClick)
         composeRule.onAllNodesWithText("Hang up").onLast().performSemanticsAction(SemanticsActions.OnClick)
@@ -535,13 +646,16 @@ class LiveCallScreenshotTest {
                         onSummarize = {},
                         onDtmf = {},
                         onMark = {},
-                        onHangUp = {
+                        onHangUp = { state.value = state.value.copy(pendingHangUp = true) },
+                        onConfirmHangUp = {
                             state.value = state.value.copy(
+                                pendingHangUp = false,
                                 hangingUp = false,
                                 error = UiText.Literal("the bridge service is not running"),
                                 errorCode = "link_down"
                             )
                         },
+                        onDismissHangUp = { state.value = state.value.copy(pendingHangUp = false) },
                         onReload = {},
                         onOpenDetail = {},
                         nowEpochMs = NOW
@@ -566,6 +680,16 @@ class LiveCallScreenshotTest {
 /** A call that has been going for a minute, with all three surfaces of the screen occupied. */
 private const val UNCONFIRMED_REASON = "hangup_unconfirmed: the phone did not answer"
 
+/** A voice backend that honours every control, as a fully featured daemon reports one. */
+private val ALL_CONTROLS = LiveControls(
+    instruction = ControlAvailability.ENABLED,
+    pause = ControlAvailability.ENABLED,
+    summarize = ControlAvailability.ENABLED,
+    dtmf = ControlAvailability.ENABLED,
+    marks = ControlAvailability.ENABLED,
+    hangup = ControlAvailability.ENABLED
+)
+
 object LiveCallSamples {
     val live = LiveCallUiState(
         callId = "call-2026-11-26",
@@ -587,6 +711,7 @@ object LiveCallSamples {
         audioCodec = "opus",
         connectedAtMs = 1_764_000_005_000L,
         createdAtMs = 1_764_000_000_000L,
+        controls = ALL_CONTROLS,
         audio = AudioState(
             codec = "opus",
             bitrate = 32_000,

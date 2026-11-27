@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -42,25 +43,35 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.FocusManager
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.phonxiety.bridge.designsystem.LocalPhonxietyType
 import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.designsystem.asString
 import com.phonxiety.bridge.designsystem.component.ErrorCard
@@ -137,6 +148,14 @@ fun ComposerScreen(
     onConfirm: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val focusManager = LocalFocusManager.current
+    val fields = remember { ComposerFieldFocus() }
+    // The number is the first thing a call needs: the brief opens with it focused. The request
+    // waits for the first frame, when the field is attached and can take the focus.
+    LaunchedEffect(fields) {
+        withFrameNanos { }
+        fields.destination.requestFocus()
+    }
     Box(modifier = modifier.fillMaxSize()) {
         ScreenScaffold(title = stringResource(R.string.composer_title), onBack = onBack) {
             Column(modifier = Modifier.fillMaxSize()) {
@@ -150,13 +169,15 @@ fun ComposerScreen(
                         .padding(vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    WhoCard(state, onDestinationChange)
-                    WhyCard(state, onGoalChange, onContextChange, onConstraintsChange)
+                    WhoCard(state, onDestinationChange, fields, focusManager)
+                    WhyCard(state, onGoalChange, onContextChange, onConstraintsChange, fields, focusManager)
                     FieldsCard(
                         state = state,
                         onFieldDraftChange = onFieldDraftChange,
                         onAddField = onAddField,
-                        onRemoveField = onRemoveField
+                        onRemoveField = onRemoveField,
+                        fields = fields,
+                        focusManager = focusManager
                     )
                     LimitsCard(
                         state = state,
@@ -212,6 +233,13 @@ fun ComposerScreen(
     }
 }
 
+/** The composer's text fields, in the order the IME walks them; the focus test drives the chain. */
+internal const val COMPOSER_NUMBER_TAG = "composer_field_number"
+internal const val COMPOSER_GOAL_TAG = "composer_field_goal"
+internal const val COMPOSER_CONTEXT_TAG = "composer_field_context"
+internal const val COMPOSER_CONSTRAINTS_TAG = "composer_field_constraints"
+internal const val COMPOSER_FIELD_DRAFT_TAG = "composer_field_draft"
+
 /** Above this scale two labels no longer fit side by side in a sheet. */
 private const val STACK_ACTIONS_AT_FONT_SCALE = 1.5f
 
@@ -264,8 +292,7 @@ private fun FieldError(issue: ComposerIssue) {
             if (open) {
                 Text(
                     text = raw,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace
+                    style = LocalPhonxietyType.current.code(MaterialTheme.typography.bodySmall)
                 )
             }
         }
@@ -291,7 +318,12 @@ private fun GoalLength(used: Int) {
 }
 
 @Composable
-private fun WhoCard(state: ComposerUiState, onDestinationChange: (String) -> Unit) {
+private fun WhoCard(
+    state: ComposerUiState,
+    onDestinationChange: (String) -> Unit,
+    fields: ComposerFieldFocus,
+    focusManager: FocusManager
+) {
     SectionCard(
         title = stringResource(R.string.composer_who_title),
         subtitle = stringResource(R.string.composer_who_subtitle),
@@ -327,7 +359,11 @@ private fun WhoCard(state: ComposerUiState, onDestinationChange: (String) -> Uni
         OutlinedTextField(
             value = state.destination,
             onValueChange = onDestinationChange,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag(COMPOSER_NUMBER_TAG)
+                .focusRequester(fields.destination)
+                .focusProperties { next = fields.goal },
             label = { Text(stringResource(R.string.composer_number_label)) },
             placeholder = { Text(stringResource(R.string.composer_number_placeholder)) },
             minLines = 1,
@@ -336,8 +372,11 @@ private fun WhoCard(state: ComposerUiState, onDestinationChange: (String) -> Uni
             supportingText = state.destinationIssue?.let { issue -> { FieldError(issue) } },
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Phone,
-                imeAction = ImeAction.Next
+                imeAction = ImeAction.Next,
+                capitalization = KeyboardCapitalization.None,
+                autoCorrectEnabled = false
             ),
+            keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Next) }),
             colors = fieldColors(),
             shape = MaterialTheme.shapes.medium
         )
@@ -349,7 +388,9 @@ private fun WhyCard(
     state: ComposerUiState,
     onGoalChange: (String) -> Unit,
     onContextChange: (String) -> Unit,
-    onConstraintsChange: (String) -> Unit
+    onConstraintsChange: (String) -> Unit,
+    fields: ComposerFieldFocus,
+    focusManager: FocusManager
 ) {
     SectionCard(
         title = stringResource(R.string.composer_why_title),
@@ -358,12 +399,18 @@ private fun WhyCard(
         OutlinedTextField(
             value = state.goal,
             onValueChange = onGoalChange,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag(COMPOSER_GOAL_TAG)
+                .focusRequester(fields.goal)
+                .focusProperties { next = fields.context },
             label = { Text(stringResource(R.string.composer_goal_label)) },
             placeholder = { Text(stringResource(R.string.composer_goal_placeholder)) },
             minLines = 3,
             maxLines = 6,
             isError = state.goalIssue != null,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+            keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Next) }),
             supportingText = {
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     state.goalIssue?.let { issue -> FieldError(issue) }
@@ -376,22 +423,34 @@ private fun WhyCard(
         OutlinedTextField(
             value = state.context,
             onValueChange = onContextChange,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag(COMPOSER_CONTEXT_TAG)
+                .focusRequester(fields.context)
+                .focusProperties { next = fields.constraints },
             label = { Text(stringResource(R.string.composer_context_label)) },
             placeholder = { Text(stringResource(R.string.composer_context_placeholder)) },
             minLines = 2,
             maxLines = 4,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+            keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Next) }),
             colors = fieldColors(),
             shape = MaterialTheme.shapes.medium
         )
         OutlinedTextField(
             value = state.constraints,
             onValueChange = onConstraintsChange,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag(COMPOSER_CONSTRAINTS_TAG)
+                .focusRequester(fields.constraints)
+                .focusProperties { next = fields.fieldDraft },
             label = { Text(stringResource(R.string.composer_constraints_label)) },
             placeholder = { Text(stringResource(R.string.composer_constraints_placeholder)) },
             minLines = 2,
             maxLines = 4,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+            keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Next) }),
             colors = fieldColors(),
             shape = MaterialTheme.shapes.medium
         )
@@ -404,7 +463,9 @@ private fun FieldsCard(
     state: ComposerUiState,
     onFieldDraftChange: (String) -> Unit,
     onAddField: () -> Unit,
-    onRemoveField: (String) -> Unit
+    onRemoveField: (String) -> Unit,
+    fields: ComposerFieldFocus,
+    focusManager: FocusManager
 ) {
     SectionCard(
         title = stringResource(R.string.composer_fields_title),
@@ -444,10 +505,15 @@ private fun FieldsCard(
             OutlinedTextField(
                 value = state.fieldDraft,
                 onValueChange = onFieldDraftChange,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag(COMPOSER_FIELD_DRAFT_TAG)
+                    .focusRequester(fields.fieldDraft),
                 label = { Text(stringResource(R.string.composer_field_label)) },
                 placeholder = { Text(stringResource(R.string.composer_field_placeholder)) },
                 singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                 colors = fieldColors(),
                 shape = MaterialTheme.shapes.medium
             )
@@ -551,8 +617,7 @@ private fun LimitSlider(
             }
             Text(
                 text = formatMinutes(value),
-                style = MaterialTheme.typography.bodyMedium,
-                fontFamily = FontFamily.Monospace,
+                style = LocalPhonxietyType.current.code(MaterialTheme.typography.bodyMedium, tabular = true),
                 modifier = Modifier.widthIn(min = 64.dp),
                 textAlign = TextAlign.Center
             )
@@ -733,6 +798,19 @@ private fun ReviewText(label: String, value: String) {
         )
         Text(text = value, style = MaterialTheme.typography.bodyMedium)
     }
+}
+
+/**
+ * The composer's text fields in the order the IME walks them: number, goal, context, constraints,
+ * then the field draft, which ends the walk. The requesters make the chain explicit, so the order
+ * never depends on how the cards are laid out at a given width.
+ */
+private class ComposerFieldFocus {
+    val destination = FocusRequester()
+    val goal = FocusRequester()
+    val context = FocusRequester()
+    val constraints = FocusRequester()
+    val fieldDraft = FocusRequester()
 }
 
 /** `60` → `1 min`, `90` → `1 min 30 s`: the units a limit is read in, never a raw second count. */

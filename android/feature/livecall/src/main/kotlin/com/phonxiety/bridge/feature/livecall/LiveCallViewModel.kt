@@ -28,15 +28,48 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 
+/**
+ * What the daemon has said about one control of this call. Before `/info` answers — and if it never
+ * does — the answer is [UNKNOWN], so the screen disables the control with a reason instead of
+ * offering one the daemon would refuse.
+ */
+enum class ControlAvailability {
+    UNKNOWN,
+    ENABLED,
+    DISABLED;
+
+    /** True only when the daemon confirmed the voice backend honours the control. */
+    val isEnabled: Boolean get() = this == ENABLED
+}
+
 /** Which daemon-side controls the voice backend actually honours for this call. */
 data class LiveControls(
-    val instruction: Boolean = true,
-    val pause: Boolean = true,
-    val summarize: Boolean = true,
-    val dtmf: Boolean = true,
-    val marks: Boolean = true,
-    val hangup: Boolean = true
-)
+    val instruction: ControlAvailability = ControlAvailability.UNKNOWN,
+    val pause: ControlAvailability = ControlAvailability.UNKNOWN,
+    val summarize: ControlAvailability = ControlAvailability.UNKNOWN,
+    val dtmf: ControlAvailability = ControlAvailability.UNKNOWN,
+    val marks: ControlAvailability = ControlAvailability.UNKNOWN,
+    val hangup: ControlAvailability = ControlAvailability.UNKNOWN
+) {
+    /** True once `/info` answered and every control has a confirmed answer. */
+    val known: Boolean
+        get() = listOf(instruction, pause, summarize, dtmf, marks, hangup)
+            .none { it == ControlAvailability.UNKNOWN }
+
+    /** `/info`'s booleans as the three-state answer the screen needs. */
+    companion object {
+        fun reported(voice: VoiceControls): LiveControls = LiveControls(
+            instruction = confirmed(voice.instruction),
+            pause = confirmed(voice.pause && voice.resume),
+            summarize = confirmed(voice.summarize),
+            dtmf = confirmed(voice.dtmf),
+            marks = confirmed(voice.marks),
+            hangup = confirmed(voice.hangup)
+        )
+
+        private fun confirmed(supported: Boolean): ControlAvailability = if (supported) ControlAvailability.ENABLED else ControlAvailability.DISABLED
+    }
+}
 
 /** Everything the live call screen draws. The daemon is the only writer of the transcript. */
 data class LiveCallUiState(
@@ -72,7 +105,6 @@ data class LiveCallUiState(
     val endedAtMs: Long? = null,
     val audio: AudioState = AudioState(),
     val controls: LiveControls = LiveControls(),
-    val controlsKnown: Boolean = false,
     val instruction: String = "",
     val loading: Boolean = false,
     val reconnecting: Boolean = false,
@@ -80,6 +112,11 @@ data class LiveCallUiState(
     val busy: Boolean = false,
     /** The hang-up reached the daemon; the call is ending until a terminal state arrives. */
     val hangingUp: Boolean = false,
+    /**
+     * The hang-up is waiting for the user's confirmation. It is screen state, not composition
+     * memory, so it survives a configuration change; only the ViewModel clears or confirms it.
+     */
+    val pendingHangUp: Boolean = false,
     val error: UiText? = null,
     /** The daemon's code for [error], shown behind the details disclosure. */
     val errorCode: String? = null,
@@ -252,10 +289,38 @@ class LiveCallViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Asks for the confirmation a hang-up needs. Nothing reaches the daemon until
+     * [confirmHangUp], and an unknown hang-up control cannot be confirmed at all.
+     */
+    fun requestHangUp() {
+        val snapshot = _state.value
+        if (snapshot.missing || snapshot.busy || snapshot.hangingUp || snapshot.ended) return
+        if (!snapshot.controls.hangup.isEnabled) return
+        _state.update { it.copy(pendingHangUp = true) }
+    }
+
+    /** The user kept talking: the pending confirmation is dropped and the call runs on. */
+    fun dismissHangUp() {
+        _state.update { it.copy(pendingHangUp = false) }
+    }
+
+    /**
+     * The only path from the confirmation to the daemon. The confirmation is single-use: the
+     * pending value is consumed atomically before the operation starts, so a double tap cannot
+     * hang the call up twice.
+     */
+    fun confirmHangUp() {
+        val current = _state.value
+        if (!current.pendingHangUp) return
+        if (!_state.compareAndSet(current, current.copy(pendingHangUp = false))) return
+        hangUp()
+    }
+
     fun hangUp() {
         val snapshot = _state.value
         if (snapshot.busy || snapshot.hangingUp || snapshot.ended) return
-        _state.update { it.copy(busy = true, hangingUp = true, error = null, errorCode = null) }
+        _state.update { it.copy(busy = true, hangingUp = true, pendingHangUp = false, error = null, errorCode = null) }
         viewModelScope.launch {
             when (val outcome = api.hangup(snapshot.callId)) {
                 is ApiOutcome.Ok -> {
@@ -316,17 +381,7 @@ class LiveCallViewModel @Inject constructor(
         }
         val voice: VoiceControls = info.voiceControls
         _state.update {
-            it.copy(
-                controls = LiveControls(
-                    instruction = voice.instruction,
-                    pause = voice.pause && voice.resume,
-                    summarize = voice.summarize,
-                    dtmf = voice.dtmf,
-                    marks = voice.marks,
-                    hangup = voice.hangup
-                ),
-                controlsKnown = true
-            )
+            it.copy(controls = LiveControls.reported(voice))
         }
     }
 
@@ -388,7 +443,8 @@ class LiveCallViewModel @Inject constructor(
                     else -> null
                 },
                 ended = ended,
-                hangingUp = it.hangingUp && !ended
+                hangingUp = it.hangingUp && !ended,
+                pendingHangUp = it.pendingHangUp && !ended
             )
         }
     }
@@ -417,7 +473,8 @@ class LiveCallViewModel @Inject constructor(
                             resultStatus = page.resultStatus ?: it.resultStatus,
                             endedAtMs = it.endedAtMs ?: if (ended) System.currentTimeMillis() else null,
                             ended = ended,
-                            hangingUp = it.hangingUp && !ended
+                            hangingUp = it.hangingUp && !ended,
+                            pendingHangUp = it.pendingHangUp && !ended
                         )
                     }
                 }
@@ -529,7 +586,8 @@ internal fun reduceCallEvents(
                     resultStatus = event.resultStatus ?: next.resultStatus,
                     endedAtMs = next.endedAtMs ?: if (ended) event.secondsEpochMs() else null,
                     ended = ended,
-                    hangingUp = next.hangingUp && !ended
+                    hangingUp = next.hangingUp && !ended,
+                    pendingHangUp = next.pendingHangUp && !ended
                 )
             }
 
@@ -539,7 +597,8 @@ internal fun reduceCallEvents(
                 resultStatus = event.resultStatus ?: next.resultStatus,
                 endedAtMs = next.endedAtMs ?: event.secondsEpochMs(),
                 ended = true,
-                hangingUp = false
+                hangingUp = false,
+                pendingHangUp = false
             )
         }
     }

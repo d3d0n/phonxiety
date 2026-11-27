@@ -66,9 +66,8 @@ class CallFrontReturn(
     private var stage = Stage.NONE
 
     /**
-     * The instant the running answer wait expires, tracked so no tick is scheduled past it.
-     * [LiveCallFront] publishes the wait only through its deadline-checked predicates, so an
-     * adopted wait has its deadline recovered by probing them.
+     * The instant the running answer wait expires, tracked so no tick is scheduled past it: it is
+     * the deadline [LiveCallFront] opened the wait with, read once when the wait is armed or adopted.
      */
     private var answerExpiresAt: Long? = null
 
@@ -164,11 +163,11 @@ class CallFrontReturn(
             }
             return
         }
-        val armed = armAnswerCover(now)
-        if (!armed && !LiveCallFront.answerCoverPending(now)) return
+        if (!armAnswerCover(now) && !LiveCallFront.answerCoverPending(now)) return
+        val deadline = openAnswerDeadline(now) ?: return
         stage = Stage.ANSWER
         attemptsLeft = ANSWER_ATTEMPTS
-        answerExpiresAt = if (armed) now + LiveCallFront.ANSWER_TTL_MS else answerDeadline(now)
+        answerExpiresAt = deadline
         scheduleAnswerLook(RETURN_DELAY_MS)
     }
 
@@ -181,9 +180,10 @@ class CallFrontReturn(
         if (stage == Stage.ANSWER) return
         val now = clock()
         if (!LiveCallFront.answerCoverPending(now)) return
+        val deadline = openAnswerDeadline(now) ?: return
         stage = Stage.ANSWER
         attemptsLeft = ANSWER_ATTEMPTS
-        answerExpiresAt = answerDeadline(now)
+        answerExpiresAt = deadline
         scheduleAnswerLook(RETURN_DELAY_MS)
     }
 
@@ -340,19 +340,13 @@ class CallFrontReturn(
     }
 
     /**
-     * The instant the answer wait already open for the placed call expires. [LiveCallFront] only
-     * exposes the wait through its deadline-checked predicate, so the deadline — monotone inside
-     * the next [LiveCallFront.ANSWER_TTL_MS] — is recovered by probing it.
+     * The deadline of the answer wait now open for the placed call, read once from [LiveCallFront]
+     * under its own lock. Arming this stop's wait and adopting one opened before a configuration
+     * change both go through here, so an adopted wait keeps the deadline it opened with.
      */
-    private fun answerDeadline(now: Long): Long {
-        if (!LiveCallFront.answerCoverPending(now)) return now
-        var low = now
-        var high = now + LiveCallFront.ANSWER_TTL_MS
-        while (low < high) {
-            val mid = low + (high - low + 1) / 2
-            if (LiveCallFront.answerCoverPending(mid)) low = mid else high = mid - 1
-        }
-        return low
+    private fun openAnswerDeadline(now: Long): Long? {
+        val placed = LiveCallFront.placedCallId() ?: return null
+        return LiveCallFront.answerCoverDeadline(placed, now)
     }
 
     private fun abandonWait() {

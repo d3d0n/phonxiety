@@ -105,6 +105,7 @@
     <string name="live_call_controls_title">Audio and controls</string>
     <string name="live_call_controls_show">Show controls</string>
     <string name="live_call_controls_hide">Hide controls</string>
+    <string name="live_call_control_checking">Waiting for the daemon to say what this call supports.</string>
 
     <string name="live_call_hang_up">Hang up</string>
     <string name="live_call_hanging_up">Ending the call…</string>

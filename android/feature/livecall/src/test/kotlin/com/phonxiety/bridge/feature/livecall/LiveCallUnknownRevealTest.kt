@@ -115,6 +115,8 @@ class LiveCallUnknownRevealTest {
                         onDtmf = {},
                         onMark = {},
                         onHangUp = {},
+                        onConfirmHangUp = {},
+                        onDismissHangUp = {},
                         onReload = {},
                         onOpenDetail = {},
                         nowEpochMs = NOW

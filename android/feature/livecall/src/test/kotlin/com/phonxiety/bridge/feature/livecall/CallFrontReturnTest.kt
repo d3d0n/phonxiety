@@ -436,6 +436,47 @@ class CallFrontReturnTest {
     }
 
     @Test
+    fun anAdoptedWaitKeepsTheDeadlineItOpenedWith() {
+        val first = controller()
+        placed("c1")
+        call = dialing("c1")
+        first.onStop(canReturn = true)
+        idle(400)
+        assertEquals(1, returns)
+        first.onResume()
+
+        // The answer wait opens at this stop; its deadline is the stop plus the answer window.
+        call = dialing("c1")
+        val openedAt = now
+        first.onStop(canReturn = true)
+        assertEquals(
+            "the data layer opened the wait at this stop",
+            openedAt + LiveCallFront.ANSWER_TTL_MS,
+            LiveCallFront.answerCoverDeadline("c1", now)!!
+        )
+
+        // A configuration change hands the wait over after part of its life is spent.
+        idle(1_500)
+        first.onDestroy(recreating = true)
+        idle(500)
+        val recreated = controller()
+        recreated.onStart()
+
+        // The next instance reads the same deadline instead of minting a fresh window.
+        assertEquals(
+            "the adopted wait expires when the original one does",
+            openedAt + LiveCallFront.ANSWER_TTL_MS,
+            LiveCallFront.answerCoverDeadline("c1", now)!!
+        )
+
+        // And the adopted wait still returns once the answer lands inside that window.
+        recreated.onStop(canReturn = false)
+        call = active("c1")
+        idle(400)
+        assertEquals(2, returns)
+    }
+
+    @Test
     fun aRejectedSecondPlacementKeepsTheSpentAnswerPermit() {
         val front = controller()
         placed("c1")
