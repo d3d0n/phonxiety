@@ -12,12 +12,10 @@ import computer.iroh.Connection
 import computer.iroh.Endpoint
 import computer.iroh.EndpointAddr
 import computer.iroh.EndpointTicket
-import computer.iroh.SendStream
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 
@@ -56,9 +54,15 @@ internal class IrohLink(
 
     /** Extra bidirectional streams the daemon may open on this connection. */
     private val tunnels = AdbTunnel()
-    private val controlOutbound = Channel<ByteArray>(Channel.UNLIMITED)
-    private val audioOutbound = Channel<ByteArray>(Channel.UNLIMITED)
+
+    /** Bytes accepted by either send queue and not yet written; shared by both, as before. */
     private val backlog = AtomicLong(0)
+
+    /** Control frames behind their one writer; bounded so a stall refuses instead of growing. */
+    private val controlOutbound = IrohSendQueue(IrohSendQueue.CONTROL_CAPACITY, backlog)
+
+    /** Audio frames behind their one writer; unlimited and capped only by the supervisor's backlog. */
+    private val audioOutbound = IrohSendQueue(IrohSendQueue.AUDIO_CAPACITY, backlog)
     private val downOnce = AtomicBoolean(false)
     private val cancelled = AtomicBoolean(false)
 
@@ -158,11 +162,25 @@ internal class IrohLink(
                 return
             }
             listener.onLinkOpened()
-            scope.launch { readIrohFrames(control.recv().asFrameSource(), Framing.KIND_TEXT, listener) { reason -> fail(listener, reason) } }
+            scope.launch {
+                readIrohFrames(control.recv().asFrameSource(), Framing.KIND_TEXT, listener) { reason ->
+                    fail(listener, reason)
+                }
+            }
             scope.launch { readIrohAudio(link, listener) { reason -> fail(listener, reason) } }
             scope.launch { tunnels.acceptLoop(link, scope) }
-            scope.launch { writeLoop(controlSend, controlOutbound, listener) }
-            scope.launch { writeLoop(audioSend, audioOutbound, listener) }
+            scope.launch {
+                controlOutbound.drain(
+                    write = { controlSend.writeAll(it) },
+                    onWriteFailed = { if (!cancelled.get()) fail(listener, "write_failed") }
+                )
+            }
+            scope.launch {
+                audioOutbound.drain(
+                    write = { audioSend.writeAll(it) },
+                    onWriteFailed = { if (!cancelled.get()) fail(listener, "write_failed") }
+                )
+            }
             scope.launch {
                 val reason = runCatching { link.closed() }.getOrDefault("closed")
                 fail(listener, reason.ifEmpty { "closed" })
@@ -236,25 +254,6 @@ internal class IrohLink(
     private fun authMessage(): ByteArray = Json
         .encodeToString(DeviceAuth.serializer(), DeviceAuth(token = config.token))
         .toByteArray(Charsets.UTF_8)
-
-    /** One writer per send stream: drains its queue in order until the link ends. */
-    private suspend fun writeLoop(
-        outgoing: SendStream,
-        queue: Channel<ByteArray>,
-        listener: DeviceLink.Listener
-    ) {
-        try {
-            for (bytes in queue) {
-                try {
-                    outgoing.writeAll(bytes)
-                } finally {
-                    backlog.addAndGet(-bytes.size.toLong())
-                }
-            }
-        } catch (t: Throwable) {
-            if (!cancelled.get()) fail(listener, "write_failed")
-        }
-    }
 
     /**
      * The default network changed under a live link.  The connection's relay
@@ -354,24 +353,16 @@ internal class IrohLink(
     override fun sendText(message: String): Boolean {
         val frame = Framing.encode(Framing.KIND_TEXT, message.toByteArray(Charsets.UTF_8))
             ?: return false
-        return enqueue(controlOutbound, frame)
+        if (cancelled.get() || downOnce.get()) return false
+        return controlOutbound.offer(frame)
     }
 
     override fun sendBinary(frame: ByteArray, length: Int) {
         val size = length.coerceIn(0, frame.size)
         if (size == 0) return
         val encoded = Framing.encode(Framing.KIND_BINARY, frame, size) ?: return
-        enqueue(audioOutbound, encoded)
-    }
-
-    private fun enqueue(queue: Channel<ByteArray>, bytes: ByteArray): Boolean {
-        if (cancelled.get() || downOnce.get()) return false
-        backlog.addAndGet(bytes.size.toLong())
-        if (queue.trySend(bytes).isFailure) {
-            backlog.addAndGet(-bytes.size.toLong())
-            return false
-        }
-        return true
+        if (cancelled.get() || downOnce.get()) return
+        audioOutbound.offer(encoded)
     }
 
     /**
