@@ -284,7 +284,7 @@ class CallFrontReturn(
                 if (LiveCallFront.answerCoverPending(now)) {
                     "answer: the wait for $placed is already open"
                 } else {
-                    "answer: refused; the permit for $placed is already spent"
+                    "answer: refused; the wait for $placed expired or its permit is already spent"
                 }
             }
             return false
