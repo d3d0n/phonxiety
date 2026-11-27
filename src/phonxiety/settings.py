@@ -21,26 +21,8 @@ def default_state_dir() -> Path:
 TOKEN_KEYS = ("host_token", "device_token", "app_token")
 
 
-def _write_tokens(state_dir: Path, data: dict[str, str]) -> None:
-    """Replace the credential file atomically with owner-only access."""
-    fd, temporary = tempfile.mkstemp(prefix=".tokens-", dir=state_dir)
-    try:
-        with os.fdopen(fd, "w") as stream:
-            json.dump(data, stream)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, state_dir / "tokens.json")
-    except BaseException:
-        Path(temporary).unlink(missing_ok=True)
-        raise
-
-
 def _tokens(state_dir: Path) -> dict[str, str]:
-    """Per-installation credentials, generating and backfilling them as needed.
-
-    `app_token` is the phone app's own credential, narrower than `device_token`: it
-    was added after the first installs, so an existing file without it gains one.
-    """
+    """Per-installation credentials, generated when the file is missing."""
     state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     path = state_dir / "tokens.json"
     try:
@@ -61,11 +43,8 @@ def _tokens(state_dir: Path) -> dict[str, str]:
                 data = json.loads(path.read_text())
         finally:
             os.unlink(temporary)
-    if not all(isinstance(data.get(key), str) and data[key] for key in ("host_token", "device_token")):
+    if not all(isinstance(data.get(key), str) and data[key] for key in TOKEN_KEYS):
         raise ValueError(f"Invalid connection credential file: {path}")
-    if not isinstance(data.get("app_token"), str) or not data["app_token"]:
-        data["app_token"] = secrets.token_urlsafe(32)
-        _write_tokens(state_dir, data)
     return data
 
 
