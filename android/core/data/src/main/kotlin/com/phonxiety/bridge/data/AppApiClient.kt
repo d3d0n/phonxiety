@@ -35,6 +35,8 @@ class LinkAppApi @Inject constructor(
         body: JsonObject?
     ): ApiResult = envelope.request(method, path, query, body)
 
+    override fun operation(): ApiOperation = envelope.operation()
+
     override suspend fun download(
         path: String,
         query: Map<String, String>,
@@ -63,6 +65,15 @@ internal class AppApiEnvelope(
 ) {
     private val json: Json = DaemonJson
 
+    /**
+     * Binds one operation to the gateway resolved now: every send on the returned
+     * channel uses that object, never a fresh lookup, so a retry cannot reach the
+     * daemon that replaced it.  With no gateway installed there is nothing to pin,
+     * so the channel resolves per send as a single request always did — a read
+     * issued while the service starts can still meet the gateway that comes up.
+     */
+    fun operation(): ApiOperation = gateways.gateway()?.let(::PinnedOperation) ?: UnpinnedOperation()
+
     suspend fun request(
         method: String,
         path: String,
@@ -74,6 +85,34 @@ internal class AppApiEnvelope(
         val token = gateway.appToken
             ?: return ApiResult.Failure(401, "app_token_missing", "pair again to receive an app token")
         return exchange(gateway, token, method, path, query, body)
+    }
+
+    /** One operation on [gateway]; [isCurrent] says whether the pairing still resolves it. */
+    private inner class PinnedOperation(private val gateway: AppGateway) : ApiOperation {
+        override fun isCurrent(): Boolean = gateways.gateway() === gateway
+
+        override suspend fun request(
+            method: String,
+            path: String,
+            query: Map<String, String>,
+            body: JsonObject?
+        ): ApiResult {
+            val token = gateway.appToken
+                ?: return ApiResult.Failure(401, "app_token_missing", "pair again to receive an app token")
+            return exchange(gateway, token, method, path, query, body)
+        }
+    }
+
+    /** No gateway to pin: each send resolves the current one. */
+    private inner class UnpinnedOperation : ApiOperation {
+        override fun isCurrent(): Boolean = true
+
+        override suspend fun request(
+            method: String,
+            path: String,
+            query: Map<String, String>,
+            body: JsonObject?
+        ): ApiResult = this@AppApiEnvelope.request(method, path, query, body)
     }
 
     private suspend fun exchange(
@@ -105,7 +144,7 @@ internal class AppApiEnvelope(
         // An answer that arrived after the pairing moved belongs to the previous
         // daemon: the caller must not take it for the one it is paired with now.
         if (gateways.gateway() !== gateway) {
-            return ApiResult.Failure(503, "pairing_changed", "the pairing changed")
+            return PAIRING_CHANGED
         }
         return map(result)
     }
@@ -132,7 +171,7 @@ internal class AppApiEnvelope(
             // A download finished under a pairing that has since been replaced is
             // as stale as the pages of a paged one.
             if (gateways.gateway() !== gateway) {
-                return ApiResult.Failure(503, "pairing_changed", "the pairing changed")
+                return PAIRING_CHANGED
             }
             when (val outcome = streamed) {
                 is AttachmentOutcome.Complete -> return ApiResult.Success(

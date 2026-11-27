@@ -33,6 +33,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.random.Random
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.SerializationStrategy
 import kotlinx.serialization.json.Json
@@ -150,6 +151,13 @@ class DefaultDaemonApi @Inject constructor(
      * it so the pauses are exact and the virtual clock they run on is predictable.
      */
     internal var retryRandom: Random = Random.Default
+
+    /**
+     * Test seam for the retry clock.  Production reads a monotonic millisecond
+     * clock; a test drives it with virtual time, so the operation budget is
+     * checked at exactly the points the retries reach.
+     */
+    internal var retryClock: () -> Long = { System.nanoTime() / 1_000_000L }
 
     override suspend fun info(): ApiOutcome<DaemonInfo> = call(DaemonInfo.serializer(), "GET", "/app/v1/info")
 
@@ -329,9 +337,17 @@ class DefaultDaemonApi @Inject constructor(
      * Runs one request and, for a read whose answer says "not now", up to
      * [MAX_RETRIES] more attempts with a jittered pause between them.
      *
-     * No deadline is created here.  The caller's own operation deadline is the one
-     * that counts: it cancels the pause, so the attempts can never outlive it, and
-     * the link's own per-exchange deadline still bounds every single attempt.
+     * The whole read — readiness, every attempt and every pause — shares one
+     * [OPERATION_BUDGET_MILLIS] budget, the worst case of the single attempt it
+     * replaced.  When the budget runs out the answer is the engine's own typed
+     * timeout, so a caller handles it exactly as it did before.
+     *
+     * The whole read is also one operation on one gateway: the channel is bound
+     * before the first attempt and every later attempt is sent on it, never to a
+     * gateway resolved afresh.  Once the pairing no longer resolves that gateway
+     * the read stops with `pairing_changed`, so no retry can reach another daemon.
+     *
+     * A write, a download and the long poll are still one attempt and nothing else.
      */
     private suspend fun <T> call(
         deserializer: DeserializationStrategy<T>,
@@ -341,17 +357,45 @@ class DefaultDaemonApi @Inject constructor(
         body: JsonObject? = null,
         retryable: Boolean = true
     ): ApiOutcome<T> {
+        if (!retryable || method != "GET") return attempt(deserializer, method, path, query, body)
+        val operation = api.operation()
+        val startedAt = retryClock()
+        return withTimeoutOrNull(OPERATION_BUDGET_MILLIS) {
+            readWithRetries(operation, deserializer, method, path, query, body, startedAt)
+        } ?: ApiOutcome.Failure(TIMEOUT_STATUS, TIMEOUT_CODE, TIMEOUT_MESSAGE)
+    }
+
+    /** The retrying part of a read; it runs inside the operation budget. */
+    private suspend fun <T> readWithRetries(
+        operation: ApiOperation,
+        deserializer: DeserializationStrategy<T>,
+        method: String,
+        path: String,
+        query: Map<String, String>,
+        body: JsonObject?,
+        startedAt: Long
+    ): ApiOutcome<T> {
         var retries = 0
         while (true) {
-            val outcome = attempt(deserializer, method, path, query, body)
+            val outcome = attempt(operation, deserializer, method, path, query, body)
             val failure = outcome as? ApiOutcome.Failure ?: return outcome
-            if (!retryable || method != "GET" || retries == MAX_RETRIES || !failure.isWorthAnotherAttempt()) {
-                return failure
-            }
+            if (retries == MAX_RETRIES || !failure.isWorthAnotherAttempt()) return failure
+            val pause = retryDelayMillis(retries + 1)
+            if (!fits(startedAt, pause)) return failure
             retries++
-            delay(retryDelayMillis(retries))
+            delay(pause)
+            // The one check a retry must pass: the gateway this read is bound to is
+            // still the pairing's, so the next attempt can only reach that daemon.
+            if (!operation.isCurrent()) return PAIRING_CHANGED_ANSWER
         }
     }
+
+    /**
+     * Whether [pause] and an attempt that could still answer both fit in what is
+     * left of the budget.  An attempt with less time than that would only spend
+     * the caller's wait to end in the same timeout.
+     */
+    private fun fits(startedAt: Long, pause: Long): Boolean = retryClock() - startedAt + pause + MIN_ATTEMPT_MILLIS <= OPERATION_BUDGET_MILLIS
 
     private suspend fun <T> attempt(
         deserializer: DeserializationStrategy<T>,
@@ -359,7 +403,22 @@ class DefaultDaemonApi @Inject constructor(
         path: String,
         query: Map<String, String>,
         body: JsonObject?
-    ): ApiOutcome<T> = when (val result = api.request(method, path, query, body)) {
+    ): ApiOutcome<T> = decode(deserializer, path, api.request(method, path, query, body))
+
+    private suspend fun <T> attempt(
+        operation: ApiOperation,
+        deserializer: DeserializationStrategy<T>,
+        method: String,
+        path: String,
+        query: Map<String, String>,
+        body: JsonObject?
+    ): ApiOutcome<T> = decode(deserializer, path, operation.request(method, path, query, body))
+
+    private fun <T> decode(
+        deserializer: DeserializationStrategy<T>,
+        path: String,
+        result: ApiResult
+    ): ApiOutcome<T> = when (result) {
         is ApiResult.Failure -> ApiOutcome.Failure(result.status, result.code, result.message)
 
         is ApiResult.Success -> try {
@@ -369,8 +428,12 @@ class DefaultDaemonApi @Inject constructor(
         }
     }
 
-    /** A gateway or an engine that answered "not now"; anything else is the caller's answer. */
-    private fun ApiOutcome.Failure.isWorthAnotherAttempt(): Boolean = status in RETRYABLE_STATUS || code == "transport_error"
+    /**
+     * A gateway or an engine that answered "not now"; anything else is the
+     * caller's answer.  A pairing change is never another attempt, whatever
+     * status carries it: the next one would reach a different daemon.
+     */
+    private fun ApiOutcome.Failure.isWorthAnotherAttempt(): Boolean = code != PAIRING_CHANGED_CODE && (status in RETRYABLE_STATUS || code == "transport_error")
 
     /** Wait before retry [retry]: a base per attempt plus a random part under that base. */
     private fun retryDelayMillis(retry: Int): Long {
@@ -409,14 +472,35 @@ class DefaultDaemonApi @Inject constructor(
         return id
     }
 
-    private companion object {
+    internal companion object {
         /** A read gets two more attempts; a write, a download and the long poll never do. */
         const val MAX_RETRIES = 2
 
         /** First pause 200–399 ms, second 400–799 ms: long enough for a restarted gateway. */
         const val RETRY_BASE_MILLIS = 200L
 
+        /**
+         * One read's whole budget, readiness, attempts and pauses alike: the
+         * worst case of the single attempt retries replaced.  It ends in the
+         * engine's own timeout answer, so a caller handles it as it always did.
+         */
+        const val OPERATION_BUDGET_MILLIS = 30_000L
+
+        /** No retry starts with less than this left for its own attempt. */
+        const val MIN_ATTEMPT_MILLIS = 1_000L
+
+        /** The engine's own timeout answer, kept field for field. */
+        const val TIMEOUT_STATUS = 504
+        const val TIMEOUT_CODE = "timeout"
+        const val TIMEOUT_MESSAGE = "the daemon did not answer in time"
+
         /** A gateway that could not answer now; a 4xx is the caller's own answer. */
         val RETRYABLE_STATUS = setOf(502, 503, 504)
+
+        /** The code that says the pairing moved away from the gateway an operation used. */
+        const val PAIRING_CHANGED_CODE = "pairing_changed"
+
+        /** The answer for a retry the pairing forbids; never a send to the next daemon. */
+        val PAIRING_CHANGED_ANSWER = ApiOutcome.Failure(PAIRING_CHANGED.status, PAIRING_CHANGED.code, PAIRING_CHANGED.message)
     }
 }

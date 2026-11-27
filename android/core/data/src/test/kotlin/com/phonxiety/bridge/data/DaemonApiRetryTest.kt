@@ -1,11 +1,22 @@
 package com.phonxiety.bridge.data
 
+import com.phonxiety.bridge.model.AppGateway
+import com.phonxiety.bridge.model.AppGatewaySource
+import com.phonxiety.bridge.model.AttachmentHeader
+import com.phonxiety.bridge.model.AttachmentOutcome
+import com.phonxiety.bridge.model.DeviceApiError
+import com.phonxiety.bridge.model.DeviceApiRequest
+import com.phonxiety.bridge.model.DeviceApiResult
 import com.phonxiety.bridge.model.PlaceCallRequest
 import java.io.ByteArrayOutputStream
 import java.io.OutputStream
 import kotlin.random.Random
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.currentTime
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
@@ -17,8 +28,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Retries belong to reads only, never outlive the caller's deadline, and never
- * repeat a write, a download or the events long poll.
+ * Retries belong to reads only, never outlive one operation budget, keep their
+ * gateway, and never repeat a write, a download or the events long poll.
  */
 class DaemonApiRetryTest {
 
@@ -153,6 +164,203 @@ class DaemonApiRetryTest {
         assertEquals(1, transport.requests)
     }
 
+    @Test
+    fun slowAttemptsEndAtTheOperationBudgetWithTheTypedTimeout() = runTest {
+        // Each attempt alone spends 20 s, so three of them could never fit one read.
+        val transport = ScriptedApi(ApiResult.Failure(503, "link_down", "not yet"), latencyMillis = 20_000)
+        val api = DefaultDaemonApi(transport).apply {
+            retryRandom = Random(1)
+            retryClock = { currentTime }
+        }
+
+        val outcome = api.diagnostics()
+
+        assertEquals(DefaultDaemonApi.OPERATION_BUDGET_MILLIS, currentTime)
+        assertEquals("attempts: ${transport.requests.size}", 2, transport.requests.size)
+        val failure = outcome as ApiOutcome.Failure
+        assertEquals(504, failure.status)
+        assertEquals("timeout", failure.code)
+        assertEquals("the daemon did not answer in time", failure.message)
+    }
+
+    @Test
+    fun aFast503IsRetriedInsideTheOperationBudget() = runTest {
+        val transport = ScriptedApi(
+            ApiResult.Failure(503, "link_down", "not yet"),
+            ApiResult.Success(200, buildJsonObject { put("ok", true) })
+        )
+        val api = DefaultDaemonApi(transport).apply {
+            retryRandom = Random(1)
+            retryClock = { currentTime }
+        }
+
+        val outcome = api.diagnostics()
+
+        assertTrue("expected success, got $outcome", outcome is ApiOutcome.Ok)
+        assertEquals(2, transport.requests.size)
+        assertTrue("elapsed $currentTime", currentTime < DefaultDaemonApi.OPERATION_BUDGET_MILLIS)
+    }
+
+    @Test
+    fun aRetryThatCannotFitTheBudgetIsSkipped() = runTest {
+        // One attempt leaves half a second: not enough for a pause and an attempt.
+        val transport = ScriptedApi(ApiResult.Failure(503, "link_down", "not yet"), latencyMillis = 29_500)
+        val api = DefaultDaemonApi(transport).apply {
+            retryRandom = Random(1)
+            retryClock = { currentTime }
+        }
+
+        val outcome = api.diagnostics()
+
+        assertEquals(1, transport.requests.size)
+        assertEquals(29_500L, currentTime)
+        assertEquals(503, (outcome as ApiOutcome.Failure).status)
+        assertEquals("link_down", outcome.code)
+    }
+
+    @Test
+    fun everyRetryStaysOnTheGatewayTheFirstAttemptUsed() = runTest {
+        val old = FakeGateway(status = 503)
+        val fresh = FakeGateway(status = 200)
+        var lookups = 0
+        // The pairing moves right after the guard looked: the retry is already bound.
+        val source = AppGatewaySource { if (++lookups <= 3) old else fresh }
+        val api = DefaultDaemonApi(LinkAppApi(source)).apply {
+            retryRandom = Random(1)
+            retryClock = { currentTime }
+        }
+
+        val outcome = api.diagnostics()
+
+        assertEquals("the old gateway carried the retry too", 2, old.requests.size)
+        assertEquals("the new gateway must never be asked", 0, fresh.requests.size)
+        assertEquals("pairing_changed", (outcome as ApiOutcome.Failure).code)
+    }
+
+    @Test
+    fun aPairingChangeRightAfterTheGuardReachesNoOtherGateway() = runTest {
+        val old = FakeGateway(status = 503)
+        val fresh = FakeGateway(status = 200)
+        var lookups = 0
+        // The source answers the old gateway for the lookup the guard makes, then the new one.
+        val source = AppGatewaySource { if (++lookups <= 2) old else fresh }
+        val api = DefaultDaemonApi(LinkAppApi(source)).apply {
+            retryRandom = Random(1)
+            retryClock = { currentTime }
+        }
+
+        val outcome = api.diagnostics()
+
+        assertEquals("the new gateway must never be asked", 0, fresh.requests.size)
+        assertEquals(1, old.requests.size)
+        assertEquals("pairing_changed", (outcome as ApiOutcome.Failure).code)
+        assertEquals(503, outcome.status)
+    }
+
+    @Test
+    fun aPairingChangeDuringThePauseStopsTheRetry() = runTest {
+        val old = FakeGateway(status = 503)
+        val fresh = FakeGateway(status = 200)
+        var current = old
+        val api = DefaultDaemonApi(LinkAppApi(AppGatewaySource { current })).apply {
+            retryRandom = Random(1)
+            retryClock = { currentTime }
+        }
+
+        val operation = async { api.diagnostics() }
+        runCurrent()
+        assertEquals(1, old.requests.size)
+        assertEquals("the pause has not elapsed", 0L, currentTime)
+
+        current = fresh
+        val outcome = operation.await()
+
+        assertEquals("the new gateway must never be asked", 0, fresh.requests.size)
+        assertEquals("pairing_changed", (outcome as ApiOutcome.Failure).code)
+    }
+
+    @Test
+    fun aPairingChangeIsNeverRetried() = runTest {
+        for (status in listOf(503, 500)) {
+            val transport = ScriptedApi(ApiResult.Failure(status, "pairing_changed", "the pairing changed"))
+            val api = DefaultDaemonApi(transport).apply { retryRandom = Random(1) }
+
+            val outcome = api.diagnostics()
+
+            assertEquals("$status: attempts", 1, transport.requests.size)
+            assertEquals("$status: the answer", status, (outcome as ApiOutcome.Failure).status)
+            assertEquals("$status: the code", "pairing_changed", outcome.code)
+        }
+    }
+
+    @Test
+    fun aCancellationFromTheTransportIsRethrownAndNotATimeout() = runTest {
+        val transport = object : AppApi {
+            override suspend fun request(
+                method: String,
+                path: String,
+                query: Map<String, String>,
+                body: JsonObject?
+            ): ApiResult = throw CancellationException("the caller went away")
+
+            override suspend fun download(
+                path: String,
+                query: Map<String, String>,
+                sink: OutputStream
+            ): ApiResult = error("a download is not this test")
+        }
+        val api = DefaultDaemonApi(transport).apply { retryClock = { currentTime } }
+
+        val thrown = runCatching { api.diagnostics() }.exceptionOrNull()
+
+        assertTrue("expected a cancellation, got $thrown", thrown is CancellationException)
+    }
+
+    @Test
+    fun aCallerCancellationDuringAnAttemptStaysCancellation() = runTest {
+        val transport = object : AppApi {
+            override suspend fun request(
+                method: String,
+                path: String,
+                query: Map<String, String>,
+                body: JsonObject?
+            ): ApiResult = awaitCancellation()
+
+            override suspend fun download(
+                path: String,
+                query: Map<String, String>,
+                sink: OutputStream
+            ): ApiResult = error("a download is not this test")
+        }
+        val api = DefaultDaemonApi(transport).apply { retryClock = { currentTime } }
+
+        val operation = async { api.diagnostics() }
+        runCurrent()
+        operation.cancel()
+
+        val thrown = runCatching { operation.await() }.exceptionOrNull()
+        assertTrue("expected a cancellation, got $thrown", thrown is CancellationException)
+    }
+
+    @Test
+    fun aCallerCancellationDuringThePauseStaysCancellation() = runTest {
+        val transport = ScriptedApi(ApiResult.Failure(503, "link_down", "not yet"))
+        val api = DefaultDaemonApi(transport).apply {
+            retryRandom = Random(1)
+            retryClock = { currentTime }
+        }
+
+        val operation = async { api.diagnostics() }
+        runCurrent()
+        assertEquals("the first attempt ran and the pause began", 1, transport.requests.size)
+        assertEquals(0L, currentTime)
+        operation.cancel()
+
+        val thrown = runCatching { operation.await() }.exceptionOrNull()
+        assertTrue("expected a cancellation, got $thrown", thrown is CancellationException)
+        assertEquals(1, transport.requests.size)
+    }
+
     private suspend fun failingTransport(block: suspend (DefaultDaemonApi) -> Any?): ScriptedApi {
         val transport = ScriptedApi(ApiResult.Failure(503, "link_down", "no"))
         block(DefaultDaemonApi(transport).apply { retryRandom = Random(1) })
@@ -160,7 +368,7 @@ class DaemonApiRetryTest {
     }
 
     /** Answers from its script in order, repeating the last answer; records every attempt. */
-    private class ScriptedApi(vararg replies: ApiResult) : AppApi {
+    private class ScriptedApi(vararg replies: ApiResult, private val latencyMillis: Long = 0) : AppApi {
         private val script = replies.toList()
         val requests = mutableListOf<Pair<String, String>>()
         var downloads = 0
@@ -172,6 +380,7 @@ class DaemonApiRetryTest {
             body: JsonObject?
         ): ApiResult {
             requests += method to path
+            if (latencyMillis > 0) delay(latencyMillis)
             return if (requests.size <= script.size) script[requests.size - 1] else script.last()
         }
 
@@ -183,5 +392,27 @@ class DaemonApiRetryTest {
             downloads++
             return ApiResult.Failure(503, "link_down", "no")
         }
+    }
+
+    /** One daemon's gateway object: records every request it is asked to carry. */
+    private class FakeGateway(
+        private val status: Int,
+        private val code: String = "link_down",
+        private val message: String = "not yet"
+    ) : AppGateway {
+        override val appToken: String = "token"
+        override val supportsAttachments: Boolean = false
+        val requests = mutableListOf<DeviceApiRequest>()
+
+        override suspend fun exchange(request: DeviceApiRequest): DeviceApiResult {
+            requests += request
+            return if (status in 200..299) {
+                DeviceApiResult(request.id, status, result = buildJsonObject { put("ok", true) })
+            } else {
+                DeviceApiResult(request.id, status, error = DeviceApiError(code, message))
+            }
+        }
+
+        override suspend fun receiveAttachment(header: AttachmentHeader, sink: OutputStream): AttachmentOutcome = error("a download is not this test")
     }
 }
