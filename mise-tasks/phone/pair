@@ -8,6 +8,12 @@
 #
 # The phone credential goes through a private temporary file and a root shell
 # stdin. It is never printed and never passed as a command-line argument.
+#
+# The whole app process is force-stopped and its exit confirmed before the
+# file is replaced, so no in-process writer survives the swap.  An empty
+# `pidof` proves the previous writers are gone; it is not a lock against a
+# later explicit launch (a person or another tool starting the app), so the
+# replacement stays as short as possible.
 set -euo pipefail
 
 ROOT="${MISE_PROJECT_ROOT:?run this task through mise: mise run phone:pair}"
@@ -16,6 +22,7 @@ ADB="${ADB:-adb}"
 SERIAL=""
 MODE=()
 TMP=""
+SERVICE_WAS_RUNNING=0
 
 usage() {
     cat <<'EOF'
@@ -105,25 +112,69 @@ uv run --project "$ROOT" phonxiety pair --json ${MODE[@]+"${MODE[@]}"} > "$TMP/c
     || die "could not build the phone configuration"
 [ -s "$TMP/config.json" ] || die "the phone configuration is empty"
 
-# The file is replaced while the service is down: a start that read the previous
-# file must not adopt it after the new one is in place.  Only then is the file
-# written, atomically (temporary file, then rename), and the service started again.
-note "Stopping the bridge service before the config is replaced..."
-"${ADB_CMD[@]}" shell am stopservice --user 0 -n "$PACKAGE/.BridgeService" \
-    >/dev/null 2>&1 || true
-i=0
-while [ "$i" -lt 20 ]; do
-    if ! "${ADB_CMD[@]}" shell dumpsys activity services "$PACKAGE" 2>/dev/null \
-        | grep -q "BridgeService"; then
-        break
+# Root is preflighted before anything is stopped: a denied `su` must leave the
+# running service untouched.
+if ! "${ADB_CMD[@]}" shell su -c id >/dev/null 2>&1; then
+    die "root access is not available on the phone"
+fi
+
+# What the previous, valid configuration was running as.  The answer is read
+# before anything is stopped, so a failed attempt can restore exactly that.
+if ! SERVICES="$("${ADB_CMD[@]}" shell dumpsys activity services "$PACKAGE" 2>/dev/null)"; then
+    die "could not read the running bridge service; the config was not touched"
+fi
+if printf '%s\n' "$SERVICES" | grep -q "BridgeService"; then
+    SERVICE_WAS_RUNNING=1
+fi
+
+restore_service() {
+    [ "$SERVICE_WAS_RUNNING" -eq 1 ] || return 0
+    note "Restoring the bridge service..."
+    if ! "${ADB_CMD[@]}" shell am start-foreground-service --user 0 \
+        -n "$PACKAGE/.BridgeService" >/dev/null 2>&1; then
+        note "warning: the previously running service could not be restored"
     fi
+}
+
+# "" while the query itself failed, otherwise the pids or empty.
+running_pids() {
+    local out
+    out="$("${ADB_CMD[@]}" shell "pidof $PACKAGE 2>/dev/null; echo PX_STATUS=\$?" 2>/dev/null)" || { printf 'error\n'; return 0; }
+    case "$out" in
+        *PX_STATUS=*) ;;
+        *) printf 'error\n'; return 0 ;;
+    esac
+    printf '%s' "${out%PX_STATUS=*}" | tr -d '\r\n '
+}
+
+# The whole app process, not only the service: a token write in the app process
+# could otherwise outlive the service and race the file swap.
+note "Stopping the app process before the config is replaced..."
+if ! "${ADB_CMD[@]}" shell am force-stop --user 0 "$PACKAGE" >/dev/null 2>&1; then
+    restore_service
+    die "could not force-stop the app; the config was not touched"
+fi
+i=0
+PIDS=""
+while [ "$i" -lt 20 ]; do
+    PIDS="$(running_pids)"
+    [ "$PIDS" = "error" ] && break
+    [ -z "$PIDS" ] && break
     sleep 0.25
     i=$((i+1))
 done
+if [ "$PIDS" = "error" ]; then
+    restore_service
+    die "could not confirm the app process stopped (adb query failed)"
+fi
+[ -z "$PIDS" ] || { restore_service; die "the app process is still running (pids: $PIDS)"; }
 
 HASH="$(shasum -a 256 "$TMP/config.json" | awk '{print $1}')"
 [ -n "$HASH" ] || die "could not hash the phone configuration"
 
+# The remote script runs as root and never sees the credential on a command
+# line: the file is staged next to its destination under a unique private name,
+# labelled with the app-data context, then renamed over config.json.
 {
     printf '%s\n' \
         '#!/system/bin/sh' \
@@ -132,28 +183,68 @@ HASH="$(shasum -a 256 "$TMP/config.json" | awk '{print $1}')"
         "APP=$PACKAGE" \
         'DATA="/data/user_de/0/$APP"' \
         'DIR="$DATA/files"' \
+        'TMPFILE=""' \
+        'cleanup() { if [ -n "$TMPFILE" ]; then rm -f "$TMPFILE"; fi; }' \
+        'trap cleanup EXIT HUP INT TERM' \
         '[ -d "$DATA" ] || { echo "app data directory missing" >&2; exit 1; }' \
         'mkdir -p "$DIR"' \
-        "cat > \"\$DIR/config.json.tmp\" <<'PX_CONFIG_EOF'"
+        'label_of() { ls -Z "$1" 2>/dev/null | awk '"'"'{ for (i = 1; i <= NF; i++) if ($i ~ /^u:object_r:/) { print $i; exit } }'"'"'; }' \
+        'LABEL=$(label_of "$DIR/config.json")' \
+        '[ -n "$LABEL" ] || LABEL=$(label_of "$DATA")' \
+        '[ -n "$LABEL" ] || { echo "cannot read the app-data label" >&2; exit 1; }' \
+        'TMPFILE="$DIR/.config.json.$$.new"' \
+        '[ ! -e "$TMPFILE" ] || { echo "temporary file already exists" >&2; exit 1; }' \
+        "cat > \"\$TMPFILE\" <<'PX_CONFIG_EOF'"
     cat "$TMP/config.json"
     printf '%s\n' \
         'PX_CONFIG_EOF' \
         'UID_=$(stat -c %u "$DATA")' \
         'GID_=$(stat -c %g "$DATA")' \
-        'chown "$UID_:$GID_" "$DIR" "$DIR/config.json.tmp"' \
+        'chown "$UID_:$GID_" "$DIR" "$TMPFILE"' \
         'chmod 700 "$DIR"' \
-        'chmod 600 "$DIR/config.json.tmp"' \
-        'restorecon -R "$DIR" 2>/dev/null || true' \
-        'mv -f "$DIR/config.json.tmp" "$DIR/config.json"' \
+        'chmod 600 "$TMPFILE"' \
+        'chcon "$LABEL" "$TMPFILE" || { echo "cannot label the temporary file" >&2; exit 1; }' \
+        'TMP_LABEL=$(label_of "$TMPFILE")' \
+        '[ "$TMP_LABEL" = "$LABEL" ] || { echo "temporary file label mismatch" >&2; exit 1; }' \
+        'mv -f "$TMPFILE" "$DIR/config.json"' \
+        'TMPFILE=""' \
+        'echo PX_REPLACED=1' \
+        'FINAL_LABEL=$(label_of "$DIR/config.json")' \
+        '[ "$FINAL_LABEL" = "$LABEL" ] || { echo "final file label mismatch" >&2; exit 1; }' \
         'sha256sum "$DIR/config.json"'
 } > "$TMP/setup.sh"
 
-if ! REMOTE_OUT="$("${ADB_CMD[@]}" shell "su -c 'sh -s'" < "$TMP/setup.sh")"; then
+set +e
+REMOTE_OUT="$("${ADB_CMD[@]}" shell "su -c 'sh -s'" < "$TMP/setup.sh" 2>&1)"
+REMOTE_STATUS=$?
+set -e
+REPLACED=0
+if printf '%s\n' "$REMOTE_OUT" | grep -q 'PX_REPLACED=1'; then
+    REPLACED=1
+fi
+
+if [ "$REMOTE_STATUS" -ne 0 ]; then
+    # The root script's own words say why it refused (a label, a missing directory), and its
+    # output never carries the credential.
+    printf '%s\n' "$REMOTE_OUT" | tr -d '\r' | grep -v '^PX_' >&2 || true
+    if [ "$REPLACED" -eq 1 ]; then
+        die "the phone configuration may be replaced but could not be verified; not restarting the bridge"
+    fi
+    restore_service
     die "writing the phone configuration failed"
 fi
-REMOTE_HASH="$(printf '%s\n' "$REMOTE_OUT" | tr -d '\r' | awk 'NF {print $1; exit}')"
-[ "$REMOTE_HASH" = "$HASH" ] || die "phone configuration hash mismatch"
 
+REMOTE_HASH="$(printf '%s\n' "$REMOTE_OUT" | tr -d '\r' | awk 'NF && $0 !~ /^PX_/ {print $1; exit}')"
+if [ "$REMOTE_HASH" != "$HASH" ]; then
+    if [ "$REPLACED" -eq 1 ]; then
+        die "phone configuration hash mismatch after replacement; not restarting the bridge"
+    fi
+    restore_service
+    die "phone configuration hash mismatch"
+fi
+
+# An explicit service start clears the stopped state left by force-stop, so the
+# restart works without an activity.
 note "Starting the bridge service..."
 "${ADB_CMD[@]}" shell am start-foreground-service --user 0 \
     -n "$PACKAGE/.BridgeService" >/dev/null || die "am start-foreground-service failed"
