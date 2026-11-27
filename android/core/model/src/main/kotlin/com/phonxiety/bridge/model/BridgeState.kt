@@ -100,8 +100,9 @@ data class Capabilities(
 /**
  * Why one transport link went down, typed.
  *
- * [wire] is the exact string [LinkError.code] has always carried: surfaces,
- * logs and the Doctor show it, so its spelling must never change.  Only a
+ * [wire] is the exact string [LinkError.code] has always carried for a named
+ * reason, and an unnamed native close keeps its own text there (see [text]):
+ * surfaces, logs and the Doctor show it, so its spelling must never change.  Only a
  * transport's own link-down belongs here; engine error codes such as
  * `audio_error` stay plain [LinkError.code] values with no [LinkError.reason].
  */
@@ -129,6 +130,14 @@ enum class LinkDownReason(val wire: String) {
 
     /** A native close this build cannot name; [LinkError.detail] keeps its text. */
     OTHER("other");
+
+    /**
+     * The string this link-down has always been known by in [LinkError.code]
+     * and the link-down log lines: the [wire] spelling, or for [OTHER] the
+     * native close text itself, so an unnamed close still reads as what the
+     * transport said.
+     */
+    fun text(detail: String?): String = if (this == OTHER) detail ?: wire else wire
 
     companion object {
         /**

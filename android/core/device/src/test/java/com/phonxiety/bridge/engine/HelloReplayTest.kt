@@ -262,7 +262,7 @@ class HelloReplayTest {
         harness.factory.last().open()
         harness.factory.last().down(LinkDownReason.OTHER, "timed out by peer")
         val native = harness.store.state.value.lastError!!
-        assertEquals("other", native.code)
+        assertEquals("timed out by peer", native.code)
         assertEquals(LinkDownReason.OTHER, native.reason)
         assertEquals("timed out by peer", native.detail)
         assertEquals("timed out by peer", native.message)

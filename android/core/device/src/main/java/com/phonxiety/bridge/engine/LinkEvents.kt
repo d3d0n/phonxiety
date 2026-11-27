@@ -103,7 +103,7 @@ internal class LinkEvents(
         settings.applyWifiLock()
         store.linkDown(
             LinkError(
-                code = reason.wire,
+                code = reason.text(detail),
                 message = linkMessage(reason, detail),
                 atEpochMs = System.currentTimeMillis(),
                 reason = reason,

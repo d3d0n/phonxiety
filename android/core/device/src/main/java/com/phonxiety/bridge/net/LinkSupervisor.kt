@@ -482,7 +482,7 @@ internal class LinkSupervisor(
 
     /** The slot is already given up: tell the engine and arm the backoff. */
     private fun notifyDown(reason: LinkDownReason, detail: String? = null) {
-        BridgeLog.w(TAG, "device link down: ${reason.wire}${detail?.let { " ($it)" }.orEmpty()}")
+        BridgeLog.w(TAG, "device link down: ${reason.text(detail)}")
         callbacks.onLinkDown(reason, detail)
         scheduleReconnect()
     }

@@ -406,7 +406,7 @@ internal class IrohLink(
         lifecycle.close()
         try {
             releaseWatchers()
-            BridgeLog.w(TAG) { "iroh paths at link down (${reason.wire}${detail?.let { ": $it" }.orEmpty()}): ${paths.describe()}" }
+            BridgeLog.w(TAG) { "iroh paths at link down (${reason.text(detail)}): ${paths.describe()}" }
             route = null
             // The peer reads this close text: a typed reason keeps its wire
             // spelling, and an unnamed native close is echoed back unchanged.

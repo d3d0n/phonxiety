@@ -34,4 +34,16 @@ class NativeCloseTest {
         assertEquals(LinkDownReason.OTHER, typed)
         assertEquals("timed out by peer", detail)
     }
+
+    /**
+     * An unnamed close is still known by its own words, as it was before the
+     * reasons were typed; a named reason is its wire spelling whatever detail
+     * travels with it.
+     */
+    @Test
+    fun theLegacyTextOfAnUnnamedCloseIsItsOwnWords() {
+        assertEquals("timed out by peer", LinkDownReason.OTHER.text("timed out by peer"))
+        assertEquals("other", LinkDownReason.OTHER.text(null))
+        assertEquals("closed", LinkDownReason.CLOSED.text("ignored"))
+    }
 }
