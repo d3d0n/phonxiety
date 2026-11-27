@@ -26,7 +26,7 @@ import org.json.JSONObject
  */
 internal class CallLedgerException(message: String) : Exception(message)
 
-internal class CallLedger(context: Context, private val bootId: String) {
+internal class CallLedger(context: Context, private val bootId: String) : CallStore {
     companion object {
         private const val TAG = "PhonxietyBridge"
         private const val FILE_NAME = "call-ledger.json"
@@ -71,10 +71,10 @@ internal class CallLedger(context: Context, private val bootId: String) {
     private var state: Snapshot = load()
 
     @Synchronized
-    fun current(): Snapshot = state
+    override fun current(): Snapshot = state
 
     @Synchronized
-    fun reserve(
+    override fun reserve(
         callId: String,
         destination: String,
         phoneAccount: String?,
@@ -98,21 +98,21 @@ internal class CallLedger(context: Context, private val bootId: String) {
     }
 
     @Synchronized
-    fun markState(callId: String, callState: String) {
+    override fun markState(callId: String, callState: String) {
         val pending = state.pending ?: return
         if (pending.callId != callId || pending.state == callState) return
         commit(state.copy(pending = pending.copy(state = callState)))
     }
 
     @Synchronized
-    fun cancel(callId: String) {
+    override fun cancel(callId: String) {
         val pending = state.pending ?: return
         if (pending.callId != callId || pending.cancelled) return
         commit(state.copy(pending = pending.copy(cancelled = true)))
     }
 
     @Synchronized
-    fun finish(callId: String, destination: String, recentState: String) {
+    override fun finish(callId: String, destination: String, recentState: String) {
         val pending = state.pending
         val next = Snapshot(
             pending = if (pending != null && pending.callId == callId) null else pending,
@@ -123,7 +123,7 @@ internal class CallLedger(context: Context, private val bootId: String) {
     }
 
     @Synchronized
-    fun orphan(
+    override fun orphan(
         callId: String,
         destination: String,
         dialStartedWall: Long,
@@ -155,7 +155,7 @@ internal class CallLedger(context: Context, private val bootId: String) {
     }
 
     @Synchronized
-    fun consumeOrphan(callId: String, dialStartedWall: Long) {
+    override fun consumeOrphan(callId: String, dialStartedWall: Long) {
         val remaining = state.orphans.filterNot {
             it.callId == callId && it.dialStartedWall == dialStartedWall
         }
@@ -164,7 +164,7 @@ internal class CallLedger(context: Context, private val bootId: String) {
     }
 
     @Synchronized
-    fun pruneOrphans() {
+    override fun pruneOrphans() {
         val now = System.currentTimeMillis()
         val remaining = state.orphans.filter { it.expiresWall > now }
         if (remaining.size == state.orphans.size) return

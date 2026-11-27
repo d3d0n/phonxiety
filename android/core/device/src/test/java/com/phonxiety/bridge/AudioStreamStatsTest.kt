@@ -1,7 +1,7 @@
 package com.phonxiety.bridge
 
-import com.phonxiety.bridge.BridgeEngine.OwnedCall
 import com.phonxiety.bridge.audio.PhoneAudio
+import com.phonxiety.bridge.engine.CallSession.OwnedCall
 import com.phonxiety.bridge.model.AudioState
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -24,7 +24,7 @@ import org.robolectric.annotation.Config
  * from the 100 ms scheduler outside its lock while teardown runs elsewhere, and
  * several teardowns can touch one call (hang-up, Telecom's terminal callback,
  * an audio-fatal callback).  These tests drive the engine's own ownership
- * decisions — [BridgeEngine.OwnedCall.detachAudio], `detachAudioAt` and
+ * decisions — [OwnedCall.detachAudio], `detachAudioAt` and
  * `audioToPublish` — against the store's stream gate, so a cleanup that finds
  * nothing leaves nothing to reset and a stale callback cannot touch a
  * successor's stream.
@@ -66,7 +66,7 @@ class AudioStreamStatsTest {
     @Test
     fun aPublishCapturedBeforeTeardownNeverLandsAfterTheReset() {
         val store = EngineStateStore()
-        val owned = BridgeEngine.OwnedCall("call-1", "+998901234567")
+        val owned = OwnedCall("call-1", "+998901234567")
         val attached = owned.attach(store, epoch = 1)
         assertTrue(store.audioStats(attached.stream, stats(drops = 255_329)))
         assertEquals(255_329L, store.state.value.audio.drops)
@@ -89,7 +89,7 @@ class AudioStreamStatsTest {
     @Test
     fun hangUpResetsWithoutATerminalTelecomCallbackAndTheLateCleanupFindsNothing() {
         val store = EngineStateStore()
-        val owned = BridgeEngine.OwnedCall("call-1", "+998901234567")
+        val owned = OwnedCall("call-1", "+998901234567")
         val attached = owned.attach(store, epoch = 4)
         store.audio(attached.stream, "opus", 24_000)
         assertTrue(store.audioStats(attached.stream, stats(drops = 255_329)))
@@ -112,7 +112,7 @@ class AudioStreamStatsTest {
     @Test
     fun aDelayedCleanupAfterHangUpNeverResetsTheSuccessor() {
         val store = EngineStateStore()
-        val first = BridgeEngine.OwnedCall("call-1", "+998901234567")
+        val first = OwnedCall("call-1", "+998901234567")
         val firstAudio = first.attach(store, epoch = 1)
         assertTrue(store.audioStats(firstAudio.stream, stats(drops = 255_329)))
 
@@ -122,7 +122,7 @@ class AudioStreamStatsTest {
 
         // A successor call attaches while the first call's terminal cleanup is
         // still queued.
-        val successor = BridgeEngine.OwnedCall("call-2", "+998901234568")
+        val successor = OwnedCall("call-2", "+998901234568")
         val secondAudio = successor.attach(store, epoch = 1)
         assertTrue(store.audioStats(secondAudio.stream, stats(drops = 480)))
         assertEquals(480L, store.state.value.audio.drops)
@@ -144,7 +144,7 @@ class AudioStreamStatsTest {
     @Test
     fun anObsoleteFatalCallbackLeavesTheReplacementPublishing() {
         val store = EngineStateStore()
-        val owned = BridgeEngine.OwnedCall("call-1", "+998901234567")
+        val owned = OwnedCall("call-1", "+998901234567")
         val old = owned.attach(store, epoch = 1)
         assertTrue(store.audioStats(old.stream, stats(drops = 255_329)))
 
@@ -172,7 +172,7 @@ class AudioStreamStatsTest {
     @Test
     fun aMatchingFatalCallbackResetsOnlyItsOwnStream() {
         val store = EngineStateStore()
-        val owned = BridgeEngine.OwnedCall("call-1", "+998901234567")
+        val owned = OwnedCall("call-1", "+998901234567")
         val attached = owned.attach(store, epoch = 7)
         assertTrue(store.audioStats(attached.stream, stats(drops = 255_329)))
 
@@ -194,7 +194,7 @@ class AudioStreamStatsTest {
     @Test
     fun aFinishedCallPublishesNothingEvenWithAudioAttached() {
         val store = EngineStateStore()
-        val owned = BridgeEngine.OwnedCall("call-1", "+998901234567")
+        val owned = OwnedCall("call-1", "+998901234567")
         owned.attach(store, epoch = 1)
         owned.finished = true
         assertNull(owned.audioToPublish())
@@ -203,7 +203,7 @@ class AudioStreamStatsTest {
     @Test
     fun aLiveStreamKeepsPublishingEveryTickUntilItsTeardown() {
         val store = EngineStateStore()
-        val owned = BridgeEngine.OwnedCall("call-1", "+998901234567")
+        val owned = OwnedCall("call-1", "+998901234567")
         val attached = owned.attach(store, epoch = 1)
 
         // One publish per 100 ms scheduler tick: each lands while the stream is live.
@@ -223,7 +223,7 @@ class AudioStreamStatsTest {
     @Test
     fun aPublishBlockedBetweenCaptureAndStoreIsOrderedByTheReset() {
         val store = EngineStateStore()
-        val owned = BridgeEngine.OwnedCall("call-1", "+998901234567")
+        val owned = OwnedCall("call-1", "+998901234567")
         val attached = owned.attach(store, epoch = 1)
         assertTrue(store.audioStats(attached.stream, stats(drops = 255_329)))
 
@@ -252,7 +252,7 @@ class AudioStreamStatsTest {
     @Test
     fun aTelecomEndingReleasesItsStreamAndTheTerminalCleanupFindsNothing() {
         val store = EngineStateStore()
-        val owned = BridgeEngine.OwnedCall("call-1", "+998901234567")
+        val owned = OwnedCall("call-1", "+998901234567")
         val attached = owned.attach(store, epoch = 1)
         assertTrue(store.audioStats(attached.stream, stats(drops = 255_329)))
         val captured = owned.audioToPublish()

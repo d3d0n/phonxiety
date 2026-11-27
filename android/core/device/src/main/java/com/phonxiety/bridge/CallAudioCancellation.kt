@@ -1,5 +1,7 @@
 package com.phonxiety.bridge
 
+import com.phonxiety.bridge.engine.CallSession
+
 /**
  * Which audio a command may stop.
  *
@@ -9,16 +11,16 @@ package com.phonxiety.bridge
  * until its scheduled stop; an explicit stop or any teardown still stops both.
  */
 internal class CallAudioCancellation(
-    private val stopActionAudio: (BridgeEngine.OwnedCall) -> Unit,
-    private val stopLabTone: (BridgeEngine.OwnedCall) -> Unit
+    private val stopActionAudio: (CallSession.OwnedCall) -> Unit,
+    private val stopLabTone: (CallSession.OwnedCall) -> Unit
 ) {
     /** A routine `cancel_actions`: only the tone the action itself started. */
-    fun cancelActions(call: BridgeEngine.OwnedCall) {
+    fun cancelActions(call: CallSession.OwnedCall) {
         stopActionAudio(call)
     }
 
     /** An explicit stop or a teardown: the action's tone and the Lab tone. */
-    fun stopAll(call: BridgeEngine.OwnedCall) {
+    fun stopAll(call: CallSession.OwnedCall) {
         stopActionAudio(call)
         stopLabTone(call)
     }

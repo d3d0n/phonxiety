@@ -1,6 +1,6 @@
 package com.phonxiety.bridge
 
-import com.phonxiety.bridge.BridgeEngine.OwnedCall
+import com.phonxiety.bridge.engine.CallSession.OwnedCall
 import org.junit.Assert.assertEquals
 import org.junit.Test
 

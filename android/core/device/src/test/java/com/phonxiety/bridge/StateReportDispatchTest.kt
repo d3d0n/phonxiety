@@ -7,7 +7,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The engine's report dispatch, driven the way [BridgeEngine.reportState] drives it: the plan
+ * The engine's report dispatch, driven the way `StateReportPublisher.report` drives it: the plan
  * decides, and the harness applies it to the wire and to a real [EngineStateStore].
  */
 class StateReportDispatchTest {
