@@ -45,14 +45,15 @@ object WidgetStateStore {
 
 /**
  * Ends the running call: the daemon's own `hangup` when the link is up and the daemon succeeds,
- * and the Telecom call the engine supervises otherwise. Either way the engine reports the end
+ * and the call the engine owns on this device otherwise. Either way the engine reports the end
  * through the state.
  *
  * The daemon is asked only over a live link. Without one, its request would wait for a reconnect
- * and keep the call up for the whole bound, so an explicit hang-up goes straight to Telecom.
+ * and keep the call up for the whole bound, so an explicit hang-up goes straight to the engine,
+ * which ends only its own call and leaves any unrelated call alone.
  *
- * [callId], [linkUp], [daemon] and [telecom] are the seams the Hang up receiver's tests use to
- * prove that a throwing daemon still falls through to Telecom; the app calls it with the live ones.
+ * [callId], [linkUp], [daemon] and [local] are the seams the Hang up receiver's tests use to
+ * prove that a throwing daemon still falls through to the engine; the app calls it with the live ones.
  */
 object CallEnd {
     suspend fun hangUp(
@@ -60,7 +61,7 @@ object CallEnd {
         callId: String? = BridgeRuntime.state.value.call?.callId,
         linkUp: Boolean = BridgeRuntime.state.value.link is LinkState.Up,
         daemon: suspend () -> ApiOutcome<*>? = { callId?.let { id -> daemonApiOrNull(context)?.hangup(id) } },
-        telecom: suspend () -> Unit = ::disconnectSupervised
+        local: suspend (String?) -> Unit = { id -> BridgeRuntime.endOwnedCall(id) }
     ) {
         if (callId != null && linkUp) {
             val outcome = try {
@@ -68,18 +69,14 @@ object CallEnd {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                // The daemon's end failed; the call Telecom owns is still there to end.
+                // The daemon's end failed; the call the engine owns is still there to end.
                 null
             }
             if (outcome is ApiOutcome.Ok) return
         }
-        telecom()
-    }
-
-    private suspend fun disconnectSupervised() {
-        BridgeRuntime.currentCalls().forEach { call ->
-            runCatching { call.disconnect() }
-        }
+        // The id captured on entry: a call that takes over the line while the
+        // daemon request waits must not become the call this hang-up ends.
+        local(callId)
     }
 
     private const val HANGUP_TIMEOUT_MS = 5_000L

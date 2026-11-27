@@ -33,9 +33,8 @@ import org.robolectric.annotation.Config
  * The Hang up button: the intent the card sends, the receiver that receives it, and what the
  * receiver does when the hang-up work fails.
  *
- * The Telecom half of `CallEnd` (`Call.disconnect()`) cannot run on the JVM — `android.telecom.Call`
- * is final and has no public constructor — so the enders are the seams: the tests prove the daemon
- * failure is contained, the receiver completes, and the Telecom fallback is the one attempted.
+ * The local end of `CallEnd` is a seam the receiver's tests substitute: the tests prove the daemon
+ * failure is contained, the receiver completes, and the local end is the one attempted.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -66,10 +65,10 @@ class NotificationActionsTest {
     }
 
     @Test
-    fun aThrowingDaemonStillFallsBackToTelecomThroughTheReceiverAndFinishes() {
+    fun aThrowingDaemonStillFallsBackToTheLocalEndThroughTheReceiverAndFinishes() {
         val scheduler = TestCoroutineScheduler()
         val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(scheduler))
-        val telecom = AtomicInteger(0)
+        val local = AtomicInteger(0)
 
         val receiver = NotificationActions(
             endCall = { appContext ->
@@ -78,7 +77,7 @@ class NotificationActionsTest {
                     callId = "call-1",
                     linkUp = true,
                     daemon = { throw IOException("the daemon did not answer") },
-                    telecom = { telecom.incrementAndGet() }
+                    local = { _ -> local.incrementAndGet() }
                 )
             },
             scope = scope
@@ -87,7 +86,7 @@ class NotificationActionsTest {
         receiver.onReceive(context, hangUp)
         scheduler.advanceUntilIdle()
 
-        assertEquals("the Telecom fallback was not attempted", 1, telecom.get())
+        assertEquals("the local end was not attempted", 1, local.get())
         assertTrue(
             "the receiver left work running",
             scope.coroutineContext.job.children.none { it.isActive }
@@ -95,53 +94,53 @@ class NotificationActionsTest {
     }
 
     @Test
-    fun aDaemonAnswerEndsTheCallWithoutTouchingTelecom() = runTest {
-        val telecom = AtomicInteger(0)
+    fun aDaemonAnswerEndsTheCallWithoutTheLocalEnd() = runTest {
+        val local = AtomicInteger(0)
 
         CallEnd.hangUp(
             context,
             callId = "call-1",
             linkUp = true,
             daemon = { ApiOutcome.Ok(200, Unit) },
-            telecom = { telecom.incrementAndGet() }
+            local = { _ -> local.incrementAndGet() }
         )
 
-        assertEquals(0, telecom.get())
+        assertEquals(0, local.get())
     }
 
     @Test
-    fun aThrowingDaemonFallsBackToTelecom() = runTest {
-        val telecom = AtomicInteger(0)
+    fun aThrowingDaemonFallsBackToTheLocalEnd() = runTest {
+        val local = AtomicInteger(0)
 
         CallEnd.hangUp(
             context,
             callId = "call-1",
             linkUp = true,
             daemon = { throw IOException("the daemon did not answer") },
-            telecom = { telecom.incrementAndGet() }
+            local = { _ -> local.incrementAndGet() }
         )
 
-        assertEquals(1, telecom.get())
+        assertEquals(1, local.get())
     }
 
     @Test
-    fun aDaemonFailureOutcomeFallsBackToTelecom() = runTest {
-        val telecom = AtomicInteger(0)
+    fun aDaemonFailureOutcomeFallsBackToTheLocalEnd() = runTest {
+        val local = AtomicInteger(0)
 
         CallEnd.hangUp(
             context,
             callId = "call-1",
             linkUp = true,
             daemon = { ApiOutcome.Failure(500, "daemon_error", "no") },
-            telecom = { telecom.incrementAndGet() }
+            local = { _ -> local.incrementAndGet() }
         )
 
-        assertEquals(1, telecom.get())
+        assertEquals(1, local.get())
     }
 
     @Test
-    fun withNoCallThereIsNothingTheDaemonCouldEndSoTelecomIsUsed() = runTest {
-        val telecom = AtomicInteger(0)
+    fun withNoCallThereIsNothingTheDaemonCouldEndSoTheLocalEndRuns() = runTest {
+        val local = AtomicInteger(0)
         val daemon = AtomicInteger(0)
 
         CallEnd.hangUp(
@@ -152,11 +151,11 @@ class NotificationActionsTest {
                 daemon.incrementAndGet()
                 ApiOutcome.Ok(200, Unit)
             },
-            telecom = { telecom.incrementAndGet() }
+            local = { _ -> local.incrementAndGet() }
         )
 
         assertEquals(0, daemon.get())
-        assertEquals(1, telecom.get())
+        assertEquals(1, local.get())
     }
 
     @Test

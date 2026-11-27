@@ -335,21 +335,61 @@ internal class CommandService(
         )
     }
 
+    /**
+     * Ends the call the engine owns, whether the request came from the daemon
+     * or from this device's own hang-up surfaces.
+     *
+     * Only the owned (or still pending) call is touched: the plan writes the
+     * tombstone for a dial Telecom has not surfaced yet, disconnects just that
+     * Telecom call, and never reaches an unrelated incoming or held call.
+     * Returns false, queuing nothing, when [callId] names neither the owned nor
+     * the pending call.
+     */
+    fun endOwnedLocally(callId: String?): Boolean {
+        val target = synchronized(session.lock) {
+            session.owned?.callId?.takeIf { callId == null || callId == it }
+        } ?: return false
+        return try {
+            executor.execute {
+                try {
+                    endCall(target)
+                } catch (e: Exception) {
+                    BridgeLog.e(TAG) { "local hang-up failed: ${e.javaClass.simpleName}" }
+                }
+            }
+            true
+        } catch (_: RejectedExecutionException) {
+            false
+        }
+    }
+
     private fun handleHangup(id: String, command: DeviceCommand.Hangup) {
         val callId = command.callId.ifEmpty { throw CommandException("call_id_required") }
-        val plan = synchronized(session.lock) { session.planHangupLocked(callId) }
+        when (val result = endCall(callId)) {
+            is HangupResult.Ended -> replyOk(
+                id,
+                buildJsonObject {
+                    put("call_id", result.callId)
+                    put("state", result.state)
+                }
+            )
+
+            is HangupResult.Refused -> replyError(id, result.error)
+        }
+    }
+
+    /** The one hang-up core; the daemon's reply and the local end differ only in what reads it. */
+    private fun endCall(callId: String): HangupResult {
+        val plan = try {
+            synchronized(session.lock) { session.planHangupLocked(callId) }
+        } catch (e: CallSession.DialRefused) {
+            return HangupResult.Refused(callId, e.code)
+        }
 
         val terminalState = plan.terminalState
         if (terminalState != null) {
             store.callPhase(callPhaseOf(terminalState))
-            replyOk(
-                id,
-                buildJsonObject {
-                    put("call_id", callId)
-                    put("state", terminalState)
-                }
-            )
-            return
+            return HangupResult.Ended(callId, terminalState)
         }
         plan.toneOwner?.let { cancelToneFor(it) }
         audio.closeAsync(plan.audio)
@@ -369,32 +409,25 @@ internal class CommandService(
                         session.recent[callId]?.state ?: "ended"
                     }
                 }
-                if (terminal != null) {
+                return if (terminal != null) {
                     store.callPhase(callPhaseOf(terminal))
-                    replyOk(
-                        id,
-                        buildJsonObject {
-                            put("call_id", callId)
-                            put("state", terminal)
-                        }
-                    )
+                    HangupResult.Ended(callId, terminal)
                 } else {
-                    replyError(id, "disconnect_failed")
+                    HangupResult.Refused(callId, "disconnect_failed")
                 }
-                return
             }
         }
         if (plan.pendingOnly) {
             BridgeLog.w(TAG, "hangup requested before the telecom call appeared; retained")
         }
         store.callPhase(CallPhase.ENDING)
-        replyOk(
-            id,
-            buildJsonObject {
-                put("call_id", callId)
-                put("state", "ending")
-            }
-        )
+        return HangupResult.Ended(callId, "ending")
+    }
+
+    /** What [endCall] resolved to: a state the daemon replies with, or its error code. */
+    private sealed interface HangupResult {
+        class Ended(val callId: String, val state: String) : HangupResult
+        class Refused(val callId: String, val error: String) : HangupResult
     }
 
     private fun handleStartAudio(id: String, command: DeviceCommand.StartAudio) {

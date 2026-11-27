@@ -56,6 +56,12 @@ object BridgeRuntime {
     /** `dialing`, `active` or `ending` while the bridge owns a call. */
     fun currentCallState(): String? = engine?.activeCallState()
 
+    /**
+     * Ends the engine-owned call on this device; false when the service has no
+     * engine to ask, so nothing was queued.
+     */
+    fun endOwnedCall(callId: String?): Boolean = engine?.endOwnedCall(callId) ?: false
+
     /** Route of the live link, or null while it is down or unavailable. */
     fun currentRoute(): Route? = engine?.currentRoute()?.let { Route(relay = it.relay, rttMs = it.rttMs) }
 

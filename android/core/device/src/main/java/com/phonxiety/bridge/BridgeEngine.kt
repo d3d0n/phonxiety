@@ -435,6 +435,13 @@ internal class BridgeEngine(
 
     fun linkIsUp(): Boolean = links.isUp()
 
+    /**
+     * Ends the call this engine owns on this device: the same core the daemon's
+     * `hangup` runs, queued on the command executor.  True when a request was
+     * queued for the owned or pending call, false when there is none.
+     */
+    fun endOwnedCall(callId: String?): Boolean = commands.endOwnedLocally(callId)
+
     /** Route of the live link for the UI, or null while down. */
     internal fun currentRoute(): DeviceLink.Route? = links.route()
 
