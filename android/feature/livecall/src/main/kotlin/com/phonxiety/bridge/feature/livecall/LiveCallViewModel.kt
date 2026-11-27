@@ -456,11 +456,15 @@ class LiveCallViewModel @Inject constructor(
                     // The empty state explains this; an extra invented sentence would not.
                     it.copy(loading = false, missing = true)
                 } else {
+                    // A record that cannot load is its own failure: it never wears the hang-up's
+                    // wording or action, and the call's end does not take it away.
                     it.copy(
                         loading = false,
                         reconnecting = true,
                         error = UiText.Literal(outcome.message),
-                        errorCode = outcome.code
+                        errorCode = outcome.code,
+                        callScreenAction = false,
+                        hangUpFailed = false
                     )
                 }
             }

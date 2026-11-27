@@ -2,6 +2,7 @@ package com.phonxiety.bridge.feature.livecall
 
 import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.BridgeStateRepository
+import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.AudioState
 import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.model.CallEvent
@@ -389,6 +390,39 @@ class LiveCallViewModelTest {
         assertEquals("the retry reaches the daemon", 2, api.hangupCalls)
         assertEquals("and does not reload instead", infoBefore, api.infoCalls)
 
+        api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(endedEvent(1))))
+        advanceUntilIdle()
+    }
+
+    @Test
+    fun aRecordThatFailsToLoadAfterAHangUpFailureShowsItsOwnFailure() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        api.info = ApiOutcome.Ok(200, DaemonInfo(voiceControls = VoiceControls(hangup = true)))
+        api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "active"))
+        api.hangup = ApiOutcome.Failure(403, "forbidden", "the daemon refused")
+
+        val viewModel = viewModel(api, FakeCallScreenOpener(shown = false))
+        viewModel.bind(CALL_ID)
+        runCurrent()
+        viewModel.requestHangUp()
+        runCurrent()
+        viewModel.confirmHangUp()
+        runCurrent()
+        viewModel.openCallScreen()
+        runCurrent()
+        assertTrue(viewModel.state.value.hangUpFailed)
+
+        api.callSnapshot = ApiOutcome.Failure(503, "link_down", "the daemon is not reachable")
+        viewModel.reload()
+        runCurrent()
+
+        val reloaded = viewModel.state.value
+        assertFalse("the load failure is not a hang-up failure", reloaded.hangUpFailed)
+        assertFalse("and offers no call-screen action", reloaded.callScreenAction)
+        assertEquals("link_down", reloaded.errorCode)
+        assertEquals(UiText.Literal("the daemon is not reachable"), reloaded.error)
+
+        api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "active"))
         api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(endedEvent(1))))
         advanceUntilIdle()
     }
