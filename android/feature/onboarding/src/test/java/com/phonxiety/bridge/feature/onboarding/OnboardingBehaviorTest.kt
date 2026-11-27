@@ -373,10 +373,13 @@ class OnboardingBehaviorTest {
 
         val results = mutableListOf<TextLayoutResult>()
         node.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(results)
+        // One layout, not several runs: accessibility reads only the first result, so a split
+        // identifier would leave every character after its first run without bounds.
+        assertEquals("the constant is laid out as one run", 1, results.size)
         assertEquals(
             "the layout has to describe exactly the node's characters",
             constant,
-            results.joinToString("") { it.layoutInput.text.text }
+            results.single().layoutInput.text.text
         )
     }
 
