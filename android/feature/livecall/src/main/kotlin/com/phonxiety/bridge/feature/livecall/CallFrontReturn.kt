@@ -280,7 +280,13 @@ class CallFrontReturn(
             return false
         }
         if (!LiveCallFront.armAnswerCover(now)) {
-            BridgeLog.i(TAG) { "answer: refused; the permit for $placed is already spent" }
+            BridgeLog.i(TAG) {
+                if (LiveCallFront.answerCoverPending(now)) {
+                    "answer: the wait for $placed is already open"
+                } else {
+                    "answer: refused; the permit for $placed is already spent"
+                }
+            }
             return false
         }
         return true
