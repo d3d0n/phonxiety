@@ -40,8 +40,11 @@ import org.robolectric.shadow.api.Shadow
 class OwnedHangupTest {
     private val context: Context = RuntimeEnvironment.getApplication()
 
-    /** A Call whose adapter records `disconnectCall`; a failing adapter proves the error reply. */
-    private class TelecomCall(private val failDisconnect: Boolean = false) {
+    /**
+     * A Call whose adapter records `disconnectCall`; a failing adapter proves the error reply, and
+     * [onDisconnect] runs inside the disconnect, where Telecom's own callbacks can already race it.
+     */
+    private class TelecomCall(private val failDisconnect: Boolean = false, private val onDisconnect: () -> Unit = {}) {
         val disconnects = AtomicInteger(0)
         val call: Call
 
@@ -54,6 +57,7 @@ class OwnedHangupTest {
             val proxy = Proxy.newProxyInstance(iface.classLoader, arrayOf(iface)) { _, method, _ ->
                 if (method.name == "disconnectCall") {
                     disconnects.incrementAndGet()
+                    onDisconnect()
                     if (failDisconnect) throw IllegalStateException("the adapter refused")
                 }
                 null
@@ -291,6 +295,49 @@ class OwnedHangupTest {
         } finally {
             gate.countDown()
         }
+    }
+
+    /**
+     * Telecom ends the call while the local end is still inside `disconnect()`: the store keeps
+     * the ENDED Telecom reported and never moves back to the hang-up's late ENDING.
+     */
+    @Test(timeout = 10_000)
+    fun anEndReportedInsideTheDisconnectStaysEnded() {
+        val harness = Harness()
+        harness.store.callStarted(CALL_ID, "+99890•••4567", 1_000L)
+        harness.store.callPhase(CallPhase.ACTIVE)
+        val owned = TelecomCall(onDisconnect = { harness.store.callPhase(CallPhase.ENDED) })
+        harness.attach(owned.call)
+
+        assertTrue(harness.service.endOwnedLocally(CALL_ID))
+        harness.drainCommands()
+
+        assertEquals(1, owned.disconnects.get())
+        assertEquals("the late ending moved an ended call back", CallPhase.ENDED, harness.store.state.value.call?.phase)
+    }
+
+    /**
+     * Another call shows in the store while the local end is inside `disconnect()`: its phase is
+     * not the ended call's to change.
+     */
+    @Test(timeout = 10_000)
+    fun aCallShownInsideTheDisconnectKeepsItsPhase() {
+        val harness = Harness()
+        harness.store.callStarted(CALL_ID, "+99890•••4567", 1_000L)
+        harness.store.callPhase(CallPhase.ACTIVE)
+        val owned = TelecomCall(
+            onDisconnect = {
+                harness.store.callStarted("call-2", "+99890•••4321", 2_000L)
+                harness.store.callPhase(CallPhase.ACTIVE)
+            }
+        )
+        harness.attach(owned.call)
+
+        assertTrue(harness.service.endOwnedLocally(CALL_ID))
+        harness.drainCommands()
+
+        assertEquals("call-2", harness.store.state.value.call?.callId)
+        assertEquals("the ending call's phase landed on the next one", CallPhase.ACTIVE, harness.store.state.value.call?.phase)
     }
 
     @Test

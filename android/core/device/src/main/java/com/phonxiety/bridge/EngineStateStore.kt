@@ -150,9 +150,12 @@ class EngineStateStore {
      * call chip counts from it; otherwise the engine's clock at this transition is used. The stamp
      * belongs to the call and is never replaced by a later ACTIVE, so a screen opened mid-call
      * counts from the answer rather than from the moment it opened.
+     *
+     * Given a [callId], only that call moves: a phase meant for a call the store no longer shows
+     * is dropped.
      */
-    fun callPhase(phase: CallPhase, connectTimeMillis: Long? = null) {
-        advance(phase, connectTimeMillis, stampWhenUnknown = true)
+    fun callPhase(phase: CallPhase, connectTimeMillis: Long? = null, callId: String? = null) {
+        advance(phase, connectTimeMillis, stampWhenUnknown = true, callId = callId)
     }
 
     /**
@@ -166,9 +169,13 @@ class EngineStateStore {
         advance(phase, connectTimeMillis, stampWhenUnknown = false)
     }
 
-    private fun advance(phase: CallPhase, connectTimeMillis: Long?, stampWhenUnknown: Boolean) {
+    private fun advance(phase: CallPhase, connectTimeMillis: Long?, stampWhenUnknown: Boolean, callId: String? = null) {
         mutable.update { current ->
             val call = current.call ?: return@update current
+            if (callId != null && call.callId != callId) return@update current
+            // An ended call is final: a hang-up's late "ending" that lost the race with Telecom's
+            // own end never moves it back.
+            if (call.phase == CallPhase.ENDED && phase != CallPhase.ENDED) return@update current
             val now = System.currentTimeMillis()
             val connectedAt = when {
                 call.connectedAtEpochMs != null -> call.connectedAtEpochMs

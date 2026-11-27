@@ -402,7 +402,7 @@ internal class CommandService(
 
         val terminalState = plan.terminalState
         if (terminalState != null) {
-            store.callPhase(callPhaseOf(terminalState))
+            store.callPhase(callPhaseOf(terminalState), callId = callId)
             return HangupResult.Ended(callId, terminalState)
         }
         plan.toneOwner?.let { cancelToneFor(it) }
@@ -428,7 +428,7 @@ internal class CommandService(
                     return HangupResult.Obsolete
                 }
                 return if (terminal != null) {
-                    store.callPhase(callPhaseOf(terminal))
+                    store.callPhase(callPhaseOf(terminal), callId = callId)
                     HangupResult.Ended(callId, terminal)
                 } else {
                     HangupResult.Refused(callId, "disconnect_failed")
@@ -438,7 +438,7 @@ internal class CommandService(
         if (plan.pendingOnly) {
             BridgeLog.w(TAG, "hangup requested before the telecom call appeared; retained")
         }
-        store.callPhase(CallPhase.ENDING)
+        store.callPhase(CallPhase.ENDING, callId = callId)
         return HangupResult.Ended(callId, "ending")
     }
 
