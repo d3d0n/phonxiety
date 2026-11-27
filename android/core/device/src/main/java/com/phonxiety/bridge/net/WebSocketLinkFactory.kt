@@ -29,11 +29,12 @@ import okio.ByteString.Companion.toByteString
  * fresh [WebSocket].
  */
 internal class WebSocketLinkFactory(
-    private val config: BridgeConfig.Address
+    private val config: BridgeConfig.Address,
+    private val tap: () -> FrameTapSink = { FrameTapSink.None }
 ) : DeviceLinkFactory {
     private val client = pinnedOkHttpClient(config.certSha256)
 
-    override fun create(): DeviceLink = WebSocketLink(client, config)
+    override fun create(): DeviceLink = WebSocketLink(client, config, tap())
 
     override fun shutdown() {
         runCatching { client.dispatcher.executorService.shutdown() }
@@ -173,7 +174,8 @@ private class PinnedTrustManager(pinHex: String) : X509TrustManager {
 
 private class WebSocketLink(
     private val client: OkHttpClient,
-    private val config: BridgeConfig.Address
+    private val config: BridgeConfig.Address,
+    private val tap: FrameTapSink
 ) : DeviceLink {
     private val downOnce = AtomicBoolean(false)
     private val cancelled = AtomicBoolean(false)
@@ -208,10 +210,12 @@ private class WebSocketLink(
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (tap.enabled) tap.frame(FrameDirection.IN, FrameStream.SOCKET, Framing.KIND_TEXT, utf8Length(text))
                 listener.onLinkText(text)
             }
 
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                if (tap.enabled) tap.frame(FrameDirection.IN, FrameStream.SOCKET, Framing.KIND_BINARY, bytes.size)
                 listener.onLinkBinary(bytes)
             }
 

@@ -19,7 +19,8 @@ internal fun RecvStream.asFrameSource(): IrohFrameSource = IrohFrameSource { len
 /**
  * Reads framed messages from one stream.  [expectedKind] is the only frame kind
  * the stream may carry: text on control, binary on an audio stream.  A frame of
- * the other kind is a protocol error.
+ * the other kind is a protocol error.  [tap] records the frame's size and type,
+ * never its bytes.
  *
  * [fail] reports the link down; it ignores a link that already ended, so the
  * reader simply returns after either a truncation or a throw.
@@ -27,6 +28,8 @@ internal fun RecvStream.asFrameSource(): IrohFrameSource = IrohFrameSource { len
 internal suspend fun readIrohFrames(
     source: IrohFrameSource,
     expectedKind: Int,
+    stream: FrameStream,
+    tap: FrameTapSink,
     listener: DeviceLink.Listener,
     fail: (String) -> Unit
 ) {
@@ -47,6 +50,7 @@ internal suspend fun readIrohFrames(
                 fail("closed")
                 return
             }
+            if (tap.enabled) tap.frame(FrameDirection.IN, stream, parsed.kind, parsed.length)
             if (expectedKind == Framing.KIND_TEXT) {
                 listener.onLinkText(payload.toString(Charsets.UTF_8))
             } else {
@@ -61,6 +65,7 @@ internal suspend fun readIrohFrames(
 /** Accepts the daemon→phone audio stream after auth, then reads its frames. */
 internal suspend fun readIrohAudio(
     link: Connection,
+    tap: FrameTapSink,
     listener: DeviceLink.Listener,
     fail: (String) -> Unit
 ) {
@@ -70,7 +75,7 @@ internal suspend fun readIrohAudio(
         fail("closed")
         return
     }
-    readIrohFrames(incoming.asFrameSource(), Framing.KIND_BINARY, listener, fail)
+    readIrohFrames(incoming.asFrameSource(), Framing.KIND_BINARY, FrameStream.AUDIO, tap, listener, fail)
 }
 
 /**
@@ -117,6 +122,7 @@ private fun isLinkProbe(bytes: ByteArray): Boolean = bytes.size >= 4 &&
  */
 internal class IrohAttachmentChannel(
     private val incoming: IrohFrameSource,
+    private val tap: FrameTapSink,
     private val cancelStreams: () -> Unit
 ) : AttachmentChannel {
     private val done = AtomicBoolean(false)
@@ -137,6 +143,7 @@ internal class IrohAttachmentChannel(
                 done.set(true)
                 return AttachmentFrame.Error("closed", "the attachment stream ended mid-frame")
             }
+            if (tap.enabled) tap.frame(FrameDirection.IN, FrameStream.ATTACHMENT, parsed.kind, parsed.length)
             if (parsed.kind == Framing.KIND_BINARY) {
                 AttachmentFrame.Data(payload)
             } else {

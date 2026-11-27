@@ -28,7 +28,7 @@ class IrohSendQueueTest {
         queue: IrohSendQueue,
         write: suspend (ByteArray) -> Unit,
         onWriteFailed: () -> Unit
-    ) = queue.drain(write, onWriteFailed)
+    ) = queue.drain(FrameStream.CONTROL, Framing.KIND_TEXT, FrameTapSink.None, write, onWriteFailed)
 
     @Test
     fun helloIsWrittenFirstOnControl() = runBlocking {

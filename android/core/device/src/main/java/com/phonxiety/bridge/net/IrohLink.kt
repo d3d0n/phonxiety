@@ -38,7 +38,8 @@ internal class IrohLink(
     private val ownsCall: () -> Boolean,
     private val beginIdleLinkAction: () -> IdleLinkAction?,
     private val policy: IrohEscalationPolicy,
-    private val budget: IrohFailureBudget
+    private val budget: IrohFailureBudget,
+    private val tap: FrameTapSink
 ) : DeviceLink {
     private companion object {
         const val TAG = "Bridge:iroh"
@@ -111,7 +112,7 @@ internal class IrohLink(
             val frame = Framing.encode(Framing.KIND_TEXT, header.toByteArray(Charsets.UTF_8)) ?: return null
             runCatching { send.setPriority(CONTROL_PRIORITY) }
             send.writeAll(frame)
-            IrohAttachmentChannel(incoming.asFrameSource()) {
+            IrohAttachmentChannel(incoming.asFrameSource(), tap) {
                 irohIo.launch {
                     runCatching { send.finish() }
                     runCatching { incoming.stop(0uL) }
@@ -163,20 +164,26 @@ internal class IrohLink(
             }
             listener.onLinkOpened()
             scope.launch {
-                readIrohFrames(control.recv().asFrameSource(), Framing.KIND_TEXT, listener) { reason ->
+                readIrohFrames(control.recv().asFrameSource(), Framing.KIND_TEXT, FrameStream.CONTROL, tap, listener) { reason ->
                     fail(listener, reason)
                 }
             }
-            scope.launch { readIrohAudio(link, listener) { reason -> fail(listener, reason) } }
+            scope.launch { readIrohAudio(link, tap, listener) { reason -> fail(listener, reason) } }
             scope.launch { tunnels.acceptLoop(link, scope) }
             scope.launch {
                 controlOutbound.drain(
+                    stream = FrameStream.CONTROL,
+                    kind = Framing.KIND_TEXT,
+                    tap = tap,
                     write = { controlSend.writeAll(it) },
                     onWriteFailed = { if (!cancelled.get()) fail(listener, "write_failed") }
                 )
             }
             scope.launch {
                 audioOutbound.drain(
+                    stream = FrameStream.AUDIO,
+                    kind = Framing.KIND_BINARY,
+                    tap = tap,
                     write = { audioSend.writeAll(it) },
                     onWriteFailed = { if (!cancelled.get()) fail(listener, "write_failed") }
                 )
@@ -351,10 +358,10 @@ internal class IrohLink(
     }
 
     override fun sendText(message: String): Boolean {
-        val frame = Framing.encode(Framing.KIND_TEXT, message.toByteArray(Charsets.UTF_8))
-            ?: return false
+        val payload = message.toByteArray(Charsets.UTF_8)
+        val frame = Framing.encode(Framing.KIND_TEXT, payload) ?: return false
         if (cancelled.get() || downOnce.get()) return false
-        return controlOutbound.offer(frame)
+        return controlOutbound.offer(frame, payload.size)
     }
 
     override fun sendBinary(frame: ByteArray, length: Int) {
@@ -362,7 +369,7 @@ internal class IrohLink(
         if (size == 0) return
         val encoded = Framing.encode(Framing.KIND_BINARY, frame, size) ?: return
         if (cancelled.get() || downOnce.get()) return
-        audioOutbound.offer(encoded)
+        audioOutbound.offer(encoded, size)
     }
 
     /**

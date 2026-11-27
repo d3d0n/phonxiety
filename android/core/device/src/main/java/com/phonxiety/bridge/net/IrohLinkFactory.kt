@@ -10,6 +10,7 @@ internal class IrohLinkFactory(
     private val config: BridgeConfig.Iroh,
     private val ownsCall: () -> Boolean,
     private val beginIdleLinkAction: () -> IdleLinkAction?,
+    private val tap: () -> FrameTapSink = { FrameTapSink.None },
     clock: () -> Long = { System.nanoTime() / 1_000_000L }
 ) : DeviceLinkFactory {
     /**
@@ -26,7 +27,7 @@ internal class IrohLinkFactory(
      */
     private val budget = IrohFailureBudget(clock)
 
-    override fun create(): DeviceLink = IrohLink(context, config, ownsCall, beginIdleLinkAction, policy, budget)
+    override fun create(): DeviceLink = IrohLink(context, config, ownsCall, beginIdleLinkAction, policy, budget, tap())
 
     /** Only iroh outcomes reach this factory; each one feeds the endpoint's one account. */
     override fun attemptEnded(outcome: AttemptOutcome, kind: LinkKind?) = budget.note(outcome)

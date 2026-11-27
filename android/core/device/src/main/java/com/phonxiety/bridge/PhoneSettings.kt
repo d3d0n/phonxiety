@@ -53,6 +53,10 @@ object PhoneCodec {
  * endpoint uses: [connectionMode] pins one candidate or leaves the choice to selection,
  * [relayMode] picks between the preset relays, the daemon's list, the phone's own list and
  * no relays at all, and [relayUrls] is that own list.
+ *
+ * [frameTap] turns on the transport frame dump: direction, stream, frame type, byte size
+ * and the link's correlation id only — never payload bytes.  Off by default, and read
+ * when a link attempt starts, so a change takes effect on the next dial.
  */
 data class PhoneSettings(
     val preferredCodec: String = PhoneCodec.AUTO,
@@ -67,7 +71,9 @@ data class PhoneSettings(
     val relayMode: String = RelayModeSetting.DEFAULT.wire,
     val relayUrls: List<String> = emptyList(),
     /** The daemon's own `iroh_relays`, mirrored here so the daemon relay mode can use it. */
-    val daemonRelayUrls: List<String> = emptyList()
+    val daemonRelayUrls: List<String> = emptyList(),
+    /** Whether the transport records frame metadata to the bounded dump; off by default. */
+    val frameTap: Boolean = false
 ) {
     companion object {
         const val MIN_BITRATE = 6_000
@@ -88,7 +94,8 @@ data class PhoneSettings(
             connectionMode: String? = ConnectionMode.AUTO.wire,
             relayMode: String? = RelayModeSetting.DEFAULT.wire,
             relayUrls: List<String> = emptyList(),
-            daemonRelayUrls: List<String> = emptyList()
+            daemonRelayUrls: List<String> = emptyList(),
+            frameTap: Boolean = false
         ): PhoneSettings = PhoneSettings(
             preferredCodec = PhoneCodec.normalize(preferredCodec),
             maxBitrate = maxBitrate.coerceIn(MIN_BITRATE, MAX_BITRATE),
@@ -101,7 +108,8 @@ data class PhoneSettings(
             connectionMode = ConnectionMode.of(connectionMode).wire,
             relayMode = RelayModeSetting.of(relayMode).wire,
             relayUrls = RelayOptions.sanitize(relayUrls),
-            daemonRelayUrls = RelayOptions.sanitize(daemonRelayUrls)
+            daemonRelayUrls = RelayOptions.sanitize(daemonRelayUrls),
+            frameTap = frameTap
         )
 
         /** Keeps digits and a single leading `+`; an empty string means "not configured". */
@@ -207,6 +215,7 @@ class PhoneSettingsStore internal constructor(
             preferences[RELAY_MODE] = next.relayMode
             preferences[RELAY_URLS] = RelayOptions.join(next.relayUrls)
             preferences[DAEMON_RELAY_URLS] = RelayOptions.join(next.daemonRelayUrls)
+            preferences[FRAME_TAP] = next.frameTap
         }
         return written
     }
@@ -285,7 +294,8 @@ class PhoneSettingsStore internal constructor(
         connectionMode = preferences[CONNECTION_MODE],
         relayMode = preferences[RELAY_MODE],
         relayUrls = RelayOptions.split(preferences[RELAY_URLS].orEmpty()),
-        daemonRelayUrls = RelayOptions.split(preferences[DAEMON_RELAY_URLS].orEmpty())
+        daemonRelayUrls = RelayOptions.split(preferences[DAEMON_RELAY_URLS].orEmpty()),
+        frameTap = preferences[FRAME_TAP] ?: false
     )
 
     companion object {
@@ -304,6 +314,7 @@ class PhoneSettingsStore internal constructor(
         private val RELAY_MODE = stringPreferencesKey("relay_mode")
         private val RELAY_URLS = stringPreferencesKey("relay_urls")
         private val DAEMON_RELAY_URLS = stringPreferencesKey("daemon_relay_urls")
+        private val FRAME_TAP = booleanPreferencesKey("frame_tap")
 
         /** Set by the one migration, so a leftover old file is never applied twice. */
         private val MIGRATED_FROM_CREDENTIAL = booleanPreferencesKey("migrated_from_credential_protected")

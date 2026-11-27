@@ -87,7 +87,7 @@ internal class CandidateLinkFactory(
     private val beginIdleLinkAction: () -> IdleLinkAction?
 ) : DeviceLinkFactory {
     private val irohFactory: IrohLinkFactory? = (config as? BridgeConfig.Iroh)?.let { iroh ->
-        IrohLinkFactory(context, iroh, { ownsCall() }, beginIdleLinkAction)
+        IrohLinkFactory(context, iroh, { ownsCall() }, beginIdleLinkAction, tap = { FrameTap.of(context) })
     }
     private val addressFactories = ConcurrentHashMap<String, WebSocketLinkFactory>()
     private val attempts = ConcurrentHashMap<String, Attempts>()
@@ -183,7 +183,9 @@ internal class CandidateLinkFactory(
         val pin = candidate.certSha256
         val url = candidate.url ?: error("address candidate without a url")
         val address = BridgeConfig.validateAddress(url, config.token, pin, config.appToken)
-        return addressFactories.getOrPut(candidate.id) { WebSocketLinkFactory(address) }
+        return addressFactories.getOrPut(candidate.id) {
+            WebSocketLinkFactory(address, tap = { FrameTap.of(context) })
+        }
     }
 
     private fun startDiscovery() {

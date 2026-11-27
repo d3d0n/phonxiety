@@ -41,13 +41,16 @@ internal class IrohSendQueue(private val capacity: Int, private val backlog: Ato
         const val AUDIO_CAPACITY = Channel.UNLIMITED
     }
 
-    private val frames = Channel<ByteArray>(capacity)
+    private val frames = Channel<Frame>(capacity)
     private val failed = AtomicBoolean(false)
 
+    /** One accepted frame: the bytes to write and the payload size the tap records. */
+    private class Frame(val bytes: ByteArray, val payload: Int)
+
     /** Accepts [bytes] without suspending; false when the queue is full or closed. */
-    fun offer(bytes: ByteArray): Boolean {
+    fun offer(bytes: ByteArray, payload: Int = bytes.size): Boolean {
         backlog.addAndGet(bytes.size.toLong())
-        if (frames.trySend(bytes).isFailure) {
+        if (frames.trySend(Frame(bytes, payload)).isFailure) {
             backlog.addAndGet(-bytes.size.toLong())
             return false
         }
@@ -56,15 +59,23 @@ internal class IrohSendQueue(private val capacity: Int, private val backlog: Ato
 
     /**
      * Writes every accepted frame in order until the queue closes or [write]
-     * throws.  Exactly one coroutine calls this per queue.
+     * throws.  Exactly one coroutine calls this per queue.  [tap] records each
+     * frame after its write returns, with the stream and kind it used.
      */
-    suspend fun drain(write: suspend (ByteArray) -> Unit, onWriteFailed: () -> Unit) {
+    suspend fun drain(
+        stream: FrameStream,
+        kind: Int,
+        tap: FrameTapSink,
+        write: suspend (ByteArray) -> Unit,
+        onWriteFailed: () -> Unit
+    ) {
         try {
-            for (bytes in frames) {
+            for (frame in frames) {
                 try {
-                    write(bytes)
+                    write(frame.bytes)
+                    if (tap.enabled) tap.frame(FrameDirection.OUT, stream, kind, frame.payload)
                 } finally {
-                    backlog.addAndGet(-bytes.size.toLong())
+                    backlog.addAndGet(-frame.bytes.size.toLong())
                 }
             }
         } catch (t: Throwable) {
