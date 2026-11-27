@@ -264,8 +264,8 @@ internal fun PhonxietyNavigationHost(
 
 /**
  * Installs the host's scroll-to-top registry for everything drawn below it. The assertion is the
- * host-level check that the provision happened: a screen's RegisterScrollToTop would otherwise
- * fail at that screen, far from the host that forgot the registry.
+ * host-level check that the provision happened: without it a screen's RegisterScrollToTop would
+ * register nothing, and a re-tap would go quiet with no sign of the host that forgot the registry.
  */
 @Composable
 internal fun HostScrollRegistry(registry: ScrollToTopRegistry, content: @Composable () -> Unit) {

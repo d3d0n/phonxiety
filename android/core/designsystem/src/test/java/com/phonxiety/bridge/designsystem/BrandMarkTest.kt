@@ -1,6 +1,7 @@
 package com.phonxiety.bridge.designsystem
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -70,6 +71,22 @@ class BrandMarkTest {
         }
         val bounds = composeRule.onNodeWithTag("lockup").getUnclippedBoundsInRoot()
         assertTrue((bounds.bottom - bounds.top).value >= 18f)
+    }
+
+    @Test
+    fun anUndersizedCallerModifierCannotShrinkTheWordmark() {
+        composeRule.setContent {
+            PhonxietyTheme(darkTheme = true, dynamicColor = false) {
+                BrandLockup(
+                    modifier = Modifier.height(8.dp).testTag("lockup"),
+                    height = 24.dp
+                )
+            }
+        }
+        val word = composeRule
+            .onNodeWithTag(BRAND_WORDMARK_TEST_TAG, useUnmergedTree = true)
+            .getUnclippedBoundsInRoot()
+        assertTrue((word.bottom - word.top).value >= 18f)
     }
 
     @Test

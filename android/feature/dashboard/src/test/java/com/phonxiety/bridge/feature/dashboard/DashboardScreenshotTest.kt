@@ -328,7 +328,7 @@ class DashboardScreenshotTest {
     fun noAudioStreamShowsNoFabricatedZeros() {
         setScreen(bridge = DashboardSamples.direct.copy(audio = AudioState()))
         composeRule.onNodeWithText("No audio stream. It starts with a call.").assertExists()
-        composeRule.onNodeWithText("Playback drops", ignoreCase = true).assertDoesNotExist()
+        composeRule.onNodeWithText("Playback drops").assertDoesNotExist()
     }
 
     @Test

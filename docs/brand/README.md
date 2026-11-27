@@ -29,16 +29,17 @@ pairs: none is magenta, so status never competes with Signal.
 ## Type
 
 - **Chakra Petch SemiBold** — the name and every heading. Name tracking −1.6 %.
-- **JetBrains Mono Regular** — body text (15 sp, line height 1.65), captions (12 sp, uppercase at
-  the render site, tracking 2.5 px) and code.
+- **JetBrains Mono Regular** — body text (15 sp, line height 1.65), captions (12 sp, tracking
+  2.5 sp, uppercase at the render site while accessibility reads the original casing) and code.
 - **JetBrains Mono Medium** — labels.
 
 Both faces ship under the SIL Open Font License; the texts are in `docs/brand/fonts/`.
 
 ## Logo
 
-- Clear space: half the arrow's height on every side.
-- Word at least 18 px, sign at least 16 px.
+- Clear space: half the arrow's height on every side. This is a placement rule for whoever puts
+  the mark on a surface; the composables keep the arrow's own box but do not reserve that margin.
+- Word at least 18 dp, sign at least 16 dp.
 - Glow only on the arrow, only on dark backgrounds.
 - Never rotate, recolour or stretch the mark. Use the dark version on dark, the light version on
   light.

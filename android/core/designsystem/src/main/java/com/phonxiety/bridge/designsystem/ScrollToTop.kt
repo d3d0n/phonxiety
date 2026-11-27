@@ -1,13 +1,11 @@
 package com.phonxiety.bridge.designsystem
 
-import android.content.pm.ApplicationInfo
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.staticCompositionLocalOf
-import androidx.compose.ui.platform.LocalContext
 
 /**
  * A handle to one registration. Two registrations of the same destination with the same callback
@@ -71,23 +69,17 @@ val LocalScrollToTop = staticCompositionLocalOf<ScrollToTopRegistry?> { null }
  * changes keeps its registration, and an older still-composed screen cannot reclaim the destination
  * by changing its callback. The newest callback is read through a stable wrapper.
  *
- * A host that forgot to provide [LocalScrollToTop] fails loudly in a debuggable build; in release
- * the call is a no-op so a missing host degrades instead of crashing.
+ * The navigation host provides one remembered registry through [LocalScrollToTop] and dispatches a
+ * section's key when its active tab is tapped again. There is no shared or global registry: a
+ * screen composed without a provider (an isolated test, a preview) registers nothing, in every
+ * build type, instead of failing.
  */
 @Composable
 fun RegisterScrollToTop(destination: Any, scrollToTop: () -> Unit) {
-    val registry = LocalScrollToTop.current
-    if (registry == null) {
-        if (LocalContext.current.isDebuggable()) {
-            error("RegisterScrollToTop needs LocalScrollToTop provided by the navigation host")
-        }
-        return
-    }
+    val registry = LocalScrollToTop.current ?: return
     val latest = rememberUpdatedState(scrollToTop)
     DisposableEffect(registry, destination) {
         val handle = registry.register(destination) { latest.value() }
         onDispose { registry.unregister(handle) }
     }
 }
-
-private fun android.content.Context.isDebuggable(): Boolean = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0

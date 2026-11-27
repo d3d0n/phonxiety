@@ -60,8 +60,29 @@ internal object BrandArrow {
     private val bracketCorner = Offset(150f - SHIFT, 50f - SHIFT)
     private val bracketEnd = Offset(150f - SHIFT, 124f - SHIFT)
 
-    /** Draws the mark into [side] square units at [origin], with an optional glow behind it. */
-    fun DrawScope.drawMark(origin: Offset, side: Float, color: Color, glow: Boolean) {
+    /** One widening pass of the glow: the stroke width factor and the alpha it carries. */
+    private class GlowSpec(val widthFactor: Float, val alpha: Float)
+
+    private val GLOW_SPECS = listOf(
+        GlowSpec(2.4f, 0.10f),
+        GlowSpec(1.5f, 0.14f),
+        GlowSpec(0.9f, 0.18f)
+    )
+
+    internal class GlowStroke(val stroke: Stroke, val alpha: Float)
+
+    /** The geometry of one mark at one size: the path and the strokes never change while drawn. */
+    internal class Mark internal constructor(
+        internal val path: Path,
+        internal val body: Stroke,
+        internal val glow: List<GlowStroke>
+    )
+
+    /**
+     * Builds the mark for [side] square units at [origin]. Called from a draw cache, so the path,
+     * the glow list and every stroke are allocated once per size, not once per frame.
+     */
+    fun mark(origin: Offset, side: Float): Mark {
         val scale = side / VIEWPORT
         val stroke = STROKE * scale
         val path = Path().apply {
@@ -71,20 +92,30 @@ internal object BrandArrow {
             lineTo(origin.x + bracketCorner.x * scale, origin.y + bracketCorner.y * scale)
             lineTo(origin.x + bracketEnd.x * scale, origin.y + bracketEnd.y * scale)
         }
-        if (glow) {
-            // The brand's glow: three widening passes of the mark itself, never a colour of its own.
-            listOf(2.4f to 0.10f, 1.5f to 0.14f, 0.9f to 0.18f).forEach { (width, alpha) ->
-                drawPath(
-                    path = path,
-                    color = color.copy(alpha = alpha),
-                    style = Stroke(width = stroke * width, cap = StrokeCap.Butt, join = StrokeJoin.Miter)
+        return Mark(
+            path = path,
+            body = Stroke(width = stroke, cap = StrokeCap.Butt, join = StrokeJoin.Miter),
+            glow = GLOW_SPECS.map { spec ->
+                GlowStroke(
+                    stroke = Stroke(
+                        width = stroke * spec.widthFactor,
+                        cap = StrokeCap.Butt,
+                        join = StrokeJoin.Miter
+                    ),
+                    alpha = spec.alpha
                 )
             }
-        }
-        drawPath(
-            path = path,
-            color = color,
-            style = Stroke(width = stroke, cap = StrokeCap.Butt, join = StrokeJoin.Miter)
         )
+    }
+
+    /** Draws a cached [mark], with the glow passes behind it when [glow] is on. */
+    fun DrawScope.drawMark(mark: Mark, color: Color, glow: Boolean) {
+        if (glow) {
+            // The brand's glow: three widening passes of the mark itself, never a colour of its own.
+            mark.glow.forEach { pass ->
+                drawPath(path = mark.path, color = color.copy(alpha = pass.alpha), style = pass.stroke)
+            }
+        }
+        drawPath(path = mark.path, color = color, style = mark.body)
     }
 }

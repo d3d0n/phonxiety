@@ -27,9 +27,6 @@ import org.robolectric.annotation.Config
  * one that runs. The host is composed with the registry the test holds, and the fake replaces the
  * section root's own action for a moment, so a navigator that stopped using the host's registry —
  * or stopped dispatching at a root — leaves the counter at zero.
- *
- * The app is debuggable for the test, which is what makes a host that forgot the provision fail at
- * the registration instead of going quiet.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])

@@ -9,7 +9,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertThrows
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -134,6 +133,38 @@ class ScrollToTopTest {
         assertEquals(1, calls)
     }
 
+    /**
+     * The same callback twice at one destination: disposing the first handle leaves the replacement
+     * registered, and only the second handle removes it. An identity-based registry drops both on
+     * the first unregister.
+     */
+    @Test
+    fun theSameCallbackTwiceAtOneDestinationSurvivesTheFirstUnregister() {
+        val registry = ScrollToTopRegistry()
+        var calls = 0
+        val shared: () -> Unit = { calls++ }
+        val first = registry.register(DESTINATION, shared)
+        val second = registry.register(DESTINATION, shared)
+
+        registry.unregister(first)
+        registry.dispatch(DESTINATION)
+        assertEquals(1, calls)
+
+        registry.unregister(second)
+        registry.dispatch(DESTINATION)
+        assertEquals(1, calls)
+    }
+
+    @Test
+    fun aFreshRegistryHasNothingToDispatch() {
+        val registry = ScrollToTopRegistry()
+        var calls = 0
+
+        registry.dispatch(DESTINATION)
+
+        assertEquals(0, calls)
+    }
+
     @Test
     fun aCallbackChangeInAReplacedScreenCannotReclaimTheDestination() {
         val registry = ScrollToTopRegistry()
@@ -168,7 +199,8 @@ class ScrollToTopTest {
         composeRule.setContent {
             CompositionLocalProvider(LocalScrollToTop provides registry) {
                 val callback: () -> Unit = remember(version) {
-                    { seen = version }
+                    val capturedVersion = version
+                    { seen = capturedVersion }
                 }
                 RegisterScrollToTop(DESTINATION, callback)
             }
@@ -180,17 +212,16 @@ class ScrollToTopTest {
     }
 
     @Test
-    fun withoutAProviderRegistrationFailsLoudlyInDebug() {
+    fun withoutAProviderRegistrationIsASilentNoOp() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
-        context.applicationInfo.flags =
-            context.applicationInfo.flags or android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE
+        val original = context.applicationInfo.flags
+        context.applicationInfo.flags = original or android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE
         try {
-            assertThrows(IllegalStateException::class.java) {
-                composeRule.setContent { RegisterScrollToTop(DESTINATION) {} }
-            }
+            var calls = 0
+            composeRule.setContent { RegisterScrollToTop(DESTINATION) { calls++ } }
+            composeRule.runOnIdle { assertEquals(0, calls) }
         } finally {
-            context.applicationInfo.flags =
-                context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE.inv()
+            context.applicationInfo.flags = original
         }
     }
 

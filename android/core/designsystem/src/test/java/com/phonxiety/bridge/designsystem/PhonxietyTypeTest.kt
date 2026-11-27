@@ -90,7 +90,7 @@ class PhonxietyTypeTest {
     }
 
     @Test
-    fun theCaptionIsTwelveSpWithTrackingAndRendersUppercase() {
+    fun theCaptionIsTwelveSpWithWideTracking() {
         val caption = PhonxietyType().caption
         assertEquals(JetBrainsMonoFamily, caption.fontFamily)
         assertEquals(12.sp, caption.fontSize)
