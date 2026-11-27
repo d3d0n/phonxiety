@@ -73,19 +73,17 @@ class CallCacheSchemaTest {
         assertEquals(emptyList<TranscriptEntity>(), cache.detail.observeTranscript("call-1").first())
     }
 
-    private fun columns(table: String): Set<String> =
-        database.openHelper.readableDatabase.query("PRAGMA table_info($table)").use { cursor ->
-            buildSet {
-                while (cursor.moveToNext()) add(cursor.getString(1))
-            }
+    private fun columns(table: String): Set<String> = database.openHelper.readableDatabase.query("PRAGMA table_info($table)").use { cursor ->
+        buildSet {
+            while (cursor.moveToNext()) add(cursor.getString(1))
         }
+    }
 
-    private fun tables(): Set<String> =
-        database.openHelper.readableDatabase.query("SELECT name FROM sqlite_master WHERE type = 'table'").use { cursor ->
-            buildSet {
-                while (cursor.moveToNext()) add(cursor.getString(0))
-            }
+    private fun tables(): Set<String> = database.openHelper.readableDatabase.query("SELECT name FROM sqlite_master WHERE type = 'table'").use { cursor ->
+        buildSet {
+            while (cursor.moveToNext()) add(cursor.getString(0))
         }
+    }
 
     /** Every column an ordinary (not primary-key) index covers on [table]. */
     private fun indexedColumns(table: String): Set<String> {
