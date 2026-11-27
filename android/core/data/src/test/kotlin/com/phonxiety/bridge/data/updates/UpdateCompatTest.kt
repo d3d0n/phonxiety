@@ -167,11 +167,11 @@ class UpdateCompatTest {
     fun `the daemon's own words stay verbatim`() {
         val verdict = UpdateCompat.evaluate(
             manifest(),
-            installed(daemonCompatible = false, daemonNotes = listOf("protocol ranges do not overlap"))
+            installed(daemonCompatible = false, daemonNotes = listOf("update the daemon: the app speaks a newer app API"))
         )
         assertEquals(UpdateStatus.INCOMPATIBLE, verdict.daemon.status)
         assertEquals(
-            CompatibilityNote.Reported("protocol ranges do not overlap"),
+            CompatibilityNote.Reported("update the daemon: the app speaks a newer app API"),
             verdict.daemon.notes.single()
         )
     }
@@ -184,16 +184,10 @@ class UpdateCompatTest {
     }
 
     @Test
-    fun `a protocol the daemon does not accept is incompatible`() {
-        val verdict = UpdateCompat.evaluate(manifest(protocol = 4), installed(daemonProtocols = listOf(2, 3)))
-        assertEquals(UpdateStatus.INCOMPATIBLE, verdict.daemon.status)
-    }
-
-    @Test
     fun `an unanswered daemon is unknown`() {
         val verdict = UpdateCompat.evaluate(
             manifest(),
-            installed(daemonVersion = null, daemonProtocols = emptyList(), daemonCompatible = null)
+            installed(daemonVersion = null, daemonCompatible = null)
         )
         assertEquals(UpdateStatus.UNKNOWN, verdict.daemon.status)
     }
@@ -233,7 +227,6 @@ class UpdateCompatTest {
         deviceSdk: Int = 35,
         granted: Set<String> = setOf("android.permission.CAPTURE_AUDIO_OUTPUT"),
         daemonVersion: String? = "0.1.0",
-        daemonProtocols: List<Int> = listOf(3),
         daemonCompatible: Boolean? = true,
         daemonNotes: List<String> = emptyList()
     ) = InstalledVersions(
@@ -246,7 +239,6 @@ class UpdateCompatTest {
         grantedPrivilegedPermissions = granted,
         daemonVersion = daemonVersion,
         daemonAppApi = 1,
-        daemonProtocolVersions = daemonProtocols,
         daemonCompatible = daemonCompatible,
         daemonNotes = daemonNotes
     )

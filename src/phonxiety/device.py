@@ -29,10 +29,8 @@ OPUS_MAGIC = b"PX02"  # one 20 ms Opus packet
 PROBE_MAGIC = b"PXLT"
 MARK_MAGIC = b"PXMK"  # no payload; the phone reports it drained once everything before it played
 PROTOCOL_VERSION = 3
-# The phone may still speak 2: a hello without the v3 fields is accepted during the transition.
-PROTOCOL_VERSIONS = (2, 3)
-HELLO_FIELDS = ("device", "boot_id", "capabilities", "active_call")
-HELLO_V3_FIELDS = ("app_api", "preferred_codec", "max_bitrate", "control_caps")
+# The hello fields stored as sent; `preferred_codec` and `max_bitrate` go through `_apply_prefs`.
+HELLO_FIELDS = ("device", "boot_id", "capabilities", "active_call", "app_api", "control_caps")
 MAX_API_RESULT_CHARS = 256 * 1024  # one api_result must fit the phone's page limit
 API_CONCURRENCY = 8
 FRAME_PCM_BYTES = 1920
@@ -211,7 +209,7 @@ class DeviceHub:
         except (LinkClosed, TimeoutError, ValueError):
             await link.close(1002, "Device handshake failed")
             return
-        if not isinstance(hello, dict) or hello.get("type") != "hello" or hello.get("version") not in PROTOCOL_VERSIONS:
+        if not isinstance(hello, dict) or hello.get("type") != "hello" or hello.get("version") != PROTOCOL_VERSION:
             await link.close(1002, "Incompatible device handshake")
             return
         async with self._attach_lock:
@@ -249,7 +247,7 @@ class DeviceHub:
                 asyncio.create_task(self._write_audio(link), name="device-audio"),
                 asyncio.create_task(self._heartbeat(link), name="device-heartbeat"),
             ]
-            await self._offer_app_access(link, hello)
+            await self._offer_app_access(link)
             self._events.put_nowait(hello)
             while True:
                 message = await link.recv()
@@ -298,8 +296,8 @@ class DeviceHub:
         if cancelled:
             raise asyncio.CancelledError
 
-    async def _offer_app_access(self, link: DeviceLink, hello: dict[str, Any]) -> None:
-        """Hand the app token to a v3 phone before the link serves anything else.
+    async def _offer_app_access(self, link: DeviceLink) -> None:
+        """Hand the app token to the phone before the link serves anything else.
 
         The offer shares the control lock with commands, so it can wait behind a full
         buffer; a phone that does not take it within `LINK_WRITE_TIMEOUT_S` is disconnected
@@ -307,7 +305,7 @@ class DeviceHub:
         """
         source = self.app_token_source
         token = source() if source is not None else None
-        if not token or not isinstance(hello.get("app_api"), int):
+        if not token:
             return
         try:
             async with asyncio.timeout(LINK_WRITE_TIMEOUT_S):
@@ -319,16 +317,9 @@ class DeviceHub:
             raise LinkClosed("app token delivery timed out") from None
 
     def _record_hello(self, hello: dict[str, Any]) -> None:
-        """Keep the fields the rest of the daemon reads, and v3's preferences when present."""
+        """Store the hello's identity and capabilities; `_apply_prefs` stores the audio preference."""
         self.info = {key: hello.get(key) for key in HELLO_FIELDS}
         self.info["version"] = hello.get("version")
-        for key in HELLO_V3_FIELDS:
-            if key in ("preferred_codec", "max_bitrate"):
-                continue  # validated by _apply_prefs, so a bad value cannot reach a call
-            if hello.get(key) is not None:
-                self.info[key] = hello[key]
-        if isinstance(hello.get("app_api"), int):
-            self.info["app_api"] = hello["app_api"]
         self._apply_prefs(hello)
 
     def _apply_prefs(self, source: dict[str, Any]) -> None:
@@ -596,8 +587,8 @@ class DeviceHub:
     def stream_codec(self) -> str:
         """The format the next call uses: the phone's explicit choice wins over the daemon's.
 
-        `auto` (or a v2 hello without the field) keeps the daemon's configured codec; PCM
-        remains the fallback for a phone that does not offer Opus.
+        `auto` keeps the daemon's configured codec; PCM remains the fallback for a phone that
+        does not offer Opus.
         """
         offered = self.info.get("capabilities", {}).get("audio_codecs")
         phone_opus = isinstance(offered, list) and "opus" in offered

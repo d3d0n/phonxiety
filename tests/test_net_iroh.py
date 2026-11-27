@@ -13,7 +13,7 @@ from phonxiety.net.iroh import IrohLink, IrohListener
 from phonxiety.net.link import LinkClosed
 
 TOKEN = "device-secret"
-HELLO = json.dumps({"type": "hello", "version": 2, "device": "test", "capabilities": {}})
+HELLO = json.dumps({"type": "hello", "version": 3, "device": "test", "capabilities": {}})
 
 
 class _Recv:

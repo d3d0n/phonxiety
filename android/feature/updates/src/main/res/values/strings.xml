@@ -75,7 +75,6 @@
     <string name="updates_note_module_follows">This app update is step 1. Step 2 installs the module from it, then the phone reboots.</string>
     <string name="updates_note_daemon_old">Update the daemon on your computer to %1$s or newer.</string>
     <string name="updates_note_daemon_api">The daemon speaks app API %1$d; this app needs app API %2$d. Update the daemon on your computer.</string>
-    <string name="updates_note_daemon_protocol">The daemon accepts device protocol %1$s; this app speaks %2$d. Update the daemon on your computer.</string>
     <string name="updates_note_daemon_unreachable">The daemon did not answer, so its version is unknown.</string>
 
     <!-- App install -->

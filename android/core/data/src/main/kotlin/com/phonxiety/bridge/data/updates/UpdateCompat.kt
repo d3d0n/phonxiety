@@ -28,7 +28,6 @@ data class InstalledVersions(
     val grantedPrivilegedPermissions: Set<String> = emptySet(),
     val daemonVersion: String? = null,
     val daemonAppApi: Int? = null,
-    val daemonProtocolVersions: List<Int> = emptyList(),
     /** `/compat`'s verdict for the versions this release speaks; null when the link is down. */
     val daemonCompatible: Boolean? = null,
     val daemonNotes: List<String> = emptyList()
@@ -73,12 +72,6 @@ sealed interface CompatibilityNote {
 
     /** The daemon answers an older app API than this release needs. */
     data class DaemonApiOlder(val daemonAppApi: Int, val requiredAppApi: Int) : CompatibilityNote
-
-    /** The daemon does not accept the device protocol this app speaks. */
-    data class DaemonProtocolUnsupported(
-        val daemonProtocols: List<Int>,
-        val appProtocol: Int
-    ) : CompatibilityNote
 
     /** The daemon did not answer, so its version is unknown. */
     data object DaemonUnreachable : CompatibilityNote
@@ -273,17 +266,6 @@ object UpdateCompat {
                 availableVersion = daemon.minVersion,
                 status = UpdateStatus.UPDATE_AVAILABLE,
                 notes = listOf(CompatibilityNote.DaemonApiOlder(appApi, daemon.appApi))
-            )
-        }
-        if (installed.daemonProtocolVersions.isNotEmpty() && daemon.protocol !in installed.daemonProtocolVersions) {
-            return UpdateRowState(
-                target = UpdateTarget.DAEMON,
-                installedVersion = installed.daemonVersion,
-                availableVersion = daemon.minVersion,
-                status = UpdateStatus.INCOMPATIBLE,
-                notes = listOf(
-                    CompatibilityNote.DaemonProtocolUnsupported(installed.daemonProtocolVersions, daemon.protocol)
-                )
             )
         }
         return UpdateRowState(

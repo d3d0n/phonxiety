@@ -85,7 +85,6 @@ object UpdatesSamples {
         grantedPrivilegedPermissions = granted,
         daemonVersion = daemonVersion,
         daemonAppApi = 1,
-        daemonProtocolVersions = listOf(3),
         daemonCompatible = daemonCompatible,
         daemonNotes = daemonNotes
     )

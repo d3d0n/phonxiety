@@ -44,7 +44,7 @@ from pydantic import ValidationError
 from . import __version__
 from .audio.opus import CODECS, MAX_OPUS_BITRATE, MIN_OPUS_BITRATE
 from .auth import default_auth_path
-from .device import PROTOCOL_VERSION, PROTOCOL_VERSIONS, DeviceError
+from .device import PROTOCOL_VERSION, DeviceError
 from .models import CallLimits, CallRequest, TERMINAL_STATES, TestAudioOptions
 from .net.framing import frame
 from .net.tailnet import addresses_for, path_kind, tailscale_addresses, tailscale_binary
@@ -503,17 +503,9 @@ class AppApi:
     def _control_caps(self) -> set[str]:
         info = getattr(self.controller.device, "info", {}) or {}
         caps = info.get("control_caps")
-        if isinstance(caps, dict):
-            return {str(key) for key, value in caps.items() if value}
-        if isinstance(caps, (list, tuple, set)):
-            return {str(item) for item in caps}
-        return set()
+        return {str(item) for item in caps} if isinstance(caps, (list, tuple, set)) else set()
 
     def _supports(self, command: str) -> bool:
-        info = getattr(self.controller.device, "info", {}) or {}
-        caps = info.get("capabilities")
-        if isinstance(caps, dict) and caps.get(command):
-            return True
         return command in self._control_caps()
 
     async def _info(self, query: dict[str, Any], body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
@@ -526,7 +518,6 @@ class AppApi:
         return 200, {
             "daemon_version": __version__,
             "protocol": PROTOCOL_VERSION,
-            "protocol_versions": list(PROTOCOL_VERSIONS),
             "app_api": APP_API_VERSION,
             "settings_schema": SETTINGS_SCHEMA_VERSION,
             "voice_backend": self.values["voice_backend"],
@@ -1362,7 +1353,7 @@ class AppApi:
         }
 
     async def _put_settings(self, query: dict[str, Any], body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-        values = body.get("values") if isinstance(body.get("values"), dict) else body
+        values = body.get("values")
         if not isinstance(values, dict) or not values:
             raise ApiError(400, "invalid_argument", "send {\"values\": {...}} with at least one setting")
         try:
@@ -1729,22 +1720,19 @@ class AppApi:
             if client["app_api"] > APP_API_VERSION:
                 compatible = False
                 notes.append("update the daemon: the app speaks a newer app API")
-            elif client["app_api"] < APP_API_VERSION:
-                notes.append("the app speaks an older app API; newer endpoints stay unavailable")
         client_protocol = query.get("protocol")
         if client_protocol is not None:
             try:
                 client["protocol"] = int(client_protocol)
             except (TypeError, ValueError):
                 raise ApiError(400, "invalid_argument", "protocol must be an integer") from None
-            if client["protocol"] not in PROTOCOL_VERSIONS:
+            if client["protocol"] != PROTOCOL_VERSION:
                 compatible = False
-                notes.append(f"the daemon accepts device protocol {', '.join(str(v) for v in PROTOCOL_VERSIONS)}")
+                notes.append(f"the daemon accepts device protocol {PROTOCOL_VERSION}")
         return 200, {
             "daemon_version": __version__,
             "app_api": APP_API_VERSION,
             "protocol": PROTOCOL_VERSION,
-            "protocol_versions": list(PROTOCOL_VERSIONS),
             "client": client,
             "compatible": compatible,
             "notes": notes,

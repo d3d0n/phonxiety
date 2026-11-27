@@ -85,7 +85,8 @@ The copy written by `--serve` (the `dist/` copy keeps `https://` sources and no 
 | `module.schemaVersion` | app | Payload schema. The app applies a release only when `schemaVersion <= MODULE_SCHEMA_VERSION` (currently `1`). |
 | `module.requiresReboot` | app | The release needs a boot. Every module release currently does. |
 | `module.permissions` | app | Privileged grants in the allowlist. A grant the installed app does not hold forces a reboot even if `requiresReboot` were false, and makes the module install wait for the app update: the phone rebuilds the zip from the running APK. |
-| `daemon.minVersion`, `protocol`, `appApi` | app | What the daemon on the computer must be. Checked against `GET /app/v1/compat`. |
+| `daemon.minVersion`, `appApi` | app | What the daemon on the computer must be. Checked against `GET /app/v1/compat`. |
+| `daemon.protocol` | people | The device protocol this release is built for; the daemon answers the same single version through `/app/v1/compat`. |
 | `daemon.moduleSchema` | app | Module schema the daemon understands (informational; the app applies its own gate). |
 
 Magisk, KernelSU and KernelSU-Next ignore the extension fields. APatch does not document

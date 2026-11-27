@@ -268,7 +268,9 @@ def runtime_overrides(state_dir: Path) -> dict[str, object]:
         return {}
     if not isinstance(raw, dict):
         return {}
-    stored = raw.get("values") if isinstance(raw.get("values"), dict) else raw
+    stored = raw.get("values")
+    if not isinstance(stored, dict):
+        return {}
     clean: dict[str, object] = {}
     for key, value in stored.items():
         try:

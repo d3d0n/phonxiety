@@ -620,6 +620,9 @@ class SettingsTests(_ApiCase):
         status, body = await self.call("GET", "/app/v1/settings")
         self.assertEqual(status, 200)
         self.assertEqual(body["values"]["audio_codec"], self.settings.audio_codec)
+        # Only a wrapped body is a settings write; a bare dict is refused.
+        status, body = await self.call("PUT", "/app/v1/settings", body={"audio_codec": "pcm"})
+        self.assertEqual((status, body["code"]), (400, "invalid_argument"))
         status, body = await self.call("PUT", "/app/v1/settings", body={"values": {"audio_codec": "pcm", "opus_bitrate": 24000}})
         self.assertEqual(status, 200)
         self.assertEqual(body["changed"], ["audio_codec", "opus_bitrate"])
@@ -633,6 +636,15 @@ class SettingsTests(_ApiCase):
         self.assertEqual((status, body["code"]), (400, "invalid_argument"))
         status, body = await self.call("PUT", "/app/v1/settings", body={"values": {"nope": 1}})
         self.assertEqual(status, 400)
+
+    async def test_a_settings_file_without_the_values_wrapper_is_ignored(self) -> None:
+        (self.state / "settings.json").write_text(
+            json.dumps({"audio_codec": "pcm", "opus_bitrate": 24000})
+        )
+        with mock.patch.dict(os.environ, {"PHONXIETY_STATE_DIR": str(self.state), "PHONXIETY_AUDIO_CODEC": "opus"}):
+            reloaded = Settings.from_env()
+        self.assertEqual(reloaded.audio_codec, "opus")
+        self.assertEqual(reloaded.opus_bitrate, 32000)
 
     async def test_call_and_voice_keys_are_readable_validated_and_persisted(self) -> None:
         status, body = await self.call("GET", "/app/v1/settings")
@@ -712,6 +724,12 @@ class SettingsTests(_ApiCase):
 
 class TestLabAndDoctorTests(_ApiCase):
     async def test_loopback_and_tone_are_gated_by_hello_capabilities(self) -> None:
+        status, body = await self.call("POST", "/app/v1/loopback", body={"enabled": True})
+        self.assertEqual((status, body["code"]), (409, "unsupported_by_phone"))
+        # Only the `control_caps` list grants a command: neither an old capabilities key
+        # nor a name-keyed dict does.
+        self.device.info["capabilities"]["loopback_start"] = True
+        self.device.info["control_caps"] = {"loopback_start": True}
         status, body = await self.call("POST", "/app/v1/loopback", body={"enabled": True})
         self.assertEqual((status, body["code"]), (409, "unsupported_by_phone"))
         self.device.info["control_caps"] = ["loopback_start", "loopback_stop", "tone_start"]
@@ -965,8 +983,13 @@ class UpdateAndPairTests(_ApiCase):
         self.assertEqual((status, body["code"]), (404, "unknown_channel"))
         status, body = await self.call("GET", "/app/v1/compat", query={"app_api": 99, "protocol": 3})
         self.assertEqual((status, body["compatible"]), (200, False))
-        status, body = await self.call("GET", "/app/v1/compat", query={"app_api": 1, "protocol": 2})
+        self.assertNotIn("protocol_versions", body)
+        status, body = await self.call("GET", "/app/v1/compat", query={"app_api": 1, "protocol": 3})
         self.assertTrue(body["compatible"])
+        # Protocol 2 is not accepted: the daemon speaks 3 only and says so.
+        status, body = await self.call("GET", "/app/v1/compat", query={"app_api": 1, "protocol": 2})
+        self.assertFalse(body["compatible"])
+        self.assertEqual(body["notes"], ["the daemon accepts device protocol 3"])
 
     async def test_rotation_replaces_the_app_token_immediately(self) -> None:
         (self.state / "tokens.json").write_text(json.dumps({"host_token": "h", "device_token": "d", "app_token": TOKEN}))
@@ -1125,7 +1148,7 @@ class HubTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0.01)
         return [json.loads(item) for item in self.link.sent if isinstance(item, str) and '"api_result"' in item]
 
-    async def test_hello_v3_fields_are_kept_and_v2_still_connects(self) -> None:
+    async def test_the_hello_fields_are_recorded_as_sent(self) -> None:
         await self._hello(app_api=1, preferred_codec="opus", max_bitrate=32000, control_caps=["tone_start"])
         self.assertEqual(self.hub.info["app_api"], 1)
         self.assertEqual(self.hub.info["preferred_codec"], "opus")
@@ -1137,16 +1160,16 @@ class HubTests(unittest.IsolatedAsyncioTestCase):
             await self.link.reread.wait()  # the token offer happens before the next read
         return [json.loads(item) for item in self.link.sent if isinstance(item, str) and '"app_access"' in item]
 
-    async def test_a_v3_phone_receives_the_current_app_token_on_connect(self) -> None:
+    async def test_the_app_token_reaches_the_phone_on_connect(self) -> None:
         self.hub.app_token_source = lambda: "app-secret"
-        await self._hello(app_api=1)
+        await self._hello()
         self.assertEqual(await self._app_access(), [{"type": "app_access", "app_token": "app-secret"}])
 
     async def test_a_link_that_does_not_take_the_app_token_is_closed_so_the_phone_reconnects(self) -> None:
         self.hub.app_token_source = lambda: "app-secret"
         self.link.blocked = asyncio.Event()
         with mock.patch("phonxiety.device.LINK_WRITE_TIMEOUT_S", 0.05):
-            await self._hello(app_api=1)
+            await self._hello()
             async with asyncio.timeout(2):
                 await self.serving
         self.assertEqual(self.link.closed, (1013, "App token delivery timed out"))
@@ -1161,11 +1184,6 @@ class HubTests(unittest.IsolatedAsyncioTestCase):
         # The detach ran before the cancellation came out, so the next phone is not refused.
         self.assertFalse(self.hub.connected)
         self.assertIsNone(self.hub._link)
-
-    async def test_no_app_token_goes_to_a_phone_without_the_app_api(self) -> None:
-        self.hub.app_token_source = lambda: "app-secret"
-        await self._hello()
-        self.assertEqual(await self._app_access(), [])
 
     async def test_the_hello_preference_picks_the_next_call_codec(self) -> None:
         self.hub.audio_codec = "pcm"

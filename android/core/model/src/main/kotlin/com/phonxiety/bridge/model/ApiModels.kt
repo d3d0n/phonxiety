@@ -15,7 +15,6 @@ import kotlinx.serialization.json.JsonObject
 data class DaemonInfo(
     @SerialName("daemon_version") val daemonVersion: String? = null,
     val protocol: Int? = null,
-    @SerialName("protocol_versions") val protocolVersions: List<Int> = emptyList(),
     @SerialName("app_api") val appApi: Int? = null,
     @SerialName("settings_schema") val settingsSchema: Int? = null,
     @SerialName("voice_backend") val voiceBackend: String? = null,
@@ -143,7 +142,7 @@ data class ProbeCandidate(
     @SerialName("rtt_ms") val rttMs: Double? = null,
     val detail: String? = null,
     val reason: String? = null,
-    val address: String? = null
+    val addresses: List<String> = emptyList()
 )
 
 // ---------------------------------------------------------------------------
@@ -443,7 +442,6 @@ data class CompatReport(
     @SerialName("daemon_version") val daemonVersion: String? = null,
     @SerialName("app_api") val appApi: Int? = null,
     val protocol: Int? = null,
-    @SerialName("protocol_versions") val protocolVersions: List<Int> = emptyList(),
     val client: JsonObject? = null,
     val compatible: Boolean = false,
     val notes: List<String> = emptyList()

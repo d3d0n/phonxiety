@@ -51,7 +51,6 @@ class AndroidUpdateInventory @Inject constructor(
             },
             daemonVersion = daemon.version,
             daemonAppApi = daemon.appApi,
-            daemonProtocolVersions = daemon.protocols,
             daemonCompatible = daemon.compatible,
             daemonNotes = daemon.notes
         )
@@ -77,7 +76,6 @@ class AndroidUpdateInventory @Inject constructor(
     private data class DaemonFacts(
         val version: String? = null,
         val appApi: Int? = null,
-        val protocols: List<Int> = emptyList(),
         val compatible: Boolean? = null,
         val notes: List<String> = emptyList()
     )
@@ -89,7 +87,6 @@ class AndroidUpdateInventory @Inject constructor(
         return DaemonFacts(
             version = compat?.daemonVersion ?: info?.daemonVersion ?: lastKnownVersion,
             appApi = compat?.appApi ?: info?.appApi,
-            protocols = compat?.protocolVersions ?: info?.protocolVersions.orEmpty(),
             compatible = compat?.compatible,
             notes = compat?.notes.orEmpty()
         )

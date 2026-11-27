@@ -69,18 +69,10 @@ class UpdateTextTest {
     }
 
     @Test
-    fun `the daemon protocol note joins the versions it accepts`() {
-        assertEquals(
-            UiText.Res(R.string.updates_note_daemon_protocol, listOf("2, 3", 4)),
-            CompatibilityNote.DaemonProtocolUnsupported(listOf(2, 3), appProtocol = 4).text()
-        )
-    }
-
-    @Test
     fun `the daemon's own words are never rewritten`() {
         assertEquals(
-            UiText.Literal("protocol ranges do not overlap"),
-            CompatibilityNote.Reported("protocol ranges do not overlap").text()
+            UiText.Literal("update the daemon: the app speaks a newer app API"),
+            CompatibilityNote.Reported("update the daemon: the app speaks a newer app API").text()
         )
     }
 

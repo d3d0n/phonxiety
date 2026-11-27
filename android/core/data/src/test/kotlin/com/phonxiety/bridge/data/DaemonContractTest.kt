@@ -816,9 +816,6 @@ class DaemonContractTest {
         val IGNORED: Map<String, Map<String, String>> = mapOf(
             LinkTestResult.serializer().descriptor.serialName to mapOf(
                 "bitrate" to "a codec trial's bitrate is daemon-side Lab detail the app does not render"
-            ),
-            ProbeCandidate.serializer().descriptor.serialName to mapOf(
-                "addresses" to "the daemon reports a list; the app's single `address` field is legacy"
             )
         )
 
@@ -911,6 +908,11 @@ class DaemonContractTest {
                     "a candidate that was never measured has no detail line",
                     setOf("probe_post.json"),
                     omittedFor = setOf("tailscale")
+                ),
+                "addresses" to Allowance(
+                    "only a path whose own address the daemon can name carries addresses",
+                    setOf("probe_post.json"),
+                    omittedFor = setOf("iroh", "tailscale")
                 )
             )
         )
@@ -923,9 +925,6 @@ class DaemonContractTest {
         val NEVER_SENT: Map<String, Map<String, String>> = mapOf(
             TranscriptTurn.serializer().descriptor.serialName to mapOf(
                 "final" to "paged and archived turns carry no final flag; the long-poll event does"
-            ),
-            ProbeCandidate.serializer().descriptor.serialName to mapOf(
-                "address" to "older daemon shape: the current daemon reports `addresses` instead"
             )
         )
 

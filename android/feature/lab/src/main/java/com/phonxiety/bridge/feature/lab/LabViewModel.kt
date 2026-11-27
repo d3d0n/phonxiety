@@ -258,7 +258,7 @@ class LabViewModel @Inject constructor(
 
     /** One of the bridge's own candidate rows: reached, not reached, or a path it did not measure. */
     private fun daemonRow(candidate: ProbeCandidate): ProbeRowUi {
-        val endpoint = candidate.address?.let(::hostPort)
+        val endpoint = candidate.addresses.firstOrNull()?.let(::hostPort)
         val rttMs = candidate.rttMs?.roundToLong()
         // The bridge marks a path it never probed with "not_measured": that is a third state, not
         // an unreachable one, and it never carries an RTT.
@@ -381,7 +381,7 @@ class LabViewModel @Inject constructor(
     /** A row this phone could not measure; the bridge's own listener answer stays a second line. */
     private fun notChecked(candidate: ProbeCandidate, @StringRes note: Int): ProbeRowUi = ProbeRowUi(
         key = candidate.name,
-        endpoint = candidate.address?.let(::hostPort),
+        endpoint = candidate.addresses.firstOrNull()?.let(::hostPort),
         verdict = ProbeVerdict.NOT_CHECKED,
         note = UiText.Res(note),
         listenerNote = listenerNote(candidate)

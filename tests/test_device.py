@@ -46,7 +46,7 @@ class DeviceLinkTests(unittest.IsolatedAsyncioTestCase):
 
     async def _phone(self, socket: ClientConnection, boot_id: str = "boot-1", device: str = "test") -> None:
         await socket.send(json.dumps({
-            "type": "hello", "version": 2, "device": device, "boot_id": boot_id, "capabilities": {},
+            "type": "hello", "version": 3, "device": device, "boot_id": boot_id, "capabilities": {},
         }))
         async with asyncio.timeout(2):
             while not self.hub.connected or self.hub.info.get("boot_id") != boot_id or self.hub.info.get("device") != device:
@@ -63,10 +63,18 @@ class DeviceLinkTests(unittest.IsolatedAsyncioTestCase):
                     await asyncio.sleep(0.01)
             self.assertEqual(stale.close_code, 1012)
 
+    async def test_a_phone_speaking_an_older_protocol_is_refused(self) -> None:
+        async with self._connect() as socket:
+            await socket.send(json.dumps({"type": "hello", "version": 2, "device": "test", "boot_id": "b", "capabilities": {}}))
+            async with asyncio.timeout(2):
+                await socket.wait_closed()
+            self.assertEqual(socket.close_code, 1002)
+            self.assertFalse(self.hub.connected)
+
     async def test_another_phone_is_refused_while_one_is_connected(self) -> None:
         async with self._connect() as first, self._connect() as other:
             await self._phone(first)
-            await other.send(json.dumps({"type": "hello", "version": 2, "device": "other", "boot_id": "x", "capabilities": {}}))
+            await other.send(json.dumps({"type": "hello", "version": 3, "device": "other", "boot_id": "x", "capabilities": {}}))
             async with asyncio.timeout(2):
                 await other.wait_closed()
             self.assertEqual(other.close_code, 1013)

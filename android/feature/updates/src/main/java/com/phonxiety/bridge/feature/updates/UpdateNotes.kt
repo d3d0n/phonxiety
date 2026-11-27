@@ -44,11 +44,6 @@ internal fun CompatibilityNote.text(): UiText = when (this) {
     is CompatibilityNote.DaemonApiOlder ->
         UiText.Res(R.string.updates_note_daemon_api, listOf(daemonAppApi, requiredAppApi))
 
-    is CompatibilityNote.DaemonProtocolUnsupported -> UiText.Res(
-        R.string.updates_note_daemon_protocol,
-        listOf(daemonProtocols.joinToString(", "), appProtocol)
-    )
-
     CompatibilityNote.DaemonUnreachable -> UiText.Res(R.string.updates_note_daemon_unreachable)
 
     is CompatibilityNote.Reported -> UiText.Literal(text)
