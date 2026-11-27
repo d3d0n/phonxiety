@@ -70,8 +70,17 @@ internal fun Project.configureCompose(android: CommonExtension) {
     pluginManager.apply("org.jetbrains.kotlin.plugin.compose")
     android.buildFeatures.compose = true
     val stability = rootProject.layout.projectDirectory.file(STABILITY_CONFIGURATION)
+    val reports = providers.gradleProperty(COMPOSE_REPORTS).isPresent
     extensions.configure<ComposeCompilerGradlePluginExtension> {
         stabilityConfigurationFiles.add(stability)
+        // Off by default: the report and metric trees are debugging output, not
+        // build products, and writing them on every build would make every
+        // compile task carry them as outputs.  `-Pphonxiety.composeReports`
+        // turns both on for every module that composes.
+        if (reports) {
+            reportsDestination.set(layout.buildDirectory.dir("compose-reports"))
+            metricsDestination.set(layout.buildDirectory.dir("compose-metrics"))
+        }
     }
     // The compiler reads the file through the plugin, which does not declare it
     // as a task input; without this an edited allowlist would leave every screen
@@ -83,6 +92,13 @@ internal fun Project.configureCompose(android: CommonExtension) {
 
 /** One stability file for the whole build, next to the root script. */
 private const val STABILITY_CONFIGURATION = "compose-stability.conf"
+
+/**
+ * The one switch that asks the Compose compiler for its stability report and
+ * its metric tree.  Presence-only, like `skipScreenshots`: `-Pphonxiety.composeReports`
+ * and `-Pphonxiety.composeReports=true` both mean on.
+ */
+private const val COMPOSE_REPORTS = "phonxiety.composeReports"
 
 /** A library alias of the catalog of the build that applies this convention. */
 internal fun Project.library(alias: String): Provider<MinimalExternalModuleDependency> {

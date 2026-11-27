@@ -77,6 +77,13 @@ mise exec -- ./gradlew assembleDebug assembleRelease testDebugUnitTest lint ktli
 One module: `./gradlew :feature:lab:testDebugUnitTest :feature:lab:verifyRoborazziDebug`. To
 re-record screenshots for an intended change: `./gradlew :feature:lab:recordRoborazziDebug`.
 
+The Compose compiler's stability report is off by default, because it is debugging output and not a
+build product. `-Pphonxiety.composeReports` turns it on for every module that composes: each
+module's report lands in `build/compose-reports` and its metric tree in `build/compose-metrics`.
+`@Immutable` on a screen's state is kept only while that report shows the annotation changes the
+compiler's verdict, and the `*StabilityTest` in each feature module fails when a kept annotation
+goes missing.
+
 ## Changelog
 
 `android/CHANGELOG.md` holds the notes of the next release, in the user's words.
