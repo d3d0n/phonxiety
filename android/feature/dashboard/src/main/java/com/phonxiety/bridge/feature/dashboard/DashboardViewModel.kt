@@ -70,8 +70,12 @@ constructor(
         confirmingUnpair.value = false
     }
 
+    /**
+     * Unpairs once per question: the answer consumes the open question before the unpair starts,
+     * so a second tap on the confirmation finds nothing left to confirm.
+     */
     fun unpair() {
-        confirmingUnpair.value = false
+        if (!confirmingUnpair.compareAndSet(true, false)) return
         viewModelScope.launch { pairingRepository.unpair() }
     }
 

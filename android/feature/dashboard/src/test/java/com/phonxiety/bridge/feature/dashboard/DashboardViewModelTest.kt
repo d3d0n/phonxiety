@@ -76,7 +76,39 @@ class DashboardViewModelTest {
     }
 
     @Test
-    fun unpairCallsTheRepository() = runTest(dispatcher) {
+    fun anAnsweredQuestionCallsTheRepository() = runTest(dispatcher) {
+        val pairing = FakePairingRepository(pairedNow = true)
+        val viewModel = DashboardViewModel(
+            ApplicationProvider.getApplicationContext<Context>(),
+            FakeBridgeStateRepository(DIRECT),
+            pairing
+        )
+
+        viewModel.requestUnpair()
+        viewModel.unpair()
+        testScheduler.advanceUntilIdle()
+        assertFalse(pairing.paired.value)
+        assertEquals(1, pairing.unpairCalls)
+    }
+
+    @Test
+    fun aDoubleTapOnTheAnswerUnpairsOnce() = runTest(dispatcher) {
+        val pairing = FakePairingRepository(pairedNow = true)
+        val viewModel = DashboardViewModel(
+            ApplicationProvider.getApplicationContext<Context>(),
+            FakeBridgeStateRepository(DIRECT),
+            pairing
+        )
+
+        viewModel.requestUnpair()
+        viewModel.unpair()
+        viewModel.unpair()
+        testScheduler.advanceUntilIdle()
+        assertEquals("the second tap found an open question", 1, pairing.unpairCalls)
+    }
+
+    @Test
+    fun anUnpairWithoutAQuestionDoesNothing() = runTest(dispatcher) {
         val pairing = FakePairingRepository(pairedNow = true)
         val viewModel = DashboardViewModel(
             ApplicationProvider.getApplicationContext<Context>(),
@@ -86,8 +118,7 @@ class DashboardViewModelTest {
 
         viewModel.unpair()
         testScheduler.advanceUntilIdle()
-        assertFalse(pairing.paired.value)
-        assertTrue(pairing.unpairCalls > 0)
+        assertEquals(0, pairing.unpairCalls)
     }
 
     @Test
@@ -134,7 +165,7 @@ class DashboardViewModelTest {
             testScheduler.advanceUntilIdle()
             // The question is closed by the answer itself, and the pairing repository ran.
             assertFalse(awaitItem().confirmingUnpair)
-            assertTrue(pairing.unpairCalls > 0)
+            assertEquals(1, pairing.unpairCalls)
             cancelAndIgnoreRemainingEvents()
         }
     }
