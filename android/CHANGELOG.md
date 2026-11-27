@@ -35,10 +35,15 @@ and run cellular calls through this phone.
 
 - After you answer over the system call screen, the live call screen comes back on top, once per call. It never covers another call.
 - Hanging up from the notification or the tile asks the computer first, when the link is up, and otherwise ends Phonxiety's own call on the phone at once. Another call on the phone, incoming or on hold, is never touched, and a call still being placed is cancelled as soon as the phone sees it.
+- **The live call screen offers only the controls the computer reports.** Until the computer answers, they wait instead of guessing.
+- Hanging up from the live call screen goes through the computer. If it cannot end the call, the screen says "The call is still up" and offers the phone's own call screen, or another try. The message goes away once the call ends.
+- The call's state and duration change with a short animation, or at once when animations are off. Transcript lines keep their place as new ones arrive.
+- Writing a new call starts in the number field, and the keyboard's action key moves through the fields.
+- A call the computer no longer has keeps the copy saved on this phone, with a note saying so. Opening a call asks the computer once instead of three times.
 
 ## Safer actions
 
-- Unpairing, installing an update, deleting a call, a doctor repair and the lab's test call each ask first. A second tap never repeats them, and the question survives rotating the phone.
+- Unpairing, installing an update, deleting a call, hanging up from the live call screen, a doctor repair and the lab's test call each ask first. A second tap never repeats them, and the question survives rotating the phone.
 - "Install again" after a failed update works, and an update offer that disappears no longer reopens its question by itself.
 
 ## Reliability
@@ -48,9 +53,14 @@ and run cellular calls through this phone.
 - A link whose control messages back up is replaced instead of silently dropping them.
 - When the link to the computer drops, the dashboard and the Doctor say why in a plain sentence, next to the reason's code.
 
+## Diagnostics
+
+- **Message sizes** in the Lab records the size and kind of every message the bridge sends and receives, in a bounded file. Message contents are never written. It stays off until you turn it on.
+
 ## Under the hood
 
 - Named background scopes that report crashes.
 - Shared build conventions.
 - Logs that build their messages only when they are kept.
 - A smaller app: fewer null checks compiled in.
+- The call cache keeps the list apart from each call's record, indexes what the list filters and sorts by, and writes a record together with its transcript.
