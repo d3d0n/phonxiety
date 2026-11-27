@@ -105,6 +105,127 @@ class CallFrontReturnTest {
     }
 
     @Test
+    fun thePlacementCoverReturnsWhenOnlyThePauseIsDelivered() {
+        val front = controller()
+
+        // The order the phone logged: the composer's reply marked the call about a second and a
+        // half before Telecom's screen covered the app, and the cover paused the activity without
+        // ever stopping it — the task went to the back, no stop followed, and the live screen
+        // stayed under the system screen for the whole call.
+        LiveCallFront.expectPlacement(now)
+        idle(1_500)
+        LiveCallFront.remember("c1", now)
+        call = dialing("c1")
+
+        front.onPause(canReturn = true)
+        idle(400)
+
+        assertEquals("the pause is the cover: the live screen returns over it", 1, returns)
+        assertNull(LiveCallFront.pendingCallId(now))
+        assertFalse(LiveCallFront.awaitsCover(now))
+    }
+
+    @Test
+    fun aPauseBeforeTheReplyStillReturnsOnceItLands() {
+        val front = controller()
+
+        // The cover pauses the app before the daemon answers the composer, and the stop arrives
+        // while the reply is still travelling. Neither observation may spend the permit early.
+        LiveCallFront.expectPlacement(now)
+        front.onPause(canReturn = true)
+        idle(200)
+        front.onStop(canReturn = true)
+        idle(200)
+        assertEquals(0, returns)
+
+        LiveCallFront.remember("c1", now)
+        call = dialing("c1")
+        idle(600)
+
+        assertEquals(1, returns)
+    }
+
+    @Test
+    fun aCoverThatPausesThenStopsReturnsOnce() {
+        val front = controller()
+        placed("c1")
+        call = dialing("c1")
+
+        // The ordinary cover: the pause arms the wait and the stop that follows finds it armed.
+        front.onPause(canReturn = true)
+        front.onStop(canReturn = true)
+        idle(400)
+
+        assertEquals("one cover, one return", 1, returns)
+    }
+
+    @Test
+    fun aPauseWithoutAPlacementReturnsNothing() {
+        val front = controller()
+
+        // An incoming call is answered while the app is paused; this phone placed nothing.
+        call = active("incoming")
+        front.onPause(canReturn = true)
+        idle(4_000)
+
+        assertEquals(0, returns)
+        assertNull(LiveCallFront.placedCallId())
+    }
+
+    @Test
+    fun aPauseThatCannotStartTheActivityReturnsNothing() {
+        val front = controller()
+        placed("c1")
+        call = dialing("c1")
+
+        // A configuration change: this instance is on its way out and may not start anything.
+        front.onPause(canReturn = false)
+        idle(4_000)
+
+        assertEquals(0, returns)
+        assertEquals("the permit waits for the next instance's cover", "c1", LiveCallFront.placedCallId())
+    }
+
+    @Test
+    fun aDeliberateLeaveStillBlocksThePauseReturn() {
+        val front = controller()
+        placed("c1")
+        call = dialing("c1")
+
+        // Home comes before the pause: the user walked away on purpose, so the cover that follows
+        // is not the live screen's to replace.
+        front.onUserLeaveHint()
+        front.onPause(canReturn = true)
+        idle(4_000)
+
+        assertEquals(0, returns)
+        assertNull(LiveCallFront.pendingCallId(now))
+    }
+
+    @Test
+    fun theAnswerCoverReturnsFromItsPause() {
+        val front = controller()
+        placed("c1")
+        call = dialing("c1")
+        front.onPause(canReturn = true)
+        idle(400)
+        assertEquals(1, returns)
+
+        // The live screen is back in front. The far end answers: Telecom's screen comes up over it
+        // again, which pauses the activity, and the daemon reports ACTIVE a link round-trip later.
+        front.onResume()
+        call = dialing("c1")
+        front.onPause(canReturn = true)
+        idle(400)
+        assertEquals("still ringing: nothing to pull back", 1, returns)
+
+        call = active("c1")
+        idle(300)
+        assertEquals(2, returns)
+        assertFalse(LiveCallFront.answerCoverPending(now))
+    }
+
+    @Test
     fun answeredCoverReturnsOnceAfterTheAnswer() {
         val front = controller()
         placed("c1")

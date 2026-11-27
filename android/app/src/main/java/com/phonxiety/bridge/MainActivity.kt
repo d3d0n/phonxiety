@@ -5,7 +5,6 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -118,6 +117,13 @@ class MainActivity : ComponentActivity() {
         callFront.onResume()
     }
 
+    override fun onPause() {
+        super.onPause()
+        // The cover pauses this activity before it stops it, and on the phone the placement cover
+        // was followed by no stop at all: the pause is the signal the return must not miss.
+        callFront.onPause(canReturn = !isFinishing && !isChangingConfigurations)
+    }
+
     override fun onStop() {
         super.onStop()
         callFront.onStop(canReturn = !isFinishing && !isChangingConfigurations)
@@ -134,8 +140,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun bringToFront() {
-        if (isFinishing || isDestroyed) return
+        if (isFinishing || isDestroyed) {
+            BridgeLog.w(TAG, "the live screen could not return: the activity is going away")
+            return
+        }
         try {
+            BridgeLog.i(TAG, "returning the live screen over the system call screen")
             startActivity(
                 Intent(this, MainActivity::class.java)
                     .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -143,7 +153,7 @@ class MainActivity : ComponentActivity() {
         } catch (e: RuntimeException) {
             // A blocked background start is reported as an ActivityTaskManager log line, not as a
             // throwable; a security refusal is the only case that lands here.
-            Log.w(TAG, "the live call could not return to the front: ${e.javaClass.simpleName}")
+            BridgeLog.w(TAG, "the live screen could not return to the front: ${e.javaClass.simpleName}")
         }
     }
 
@@ -161,7 +171,7 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
-        private const val TAG = "MainActivity"
+        private const val TAG = "Bridge:callfront"
         private const val PAIR_SCHEME = "phonxiety"
         private const val PAIR_HOST = "pair"
 
