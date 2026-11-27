@@ -29,10 +29,13 @@ import com.phonxiety.bridge.model.CallState
  *   that is already ACTIVE retires the answer permit as well: the answered screen was behind it.
  * - the answer permit opens at the stop that follows the answer, and only for the call this phone
  *   placed, only if the live screen was seen since then — by the initial return or by the activity
- *   resuming over the placed call — and only while Telecom shows no other call: a screen another
- *   call raised is neither replaced nor allowed to spend this permit. The wait looks for ACTIVE (the
- *   daemon is a link round-trip behind Telecom's own transition) for 400 ms plus twelve retries,
- *   then closes, leaving the permit for this call's own next cover. A resume over an already
+ *   resuming over the placed call — and only while the screen at that stop belongs to no other
+ *   call. The wait then looks for ACTIVE (the daemon is a link round-trip behind Telecom's own
+ *   transition) for 400 ms plus twelve retries. A call that appears during the wait is never
+ *   replaced and does not spend the permit: Telecom does not stop this activity again when that
+ *   call ends, so the wait keeps watching until the deadline it opened with. The deadline, a
+ *   hangup, a resume and a deliberate leave close the wait without spending it, leaving the permit
+ *   for this call's own next cover; a return spends it once per call. A resume over an already
  *   ACTIVE call retires it, and a spent permit never opens again, so a later cover (a hold, a
  *   reopened dialer) stays with Telecom. A wait that is open when the activity is recreated for a
  *   configuration change is adopted by the next instance with the deadline it opened with.
@@ -139,9 +142,14 @@ class CallFrontReturn(
         // this stop so the return stays inside the window where this activity may start itself; the
         // wait then covers the daemon reporting the answer a link round-trip later.
         if (anotherCall()) {
-            // Telecom is showing another call above this one: that screen is not the answer's, so it
-            // is left in front and this call's permit is not spent on it.
-            LiveCallFront.closeAnswerCover()
+            // Telecom is showing another call above this one: that screen is not the answer's, so
+            // it is left in front and this call's permit is not spent on it. A wait this call
+            // already had open keeps its own deadline and keeps watching for that call to end.
+            if (LiveCallFront.answerCoverPending(now)) {
+                adoptAnswerWait()
+            } else {
+                LiveCallFront.closeAnswerCover()
+            }
             return
         }
         val armed = armAnswerCover(now)
@@ -229,17 +237,18 @@ class CallFrontReturn(
             LiveCallFront.closeAnswerCover()
             return
         }
-        if (anotherCall()) {
-            // Another call came in over this one: its screen is not ours to replace, and this
-            // call's own answer cover may still come later.
-            LiveCallFront.closeAnswerCover()
-            return
-        }
         val now = clock()
         val placed = LiveCallFront.placedCallId()
         if (placed == null || !LiveCallFront.answerCoverPending(now)) {
             // The call ended or was forgotten, or the answer wait ran out.
             LiveCallFront.closeAnswerCover()
+            return
+        }
+        if (anotherCall()) {
+            // Another call came in over this one: its screen is not ours to replace and the permit
+            // is not spent on it. Telecom does not stop this activity again when that call ends, so
+            // keep watching until the deadline this wait opened with.
+            handler.postDelayed(tick, RETURN_RETRY_MS)
             return
         }
         val current = call()

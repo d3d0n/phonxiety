@@ -5,6 +5,7 @@ import android.os.Looper
 import com.phonxiety.bridge.data.LiveCallFront
 import com.phonxiety.bridge.model.CallPhase
 import com.phonxiety.bridge.model.CallState
+import java.time.Duration
 import java.util.concurrent.TimeUnit
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -14,6 +15,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowLooper
 
@@ -310,11 +312,44 @@ class CallFrontReturnTest {
         idle(1_000)
         assertEquals("another call came in over ours", 1, returns)
 
-        // The incoming call ends; our own answer cover comes up and is ours to replace.
+        // That call ends. Telecom does not stop this activity again, yet the wait this stop opened
+        // is still ours: the placed call is ACTIVE and the wait's own deadline has not passed.
         another = false
+        idle(300)
+        assertEquals(2, returns)
+    }
+
+    @Test
+    fun anotherCallThatOutlivesTheAnswerWaitEndsItWithoutATickBehind() {
+        val front = controller()
+        placed("c1")
+        call = dialing("c1")
         front.onStop(canReturn = true)
         idle(400)
-        assertEquals(2, returns)
+        front.onResume()
+
+        // The answer cover is up and the daemon reports the answer, but another call is in front.
+        front.onStop(canReturn = true)
+        another = true
+        call = active("c1")
+        idle(1_000)
+        assertEquals(1, returns)
+
+        // The other call outlasts the wait: its deadline closes the permit, and nothing is spent on
+        // the other call's screen.
+        idle(LiveCallFront.ANSWER_TTL_MS)
+        assertFalse(LiveCallFront.answerCoverPending(now))
+
+        // When the other call finally ends there is no tick left to pull this call forward.
+        another = false
+        call = active("c1")
+        idle(2_000)
+        assertEquals(1, returns)
+        assertEquals(
+            "the deadline leaves no tick behind",
+            Duration.ZERO,
+            shadowOf(Looper.getMainLooper()).nextScheduledTaskTime
+        )
     }
 
     @Test

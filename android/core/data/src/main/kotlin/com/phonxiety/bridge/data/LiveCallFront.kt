@@ -121,9 +121,8 @@ object LiveCallFront {
     /**
      * Opens the answer-cover wait for the placed call. False when no call was placed from this
      * phone, while a wait for this call is already running (it keeps its own deadline), and once
-     * this call's answer was seen or returned. A wait closed by a resume, a leave, a wait for
-     * another call's screen or the deadline does not close the permit: this call's own next cover
-     * opens a new wait through here.
+     * this call's answer was seen or returned. A wait closed by a resume, a leave or the deadline
+     * does not close the permit: this call's own next cover opens a new wait through here.
      */
     fun armAnswerCover(nowElapsed: Long = SystemClock.elapsedRealtime()): Boolean = synchronized(lock) {
         val armed = placedCallId != null && answer == Answer.CLOSED
@@ -151,9 +150,8 @@ object LiveCallFront {
     }
 
     /**
-     * The answer cover is over without a return: the screen came back, the user walked away, the
-     * wait ran out, or the screen in front turned out to be another call's. Nothing was spent, so a
-     * later cover of this call may open the wait again.
+     * The answer cover is over without a return: the screen came back, the user walked away, or the
+     * wait ran out. Nothing was spent, so a later cover of this call may open the wait again.
      */
     fun closeAnswerCover() {
         synchronized(lock) {
