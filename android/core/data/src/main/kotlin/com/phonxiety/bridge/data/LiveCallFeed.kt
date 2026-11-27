@@ -1,23 +1,23 @@
 package com.phonxiety.bridge.data
 
+import com.phonxiety.bridge.BridgeLog
 import com.phonxiety.bridge.model.CallEvent
 import com.phonxiety.bridge.model.CallEventsPage
 import com.phonxiety.bridge.model.CallId
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 /**
  * One call's `events` long-poll, as a stream. The caller names a call, not a cursor: the feed owns
@@ -37,6 +37,12 @@ private val TERMINAL_CALL_STATES = setOf("ended", "cancelled", "failed", "unknow
 /** The daemon's own word for a call that is over; the feed stops polling it. */
 fun callHasEnded(state: String?): Boolean = state in TERMINAL_CALL_STATES
 
+/** How long a call nobody watches keeps its cursor before the feed forgets it. */
+internal const val ABANDONED_CALL_IDLE_MS = 10 * 60 * 1000L
+
+/** Terminal pages kept after their call is forgotten, so a screen that comes back still reads one. */
+internal const val REMEMBERED_TERMINAL_CALLS = 4
+
 /** Everything one call's event stream has accumulated so far. */
 data class LiveCallFeedState(
     val callId: String,
@@ -48,10 +54,15 @@ data class LiveCallFeedState(
     val callOutcome: String? = null,
     val resultStatus: String? = null,
     /**
-     * Pages that arrived without the events between the previous cursor and theirs. The feed
-     * carries only the count: the record, not the stream, is the complete copy a screen must read.
+     * Accepted pages so far. A reconnect-status emission keeps it, so a screen can tell a new
+     * page from a note that the last attempt failed and never apply stale metadata as news.
      */
-    val truncatedPages: Int = 0,
+    val acceptedPages: Long = 0,
+    /**
+     * The revision at which the last page arrived without the events before it. Everything at or
+     * below it predates the record a screen must re-read; only later events are newer than it.
+     */
+    val truncationRevision: Long? = null,
     /** The last attempt failed and another follows. */
     val reconnecting: Boolean = false,
     /** The daemon called the call over; the stream is finished. */
@@ -62,17 +73,20 @@ data class LiveCallFeedState(
  * The live-call events of each call, shared by every screen that shows that call: the live call
  * and the test lab's test call.
  *
- * The feed is a singleton because the request belongs to the call, not to a screen. It is started
- * by the first collector of a call and stopped when the last one leaves
- * ([SharingStarted.WhileSubscribed] with a zero stop timeout; the accumulated value is kept after
- * the stop, so a screen that comes back resumes from the cursor instead of re-reading the call).
- * A terminal page finishes the loop; a truncated page is counted so the subscribing screen can
- * re-read the record, because the stream no longer has the events it missed.
+ * The feed is a singleton because the request belongs to the call, not to a screen. A call's loop
+ * runs while at least one collector watches it: the first collector publishes the accepted value
+ * on its way in and starts the loop behind it, and the last one stops the loop, keeping the cursor
+ * for whoever comes back. A terminal page finishes the loop, and its entry is kept so a screen that
+ * leaves and returns still reads the end instead of asking a finished call again.
+ *
+ * Memory is bounded: a call with no collectors is forgotten after [ABANDONED_CALL_IDLE_MS], and
+ * finished calls kept for a return are capped at [REMEMBERED_TERMINAL_CALLS] with the
+ * most-recently-touched ones winning. A live call with a collector is never forgotten.
  */
 @Singleton
 class LiveCallFeed constructor(
     private val source: CallEventsSource,
-    /** The clock the long-poll runs on; production keeps its own, tests pass their own. */
+    /** The clock the long-poll and the idle bound run on; tests pass their own. */
     private val scope: CoroutineScope
 ) {
     @Inject
@@ -81,50 +95,177 @@ class LiveCallFeed constructor(
         CoroutineScope(SupervisorJob() + Dispatchers.Default)
     )
 
-    private val feeds = mutableMapOf<String, CallFeed>()
+    /**
+     * Awaited after a page is accepted and before it is published. It exists so tests can cancel a
+     * loop exactly in that window; production leaves it empty.
+     */
+    internal var afterAccept: suspend () -> Unit = {}
+
+    private val lock = Any()
+
+    /** Live calls and the recently finished ones, in creation order. */
+    private val feeds = LinkedHashMap<String, CallFeed>()
+
+    private var touches = 0L
 
     /** The accumulated stream of [callId], shared by every collector of that call. */
-    fun state(callId: CallId): StateFlow<LiveCallFeedState> = synchronized(feeds) {
-        feeds.getOrPut(callId.value) { CallFeed(callId) }.state
+    fun state(callId: CallId): StateFlow<LiveCallFeedState> = synchronized(lock) {
+        feeds.getOrPut(callId.value) { CallFeed(callId) }.view
+    }
+
+    /** How many calls still hold a cursor in memory. */
+    internal fun retainedCalls(): Int = synchronized(lock) { feeds.size }
+
+    /** Whether [callId] still has an entry in memory. */
+    internal fun isRetained(callId: CallId): Boolean = synchronized(lock) { feeds.containsKey(callId.value) }
+
+    /** How many finished calls are kept for a screen that comes back. */
+    internal fun retainedTerminalCalls(): Int = synchronized(lock) { feeds.values.count { it.finished } }
+
+    /** Whether [callId] still has a request loop of its own. */
+    internal fun isPolling(callId: CallId): Boolean = synchronized(lock) {
+        feeds[callId.value]?.polling == true
     }
 
     private inner class CallFeed(private val callId: CallId) {
-        private val accumulated = MutableStateFlow(LiveCallFeedState(callId.value))
+        private var accumulated = LiveCallFeedState(callId.value)
+        private val published = MutableStateFlow(accumulated)
 
         /** Transcripts already accepted, so a page replayed with a new revision writes one turn. */
         private val appliedSequences = mutableSetOf<Long>()
 
-        val state: StateFlow<LiveCallFeedState> = poll()
-            .stateIn(
-                scope = scope,
-                // One long-poll for the call while anyone is watching; the last value and cursor
-                // stay after the stop so the next collector resumes instead of starting over.
-                started = SharingStarted.WhileSubscribed(
-                    stopTimeoutMillis = 0,
-                    replayExpirationMillis = Long.MAX_VALUE
-                ),
-                initialValue = accumulated.value
-            )
+        private var collectors = 0
+        private var generation = 0
+        private var job: Job? = null
+        private var idleJob: Job? = null
+        private var touchedAt = 0L
 
-        private fun poll(): Flow<LiveCallFeedState> = flow {
+        val polling: Boolean get() = job?.isActive == true
+
+        val finished: Boolean get() = accumulated.ended
+
+        val view: StateFlow<LiveCallFeedState> = object : StateFlow<LiveCallFeedState> {
+            override val value: LiveCallFeedState get() = published.value
+            override val replayCache: List<LiveCallFeedState> get() = published.replayCache
+
+            override suspend fun collect(collector: FlowCollector<LiveCallFeedState>): Nothing {
+                attached()
+                try {
+                    published.collect(collector)
+                } finally {
+                    detached()
+                }
+            }
+        }
+
+        private fun attached() = synchronized(lock) {
+            collectors++
+            touches++
+            touchedAt = touches
+            // Whatever was accepted goes out before the loop is allowed to start: a cancellation
+            // between accepting a page and publishing it leaves the accumulation ahead of the
+            // value every later collector reads, and this is where that gap is closed.
+            published.value = accumulated
+            if (collectors == 1 && !accumulated.ended && job == null) start()
+        }
+
+        private fun detached() = synchronized(lock) {
+            if (collectors > 0) collectors--
+            if (collectors > 0) return@synchronized
+            // The request belongs to the call, not the screen: nobody is left, so the loop stops
+            // and the accumulated value and cursor stay for the next collector.
+            stop()
+            touches++
+            touchedAt = touches
+            // A finished call keeps its entry for a screen that comes back; the live ones only keep
+            // it while the idle bound allows.
+            if (accumulated.ended) trimFinished() else scheduleIdleEviction()
+        }
+
+        private fun start() {
+            val token = ++generation
+            job = scope.launch {
+                try {
+                    poll(token)
+                } catch (cancellation: CancellationException) {
+                    throw cancellation
+                } catch (error: Throwable) {
+                    // One call's surprise is not the monitor's: the loop is already over here, and
+                    // its next collector starts a fresh one.
+                    BridgeLog.e(TAG, "call ${callId.value} events loop failed", error)
+                }
+            }
+        }
+
+        private fun stop() {
+            // Invalidate the running loop before cancelling it: a job cancelled while suspended in
+            // a non-cancellable spot still checks its token before it writes anything.
+            generation++
+            job?.cancel()
+            job = null
+        }
+
+        private suspend fun poll(token: Int) {
+            publish(token)
+            if (!isCurrent(token) || accumulated.ended) return
             var failures = 0
-            while (currentCoroutineContext().isActive && !accumulated.value.ended) {
-                when (val outcome = source.page(callId, accumulated.value.revision, WAIT_SECONDS)) {
+            while (isCurrent(token) && !accumulated.ended && currentCoroutineContext().isActive) {
+                val outcome = try {
+                    source.page(callId, accumulated.revision, WAIT_SECONDS)
+                } catch (cancellation: CancellationException) {
+                    throw cancellation
+                } catch (error: Throwable) {
+                    // The daemon failing one request is not the end of the call, and not the end of
+                    // any other call's loop: it takes the same backoff as a reported failure.
+                    BridgeLog.e(TAG, "call ${callId.value} events request failed", error)
+                    null
+                }
+                if (outcome == null) {
+                    failures++
+                    if (!reconnecting(token)) return
+                    delay(backoffMs(failures))
+                    continue
+                }
+                when (outcome) {
                     is ApiOutcome.Ok -> {
                         failures = 0
-                        accumulated.update { it.withPage(outcome.value) }
-                        emit(accumulated.value)
+                        if (!accept(token, outcome.value)) return
+                        afterAccept()
+                        if (!publish(token)) return
+                        if (accumulated.ended) synchronized(lock) { trimFinished() }
                     }
 
                     is ApiOutcome.Failure -> {
                         failures++
-                        accumulated.update { it.copy(reconnecting = true) }
-                        emit(accumulated.value)
+                        if (!reconnecting(token)) return
                         delay(backoffMs(failures))
                     }
                 }
             }
-            // The call ended: the loop is done, whatever the subscribers do next.
+        }
+
+        private fun isCurrent(token: Int): Boolean = synchronized(lock) { token == generation }
+
+        /** Publishes the accumulated value; false when this loop has been replaced or stopped. */
+        private fun publish(token: Int): Boolean = synchronized(lock) {
+            if (token != generation) return false
+            published.value = accumulated
+            touches++
+            touchedAt = touches
+            true
+        }
+
+        private fun accept(token: Int, page: CallEventsPage): Boolean = synchronized(lock) {
+            if (token != generation) return false
+            accumulated = accumulated.withPage(page)
+            true
+        }
+
+        private fun reconnecting(token: Int): Boolean = synchronized(lock) {
+            if (token != generation) return false
+            accumulated = accumulated.copy(reconnecting = true)
+            published.value = accumulated
+            true
         }
 
         private fun LiveCallFeedState.withPage(page: CallEventsPage): LiveCallFeedState {
@@ -145,16 +286,52 @@ class LiveCallFeed constructor(
                 state = page.state ?: state,
                 callOutcome = page.callOutcome ?: callOutcome,
                 resultStatus = page.resultStatus ?: resultStatus,
-                truncatedPages = truncatedPages + if (page.truncated) 1 else 0,
+                acceptedPages = acceptedPages + 1,
+                truncationRevision = if (page.truncated) maxOf(truncationRevision ?: 0, page.revision) else truncationRevision,
                 reconnecting = false,
                 ended = ended
             )
+        }
+
+        /**
+         * Caps the finished entries kept for a return. The ones nobody watches go first, so a
+         * screen still on an old call is not cut off before an abandoned one.
+         */
+        private fun trimFinished() {
+            val finished = feeds.values.filter { it.finished }
+            if (finished.size <= REMEMBERED_TERMINAL_CALLS) return
+            val over = finished.size - REMEMBERED_TERMINAL_CALLS
+            val ordered = finished.sortedBy { it.touchedAt }
+            val victims = (ordered.filter { it.collectors == 0 } + ordered).distinct().take(over)
+            victims.forEach { it.evict() }
+        }
+
+        private fun scheduleIdleEviction() {
+            idleJob?.cancel()
+            val token = generation
+            idleJob = scope.launch {
+                delay(ABANDONED_CALL_IDLE_MS)
+                synchronized(lock) {
+                    if (token != generation || collectors > 0 || accumulated.ended) return@synchronized
+                    if (feeds[callId.value] !== this@CallFeed) return@synchronized
+                    evict()
+                }
+            }
+        }
+
+        /** Caller holds [lock]. */
+        private fun evict() {
+            if (feeds[callId.value] === this) feeds.remove(callId.value)
+            stop()
+            idleJob?.cancel()
+            idleJob = null
         }
     }
 
     private fun backoffMs(failures: Int): Long = (FAILURE_BACKOFF_MS * failures.coerceIn(1, 5)).coerceAtMost(MAX_BACKOFF_MS)
 
     private companion object {
+        const val TAG = "LiveCallFeed"
         const val WAIT_SECONDS = 25.0
         const val FAILURE_BACKOFF_MS = 1_000L
         const val MAX_BACKOFF_MS = 5_000L

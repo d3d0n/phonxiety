@@ -27,9 +27,12 @@ import com.phonxiety.bridge.designsystem.PhonxietyTheme
 import com.phonxiety.bridge.model.CallId
 import com.phonxiety.bridge.model.DaemonInfo
 import com.phonxiety.bridge.model.VoiceControls
+import java.util.concurrent.Executors
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.cancel
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Rule
@@ -56,11 +59,21 @@ class LiveCallRecreationTest {
         hangup = ApiOutcome.Ok(200, snapshot(state = "ending"))
     }
 
+    /** The feed's own thread, so its loop never runs on this test's UI dispatcher; cancelled below. */
+    private val feedDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+    private val feedScope = CoroutineScope(SupervisorJob() + feedDispatcher)
+
     /** The feed only exists so the screen has its shared stream; this call ends through hang-up. */
     private val feed = LiveCallFeed(
         CallEventsSource { callId, since, waitSeconds -> api.events(callId, since, waitSeconds) },
-        CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        feedScope
     )
+
+    @After
+    fun tearDown() {
+        feedScope.cancel()
+        feedDispatcher.close()
+    }
 
     private val factory = viewModelFactory {
         initializer { LiveCallViewModel(api, FakeBridgeState(), FakeCallScreenOpener(), feed) }

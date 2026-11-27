@@ -1,25 +1,37 @@
 package com.phonxiety.bridge.data
 
+import com.phonxiety.bridge.BridgeLog
 import com.phonxiety.bridge.model.CallEvent
 import com.phonxiety.bridge.model.CallEventsPage
 import com.phonxiety.bridge.model.CallId
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CyclicBarrier
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 
 /**
@@ -32,11 +44,18 @@ class LiveCallFeedTest {
 
     /** The feed is not a child of the test: it owns its loop, and the test cancels it here. */
     private val scopes = mutableListOf<CoroutineScope>()
+    private lateinit var previousSink: BridgeLog.Sink
+
+    @Before
+    fun setUp() {
+        previousSink = BridgeLog.sink
+    }
 
     @After
     fun tearDown() {
         scopes.forEach { it.cancel() }
         scopes.clear()
+        BridgeLog.sink = previousSink
     }
 
     /** The feed and its collectors on the test clock, so delays are virtual and ordering is fixed. */
@@ -102,6 +121,7 @@ class LiveCallFeedTest {
 
         assertEquals("nothing asks the daemon after the last collector leaves", whileWatched, daemon.requests.size)
         assertFalse("the terminal page that arrived for nobody was never read", feed.state(callId).value.ended)
+        assertFalse("and the loop is not left running", feed.isPolling(callId))
     }
 
     @Test
@@ -114,7 +134,8 @@ class LiveCallFeedTest {
         runCurrent()
         assertEquals("the watched stream waits from the accepted revision", listOf<Long?>(0L, 5L), daemon.requests)
         first.cancel()
-        advanceUntilIdle()
+        // The loop stops on its own; the idle bound is far away, so the cursor is still here.
+        runCurrent()
 
         val again = scope.launch { feed.state(callId).collect() }
         runCurrent()
@@ -202,7 +223,7 @@ class LiveCallFeedTest {
     }
 
     @Test
-    fun aTruncatedPageIsCountedAndDoesNotDropTheCursor() = runTest {
+    fun aTruncatedPageCarriesItsBoundaryAndDoesNotDropTheCursor() = runTest {
         val daemon = ScriptedDaemon()
         val (feed, scope) = feed(daemon)
         val job = scope.launch { feed.state(callId).collect() }
@@ -211,7 +232,7 @@ class LiveCallFeedTest {
         daemon.pages.send(ApiOutcome.Ok(200, page(2, emptyList(), truncated = true)))
         runCurrent()
         val truncated = feed.state(callId).value
-        assertEquals(1, truncated.truncatedPages)
+        assertEquals("the page that dropped events is the boundary a screen must re-read from", 2L, truncated.truncationRevision)
         assertTrue("a truncated page carries no events to apply", truncated.events.isEmpty())
 
         daemon.pages.send(ApiOutcome.Ok(200, page(3, listOf(endedEvent(3)))))
@@ -219,6 +240,219 @@ class LiveCallFeedTest {
         assertEquals("the next request resumes from the truncated page's revision", listOf<Long?>(0L, 2L), daemon.requests)
 
         job.cancel()
+    }
+
+    /**
+     * A cancellation can land after a page is accepted and before it is published. The accepted
+     * page is the call's, not the collector's: a screen that comes back sees it without asking the
+     * daemon again.
+     */
+    @Test
+    fun anAcceptedTerminalPageIsSeenWhenACollectorComesBack() = runTest {
+        val daemon = ScriptedDaemon()
+        val (feed, scope) = feed(daemon)
+        val accepted = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        feed.afterAccept = {
+            accepted.complete(Unit)
+            release.await()
+        }
+        val first = scope.launch { feed.state(callId).collect() }
+        runCurrent()
+
+        daemon.pages.send(ApiOutcome.Ok(200, page(3, listOf(endedEvent(3)))))
+        runCurrent()
+        withTimeout(1_000) { accepted.await() }
+        assertFalse("the publish has not happened yet", feed.state(callId).value.ended)
+
+        first.cancel()
+        runCurrent()
+        release.complete(Unit)
+        runCurrent()
+
+        val back = scope.launch { feed.state(callId).collect() }
+        runCurrent()
+        assertTrue("the accepted terminal page survives the cancelled publish", feed.state(callId).value.ended)
+        assertEquals("and it is not fetched again", 1, daemon.requests.size)
+        back.cancel()
+    }
+
+    /**
+     * A call nobody watches is not kept forever: inside the idle bound it still holds its cursor,
+     * and past it the entry is gone.
+     */
+    @Test
+    fun aCallNobodyWatchesIsForgottenAfterTheIdleBound() = runTest {
+        val daemon = ScriptedDaemon()
+        val (feed, scope) = feed(daemon)
+        val only = scope.launch { feed.state(callId).collect() }
+        runCurrent()
+        daemon.pages.send(ApiOutcome.Ok(200, page(4, listOf(transcriptEvent(4, 1)))))
+        runCurrent()
+        val watched = feed.state(callId)
+
+        only.cancel()
+        runCurrent()
+        assertFalse("the last leave stops the loop", feed.isPolling(callId))
+
+        advanceTimeBy(ABANDONED_CALL_IDLE_MS - 1_000)
+        runCurrent()
+        assertTrue("inside the idle bound the call keeps its cursor", feed.isRetained(callId))
+        assertSame(watched, feed.state(callId))
+
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertFalse("past the idle bound the abandoned call is forgotten", feed.isRetained(callId))
+        assertNotSame("and the next screen gets a fresh stream", watched, feed.state(callId))
+    }
+
+    /** A call whose loop threw still retries with the same backoff, and its failure is logged. */
+    @Test
+    fun anUnexpectedFailureIsSurfacedAndRetried() = runTest {
+        val logged = mutableListOf<String>()
+        BridgeLog.sink = BridgeLog.Sink { _, tag, message, _ -> logged += "$tag: $message" }
+        var attempts = 0
+        val source = CallEventsSource { _, _, _ ->
+            attempts++
+            if (attempts == 1) throw IllegalStateException("the socket went away")
+            ApiOutcome.Ok(200, page(2, listOf(endedEvent(2))))
+        }
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        scopes += scope
+        val feed = LiveCallFeed(source, scope)
+
+        val job = scope.launch { feed.state(callId).collect() }
+        runCurrent()
+        assertTrue("the failure is surfaced as a reconnect", feed.state(callId).value.reconnecting)
+
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals("the next attempt is the retry", 2, attempts)
+        assertTrue(feed.state(callId).value.ended)
+        assertTrue("the exception is logged", logged.any { it.startsWith("LiveCallFeed:") })
+        job.cancel()
+    }
+
+    /** One call's exception must not reach the uncaught handler or stop another call's loop. */
+    @Test
+    fun oneCallsFailureDoesNotStopAnotherCallsLoop() = runTest {
+        val boom = CallId("call-boom")
+        val calm = CallId("call-calm")
+        val calmPages = Channel<ApiOutcome<CallEventsPage>>(Channel.UNLIMITED)
+        var attempts = 0
+        val source = CallEventsSource { callId, _, _ ->
+            if (callId == boom) {
+                attempts++
+                if (attempts == 1) throw IllegalStateException("boom")
+                ApiOutcome.Ok(200, page(2, listOf(endedEvent(2))))
+            } else {
+                calmPages.receive()
+            }
+        }
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        scopes += scope
+        val feed = LiveCallFeed(source, scope)
+
+        val calmJob = scope.launch { feed.state(calm).collect() }
+        val boomJob = scope.launch { feed.state(boom).collect() }
+        runCurrent()
+        assertTrue("the throwing call reports a reconnect", feed.state(boom).value.reconnecting)
+
+        calmPages.send(ApiOutcome.Ok(200, page(1, listOf(stateEvent(1, "active")))))
+        runCurrent()
+        assertEquals("the other call keeps its own stream", "active", feed.state(calm).value.state)
+
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals("the throwing call recovered on the next attempt", 2, attempts)
+        assertTrue(feed.state(boom).value.ended)
+        assertEquals("the calm call was never disturbed", "active", feed.state(calm).value.state)
+
+        calmJob.cancel()
+        boomJob.cancel()
+    }
+
+    /** A call with a collector is never forgotten, however long nothing happens. */
+    @Test
+    fun aWatchedCallIsNeverForgotten() = runTest {
+        val daemon = ScriptedDaemon()
+        val (feed, scope) = feed(daemon)
+        val only = scope.launch { feed.state(callId).collect() }
+        runCurrent()
+        val watched = feed.state(callId)
+
+        advanceTimeBy(ABANDONED_CALL_IDLE_MS * 3)
+        runCurrent()
+
+        assertTrue("a collected call keeps its entry", feed.isRetained(callId))
+        assertSame(watched, feed.state(callId))
+        assertTrue("and keeps polling", feed.isPolling(callId))
+        only.cancel()
+    }
+
+    /** Finished calls are bounded: only the last few are kept for a screen that returns. */
+    @Test
+    fun finishedCallsAreKeptInABoundedSet() = runTest {
+        val daemon = ScriptedDaemon()
+        val (feed, scope) = feed(daemon)
+        val ids = (1..REMEMBERED_TERMINAL_CALLS + 1).map { CallId("call-$it") }
+        val views = ids.map { feed.state(it) }
+        val collectors = ids.map { id -> scope.launch { feed.state(id).collect() } }
+        runCurrent()
+        assertEquals(ids.size, daemon.requests.size)
+
+        ids.forEach { daemon.pages.send(ApiOutcome.Ok(200, page(3, listOf(endedEvent(3))))) }
+        runCurrent()
+        views.forEach { assertTrue("every call saw its terminal page", it.value.ended) }
+        collectors.forEach { it.cancel() }
+        runCurrent()
+
+        assertEquals(
+            "only a few finished calls are kept",
+            REMEMBERED_TERMINAL_CALLS,
+            feed.retainedTerminalCalls()
+        )
+        assertEquals(
+            "and only those keep an entry",
+            REMEMBERED_TERMINAL_CALLS,
+            feed.retainedCalls()
+        )
+        assertFalse("the least recently touched finished call was evicted", feed.isRetained(ids.first()))
+    }
+
+    /**
+     * Two collectors attaching at the same moment on different threads still share one request
+     * stream: the call, not the collector, owns the loop.
+     */
+    @Test
+    fun collectorsThatAttachTogetherShareOneStream() = runBlocking {
+        val requests = CopyOnWriteArrayList<Long?>()
+        val firstRequest = CompletableDeferred<Unit>()
+        val secondRequest = CompletableDeferred<Unit>()
+        val source = CallEventsSource { _, since, _ ->
+            requests += since
+            firstRequest.complete(Unit)
+            if (requests.size > 1) secondRequest.complete(Unit)
+            awaitCancellation()
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val feed = LiveCallFeed(source, scope)
+            val barrier = CyclicBarrier(3)
+            repeat(2) {
+                scope.launch {
+                    barrier.await()
+                    feed.state(callId).collect()
+                }
+            }
+            barrier.await()
+            withTimeout(5_000) { firstRequest.await() }
+            withTimeoutOrNull(1_000) { secondRequest.await() }
+            assertFalse("a second loop also asked the daemon", secondRequest.isCompleted)
+            assertEquals("one request stream serves both collectors", 1, requests.size)
+        } finally {
+            scope.cancel()
+        }
     }
 
     private fun page(revision: Long, events: List<CallEvent>, truncated: Boolean = false): CallEventsPage = CallEventsPage(

@@ -25,9 +25,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
@@ -1031,6 +1034,92 @@ class LiveCallViewModelTest {
     }
 
     /**
+     * A page dropped events, and a collector joins afterwards. The events the feed accepted before
+     * the gap are older than the record: the refresh goes between them and the events after it, so
+     * an old mark cannot replace the one the record already has.
+     */
+    @Test
+    fun anOldMarkBeforeATruncationDoesNotOverwriteTheRefreshedRecord() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        val (feed, pages) = pageFeed()
+        val scope = feedScopes.last()
+        val warm = scope.launch { feed.state(CallId(CALL_ID)).collect { } }
+        runCurrent()
+        pages.send(ApiOutcome.Ok(200, page(5, listOf(CallEvent(type = "marks", revision = 5, marks = listOf(CallMark("old")))))))
+        runCurrent()
+        pages.send(ApiOutcome.Ok(200, page(9, emptyList(), truncated = true)))
+        runCurrent()
+        warm.cancel()
+        runCurrent()
+
+        api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "active", marks = listOf(CallMark("fresh"))))
+        val viewModel = viewModel(api, feed = feed)
+        viewModel.bind(CallId(CALL_ID))
+        runCurrent()
+
+        assertEquals(
+            "the refreshed record's marks are not replaced by a pre-gap event",
+            listOf("fresh"),
+            viewModel.state.value.marks.map { it.mark }
+        )
+    }
+
+    /**
+     * A reconnect note re-carries the last page's metadata but it is not a new page: a record read
+     * that moved the state on stays the latest word.
+     */
+    @Test
+    fun aReconnectNoteDoesNotPutTheOldPageStateBack() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "dialing"))
+        val (feed, pages) = pageFeed()
+        val viewModel = viewModel(api, feed = feed)
+        viewModel.bind(CallId(CALL_ID))
+        runCurrent()
+        pages.send(ApiOutcome.Ok(200, page(revision = 1, events = listOf(stateEvent(1, "dialing")))))
+        runCurrent()
+        assertEquals("dialing", viewModel.state.value.state)
+
+        api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "active"))
+        viewModel.reload()
+        runCurrent()
+        assertEquals("active", viewModel.state.value.state)
+
+        pages.send(ApiOutcome.Failure(503, "link_down", "the link is down"))
+        runCurrent()
+        assertTrue("the reconnect is shown", viewModel.state.value.reconnecting)
+        assertEquals(
+            "a reconnect note is not a page and cannot roll the state back",
+            "active",
+            viewModel.state.value.state
+        )
+    }
+
+    /** A hang-up answer that already ends the call still earns one final record read, and one only. */
+    @Test
+    fun aHangUpThatEndsTheCallReadsTheFinalRecordOnce() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        api.info = ApiOutcome.Ok(200, DaemonInfo(voiceControls = VoiceControls(hangup = true)))
+        api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "active"))
+        api.hangup = ApiOutcome.Ok(200, snapshot(state = "ended", summary = "Booked"))
+        val (feed, pages) = pageFeed()
+        val viewModel = viewModel(api, feed = feed)
+        viewModel.bind(CallId(CALL_ID))
+        runCurrent()
+        assertEquals("the bind's own read", 1, api.callReads)
+
+        viewModel.hangUp()
+        runCurrent()
+        assertTrue(viewModel.state.value.ended)
+        assertEquals("the end earns the final record read", 2, api.callReads)
+
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertEquals("and only one", 2, api.callReads)
+        pages.close()
+    }
+
+    /**
      * A feed of this test's daemon, running on the test clock: the screen consumes the shared
      * stream, and the test drives the pages the stream carries.
      */
@@ -1045,10 +1134,19 @@ class LiveCallViewModelTest {
         )
     }
 
+    /** A feed whose pages the test sends by hand, so a reconnect can land exactly when intended. */
+    private fun TestScope.pageFeed(): Pair<LiveCallFeed, Channel<ApiOutcome<CallEventsPage>>> {
+        val pages = Channel<ApiOutcome<CallEventsPage>>(Channel.UNLIMITED)
+        val scope = CoroutineScope(SupervisorJob() + dispatcher)
+        feedScopes += scope
+        return LiveCallFeed(CallEventsSource { _, _, _ -> pages.receive() }, scope) to pages
+    }
+
     private fun TestScope.viewModel(
         api: FakeDaemonApi,
-        callScreen: CallScreenOpener = FakeCallScreenOpener()
-    ): LiveCallViewModel = LiveCallViewModel(api, FakeBridgeState(), callScreen, feed(api))
+        callScreen: CallScreenOpener = FakeCallScreenOpener(),
+        feed: LiveCallFeed = feed(api)
+    ): LiveCallViewModel = LiveCallViewModel(api, FakeBridgeState(), callScreen, feed)
 
     private companion object {
         const val CALL_ID = "call-2026-11-26"
@@ -1083,6 +1181,7 @@ fun snapshot(
     summary: String? = null,
     fields: Map<String, String> = emptyMap(),
     transcript: List<TranscriptTurn> = emptyList(),
+    marks: List<CallMark> = emptyList(),
     createdAt: Double = 1_764_000_000.0,
     connectedAt: Double? = 1_764_000_005.0
 ): CallSnapshot = CallSnapshot(
@@ -1098,6 +1197,7 @@ fun snapshot(
     connectedAt = connectedAt,
     endedAt = if (state == "ended") 1_764_000_065.0 else null,
     transcript = transcript,
+    marks = marks,
     request = JsonObject(emptyMap())
 )
 

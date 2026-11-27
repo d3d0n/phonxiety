@@ -28,11 +28,10 @@ import com.phonxiety.bridge.model.VoiceControls
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
@@ -215,6 +214,7 @@ class LiveCallViewModel @Inject constructor(
 
     private var boundCallId: CallId? = null
     private var feedJob: Job? = null
+    private var terminalJob: Job? = null
     private var audioJob: Job? = null
 
     /**
@@ -223,7 +223,10 @@ class LiveCallViewModel @Inject constructor(
      * its accumulated list.
      */
     private var eventsThrough = 0L
-    private var truncatedPages = 0
+
+    /** Accepted pages already applied; a reconnect note re-carries the previous page's metadata. */
+    private var pagesApplied = 0L
+    private var truncationThrough: Long? = null
     private var finalRecordLoaded = false
     private val seenSequences = mutableSetOf<Long>()
 
@@ -232,8 +235,10 @@ class LiveCallViewModel @Inject constructor(
         if (callId.value.isBlank() || boundCallId == callId) return
         boundCallId = callId
         feedJob?.cancel()
+        terminalJob?.cancel()
         eventsThrough = 0
-        truncatedPages = 0
+        pagesApplied = 0
+        truncationThrough = null
         finalRecordLoaded = false
         seenSequences.clear()
         _state.value = LiveCallUiState(callId = callId.value, loading = true)
@@ -241,13 +246,21 @@ class LiveCallViewModel @Inject constructor(
         viewModelScope.launch { loadInfo() }
         feedJob = viewModelScope.launch {
             loadDetail(callId)
-            // The record already ends the call: there is nothing left to poll, exactly as the old
-            // loop checked before its first request.
-            if (_state.value.terminal) return@launch
-            liveCallFeed.state(callId).collect { feed ->
-                applyFeed(feed, callId)
-                if (_state.value.terminal) currentCoroutineContext().cancel()
+            // The record already ends the call: it is the final read, and there is nothing left to
+            // poll, exactly as the old loop checked before its first request.
+            if (_state.value.terminal) {
+                finalRecordLoaded = true
+                return@launch
             }
+            liveCallFeed.state(callId).collect { feed -> applyFeed(feed, callId) }
+        }
+        // The screen can turn terminal without the feed: a hang-up answer or a truncation refresh
+        // reads a record that already ended the call. Either way the end earns one final record
+        // read, and only then does the collector leave.
+        terminalJob = viewModelScope.launch {
+            state.first { it.terminal }
+            finalRecordOnce(callId)
+            feedJob?.cancel()
         }
     }
 
@@ -565,40 +578,62 @@ class LiveCallViewModel @Inject constructor(
 
     /**
      * Applies what the shared feed has accumulated: only the events this screen has not drawn yet,
-     * the page's own state, and the record read the feed asks for when it dropped events or the
-     * call ended. The feed re-emits its whole list, so the mark above keeps actions this screen
-     * already took (a mark, a summary) from being undone by an older event.
+     * the page's own state, and the record read the feed asks for when it dropped events. The feed
+     * re-emits its whole list, so the mark above keeps actions this screen already took (a mark, a
+     * summary) from being undone by an older event.
+     *
+     * The truncation boundary is the feed's, not this screen's: everything the feed accepted up to
+     * the gap is older than the record and goes in before the refresh, and only what it accepted
+     * after the gap is newer than the record and goes in after it. A late collector therefore never
+     * draws a pre-gap mark over the refreshed record.
      */
     private suspend fun applyFeed(feed: LiveCallFeedState, callId: CallId) {
         if (feed.callId != callId.value) return
-        if (feed.truncatedPages > truncatedPages) {
-            truncatedPages = feed.truncatedPages
+        val boundary = feed.truncationRevision?.takeIf { it > (truncationThrough ?: -1) }
+        if (boundary != null) {
+            applyThrough(feed, boundary)
             // The feed dropped events we never saw: the record is the only complete copy.
             loadDetail(callId)
+            truncationThrough = boundary
+            applyThrough(feed, Long.MAX_VALUE)
+        } else {
+            applyThrough(feed, Long.MAX_VALUE)
         }
-        val fresh = freshEvents(feed.events, eventsThrough)
-        if (fresh.isNotEmpty()) {
-            eventsThrough = fresh.last().revision
-            _state.value = reduceCallEvents(_state.value, fresh, seenSequences)
-        }
+        // A reconnect note carries the page's metadata again, but it is not a new page: applying it
+        // would put an old "dialing" back over the record's own newer "active".
+        val newPage = feed.acceptedPages > pagesApplied
+        if (newPage) pagesApplied = feed.acceptedPages
         val ended = feed.ended || _state.value.ended
         _state.update {
             it.copy(
                 reconnecting = feed.reconnecting,
-                state = feed.state ?: it.state,
-                callOutcome = feed.callOutcome ?: it.callOutcome,
-                resultStatus = feed.resultStatus ?: it.resultStatus,
+                state = if (newPage) feed.state ?: it.state else it.state,
+                callOutcome = if (newPage) feed.callOutcome ?: it.callOutcome else it.callOutcome,
+                resultStatus = if (newPage) feed.resultStatus ?: it.resultStatus else it.resultStatus,
                 endedAtMs = it.endedAtMs ?: if (ended) System.currentTimeMillis() else null,
                 ended = ended,
                 hangingUp = it.hangingUp && !ended,
                 pendingHangUp = it.pendingHangUp && !ended
             ).withCallEnded(ended)
         }
-        if (feed.ended && !finalRecordLoaded) {
-            finalRecordLoaded = true
-            // The call is over: pick up the final summary, fields and marks once.
-            loadDetail(callId)
-        }
+    }
+
+    /** Reduces the feed's events this screen has not seen yet, up to and including [through]. */
+    private fun applyThrough(feed: LiveCallFeedState, through: Long) {
+        val fresh = freshEvents(feed.events, eventsThrough).filter { it.revision <= through }
+        if (fresh.isEmpty()) return
+        eventsThrough = fresh.last().revision
+        _state.value = reduceCallEvents(_state.value, fresh, seenSequences)
+    }
+
+    /**
+     * The call is over: its final summary, fields and marks are read once, whichever path turned
+     * the screen terminal — the feed's terminal page, a hang-up answer or a truncation refresh.
+     */
+    private suspend fun finalRecordOnce(callId: CallId) {
+        if (finalRecordLoaded) return
+        finalRecordLoaded = true
+        loadDetail(callId)
     }
 
     private fun mergeTurns(incoming: List<TranscriptTurn>): List<TranscriptTurn> {
