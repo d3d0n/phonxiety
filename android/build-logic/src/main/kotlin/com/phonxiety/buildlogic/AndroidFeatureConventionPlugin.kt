@@ -19,6 +19,8 @@ class AndroidFeatureConventionPlugin : Plugin<Project> {
             pluginManager.apply("io.github.takahirom.roborazzi")
 
             dependencies {
+                add("implementation", library("hilt-android"))
+                add("ksp", library("hilt-compiler"))
                 add("testImplementation", testFixtures(project(":core:designsystem")))
                 for (alias in sharedTestLibraries) {
                     add("testImplementation", library(alias))

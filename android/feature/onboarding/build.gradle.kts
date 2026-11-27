@@ -21,8 +21,6 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.hilt.navigation.compose)
-    implementation(libs.hilt.android)
-    ksp(libs.hilt.compiler)
     implementation(libs.play.services.code.scanner)
     // In-app fallback scanner: CameraX preview and the bundled ML Kit barcode model, for phones
     // where Play services cannot on-demand-install the Google code scanner module.

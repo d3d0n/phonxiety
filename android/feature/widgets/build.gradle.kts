@@ -1,5 +1,5 @@
 plugins {
-    id("phonxiety.android.compose")
+    id("phonxiety.android.feature")
 }
 
 android {
@@ -13,9 +13,6 @@ dependencies {
     implementation(project(":core:designsystem"))
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
-    implementation(libs.hilt.android)
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.androidx.glance.appwidget)
-
-    testImplementation(libs.junit)
 }
