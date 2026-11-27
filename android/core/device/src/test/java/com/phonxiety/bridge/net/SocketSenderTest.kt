@@ -3,8 +3,10 @@ package com.phonxiety.bridge.net
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.test.runTest
 import okhttp3.Request
 import okhttp3.WebSocket
@@ -12,6 +14,8 @@ import okio.ByteString
 import okio.ByteString.Companion.toByteString
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -24,6 +28,11 @@ class SocketSenderTest {
     /** The socket as OkHttp presents it: `send` returns whether it took the frame. */
     private class FakeSocket(var accepts: Boolean = true, var queued: Long = 0L) : WebSocket {
         val calls = mutableListOf<String>()
+
+        /** How many times the socket was cancelled, and from which thread. */
+        val cancels = AtomicInteger(0)
+
+        val cancelThread = AtomicReference<Thread?>(null)
 
         override fun request(): Request = error("no request in this test")
 
@@ -41,7 +50,21 @@ class SocketSenderTest {
 
         override fun close(code: Int, reason: String?): Boolean = true
 
-        override fun cancel() = Unit
+        // OkHttp reports the link down from whichever thread calls cancel:
+        // recording that thread is the down-callback thread.
+        override fun cancel() {
+            cancelThread.set(Thread.currentThread())
+            cancels.incrementAndGet()
+        }
+    }
+
+    /** Runs nothing inline: the test decides when and on which thread the queued cancel runs. */
+    private class QueuedExecutor : Executor {
+        val tasks = mutableListOf<Runnable>()
+
+        override fun execute(command: Runnable) {
+            tasks += command
+        }
     }
 
     private val bytes = byteArrayOf(1, 2, 3).toByteString()
@@ -73,6 +96,68 @@ class SocketSenderTest {
 
         assertFalse("text is refused the same way", sender.sendText("hello"))
         assertEquals("both attempts reached the socket", listOf("binary:3", "text:hello"), socket.calls)
+    }
+
+    /**
+     * A refusal's cancel is queued, not run: the caller only hands it over, so
+     * the link-down report OkHttp makes from `cancel()` cannot happen on the
+     * thread that happened to hit the refusal.
+     */
+    @Test
+    fun aRefusalSchedulesTheCancelOffTheCallerThread() {
+        val socket = FakeSocket(accepts = false)
+        val queued = QueuedExecutor()
+        val sender = SocketSender({ socket }, cancelExecutor = queued)
+        val caller = Thread.currentThread()
+
+        assertFalse(sender.sendText("hello"))
+
+        assertEquals("nothing ran on the caller thread", 0, socket.cancels.get())
+        assertEquals("exactly one cancel is queued", 1, queued.tasks.size)
+
+        val worker = Thread(queued.tasks.single(), "cancel-worker").apply { start() }
+        worker.join(5_000)
+
+        assertEquals(1, socket.cancels.get())
+        assertNotNull("the queued cancel ran", socket.cancelThread.get())
+        assertNotSame("the caller never runs the down callback", caller, socket.cancelThread.get())
+        assertEquals("cancel-worker", socket.cancelThread.get()?.name)
+    }
+
+    /** Every refusal after the first reuses the one scheduled cancel. */
+    @Test
+    fun repeatedRefusalsScheduleTheCancelOnce() {
+        val socket = FakeSocket(accepts = false)
+        val queued = QueuedExecutor()
+        val sender = SocketSender({ socket }, cancelExecutor = queued)
+
+        repeat(5) { assertFalse(sender.sendText("frame-$it")) }
+        assertEquals("one cancel for five refusals", 1, queued.tasks.size)
+        assertEquals("nothing ran inline", 0, socket.cancels.get())
+
+        queued.tasks.single().run()
+        assertEquals(1, socket.cancels.get())
+
+        repeat(5) { assertFalse(sender.sendText("again-$it")) }
+        assertEquals("no further cancel is queued", 1, queued.tasks.size)
+        assertEquals("still one cancel", 1, socket.cancels.get())
+    }
+
+    /** With the real background thread, the cancel (and OkHttp's `onFailure` from it) is off the caller. */
+    @Test
+    fun theCancelThatReportsTheLinkDownRunsOffTheCallerThread() {
+        val socket = FakeSocket(accepts = false)
+        val sender = SocketSender({ socket })
+        val caller = Thread.currentThread()
+
+        assertFalse(sender.sendText("hello"))
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (socket.cancels.get() == 0) {
+            assertTrue("the background cancel never ran", System.nanoTime() < deadline)
+            Thread.sleep(1)
+        }
+        assertEquals(1, socket.cancels.get())
+        assertNotSame("the caller never runs the down callback", caller, socket.cancelThread.get())
     }
 
     @Test
@@ -149,17 +234,23 @@ class SocketSenderTest {
         val sender = SocketSender({ socket }, tap)
 
         val first = Thread { sender.sendText("first") }.apply { start() }
-        assertTrue("the first frame reached the tap", tapEntered.await(5, TimeUnit.SECONDS))
+        var second: Thread? = null
+        try {
+            assertTrue("the first frame reached the tap", tapEntered.await(5, TimeUnit.SECONDS))
 
-        // The first frame is already in OkHttp's hands: the tap's slowness
-        // must not be able to hold the next send.
-        val second = Thread { sender.sendText("second") }.apply { start() }
-        second.join(2_000)
-        assertFalse("the tap never holds the send lock", second.isAlive)
-
-        releaseTap.countDown()
-        first.join(5_000)
-        second.join(5_000)
+            // The first frame is already in OkHttp's hands: the tap's slowness
+            // must not be able to hold the next send.
+            second = Thread { sender.sendText("second") }.apply { start() }
+            val next = second!!
+            next.join(2_000)
+            assertFalse("the tap never holds the send lock", next.isAlive)
+        } finally {
+            // A failed assertion above must never leave the tap blocked or the
+            // threads running.
+            releaseTap.countDown()
+            first.join(5_000)
+            second?.join(5_000)
+        }
         assertEquals("both hand-offs happened in call order", listOf("text:first", "text:second"), socket.calls)
     }
 

@@ -67,6 +67,16 @@ internal class IrohLink(
     private val downOnce = AtomicBoolean(false)
     private val cancelled = AtomicBoolean(false)
 
+    /** The engine listener, kept so a stalled control queue can fail the link like a reader would. */
+    @Volatile private var listener: DeviceLink.Listener? = null
+
+    /** Control sends: the bounded queue plus the one backlog failure a full queue asks for. */
+    private val controlSender = IrohControlSender(
+        queue = controlOutbound,
+        schedule = { task -> scope.launch { task() } },
+        reportDown = { reason -> listener?.let { fail(it, reason) } }
+    )
+
     @Volatile private var connection: Connection? = null
 
     @Volatile private var route: DeviceLink.Route? = null
@@ -129,6 +139,7 @@ internal class IrohLink(
     }
 
     override fun start(listener: DeviceLink.Listener) {
+        this.listener = listener
         scope.launch { connect(listener) }
     }
 
@@ -365,7 +376,7 @@ internal class IrohLink(
         val payload = message.toByteArray(Charsets.UTF_8)
         val frame = Framing.encode(Framing.KIND_TEXT, payload) ?: return false
         if (cancelled.get() || downOnce.get()) return false
-        return controlOutbound.offer(frame, payload.size)
+        return controlSender.offer(frame, payload.size)
     }
 
     override fun sendBinary(frame: ByteArray, length: Int) {

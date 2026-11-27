@@ -140,6 +140,8 @@ internal class FrameTapDump(
     scope: CoroutineScope,
     private val capacity: Int = 1024,
     private val maxBytes: Int = MAX_BYTES,
+    /** Test seam: runs under no lock after a record's enable snapshot and before its encode. */
+    private val beforeEncode: (() -> Unit)? = null,
     /** Test seam: runs under [admission] after a record's generation check and before its write. */
     private val beforeWrite: (() -> Unit)? = null
 ) {
@@ -198,6 +200,7 @@ internal class FrameTapDump(
         // under, never a half-applied toggle.
         val snapshot = state.get()
         if (!snapshot.enabled) return
+        beforeEncode?.invoke()
         val queued = Queued(record.encode(), snapshot.generation)
         if (records.trySend(queued).isFailure) dropped.incrementAndGet()
     }

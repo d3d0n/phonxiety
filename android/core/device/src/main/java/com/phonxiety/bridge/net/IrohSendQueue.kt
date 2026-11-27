@@ -53,13 +53,15 @@ internal class IrohSendQueue(
     private val failed = AtomicBoolean(false)
 
     /** Accepts [bytes] without suspending; false when the queue is full or closed. */
-    fun offer(bytes: ByteArray, payload: Int = bytes.size): Boolean {
+    fun offer(bytes: ByteArray, payload: Int = bytes.size): Boolean = offerResult(bytes, payload) == OfferResult.ACCEPTED
+
+    /** Like [offer], but tells a full queue from a closed one: a full control queue must fail the link. */
+    fun offerResult(bytes: ByteArray, payload: Int = bytes.size): OfferResult {
         backlog.addAndGet(bytes.size.toLong())
-        if (frames.trySend(queuedEntry(bytes, payload, tap)).isFailure) {
-            backlog.addAndGet(-bytes.size.toLong())
-            return false
-        }
-        return true
+        val result = frames.trySend(queuedEntry(bytes, payload, tap))
+        if (result.isSuccess) return OfferResult.ACCEPTED
+        backlog.addAndGet(-bytes.size.toLong())
+        return if (frames.isClosedForSend) OfferResult.CLOSED else OfferResult.FULL
     }
 
     /**
@@ -95,6 +97,49 @@ internal class IrohSendQueue(
     /** Stops accepting frames; the writer returns once the queue is empty. */
     fun close() {
         frames.close()
+    }
+}
+
+/** Why an offer was refused, so a caller can tell a full queue from an ending link. */
+internal enum class OfferResult { ACCEPTED, FULL, CLOSED }
+
+/**
+ * The control stream's send point: the bounded queue plus the one link failure
+ * a full queue asks for.
+ *
+ * A full control queue means its writer is not draining and the link is
+ * stalled.  The engine records its state before the send and ignores a refusal,
+ * so a saturated queue can silently lose an "ended" state or a command reply,
+ * and nothing re-syncs it while the link stays up.  The first full-queue
+ * refusal therefore schedules [reportDown] with [BACKLOG_REASON], and the
+ * engine's normal down → reconnect → hello path restores the truth.  The
+ * report goes through [schedule] (the link's own I/O scope), never inline and
+ * never under a lock, and only once per link; the refusal still returns false.
+ *
+ * A refusal from a closed queue is not a backlog: the link is already ending,
+ * so nothing is scheduled.
+ */
+internal class IrohControlSender(
+    private val queue: IrohSendQueue,
+    private val schedule: (() -> Unit) -> Unit,
+    private val reportDown: (String) -> Unit
+) {
+    internal companion object {
+        /** The link-down reason a full control queue reports. */
+        const val BACKLOG_REASON = "control_backlog"
+    }
+
+    private val scheduled = AtomicBoolean(false)
+
+    fun offer(frame: ByteArray, payload: Int): Boolean = when (queue.offerResult(frame, payload)) {
+        OfferResult.ACCEPTED -> true
+
+        OfferResult.FULL -> {
+            if (scheduled.compareAndSet(false, true)) schedule { reportDown(BACKLOG_REASON) }
+            false
+        }
+
+        OfferResult.CLOSED -> false
     }
 }
 

@@ -4,6 +4,7 @@ import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -14,6 +15,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 /** The opt-in frame dump: off by default, bounded, rotating, and never a payload byte. */
@@ -165,6 +167,40 @@ class FrameTapTest {
         assertEquals("exactly one line", 1, text.lines().count { it.matches(Regex("\\d+,\\d+,\\d+,.+")) })
     }
 
+    /**
+     * The generation is taken with the enable snapshot, before the line is
+     * encoded.  A toggle that lands mid-encode therefore cannot tag the record
+     * with the later enable's generation: the record is dropped, and only a
+     * record accepted after the toggle is written.
+     */
+    @Test
+    fun aToggleDuringEncodingDiscardsTheRecord() = runTest {
+        lateinit var dump: FrameTapDump
+        val toggled = AtomicBoolean(false)
+        dump = FrameTapDump(
+            dir = dir,
+            clock = { 1L },
+            scope = this,
+            beforeEncode = {
+                // Once, for the record captured under the first enable: off and
+                // on again while its line is still being built.
+                if (toggled.compareAndSet(false, true)) {
+                    dump.noteSetting(false)
+                    dump.noteSetting(true)
+                }
+            }
+        )
+        dump.noteSetting(true)
+        dump.record(record(1))
+        dump.record(record(2))
+        dump.close()
+        dump.job.join()
+
+        val text = file(FrameTapDump.CURRENT).readText()
+        assertFalse("the record whose encoding straddled the toggle is dropped: $text", text.contains("1001,7,1,"))
+        assertTrue("a record accepted under the live generation is written: $text", text.contains("1002,7,2,"))
+    }
+
     @Test
     fun aFailedRotationKeepsTheSizeBound() = runTest {
         // A non-empty directory cannot be deleted or replaced, so both the
@@ -221,10 +257,16 @@ class FrameTapTest {
                 toggled.countDown()
             }.apply { start() }
 
-            assertFalse(
-                "the disable waits for the check-and-write section",
-                toggled.await(300, TimeUnit.MILLISECONDS)
-            )
+            // The toggler must actually be parked on the admission monitor:
+            // wait for that state rather than guessing with a timeout.
+            val blockedDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (toggler.state != Thread.State.BLOCKED) {
+                if (System.nanoTime() > blockedDeadline) {
+                    fail("the disable never reached the admission monitor: ${toggler.state}")
+                }
+                Thread.sleep(1)
+            }
+            assertEquals("the disable is waiting, not completed", 1L, toggled.count)
 
             release.countDown()
             assertTrue("the disable lands once the write finishes", toggled.await(5, TimeUnit.SECONDS))

@@ -5,6 +5,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -13,6 +14,8 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -179,6 +182,61 @@ class IrohSendQueueTest {
         // A second writer finds a closed, empty queue: no second report.
         drainTo(queue, write = { attempts++ }, onWriteFailed = { failures.incrementAndGet() })
         assertEquals(1, failures.get())
+    }
+
+    /**
+     * A full control queue schedules exactly one link failure, with its own
+     * reason, through the link's scheduler rather than on the caller's thread;
+     * the refusal still returns false, and later refusals schedule nothing.
+     */
+    @Test
+    fun aFullControlQueueSchedulesOneBacklogFailure() {
+        assertEquals("control_backlog", IrohControlSender.BACKLOG_REASON)
+        val queue = IrohSendQueue(IrohSendQueue.CONTROL_CAPACITY, backlog)
+        val tasks = mutableListOf<() -> Unit>()
+        val reasons = Collections.synchronizedList(mutableListOf<String>())
+        val reportThread = AtomicReference<Thread?>(null)
+        val sender = IrohControlSender(
+            queue = queue,
+            schedule = { tasks += it },
+            reportDown = { reason ->
+                reportThread.set(Thread.currentThread())
+                reasons += reason
+            }
+        )
+
+        repeat(IrohSendQueue.CONTROL_CAPACITY) {
+            assertTrue("frame ${it + 1} fits the bounded control queue", sender.offer(frame(), 4))
+        }
+        assertFalse("the 129th frame is refused", sender.offer(frame(), 4))
+
+        assertEquals("exactly one failure is scheduled", 1, tasks.size)
+        assertTrue("nothing ran on the caller thread: $reasons", reasons.isEmpty())
+
+        repeat(5) { assertFalse("later refusals still return false", sender.offer(frame(), 4)) }
+        assertEquals("later refusals schedule nothing", 1, tasks.size)
+
+        val caller = Thread.currentThread()
+        val worker = Thread(tasks.single(), "control-backlog").apply { start() }
+        worker.join(5_000)
+        assertEquals(listOf(IrohControlSender.BACKLOG_REASON), reasons)
+        assertNotNull("the scheduled failure ran", reportThread.get())
+        assertNotSame("the link failure is off the caller thread", caller, reportThread.get())
+    }
+
+    /** A refusal from a closed queue is the link already ending, not a backlog. */
+    @Test
+    fun aClosedControlQueueSchedulesNoBacklogFailure() {
+        val queue = IrohSendQueue(IrohSendQueue.CONTROL_CAPACITY, backlog)
+        val tasks = mutableListOf<() -> Unit>()
+        val reasons = mutableListOf<String>()
+        val sender = IrohControlSender(queue, schedule = { tasks += it }, reportDown = { reasons += it })
+
+        queue.close()
+        repeat(3) { assertFalse(sender.offer(frame(), 4)) }
+
+        assertTrue("a closed queue is not a backlog: $tasks", tasks.isEmpty())
+        assertTrue(reasons.isEmpty())
     }
 
     @Test
