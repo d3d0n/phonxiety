@@ -38,7 +38,7 @@ internal class CallSession(
 
         /**
          * How long a dial waits for an already-admitted idle link action (a
-         * relay escalation or network recycle).  Such an action only nulls the
+         * network recycle).  Such an action only nulls the
          * endpoint and reports the link down, so it is milliseconds; the
          * deadline covers a wedged native shutdown, after which the dial is
          * refused as `link_down` rather than reserving a call about to be cut.
@@ -75,8 +75,8 @@ internal class CallSession(
     }
 
     /**
-     * Admits one idle-only link action — escalate a relay-only link, recycle
-     * the endpoint on a network move — or refuses it while a call is owned or
+     * Admits one idle-only link action — recycle the endpoint on a network
+     * move — or refuses it while a call is owned or
      * being reserved.  The door stays shut until the action is released, so the
      * link can never close under a call placed a moment later.
      */
@@ -102,7 +102,7 @@ internal class CallSession(
     ): DialOutcome {
         // Read before the wait and the lock: Telecom's call list is an IPC and must not run under them.
         val unrelated = unrelatedCall()
-        // A relay escalation or network recycle already admitted closes this
+        // A network recycle already admitted closes this
         // link as soon as it runs; wait it out instead of racing it.
         if (!admission.awaitIdle(LINK_ACTION_WAIT_MS)) throw DialRefused("link_down")
         synchronized(lock) {

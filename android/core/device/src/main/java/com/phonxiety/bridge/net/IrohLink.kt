@@ -29,16 +29,20 @@ import kotlinx.serialization.json.Json
  *
  * Reader coroutines per stream, a writer coroutine per send stream, a route
  * sampler and the datagram probe echo run for the life of the connection; any
- * failure reports down once.  Extra bidirectional streams the daemon opens
- * after auth are tunnel requests and go to [AdbTunnel].  The wire framing is
- * [Framing]; this class only decides what to send where.
+ * failure reports down once.  Staying on the relay is not a failure: nothing
+ * here closes a healthy relayed connection; iroh itself upgrades to a direct
+ * path when hole punching succeeds, and the periodic link selection moves to
+ * a LAN or Tailscale address when one measures better.  Extra
+ * bidirectional streams the daemon opens after auth are tunnel requests and go
+ * to [AdbTunnel].  The wire framing is [Framing]; this class only decides what
+ * to send where.
  */
 internal class IrohLink(
     private val context: Context,
     private val config: BridgeConfig.Iroh,
     private val ownsCall: () -> Boolean,
     private val beginIdleLinkAction: () -> IdleLinkAction?,
-    private val policy: IrohEscalationPolicy,
+    private val network: IrohNetworkPolicy,
     private val budget: IrohFailureBudget,
     private val tap: FrameTapSink
 ) : DeviceLink {
@@ -85,10 +89,10 @@ internal class IrohLink(
     /** Late-bound subscriptions; publication is terminal-state aware. */
     private val watchers = IrohLinkWatchers { cancelled.get() || downOnce.get() }
 
-    /** Carries an escalation's admission token to whichever failure ends this link. */
+    /** Carries a recycle's admission token to whichever failure ends this link. */
     private val admission = IrohLinkAdmission()
 
-    /** Serializes a destructive escalation with cancellation; recycles this link's endpoint only. */
+    /** Serializes a network recycle with cancellation; recycles this link's endpoint only. */
     private val lifecycle = IrohLinkLifecycle(
         recycleEndpoint = { generation -> IrohSupport.recycleEndpoint(generation) },
         isClosed = { cancelled.get() || downOnce.get() }
@@ -210,22 +214,9 @@ internal class IrohLink(
                 fail(listener, reason, detail)
             }
             scope.launch { echoDatagrams(link, { cancelled.get() }, { downOnce.get() }) }
-            // The relay-only watchdog: push updates from watchPaths plus the 1 s sample.
-            val pathMonitor = IrohPathMonitor(
-                policy = policy,
-                scheduler = CoroutineLinkScheduler(scope),
-                ownsCall = ownsCall,
-                onEscalate = { escalation -> onRelayOnly(escalation, listener) }
-            )
-            // A reader may have failed while this registration ran: publication
-            // is terminal-state aware, so a handle is closed at once instead of
-            // outliving the link through its own native lifetime.
-            if (watchers.attachMonitor(pathMonitor)) {
-                pathMonitor.start(paths.source(link))
-                scope.launch { paths.sample(link, pathMonitor) }
-            } else {
-                pathMonitor.cancel()
-            }
+            // The 1 s path sample feeds the UI route and the supervisor's
+            // background direct-path probe; it is not a watchdog of its own.
+            scope.launch { paths.sample(link) }
             // Android's default-network callback is the only network-change source.
             // The iroh-ffi `Endpoint.watchNetworkChange` wrapper is not used: it loops on
             // iroh's `Endpoint::network_change()`, which *notifies* iroh of a change instead
@@ -280,22 +271,19 @@ internal class IrohLink(
         .toByteArray(Charsets.UTF_8)
 
     /**
-     * The default network changed under a live link.  The connection's relay
-     * evidence is stale either way; the endpoint is recycled and the link
-     * dropped only when the policy admits it — no call owned and no recent
-     * escalation or network recycle inside the cooldown.  During a call iroh
-     * keeps migrating the connection; inside the cooldown this link keeps
-     * running rather than churning a third endpoint.
+     * The default network changed under a live link.  The endpoint is recycled
+     * and the link dropped only when the policy admits it — no call owned and
+     * no recent recycle inside the cooldown.  During a call iroh keeps
+     * migrating the connection; inside the cooldown this link keeps running
+     * rather than churning a third endpoint.
      */
     private fun onNetworkChange(reason: LinkDownReason, listener: DeviceLink.Listener) {
         if (cancelled.get() || downOnce.get()) return
-        val pathMonitor = watchers.monitor()
-        pathMonitor?.noteNetworkChange()
         val action = beginIdleLinkAction() ?: run {
             BridgeLog.i(TAG, "${reason.wire}: a call or another link action owns the link, keeping the iroh endpoint")
             return
         }
-        when (pathMonitor?.admitNetworkRecycle() ?: IrohNetworkDecision.HELD) {
+        when (network.admitRecycle(ownsCall())) {
             IrohNetworkDecision.RECYCLE -> withAdmission(action) {
                 lifecycle.run(recycle = true) {
                     BridgeLog.i(TAG, "${reason.wire}: recreating the iroh endpoint")
@@ -309,7 +297,7 @@ internal class IrohLink(
             }
 
             IrohNetworkDecision.HELD -> {
-                BridgeLog.i(TAG, "${reason.wire} inside the escalation cooldown: keeping the iroh link")
+                BridgeLog.i(TAG, "${reason.wire} inside the recycle cooldown: keeping the iroh link")
                 action.release()
             }
         }
@@ -319,7 +307,7 @@ internal class IrohLink(
      * Runs [act] with [action] handed to the link's terminal transition: the
      * winning failure releases it after the engine has seen the link down.
      * A finished link has no transition left, so the token comes back here and
-     * null tells the caller nothing was escalated.
+     * null tells the caller nothing happened.
      */
     private fun <T> withAdmission(action: IdleLinkAction, act: () -> T): T? {
         if (!admission.attach(action)) {
@@ -333,45 +321,6 @@ internal class IrohLink(
             admission.finish()
             throw t
         }
-    }
-
-    /**
-     * The policy says the relay only would no longer do: recycle this link's
-     * endpoint when this is a repeated escalation, then report down so
-     * LinkSupervisor re-dials through the usual backoff.  The engine admission
-     * makes the check-and-act atomic: a call reserved a moment earlier is never
-     * aborted by this callback, and the run is serialized with cancellation so
-     * a stale callback cannot close a replacement endpoint.  The admission is
-     * not released here: the failure that actually ends the link releases it,
-     * and only once the supervisor and the engine have seen the link down.
-     *
-     * Returns false only when the action was refused and may be retried (a call
-     * owns the link); a finished link counts as handled.
-     */
-    private fun onRelayOnly(escalation: IrohEscalation, listener: DeviceLink.Listener): Boolean {
-        val action = beginIdleLinkAction() ?: run {
-            BridgeLog.i(TAG, "relay only: a call owns the link, keeping the iroh link")
-            return false
-        }
-        // The admission outlives this callback: whichever failure wins the
-        // link's end — this one, or the closed watcher the endpoint shutdown
-        // wakes first — releases it only after the engine has seen the link
-        // down, so a dial arriving meanwhile waits instead of reserving a call
-        // that very failure is about to abort.
-        val handled = withAdmission(action) {
-            lifecycle.run(escalation.recycleEndpoint) {
-                BridgeLog.w(
-                    TAG,
-                    if (escalation.recycleEndpoint) {
-                        "relay only again: recycling the iroh endpoint before reconnecting"
-                    } else {
-                        "relay only: reconnecting the iroh link"
-                    }
-                )
-                fail(listener, LinkDownReason.RELAY_ONLY)
-            } == IrohActionOutcome.EXECUTED
-        }
-        return handled ?: false
     }
 
     override fun sendText(message: String): Boolean {
@@ -395,7 +344,7 @@ internal class IrohLink(
 
     /**
      * Reports the link down exactly once.  The winner of [downOnce] also owns
-     * any escalation's admission token: it releases it in a `finally`, after
+     * any recycle's admission token: it releases it in a `finally`, after
      * [DeviceLink.Listener.onLinkDown] has returned — the supervisor has
      * dropped this link and the engine has seen it down — never before, and a
      * losing failure releases nothing.
@@ -432,7 +381,7 @@ internal class IrohLink(
         lifecycle.close()
         releaseWatchers()
         // The supervisor drops a link before it cancels it, so no link-down
-        // publication is left; a token an escalation still holds comes back now
+        // publication is left; a token a recycle still holds comes back now
         // instead of leaving the admission shut for good.
         admission.finish()
         route = null

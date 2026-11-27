@@ -1,3 +1,13 @@
+# Phonxiety bridge 0.5.1
+
+## Reliability
+
+- **A relayed link stays up.** When the phone and the computer are on different networks, the link no longer drops and reconnects every minute while it runs through the relay. It keeps running; iroh still moves to a direct path when hole punching succeeds, and the regular path selection still moves to a LAN or Tailscale address that measures better. A network change still renews the connection when no call is in progress.
+
+## Calls
+
+- **The live screen comes back after a slow start.** A call placed from the phone now returns its live screen over the system call screen even when the voice session takes longer than ten seconds to start before the dial.
+
 # Phonxiety bridge 0.5.0
 
 The phone side of Phonxiety: the app and the root module that let the daemon on your computer place

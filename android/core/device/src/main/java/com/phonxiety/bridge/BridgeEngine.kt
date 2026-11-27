@@ -464,8 +464,8 @@ internal class BridgeEngine(
     private fun send(message: DeviceOutbound): Boolean = links.sendText(DeviceProtocol.encode(message))
 
     /**
-     * Admits one idle-only link action — escalate a relay-only link, recycle
-     * the endpoint on a network move — or refuses it while a call is owned or
+     * Admits one idle-only link action — recycle the endpoint on a network
+     * move — or refuses it while a call is owned or
      * being reserved.  The door stays shut until the action is released, so the
      * link can never close under a call placed a moment later.
      */

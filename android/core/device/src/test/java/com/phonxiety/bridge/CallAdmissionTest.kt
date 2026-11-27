@@ -35,7 +35,7 @@ class CallAdmissionTest {
         synchronized(admission.lock) { owned = true }
         first!!.release()
 
-        // A relay-only escalation or network recycle arriving now must not act:
+        // A network recycle or direct-link move arriving now must not act:
         // the link-down it would report is exactly what would abort this call.
         assertNull(admission.tryBeginIdleLinkAction { owned })
     }
@@ -82,7 +82,7 @@ class CallAdmissionTest {
         dial.join(5_000)
         assertTrue(reserved.get())
 
-        // The call is safe: the escalation that would have aborted it is now
+        // The call is safe: the action that would have aborted it is now
         // refused instead of closing the link under the reservation.
         assertNull(admission.tryBeginIdleLinkAction { owned })
     }

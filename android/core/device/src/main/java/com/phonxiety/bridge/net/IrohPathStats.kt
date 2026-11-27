@@ -2,19 +2,17 @@ package com.phonxiety.bridge.net
 
 import com.phonxiety.bridge.BridgeLog
 import computer.iroh.Connection
-import computer.iroh.PathChangeCallback
-import computer.iroh.PathSnapshot
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
 /**
- * The link's path evidence: the connection's own push events, the 1 s fallback
- * sample that keeps the UI's route fresh and feeds the relay-only monitor, and
+ * The link's path evidence: the 1 s sample that keeps the UI's route fresh and
  * the dump logged at link down.
  *
  * [link] reads the current connection, [isLive] is false once the link is
- * cancelled, and [onRoute] publishes the sampled route (null clears it).
+ * cancelled, and [onRoute] publishes the sampled route (null clears it) for the
+ * UI and link selection.
  */
 internal class IrohPathStats(
     private val scope: CoroutineScope,
@@ -27,26 +25,11 @@ internal class IrohPathStats(
         const val ROUTE_INTERVAL_MS = 1_000L
     }
 
-    /** Subscribes the monitor to a connection's own path-change events. */
-    fun source(connection: Connection): IrohPathSource = IrohPathSource { onPath ->
-        val handle = connection.watchPaths(object : PathChangeCallback {
-            override suspend fun onChange(paths: List<PathSnapshot>) = onPath(kindOf(paths))
-        })
-        IrohPathWatch { runCatching { handle.close() } }
-    }
-
-    fun kindOf(paths: List<PathSnapshot>): IrohPathKind = when (paths.firstOrNull { it.isSelected }?.isRelay) {
-        null -> IrohPathKind.UNKNOWN
-        true -> IrohPathKind.RELAY
-        false -> IrohPathKind.DIRECT
-    }
-
     /**
-     * The fallback the push events cannot replace: one snapshot per second that
-     * keeps the UI's route fresh and feeds the same path kind to the relay-only
-     * monitor, so a lost watcher event never hides a relay residence.
+     * One snapshot per second: the selected path for the UI and link selection.
+     * A lost snapshot ends the loop.
      */
-    suspend fun sample(connection: Connection, monitor: IrohPathMonitor) {
+    suspend fun sample(connection: Connection) {
         var lastPath: String? = null
         while (scope.isActive && isLive()) {
             try {
@@ -63,7 +46,6 @@ internal class IrohPathStats(
                         DeviceLink.Route(relay = it.isRelay, rttMs = if (rtt > 0L) rtt else null)
                     }
                 )
-                monitor.observe(kindOf(snapshots))
             } catch (_: Throwable) {
                 return
             }

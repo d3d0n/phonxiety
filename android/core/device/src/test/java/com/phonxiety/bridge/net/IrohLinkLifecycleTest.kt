@@ -95,10 +95,10 @@ class IrohLinkLifecycleTest {
         )
         lifecycle.bind(generation)
 
-        val escalation = Thread {
+        val recycle = Thread {
             lifecycle.run(recycle = true) { }
         }
-        escalation.start()
+        recycle.start()
         assertTrue(started.await(5, TimeUnit.SECONDS))
 
         val canceller = Thread {
@@ -110,7 +110,7 @@ class IrohLinkLifecycleTest {
         assertFalse(cancelled.await(100, TimeUnit.MILLISECONDS))
 
         release.countDown()
-        escalation.join(5_000)
+        recycle.join(5_000)
         canceller.join(5_000)
         assertTrue(cancelled.await(1, TimeUnit.SECONDS))
         assertEquals(listOf(generation), registry.recycled())
@@ -127,14 +127,14 @@ class IrohLinkLifecycleTest {
         val insideReport = CountDownLatch(1)
         val release = CountDownLatch(1)
 
-        val escalation = Thread {
+        val recycle = Thread {
             // fail() -> supervisor -> link cancel() must not deadlock on this.
             lifecycle.run(recycle = false) {
                 insideReport.countDown()
                 release.await(5, TimeUnit.SECONDS)
             }
         }
-        escalation.start()
+        recycle.start()
         assertTrue(insideReport.await(5, TimeUnit.SECONDS))
 
         val cancelled = CountDownLatch(1)
@@ -146,7 +146,7 @@ class IrohLinkLifecycleTest {
         assertTrue(cancelled.await(5, TimeUnit.SECONDS))
 
         release.countDown()
-        escalation.join(5_000)
+        recycle.join(5_000)
     }
 
     @Test

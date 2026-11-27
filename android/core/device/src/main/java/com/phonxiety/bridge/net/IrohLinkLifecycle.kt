@@ -10,9 +10,9 @@ internal enum class IrohActionOutcome {
 }
 
 /**
- * Runs a link's destructive decisions — recycle the endpoint, report down —
- * at most once, serialized with the link's own cancellation for the recycle,
- * which is applied only to the generation this link bound.
+ * Runs a link's destructive decision — recycle the endpoint before reporting
+ * down — at most once, serialized with the link's own cancellation, so the
+ * recycle is applied only to the generation this link bound.
  *
  * Cancellation sets the link's closed flag, so a callback that arrives after
  * [close] sees [IrohActionOutcome.LINK_CLOSED] and never touches the endpoint

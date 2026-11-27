@@ -10,9 +10,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The escalation's admission token outlives the escalation's own `fail()`.
+ * The recycle's admission token outlives the recycle's own `fail()`.
  *
- * A relay-only escalation or a network recycle takes the engine's admission
+ * A network recycle takes the engine's admission
  * token, then starts an action (endpoint shutdown) that can make a reader or
  * the closed watcher win the link's one failure publication first.  Releasing
  * the token when the losing `fail()` returns would let a dial reserve a call
@@ -28,7 +28,7 @@ class IrohLinkAdmissionTest {
         val admission = CallAdmission()
         val gate = IrohLinkAdmission()
         val token = admission.tryBeginIdleLinkAction { false }!!
-        // The escalation took the token; the recycle it started woke the closed
+        // The recycle took the token; the shutdown it started woke the closed
         // watcher, which won `downOnce` and is still inside the link-down callback.
         assertTrue(gate.attach(token))
 
@@ -63,7 +63,7 @@ class IrohLinkAdmissionTest {
         val token = admission.tryBeginIdleLinkAction { false }!!
         assertTrue(gate.attach(token))
 
-        // The escalation's own fail() lost the terminal transition: it returns
+        // The recycle's own fail() lost the terminal transition: it returns
         // without touching the gate.  Nothing opens the door.
         assertFalse(admission.awaitIdle(20))
         assertNull(admission.tryBeginIdleLinkAction { false })
@@ -103,11 +103,11 @@ class IrohLinkAdmissionTest {
         val gate = IrohLinkAdmission()
         gate.finish() // the link had already ended; no transition is left to carry a token
 
-        var escalated = false
+        var handled = false
         val token = admission.tryBeginIdleLinkAction { false }!!
-        if (gate.attach(token)) escalated = true else token.release()
+        if (gate.attach(token)) handled = true else token.release()
 
-        assertFalse(escalated)
+        assertFalse(handled)
         assertTrue(admission.awaitIdle(0))
         val next = admission.tryBeginIdleLinkAction { false }
         assertTrue(next != null)
@@ -127,7 +127,7 @@ class IrohLinkAdmissionTest {
 
         assertTrue(admission.awaitIdle(0))
         // A finished link refuses every later token; its caller releases it, so
-        // the next escalation can still be admitted.
+        // the next action can still be admitted.
         val later = admission.tryBeginIdleLinkAction { false }!!
         assertFalse(gate.attach(later))
         later.release()

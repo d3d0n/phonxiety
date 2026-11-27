@@ -14,11 +14,11 @@ internal class IrohLinkFactory(
     clock: () -> Long = { System.nanoTime() / 1_000_000L }
 ) : DeviceLinkFactory {
     /**
-     * Escalation history for the paired endpoint: one instance outlives every
-     * link this factory creates and every endpoint recycle, so the recycle
-     * window and the cooldown are measured across reconnects.
+     * Recycle admission for the paired endpoint: one instance outlives every
+     * link this factory creates and every endpoint recycle, so the cooldown is
+     * measured across reconnects.
      */
-    private val policy = IrohEscalationPolicy(clock = clock)
+    private val network = IrohNetworkPolicy(clock = clock)
 
     /**
      * Recovery history for an endpoint that never opens: one instance outlives
@@ -27,7 +27,7 @@ internal class IrohLinkFactory(
      */
     private val budget = IrohFailureBudget(clock)
 
-    override fun create(): DeviceLink = IrohLink(context, config, ownsCall, beginIdleLinkAction, policy, budget, tap())
+    override fun create(): DeviceLink = IrohLink(context, config, ownsCall, beginIdleLinkAction, network, budget, tap())
 
     /** Only iroh outcomes reach this factory; each one feeds the endpoint's one account. */
     override fun attemptEnded(outcome: AttemptOutcome, kind: LinkKind?) = budget.note(outcome)
