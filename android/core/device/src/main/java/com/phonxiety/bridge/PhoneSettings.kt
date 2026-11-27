@@ -19,7 +19,6 @@ import java.io.File
 import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -316,7 +315,7 @@ class PhoneSettingsStore internal constructor(
         }
 
         private fun create(app: Context): PhoneSettingsStore {
-            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            val scope = bridgeScope("phonxiety-settings", Dispatchers.IO)
             val file = AppStorage.dataStoreFile(AppStorage.deviceProtected(app).filesDir, FILE_NAME)
             val store = PhoneSettingsStore(
                 dataStore = PreferenceDataStoreFactory.create(scope = scope, produceFile = { file }),

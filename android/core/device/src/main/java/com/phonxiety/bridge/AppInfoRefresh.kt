@@ -100,20 +100,20 @@ internal class AppInfoRefresh(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            BridgeLog.w(TAG, "info refresh failed: ${e.javaClass.simpleName}")
+            BridgeLog.w(TAG) { "info refresh failed: ${e.javaClass.simpleName}" }
             return
         }
         // One attempt per connection whatever the answer: a refusal is retried
         // by the daemon's next app access, not by asking again on this link.
         refreshed.set(epoch)
         if (result.status !in 200..299) {
-            BridgeLog.w(TAG, "info refresh refused: ${result.status} ${result.error?.code.orEmpty()}")
+            BridgeLog.w(TAG) { "info refresh refused: ${result.status} ${result.error?.code.orEmpty()}" }
             return
         }
         val info = try {
             result.result?.let { json.decodeFromJsonElement(DaemonInfo.serializer(), it) }
         } catch (e: Exception) {
-            BridgeLog.w(TAG, "info refresh returned no usable document: ${e.javaClass.simpleName}")
+            BridgeLog.w(TAG) { "info refresh returned no usable document: ${e.javaClass.simpleName}" }
             null
         } ?: return
         // The link may have reconnected while the answer was in flight.
@@ -125,7 +125,7 @@ internal class AppInfoRefresh(
     }
 
     companion object {
-        private const val TAG = "PhonxietyBridge"
+        private const val TAG = "Bridge:api"
         const val INFO_PATH = "/app/v1/info"
     }
 }

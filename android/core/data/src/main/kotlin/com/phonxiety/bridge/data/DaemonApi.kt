@@ -1,8 +1,5 @@
 package com.phonxiety.bridge.data
 
-import android.content.Context
-import com.phonxiety.bridge.BridgeConfig
-import com.phonxiety.bridge.BridgeConfigLoader
 import com.phonxiety.bridge.model.CallEventsPage
 import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.CallSummary
@@ -31,12 +28,9 @@ import com.phonxiety.bridge.model.TestCallRequest
 import com.phonxiety.bridge.model.ToneResult
 import com.phonxiety.bridge.model.TranscriptPage
 import com.phonxiety.bridge.model.ValidationResult
-import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.OutputStream
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.SerializationStrategy
 import kotlinx.serialization.json.Json
@@ -142,14 +136,9 @@ interface DaemonApi {
 
 @Singleton
 class DefaultDaemonApi @Inject constructor(
-    private val api: AppApi,
-    @ApplicationContext private val context: Context
+    private val api: AppApi
 ) : DaemonApi {
-    internal val json = Json {
-        ignoreUnknownKeys = true
-        explicitNulls = false
-        coerceInputValues = true
-    }
+    internal val json: Json = DaemonJson
 
     override suspend fun info(): ApiOutcome<DaemonInfo> = call(DaemonInfo.serializer(), "GET", "/app/v1/info")
 
@@ -358,20 +347,6 @@ class DefaultDaemonApi @Inject constructor(
     }
 
     private fun <T> encode(serializer: SerializationStrategy<T>, value: T): JsonObject = json.encodeToJsonElement(serializer, value).jsonObject
-
-    /**
-     * A rotated app token stays valid only when the pairing stores it; the
-     * device token, when rotated, needs a restart and a new pairing link.
-     */
-    private suspend fun persistAppToken(appToken: String) = withContext(Dispatchers.IO) {
-        val config = BridgeConfigLoader.loadOrNull(context) ?: return@withContext
-        val updated = when (config) {
-            is BridgeConfig.Address -> config.copy(appToken = appToken)
-            is BridgeConfig.Iroh -> config.copy(appToken = appToken)
-        }
-        runCatching { BridgeConfigLoader.write(context, updated) }
-        Unit
-    }
 
     /** Call ids are already restricted by the daemon; refuse path syntax here too. */
     private fun encodeId(id: String): String {

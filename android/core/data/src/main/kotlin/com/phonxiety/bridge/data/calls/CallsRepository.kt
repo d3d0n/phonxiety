@@ -3,6 +3,7 @@ package com.phonxiety.bridge.data.calls
 import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.ApiResult
 import com.phonxiety.bridge.data.DaemonApi
+import com.phonxiety.bridge.data.DaemonJson
 import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.CallSummary
 import com.phonxiety.bridge.model.DeleteCallResult
@@ -94,11 +95,7 @@ class DefaultCallsRepository @Inject constructor(
     private val api: DaemonApi,
     private val dao: CallDao
 ) : CallsRepository {
-    private val json = Json {
-        ignoreUnknownKeys = true
-        explicitNulls = false
-        coerceInputValues = true
-    }
+    private val json: Json = DaemonJson
 
     override fun observeCalls(filter: CallFilter): Flow<List<CallSummary>> = dao.observeMatching(filter.outcome, filter.farEnd, filter.query.trim()).map { rows ->
         rows.map { it.toSummary() }

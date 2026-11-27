@@ -90,7 +90,7 @@ class CandidateStore(private val file: File) {
         )
         true
     } catch (e: Exception) {
-        BridgeLog.w(TAG, "could not store link candidates: ${e.javaClass.simpleName}")
+        BridgeLog.w(TAG) { "could not store link candidates: ${e.javaClass.simpleName}" }
         false
     }
 
@@ -143,7 +143,7 @@ class CandidateStore(private val file: File) {
     }
 
     companion object {
-        private const val TAG = "PhonxietyBridge"
+        private const val TAG = "Bridge:candidates"
         private const val FILE_NAME = "link-candidates.json"
         private const val MAX_BYTES = 64 * 1024L
 

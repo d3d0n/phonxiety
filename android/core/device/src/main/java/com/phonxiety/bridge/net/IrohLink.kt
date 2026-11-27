@@ -8,6 +8,7 @@ import com.phonxiety.bridge.AppStorage
 import com.phonxiety.bridge.BridgeConfig
 import com.phonxiety.bridge.BridgeLog
 import com.phonxiety.bridge.IdleLinkAction
+import com.phonxiety.bridge.bridgeScope
 import com.phonxiety.bridge.model.AttachmentControl
 import com.phonxiety.bridge.model.ControlEnvelope
 import com.phonxiety.bridge.model.DeviceAuth
@@ -29,9 +30,7 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.resume
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -91,7 +90,7 @@ internal class BudgetFreshBind(
  */
 internal class IrohEndpointCache<T : Any>(private val onDetach: (T, String) -> Unit) {
     private companion object {
-        const val TAG = "PhonxietyBridge"
+        const val TAG = "Bridge:iroh"
     }
 
     private val mutex = Mutex()
@@ -215,7 +214,7 @@ internal class IrohFailureBudget(private val clock: () -> Long) {
  * endpoint shutdown, endpoint recycle and connection close.  Callers include
  * the main thread when the service stops, so none of this may run there.
  */
-private val irohIo = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+private val irohIo = bridgeScope("phonxiety-iroh-io", Dispatchers.IO)
 
 /**
  * One bound endpoint and the generation that identifies it.  A link captures
@@ -234,7 +233,7 @@ internal class IrohEndpoint internal constructor(
  * the engine; it is never touched on the main thread.
  */
 object IrohSupport {
-    private const val TAG = "PhonxietyBridge"
+    private const val TAG = "Bridge:iroh"
     private const val SECRET_KEY_FILE = "iroh-secret.key"
     private const val SECRET_KEY_BYTES = 32
     private const val NETWORK_WAIT_MS = 8_000L
@@ -363,7 +362,7 @@ object IrohSupport {
         } catch (e: Exception) {
             // A new identity per service start is worse than no persistence,
             // but the link must still work; never log the key itself.
-            BridgeLog.w(TAG, "could not persist the iroh secret key: ${e.javaClass.simpleName}")
+            BridgeLog.w(TAG) { "could not persist the iroh secret key: ${e.javaClass.simpleName}" }
         }
         return generated
     }
@@ -397,7 +396,7 @@ object IrohSupport {
         }
     } catch (t: Throwable) {
         // A malformed URL is refused by the bindings; the preset map still works.
-        BridgeLog.w(TAG, "iroh relay settings refused: ${t.javaClass.simpleName}")
+        BridgeLog.w(TAG) { "iroh relay settings refused: ${t.javaClass.simpleName}" }
         null
     }
 
@@ -469,7 +468,7 @@ object IrohSupport {
             try {
                 endpoint.shutdown()
             } catch (t: Throwable) {
-                BridgeLog.w(TAG, "iroh endpoint close failed ($name): ${t.javaClass.simpleName}")
+                BridgeLog.w(TAG) { "iroh endpoint close failed ($name): ${t.javaClass.simpleName}" }
             }
         }
     }
@@ -709,7 +708,7 @@ private class IrohLink(
     private val budget: IrohFailureBudget
 ) : DeviceLink {
     private companion object {
-        const val TAG = "PhonxietyBridge"
+        const val TAG = "Bridge:iroh"
         const val ROUTE_INTERVAL_MS = 1_000L
 
         /** Send priority of the control stream, above the audio stream. */
@@ -719,7 +718,7 @@ private class IrohLink(
         const val AUDIO_PRIORITY = 0
     }
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope = bridgeScope("phonxiety-iroh-link", Dispatchers.IO)
 
     /** Extra bidirectional streams the daemon may open on this connection. */
     private val tunnels = AdbTunnel()
@@ -848,7 +847,7 @@ private class IrohLink(
             if (!watchers.attachNetworkWatch(unwatch)) unwatch()
         } catch (t: Throwable) {
             if (!cancelled.get()) {
-                BridgeLog.w(TAG, "iroh connect failed: ${t.javaClass.simpleName}")
+                BridgeLog.w(TAG) { "iroh connect failed: ${t.javaClass.simpleName}" }
                 fail(listener, "connect_failed")
             }
         }
@@ -1067,7 +1066,7 @@ private class IrohLink(
                 val path = selected?.let { (if (it.isRelay) "relay " else "direct ") + it.remoteAddr }
                 if (path != lastPath) {
                     lastPath = path
-                    BridgeLog.i(TAG, "iroh path: ${path ?: "none"}")
+                    BridgeLog.i(TAG) { "iroh path: ${path ?: "none"}" }
                 }
                 route = selected?.let {
                     val rtt = it.rttMs.toLong()
@@ -1156,7 +1155,7 @@ private class IrohLink(
         lifecycle.close()
         try {
             releaseWatchers()
-            BridgeLog.w(TAG, "iroh paths at link down ($reason): ${describePaths()}")
+            BridgeLog.w(TAG) { "iroh paths at link down ($reason): ${describePaths()}" }
             route = null
             runCatching { connection?.close(0, reason.toByteArray(Charsets.UTF_8)) }
             controlOutbound.close()

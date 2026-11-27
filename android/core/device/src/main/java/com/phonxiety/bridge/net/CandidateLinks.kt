@@ -123,7 +123,7 @@ internal class CandidateLinkFactory(
             // No candidate at all: an iroh pairing can still be built from its ticket.
             return irohFactory?.create() ?: ProbeFailureLink("no_candidate")
         }
-        BridgeLog.d(TAG, "link candidate ${candidate.label} (${decision.reason})")
+        BridgeLog.d(TAG) { "link candidate ${candidate.label} (${decision.reason})" }
         current = candidate
         selected = SelectedCandidate(candidate.kind, candidate.host)
         val link = when (candidate.kind) {
@@ -144,7 +144,7 @@ internal class CandidateLinkFactory(
         }
         val decision = selector.observe(plan, measured, mode(), duringCall(), relayOnly)
         if (!decision.switched) return false
-        BridgeLog.i(TAG, "selection moves the link to ${decision.candidate?.label} (${decision.reason})")
+        BridgeLog.i(TAG) { "selection moves the link to ${decision.candidate?.label} (${decision.reason})" }
         selected = decision.candidate?.let { SelectedCandidate(it.kind, it.host) }
         return true
     }
@@ -278,6 +278,6 @@ internal class CandidateLinkFactory(
     }
 
     private companion object {
-        const val TAG = "PhonxietyBridge"
+        const val TAG = "Bridge:candidates"
     }
 }

@@ -1,6 +1,5 @@
 package com.phonxiety.bridge.data
 
-import android.content.Context
 import com.phonxiety.bridge.data.updates.ManifestParse
 import com.phonxiety.bridge.data.updates.ReleaseSource
 import com.phonxiety.bridge.data.updates.UpdateManifestCodec
@@ -67,7 +66,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
-import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 /**
@@ -82,7 +80,6 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class DaemonContractTest {
-    private val context: Context = RuntimeEnvironment.getApplication()
 
     @Test
     fun everyExchangeMatchesTheDaemonContract() = runTest {
@@ -101,7 +98,7 @@ class DaemonContractTest {
                     )
                 )
             }
-            val api = DefaultDaemonApi(transport, context)
+            val api = DefaultDaemonApi(transport)
             val outcome = exchange.invoke(api, contract)
             if (transport is RecordingTransport) {
                 assertEnvelope(exchange.file, contract, transport.captured)

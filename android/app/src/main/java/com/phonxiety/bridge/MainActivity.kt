@@ -66,7 +66,7 @@ class MainActivity : ComponentActivity() {
         // A stored pairing always implies a link service; after a force-stop or an update the
         // process can be gone while the pairing is still on disk, and the dashboard's state and the
         // wizard's first link test both need the engine running.
-        if (BridgeConfigLoader.loadOrNull(this) != null && BridgeRuntime.engine == null) {
+        if (BridgeConfigLoader.loadOrNull(this) != null && BridgeRuntime.appGateway() == null) {
             BridgeService.start(this)
         }
         callFront.onStart()

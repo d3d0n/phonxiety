@@ -6,10 +6,7 @@ import android.content.pm.ServiceInfo
 import android.telecom.Call
 import android.telecom.InCallService
 import com.phonxiety.bridge.model.CallState
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.map
 
@@ -32,7 +29,7 @@ class BridgeInCallService : InCallService() {
         private const val TAG = "PhonxietyBridge"
     }
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope = bridgeScope("phonxiety-incall")
     private var card: Job? = null
 
     private val slot by lazy {

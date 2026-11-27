@@ -7,10 +7,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.IBinder
 import com.phonxiety.bridge.net.CandidateMerge
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.map
 
@@ -61,7 +58,7 @@ class BridgeService : Service() {
 
     @Volatile private var foregroundReady = false
     private var engine: BridgeEngine? = null
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope = bridgeScope("phonxiety-service")
     private var card: Job? = null
 
     private val slot by lazy {

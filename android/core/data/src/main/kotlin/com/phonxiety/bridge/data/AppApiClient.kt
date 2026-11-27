@@ -61,11 +61,7 @@ internal class AppApiEnvelope(
     private val pageBytes: Int = 192 * 1024,
     private val nextId: () -> String = { UUID.randomUUID().toString() }
 ) {
-    private val json = Json {
-        ignoreUnknownKeys = true
-        explicitNulls = false
-        coerceInputValues = true
-    }
+    private val json: Json = DaemonJson
 
     suspend fun request(
         method: String,

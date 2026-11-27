@@ -252,7 +252,7 @@ class DefaultUpdatesServiceRollbackTest {
             RollbackArchiveState.Present(archive)
         }
     ): DefaultUpdatesService {
-        val daemon: DaemonApi = DefaultDaemonApi(DownAppApi(), context)
+        val daemon: DaemonApi = DefaultDaemonApi(DownAppApi())
         return DefaultUpdatesService(
             context = context,
             daemonApi = daemon,

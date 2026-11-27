@@ -11,9 +11,13 @@ import kotlinx.coroutines.flow.update
 
 /**
  * Every log line the bridge writes, kept in a bounded in-process ring so the test lab can show
- * the app's own recent history without `logcat` or a file.  Lines still reach `android.util.Log`
- * unchanged; [minimumLevel] only decides what the ring keeps, which is what the log level setting
- * asks for.
+ * the app's own recent history without `logcat` or a file.
+ *
+ * Each line goes to the [sink] and, when its level is at least [minimumLevel], into the ring.
+ * [sinkLevel] decides what the sink receives; by default it accepts every level, exactly as
+ * `logcat` did, while [minimumLevel] keeps its old meaning for the ring. The lazy overloads take
+ * a lambda and build the text only when the sink or the ring will accept the line, so a hot path
+ * can describe a message it usually never writes.
  *
  * The ring is process-wide and survives activity restarts, not process death: it is a debugging
  * surface, not a durable log.
@@ -23,6 +27,28 @@ object BridgeLog {
     const val INFO = 1
     const val WARN = 2
     const val ERROR = 3
+
+    /** Severity of one line, for a sink that wants the level as a value rather than a code. */
+    enum class Level {
+        DEBUG,
+        INFO,
+        WARN,
+        ERROR;
+
+        companion object {
+            fun of(code: Int): Level = when (code) {
+                0 -> DEBUG
+                2 -> WARN
+                3 -> ERROR
+                else -> INFO
+            }
+        }
+    }
+
+    /** Where the lines are written; `logcat` by default, replaceable in tests and tools. */
+    fun interface Sink {
+        fun write(level: Level, tag: String, message: String, error: Throwable?)
+    }
 
     /** One captured line: when it happened, how severe it is, its tag and its text. */
     data class Line(
@@ -52,30 +78,56 @@ object BridgeLog {
             field = value.coerceIn(DEBUG, ERROR)
         }
 
-    fun d(tag: String, message: String) {
-        android.util.Log.d(tag, message)
-        capture(DEBUG, tag, message)
+    /** Lowest level the [sink] receives. Every level by default, so `logcat` sees what it always did. */
+    @Volatile
+    var sinkLevel: Int = DEBUG
+        set(value) {
+            field = value.coerceIn(DEBUG, ERROR)
+        }
+
+    /** Writes one line to `logcat`; the process default when nothing replaced the sink. */
+    internal val defaultSink: Sink = Sink { level, tag, message, error ->
+        when (level) {
+            Level.DEBUG -> android.util.Log.d(tag, message)
+
+            Level.INFO -> android.util.Log.i(tag, message)
+
+            Level.WARN -> android.util.Log.w(tag, message)
+
+            Level.ERROR ->
+                if (error != null) {
+                    android.util.Log.e(tag, message, error)
+                } else {
+                    android.util.Log.e(tag, message)
+                }
+        }
     }
 
-    fun i(tag: String, message: String) {
-        android.util.Log.i(tag, message)
-        capture(INFO, tag, message)
-    }
+    /** Where lines go besides the ring; the default is `android.util.Log`. */
+    @Volatile
+    var sink: Sink = defaultSink
 
-    fun w(tag: String, message: String) {
-        android.util.Log.w(tag, message)
-        capture(WARN, tag, message)
-    }
+    fun d(tag: String, message: String) = write(DEBUG, tag, message)
 
-    fun e(tag: String, message: String) {
-        android.util.Log.e(tag, message)
-        capture(ERROR, tag, message)
-    }
+    fun i(tag: String, message: String) = write(INFO, tag, message)
 
-    fun e(tag: String, message: String, throwable: Throwable) {
-        android.util.Log.e(tag, message, throwable)
-        capture(ERROR, tag, "$message: ${throwable.javaClass.simpleName}")
-    }
+    fun w(tag: String, message: String) = write(WARN, tag, message)
+
+    fun e(tag: String, message: String) = write(ERROR, tag, message)
+
+    fun e(tag: String, message: String, throwable: Throwable) = write(ERROR, tag, "$message: ${throwable.javaClass.simpleName}", throwable)
+
+    /** Debug line whose text is built only when the sink or the ring accepts it. */
+    fun d(tag: String, message: () -> String) = writeLazily(DEBUG, tag, message)
+
+    /** Info line whose text is built only when the sink or the ring accepts it. */
+    fun i(tag: String, message: () -> String) = writeLazily(INFO, tag, message)
+
+    /** Warning whose text is built only when the sink or the ring accepts it. */
+    fun w(tag: String, message: () -> String) = writeLazily(WARN, tag, message)
+
+    /** Error line whose text is built only when the sink or the ring accepts it. */
+    fun e(tag: String, message: () -> String) = writeLazily(ERROR, tag, message)
 
     /** Every retained line, oldest first. */
     fun snapshot(): List<Line> = synchronized(lines) { lines.toList() }
@@ -102,6 +154,19 @@ object BridgeLog {
         WARN -> "warn"
         ERROR -> "error"
         else -> "info"
+    }
+
+    private inline fun writeLazily(level: Int, tag: String, message: () -> String) {
+        if (!accepted(level)) return
+        write(level, tag, message(), null)
+    }
+
+    /** True when either consumer takes a line of [level]; the only gate a lazy message pays. */
+    private fun accepted(level: Int): Boolean = level >= minimumLevel || level >= sinkLevel
+
+    private fun write(level: Int, tag: String, message: String, error: Throwable? = null) {
+        if (level >= sinkLevel) sink.write(Level.of(level), tag, message, error)
+        capture(level, tag, message)
     }
 
     private fun levelLetter(level: Int): String = when (level) {

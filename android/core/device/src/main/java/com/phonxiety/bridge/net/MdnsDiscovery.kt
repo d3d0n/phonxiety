@@ -116,7 +116,7 @@ internal class MdnsDiscovery(
         try {
             service.discoverServices(MdnsAdvertisement.SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, discovery)
         } catch (e: Exception) {
-            BridgeLog.w(TAG, "mDNS discovery failed to start: ${e.javaClass.simpleName}")
+            BridgeLog.w(TAG) { "mDNS discovery failed to start: ${e.javaClass.simpleName}" }
             running = false
             listener = null
         }
@@ -153,11 +153,11 @@ internal class MdnsDiscovery(
             )
         } catch (e: Exception) {
             // NsdManager allows one resolve at a time; a busy stack is not an error worth retrying.
-            BridgeLog.d(TAG, "mDNS resolve skipped: ${e.javaClass.simpleName}")
+            BridgeLog.d(TAG) { "mDNS resolve skipped: ${e.javaClass.simpleName}" }
         }
     }
 
     private companion object {
-        const val TAG = "PhonxietyBridge"
+        const val TAG = "Bridge:mdns"
     }
 }

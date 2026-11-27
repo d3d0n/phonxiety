@@ -4,10 +4,7 @@ import android.telecom.Call
 import com.phonxiety.bridge.model.AppGateway
 import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.model.PairingGate
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -26,14 +23,14 @@ object BridgeRuntime {
     /** Route of the live link, in a form the UI can render. */
     data class Route(val relay: Boolean, val rttMs: Long?)
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope = bridgeScope("phonxiety-runtime")
     private val mutableState = MutableStateFlow(BridgeState())
     private var stateJob: Job? = null
 
     /** The one hot bridge state every surface collects, whether or not the service runs. */
     val state: StateFlow<BridgeState> = mutableState.asStateFlow()
 
-    @Volatile var engine: BridgeEngine? = null
+    @Volatile internal var engine: BridgeEngine? = null
         private set
 
     @Volatile var inCallService: BridgeInCallService? = null
@@ -59,7 +56,7 @@ object BridgeRuntime {
     fun currentRoute(): Route? = engine?.currentRoute()?.let { Route(relay = it.relay, rttMs = it.rttMs) }
 
     /** Installs the service's engine and mirrors its state process-wide. */
-    fun attach(current: BridgeEngine, identity: String) {
+    internal fun attach(current: BridgeEngine, identity: String) {
         stateJob?.cancel()
         engine = current
         PairingGate.install(current, identity)
@@ -69,7 +66,7 @@ object BridgeRuntime {
     }
 
     /** Detaches [current] if it is still the installed engine. */
-    fun detach(current: BridgeEngine) {
+    internal fun detach(current: BridgeEngine) {
         PairingGate.uninstall(current)
         if (engine !== current) return
         stateJob?.cancel()

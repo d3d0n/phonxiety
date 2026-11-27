@@ -71,7 +71,7 @@ internal class LinkSupervisor(
     }
 
     companion object {
-        private const val TAG = "PhonxietyBridge"
+        private const val TAG = "Bridge:link"
 
         /** No host message for longer than this means the peer is gone. */
         const val HOST_TIMEOUT_MS = 10_000L
@@ -268,7 +268,7 @@ internal class LinkSupervisor(
         } catch (t: Throwable) {
             // Building one attempt — a candidate plan or a probe — is itself an
             // attempt: a throw moves to the next dial instead of ending here.
-            BridgeLog.w(TAG, "link attempt creation failed: ${t.javaClass.simpleName}")
+            BridgeLog.w(TAG) { "link attempt creation failed: ${t.javaClass.simpleName}" }
             // No candidate was selected, so the transport is unknown and this
             // never feeds a transport's own recovery accounting.
             factory.attemptEnded(AttemptOutcome.FAILED_BEFORE_OPEN, null)
@@ -295,7 +295,7 @@ internal class LinkSupervisor(
             // Not under the lock: a link may call onOpen before start() returns.
             attempt.start(Listener(attempt))
         } catch (t: Throwable) {
-            BridgeLog.w(TAG, "link attempt start failed: ${t.javaClass.simpleName}")
+            BridgeLog.w(TAG) { "link attempt start failed: ${t.javaClass.simpleName}" }
             handleDown(attempt, "connect_failed")
             runCatching { attempt.cancel() }
             return
@@ -434,7 +434,7 @@ internal class LinkSupervisor(
         val hello = try {
             callbacks.onLinkOpened()
         } catch (t: Throwable) {
-            BridgeLog.w(TAG, "link hello failed: ${t.javaClass.simpleName}")
+            BridgeLog.w(TAG) { "link hello failed: ${t.javaClass.simpleName}" }
             false
         }
         if (!hello) {

@@ -21,7 +21,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
-private const val TAG = "PhonxietyBridge"
+private const val TAG = "Bridge:adb"
 
 /**
  * The device side of the iroh adb tunnel.
@@ -191,7 +191,7 @@ internal class AdbTunnel(private val host: AdbHost = AndroidAdbHost()) {
         } catch (t: CancellationException) {
             throw t
         } catch (t: Throwable) {
-            BridgeLog.w(TAG, "adb tunnel failed: ${t.javaClass.simpleName}")
+            BridgeLog.w(TAG) { "adb tunnel failed: ${t.javaClass.simpleName}" }
         } finally {
             runCatching { send.close() }
             runCatching { recv.close() }

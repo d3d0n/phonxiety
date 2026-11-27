@@ -32,7 +32,6 @@ import com.phonxiety.bridge.model.DeviceActiveCall
 import com.phonxiety.bridge.model.DeviceApiError
 import com.phonxiety.bridge.model.DeviceApiRequest
 import com.phonxiety.bridge.model.DeviceApiResult
-import com.phonxiety.bridge.model.DeviceCapabilities
 import com.phonxiety.bridge.model.DeviceCommand
 import com.phonxiety.bridge.model.DeviceOutbound
 import com.phonxiety.bridge.model.DeviceProtocol
@@ -69,11 +68,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineName
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -106,7 +102,7 @@ import okio.ByteString.Companion.encodeUtf8
  * control, the supervisor keeps the link lifecycle.  The foreground-service
  * notification follows [state].
  */
-class BridgeEngine(
+internal class BridgeEngine(
     context: Context,
     private val config: BridgeConfig
 ) : AppGateway {
@@ -198,7 +194,7 @@ class BridgeEngine(
     private val engineDispatcher = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "phonxiety-state").apply { isDaemon = true }
     }.asCoroutineDispatcher()
-    private val engineScope = CoroutineScope(SupervisorJob() + engineDispatcher + CoroutineName("phonxiety-engine"))
+    private val engineScope = bridgeScope("phonxiety-engine", engineDispatcher)
 
     /** The app API credential; the daemon re-sends it on every connect, so it can change at runtime. */
     @Volatile
@@ -2569,276 +2565,3 @@ class BridgeEngine(
  * unasked, and it reaches the store as a replay, which never stamps a connect time from the
  * engine's own clock.
  */
-internal object StateReportDispatch {
-    /**
-     * [send] repeats the state on the wire, [recordState] makes it durable in the ledger,
-     * [recordCauseKey] remembers the report's cause for dedup, and [replay] tells the store this is
-     * not a new phase transition.
-     */
-    internal class Plan(
-        val send: Boolean,
-        val replay: Boolean,
-        val recordState: Boolean,
-        val recordCauseKey: Boolean
-    )
-
-    /**
-     * Null means there is nothing to do: the wire and the ledger already hold this report.  A new
-     * state is sent once and recorded; a repeated phase is only replayed into the store, except
-     * that an ended call reports again when it gains a different disconnect cause, so the
-     * late cause still reaches the daemon.  That cause is remembered, which keeps the next
-     * identical report quiet.
-     */
-    fun plan(prevState: String?, prevCauseKey: String?, state: String, causeKey: String?): Plan? {
-        if (prevState != state) {
-            return Plan(send = true, replay = false, recordState = true, recordCauseKey = true)
-        }
-        if (state != "ended") {
-            return Plan(send = false, replay = true, recordState = false, recordCauseKey = false)
-        }
-        if (causeKey == null || causeKey == prevCauseKey) return null
-        return Plan(send = true, replay = true, recordState = false, recordCauseKey = true)
-    }
-}
-
-/**
- * The audio of the owned call together with the store stream its stats belong
- * to.  They are one value so every teardown can name the stream it actually
- * detached: a cleanup that finds nothing has nothing to reset.
- */
-internal class AttachedAudio(val audio: PhoneAudio, val stream: AudioStream)
-
-/**
- * Which audio a command may stop.
- *
- * `cancel_actions` exists to interrupt what an action started — the DTMF tone of
- * a keypress.  The Lab test tone is started and stopped by its own
- * `tone_start`/`tone_stop` pair, so routine supervision must leave it running
- * until its scheduled stop; an explicit stop or any teardown still stops both.
- */
-internal class CallAudioCancellation(
-    private val stopActionAudio: (BridgeEngine.OwnedCall) -> Unit,
-    private val stopLabTone: (BridgeEngine.OwnedCall) -> Unit
-) {
-    /** A routine `cancel_actions`: only the tone the action itself started. */
-    fun cancelActions(call: BridgeEngine.OwnedCall) {
-        stopActionAudio(call)
-    }
-
-    /** An explicit stop or a teardown: the action's tone and the Lab tone. */
-    fun stopAll(call: BridgeEngine.OwnedCall) {
-        stopActionAudio(call)
-        stopLabTone(call)
-    }
-}
-
-/**
- * Closes a detached stream's audio and clears its numbers, after the engine lock is released.
- * The stream is gone for good: a later cleanup of the same call finds nothing to reset, and a
- * publish still in flight for it is refused by the store.
- */
-internal fun releaseDetachedAudio(
-    store: EngineStateStore,
-    detached: AttachedAudio?,
-    close: (PhoneAudio?) -> Unit
-) {
-    close(detached?.audio)
-    detached?.let { store.audioReset(it.stream) }
-}
-
-/**
- * One admitted idle-only link action: the iroh link holds it while it recycles
- * the endpoint or reports the link down for a relay-only escalation, and the
- * engine refuses to reserve a call until it is released.  The action is short
- * (null the endpoint, report down); anything long must not hold it.
- */
-internal class IdleLinkAction internal constructor(private val onRelease: () -> Unit) : AutoCloseable {
-    private val released = AtomicBoolean(false)
-
-    /** Ends the action; safe to call more than once and from any thread. */
-    fun release() {
-        if (released.compareAndSet(false, true)) onRelease()
-    }
-
-    override fun close() = release()
-}
-
-/**
- * The door between idle-only link maintenance and call reservation.
- *
- * [lock] is the engine's call-ownership monitor: every read and write of the
- * owned call already happens under it, so an action admitted here can never
- * overlap a reservation, and a dial can never reserve while an action is in
- * flight.  One action runs at a time; [awaitIdle] lets a dial wait the action
- * out instead of failing a command that arrives in the same millisecond.
- */
-internal class CallAdmission {
-    /** The engine's call-ownership lock: one monitor for the owned call and this door. */
-    internal val lock: Any = Any()
-
-    private var actionInFlight = false
-
-    /**
-     * Admits one idle-only action, or null while a call is owned (including
-     * the reservation window) or another action still runs.  [callOwned] is
-     * read under [lock] and must not block.
-     */
-    fun tryBeginIdleLinkAction(callOwned: () -> Boolean): IdleLinkAction? = synchronized(lock) {
-        if (actionInFlight || callOwned()) return null
-        actionInFlight = true
-        IdleLinkAction {
-            synchronized(lock) {
-                actionInFlight = false
-                (lock as Object).notifyAll()
-            }
-        }
-    }
-
-    /**
-     * Waits up to [timeoutMs] for an in-flight action to end; true when the
-     * caller may reserve.  The monitor is released while waiting, so the action
-     * can finish and a link-down abort can proceed meanwhile.
-     */
-    fun awaitIdle(timeoutMs: Long): Boolean {
-        val deadline = System.nanoTime() + timeoutMs * 1_000_000L
-        synchronized(lock) {
-            while (actionInFlight) {
-                val leftMs = (deadline - System.nanoTime()) / 1_000_000L
-                if (leftMs <= 0L) return false
-                try {
-                    (lock as Object).wait(leftMs)
-                } catch (_: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                    return false
-                }
-            }
-            return true
-        }
-    }
-
-    /** True while an action holds the door; the caller holds [lock] to reserve. */
-    fun actionInFlightLocked(): Boolean = actionInFlight
-}
-
-/**
- * What the phone can do inside a bridge call: exactly the two bits the daemon
- * learns from `hello`.  Read from permissions, never from stored state.
- */
-internal data class PhoneCapabilities(
-    val callControl: Boolean,
-    val frameworkAudio: Boolean
-)
-
-/**
- * Remembers the capabilities the last queued `hello` announced.
- *
- * `callControl` and `frameworkAudio` reach the daemon only through `hello`, so
- * a permission granted or revoked while the link is up stays invisible to it
- * until the next handshake.  This watch compares permission samples against the
- * last hello — never against the UI [Capabilities], which [BridgeEngine] also
- * writes with the daemon's voice-control support — and only reports a change
- * that two consecutive samples agree on.
- */
-internal class CapabilityWatch {
-    private var announced: PhoneCapabilities? = null
-
-    /** The last sample that differed from [announced], waiting for the next one. */
-    private var candidate: PhoneCapabilities? = null
-
-    /** The transport accepted a hello carrying [capabilities]. */
-    @Synchronized
-    fun helloSent(capabilities: PhoneCapabilities) {
-        announced = capabilities
-        candidate = null
-    }
-
-    /** The link went down: the next hello announces whatever it finds then. */
-    @Synchronized
-    fun helloGone() {
-        announced = null
-        candidate = null
-    }
-
-    /**
-     * Records one permission sample and says whether the change is stable:
-     * true only when this sample and the one before it agree and both differ
-     * from the last hello.  A sample matching the last hello clears the
-     * candidate, so permissions alternating around the hello never admit a
-     * refresh.  False before the first hello.
-     */
-    @Synchronized
-    fun stableChange(current: PhoneCapabilities): Boolean {
-        if (announced == null || current == announced) {
-            candidate = null
-            return false
-        }
-        val previous = candidate
-        candidate = current
-        return previous == current
-    }
-}
-
-/**
- * Turns a stable capability change into one link refresh.
- *
- * Two consecutive samples must agree and differ from the last hello before a
- * refresh is admitted, so a permission flapping on and off never reconnects.
- * The idle door is taken before the decision and held through the synchronous
- * link-down publication, so a call reserved a moment earlier is never cut by a
- * refresh decided on an older sample; the re-sample under the door re-checks
- * the change has not reverted meanwhile.  A refused door defers: the candidate
- * stays, and the next stable sample decides again.
- */
-internal class CapabilityRefresh(
-    private val watch: CapabilityWatch,
-    private val admission: CallAdmission,
-    private val callOwned: () -> Boolean,
-    private val sample: () -> PhoneCapabilities,
-    private val reconnect: (reason: String) -> Boolean
-) {
-    /**
-     * One sample; true when the link was dropped so the next attempt sends a
-     * hello carrying what the phone can do now.
-     */
-    fun run(): Boolean {
-        if (!watch.stableChange(sample())) return false
-        val action = admission.tryBeginIdleLinkAction(callOwned) ?: return false
-        try {
-            if (!watch.stableChange(sample())) return false
-            return reconnect(CAPABILITIES_CHANGED)
-        } finally {
-            action.close()
-        }
-    }
-
-    companion object {
-        /** Link-down reason: only a fresh hello can tell the daemon otherwise. */
-        const val CAPABILITIES_CHANGED = "capabilities_changed"
-    }
-}
-
-/** The `hello` a link sends first: the phone's identity, call capabilities and preferences. */
-internal fun helloFrame(
-    capabilities: PhoneCapabilities,
-    device: String,
-    bootId: String,
-    busy: Boolean,
-    activeCall: DeviceActiveCall?,
-    preferredCodec: String,
-    maxBitrate: Int,
-    adbTunnel: Boolean
-): DeviceOutbound.Hello = DeviceOutbound.Hello(
-    device = device,
-    bootId = bootId,
-    capabilities = DeviceCapabilities(
-        callControl = capabilities.callControl,
-        frameworkAudio = capabilities.frameworkAudio,
-        busy = busy,
-        linkTest = true,
-        adbTunnel = adbTunnel,
-        audioCodecs = listOf("pcm", "opus")
-    ),
-    activeCall = activeCall,
-    preferredCodec = preferredCodec,
-    maxBitrate = maxBitrate
-)
