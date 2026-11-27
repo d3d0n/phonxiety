@@ -35,15 +35,18 @@ import com.phonxiety.bridge.model.VoiceControls
 import com.phonxiety.bridge.net.CandidateMerge
 import com.phonxiety.bridge.net.LanPathProbe
 import java.io.File
+import java.io.IOException
 import java.io.OutputStream
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestDispatcher
@@ -850,6 +853,37 @@ class LabViewModelTest {
     }
 
     @Test
+    fun `a failed switch write's late read never undoes a newer tap`() = runTest(testDispatcher) {
+        val store = HeldReadFrameTapPreferences(PhoneSettings(frameTap = false))
+        val vm = LabViewModel(api, bridge, store, lanCheck, context).apply {
+            resultRetryDelayMs = 1
+            viewModels += this
+        }
+        advanceUntilIdle()
+
+        // The "on" write fails; its read of the store starts with the off it holds, and waits.
+        store.failNextWrite = true
+        store.holdReads = true
+        vm.setFrameTap(true)
+        runCurrent()
+        assertTrue("the failed write's read started", store.readStarted.isCompleted)
+
+        // Meanwhile the user taps off, then on, and both writes land.
+        store.holdReads = false
+        vm.setFrameTap(false)
+        runCurrent()
+        vm.setFrameTap(true)
+        runCurrent()
+        assertTrue(store.stored.value.frameTap)
+        assertTrue(vm.state.value.frameTap)
+
+        // The old read answers with the off it began with: the newer tap stands.
+        store.releaseRead.complete(Unit)
+        advanceUntilIdle()
+        assertTrue("an old read never undoes a newer tap", vm.state.value.frameTap)
+    }
+
+    @Test
     fun `probe results replace the rows without losing the selection`() = runTest(testDispatcher) {
         api.probeHandler = { candidates ->
             ApiOutcome.Ok(
@@ -1270,6 +1304,36 @@ class GatedFrameTapPreferences(initial: PhoneSettings = PhoneSettings()) : FakeP
         settings.value = next
         frameTapWrites += next.frameTap
         return next
+    }
+}
+
+/**
+ * A store whose next switch write can fail and whose reads, once held, answer with what was stored
+ * when they started: a read still on its way while newer writes land.
+ */
+class HeldReadFrameTapPreferences(initial: PhoneSettings) : PhonePreferences {
+    val stored = MutableStateFlow(initial)
+    var failNextWrite = false
+    var holdReads = false
+    val readStarted = CompletableDeferred<Unit>()
+    val releaseRead = CompletableDeferred<Unit>()
+
+    override val settings: Flow<PhoneSettings> = flow {
+        val snapshot = stored.value
+        if (holdReads) {
+            readStarted.complete(Unit)
+            releaseRead.await()
+        }
+        emit(snapshot)
+    }
+
+    override suspend fun update(block: (PhoneSettings) -> PhoneSettings): PhoneSettings {
+        if (failNextWrite) {
+            failNextWrite = false
+            throw IOException("the store refused the write")
+        }
+        stored.value = block(stored.value)
+        return stored.value
     }
 }
 

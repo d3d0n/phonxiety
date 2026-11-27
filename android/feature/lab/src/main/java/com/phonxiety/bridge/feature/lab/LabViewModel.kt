@@ -94,6 +94,9 @@ class LabViewModel @Inject constructor(
      */
     private var frameTapWrites = 0
 
+    /** Bumped by every tap: an answer, or a failed write's read of the store, applies only to the newest tap. */
+    private var frameTapTaps = 0L
+
     init {
         viewModelScope.launch {
             _state.update { it.copy(link = it.link.copy(history = history.load())) }
@@ -730,6 +733,7 @@ class LabViewModel @Inject constructor(
         if (_state.value.frameTap == enabled) return
         _state.update { it.copy(frameTap = enabled) }
         frameTapWrites++
+        val tap = ++frameTapTaps
         viewModelScope.launch {
             val written = try {
                 phonePreferences.update { it.copy(frameTap = enabled) }
@@ -744,6 +748,8 @@ class LabViewModel @Inject constructor(
             // The last write to land is the choice that stands; an answer to an older tap is not.
             if (frameTapWrites > 0) return@launch
             val settled = written ?: phonePreferences.settings.first()
+            // Reading the store can wait: a tap made meanwhile is newer than whatever it read.
+            if (tap != frameTapTaps) return@launch
             _state.update { it.copy(frameTap = settled.frameTap) }
         }
     }
