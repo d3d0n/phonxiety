@@ -25,15 +25,20 @@ import com.phonxiety.bridge.model.CallState
  *   reply: the daemon answers the composer only after Telecom has already drawn its screen, so the
  *   call is marked as this phone's a moment after the stop. A resumed screen, a deliberate leave, an
  *   exhausted wait for the reply and a hangup all close that opportunity, so a placement reply that
- *   lands late cannot pull the live screen over somebody else's call. A return that lands on a call
- *   that is already ACTIVE retires the answer permit as well: the answered screen was behind it.
+ *   lands late cannot pull the live screen over somebody else's call. A screen showing another call
+ *   is never replaced: the wait keeps watching, without spending the permit, until the
+ *   opportunity's own deadline, and returns once only if that call goes away in time. A return that
+ *   lands on a call that is already ACTIVE retires the answer permit as well: the answered screen
+ *   was behind it.
  * - the answer permit opens at the stop that follows the answer, and only for the call this phone
  *   placed, only if the live screen was seen since then — by the initial return or by the activity
  *   resuming over the placed call — and only while the screen at that stop belongs to no other
  *   call. The wait then looks for ACTIVE (the daemon is a link round-trip behind Telecom's own
  *   transition) for 400 ms plus twelve retries. A call that appears during the wait is never
  *   replaced and does not spend the permit: Telecom does not stop this activity again when that
- *   call ends, so the wait keeps watching until the deadline it opened with. The deadline, a
+ *   call ends, so the wait keeps watching until the deadline it opened with. No tick is scheduled
+ *   past that deadline: the last one is capped at the remaining lifetime, and a tick that reaches
+ *   the deadline closes the wait instead of looking again. The deadline, a
  *   hangup, a resume and a deliberate leave close the wait without spending it, leaving the permit
  *   for this call's own next cover; a return spends it once per call. A resume over an already
  *   ACTIVE call retires it, and a spent permit never opens again, so a later cover (a hold, a
@@ -59,6 +64,13 @@ class CallFrontReturn(
 
     /** Which opportunity the posted attempt belongs to. */
     private var stage = Stage.NONE
+
+    /**
+     * The instant the running answer wait expires, tracked so no tick is scheduled past it.
+     * [LiveCallFront] publishes the wait only through its deadline-checked predicates, so an
+     * adopted wait has its deadline recovered by probing them.
+     */
+    private var answerExpiresAt: Long? = null
 
     /**
      * The placed call's live screen was on the phone's display since the placement: either the
@@ -156,7 +168,8 @@ class CallFrontReturn(
         if (!armed && !LiveCallFront.answerCoverPending(now)) return
         stage = Stage.ANSWER
         attemptsLeft = ANSWER_ATTEMPTS
-        handler.postDelayed(tick, RETURN_DELAY_MS)
+        answerExpiresAt = if (armed) now + LiveCallFront.ANSWER_TTL_MS else answerDeadline(now)
+        scheduleAnswerLook(RETURN_DELAY_MS)
     }
 
     /**
@@ -166,10 +179,12 @@ class CallFrontReturn(
      */
     private fun adoptAnswerWait() {
         if (stage == Stage.ANSWER) return
-        if (!LiveCallFront.answerCoverPending(clock())) return
+        val now = clock()
+        if (!LiveCallFront.answerCoverPending(now)) return
         stage = Stage.ANSWER
         attemptsLeft = ANSWER_ATTEMPTS
-        handler.postDelayed(tick, RETURN_DELAY_MS)
+        answerExpiresAt = answerDeadline(now)
+        scheduleAnswerLook(RETURN_DELAY_MS)
     }
 
     private fun armAnswerCover(now: Long): Boolean {
@@ -217,6 +232,14 @@ class CallFrontReturn(
             LiveCallFront.forget(pending)
             return
         }
+        if (anotherCall()) {
+            // Telecom is showing another call above this one: that screen is not ours to replace.
+            // Keep the permit and keep watching, bounded by the opportunity's own deadline — the
+            // next look closes it once that deadline has passed — and return once only if the
+            // other call goes away in time.
+            handler.postDelayed(tick, RETURN_RETRY_MS)
+            return
+        }
         if (!screenInteractive()) {
             // Nobody would see the return, and the one shot must not survive into a later cover.
             LiveCallFront.forget(pending)
@@ -244,11 +267,18 @@ class CallFrontReturn(
             LiveCallFront.closeAnswerCover()
             return
         }
+        val expiresAt = answerExpiresAt
+        if (expiresAt == null || now >= expiresAt) {
+            // The deadline instant itself is already over: the data layer's inclusive boundary
+            // still accepts a look here, but the opportunity it belonged to is over.
+            LiveCallFront.closeAnswerCover()
+            return
+        }
         if (anotherCall()) {
             // Another call came in over this one: its screen is not ours to replace and the permit
             // is not spent on it. Telecom does not stop this activity again when that call ends, so
             // keep watching until the deadline this wait opened with.
-            handler.postDelayed(tick, RETURN_RETRY_MS)
+            scheduleAnswerLook()
             return
         }
         val current = call()
@@ -292,12 +322,43 @@ class CallFrontReturn(
             return
         }
         attemptsLeft--
-        handler.postDelayed(tick, RETURN_RETRY_MS)
+        scheduleAnswerLook()
+    }
+
+    /**
+     * Posts the next look at the answer wait, never past the wait's deadline. A look that would
+     * reach the deadline closes the wait instead, so nothing is left in the queue at expiry.
+     */
+    private fun scheduleAnswerLook(delay: Long = RETURN_RETRY_MS) {
+        val deadline = answerExpiresAt ?: return
+        val remaining = deadline - clock()
+        if (remaining <= 0L) {
+            LiveCallFront.closeAnswerCover()
+            return
+        }
+        handler.postDelayed(tick, minOf(delay, remaining))
+    }
+
+    /**
+     * The instant the answer wait already open for the placed call expires. [LiveCallFront] only
+     * exposes the wait through its deadline-checked predicate, so the deadline — monotone inside
+     * the next [LiveCallFront.ANSWER_TTL_MS] — is recovered by probing it.
+     */
+    private fun answerDeadline(now: Long): Long {
+        if (!LiveCallFront.answerCoverPending(now)) return now
+        var low = now
+        var high = now + LiveCallFront.ANSWER_TTL_MS
+        while (low < high) {
+            val mid = low + (high - low + 1) / 2
+            if (LiveCallFront.answerCoverPending(mid)) low = mid else high = mid - 1
+        }
+        return low
     }
 
     private fun abandonWait() {
         attemptsLeft = 0
         stage = Stage.NONE
+        answerExpiresAt = null
         handler.removeCallbacks(tick)
     }
 

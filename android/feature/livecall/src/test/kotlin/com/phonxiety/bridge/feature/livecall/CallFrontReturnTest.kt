@@ -474,6 +474,80 @@ class CallFrontReturnTest {
     }
 
     @Test
+    fun anotherCallDuringTheInitialDelayIsNotReplaced() {
+        val front = controller()
+        placed("c1")
+        call = dialing("c1")
+
+        // Telecom's screen is up and this phone placed the call, but the initial delay is still
+        // running when an incoming call arrives over it.
+        front.onStop(canReturn = true)
+        another = true
+        idle(400)
+        assertEquals("another call's screen is in front", 0, returns)
+
+        // It stays in front; the initial permit is not spent on its screen.
+        idle(1_000)
+        assertEquals(0, returns)
+
+        // It ends before the placement opportunity's own deadline: the permit is still there.
+        another = false
+        idle(300)
+        assertEquals(1, returns)
+        assertFalse(LiveCallFront.awaitsCover(now))
+    }
+
+    @Test
+    fun anotherCallOutlastingTheInitialDeadlineSpendsNothing() {
+        val front = controller()
+        placed("c1")
+        call = dialing("c1")
+        front.onStop(canReturn = true)
+        another = true
+        idle(400)
+        assertEquals(0, returns)
+
+        // The other call outlasts the placement opportunity's own deadline: the permit is gone.
+        idle(LiveCallFront.OPPORTUNITY_TTL_MS)
+        assertFalse(LiveCallFront.awaitsCover(now))
+
+        // Its screen ending later cannot pull this call forward either.
+        another = false
+        idle(1_000)
+        assertEquals(0, returns)
+    }
+
+    @Test
+    fun noTickIsLeftAtTheAnswerWaitDeadline() {
+        val front = controller()
+        placed("c1")
+        call = dialing("c1")
+        front.onStop(canReturn = true)
+        idle(400)
+        assertEquals(1, returns)
+        front.onResume()
+
+        // The answer cover is up while another call is in front; the daemon reports the answer.
+        call = dialing("c1")
+        front.onStop(canReturn = true)
+        val openedAt = now
+        another = true
+        call = active("c1")
+        idle(1_000)
+        assertEquals(1, returns)
+
+        // Idle exactly to the wait's own deadline, not past it: the last tick must close the wait
+        // and leave nothing queued after the deadline instant.
+        idle(openedAt + LiveCallFront.ANSWER_TTL_MS - now)
+        assertFalse(LiveCallFront.answerCoverPending(openedAt + LiveCallFront.ANSWER_TTL_MS))
+        assertEquals(
+            "no tick is left at the deadline",
+            Duration.ZERO,
+            shadowOf(Looper.getMainLooper()).nextScheduledTaskTime
+        )
+    }
+
+    @Test
     fun anotherCallWhileThePlacementReplyIsPendingDoesNotReturn() {
         val front = controller()
         LiveCallFront.expectPlacement(now)
