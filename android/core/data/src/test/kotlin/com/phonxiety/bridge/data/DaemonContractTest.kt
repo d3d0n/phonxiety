@@ -10,6 +10,7 @@ import com.phonxiety.bridge.model.AttachmentHeader
 import com.phonxiety.bridge.model.AttachmentOutcome
 import com.phonxiety.bridge.model.CallEvent
 import com.phonxiety.bridge.model.CallEventsPage
+import com.phonxiety.bridge.model.CallId
 import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.CallsPage
 import com.phonxiety.bridge.model.CompatReport
@@ -106,6 +107,11 @@ class DaemonContractTest {
             covered += exchange.methods
             when (outcome) {
                 is Outcome.Download -> assertDownload(exchange.file, contract, outcome, gateway!!)
+
+                is Outcome.Completed -> {
+                    assertEquals(exchange.file + ": status", contract.status, outcome.status)
+                    checker.check(checkNotNull(exchange.descriptor), contract.responseBody, exchange.file)
+                }
 
                 is Outcome.Typed -> when (val typed = outcome.outcome) {
                     is ApiOutcome.Ok<*> -> {
@@ -210,9 +216,12 @@ class DaemonContractTest {
      * reason: an interface method the contracts never touch can silently drift.
      */
     private fun assertMethodCoverage(covered: Set<String>) {
+        // A method with a value-class parameter is compiled under a mangled JVM name
+        // (`pause-<hash>`). The hash changes with the parameter types, so compare the source
+        // name only; the suffix never contains a dash of its own.
         val declared = DaemonApi::class.java.declaredMethods
             .filterNot { it.isSynthetic || it.name.contains('$') }
-            .map { it.name }
+            .map { it.name.substringBefore('-') }
             .toSet()
         val missing = declared - covered - EXEMPT_METHODS.keys
         assertEquals("no exchange exercises these methods: $missing", emptySet<String>(), missing)
@@ -231,7 +240,7 @@ class DaemonContractTest {
         val query: Map<String, String> = (request["query"] as? JsonObject)
             ?.mapValues { it.value.jsonPrimitive.content } ?: emptyMap()
         val requestBody: JsonObject? = request["body"] as? JsonObject
-        val callId: String get() = path.split("/")[4]
+        val callId: CallId get() = CallId(path.split("/")[4])
     }
 
     private data class Captured(
@@ -333,6 +342,9 @@ class DaemonContractTest {
         data class Typed(val outcome: ApiOutcome<*>) : Outcome
 
         data class Download(val result: ApiResult, val sink: ByteArrayOutputStream) : Outcome
+
+        /** A write verb answered with its sealed outcome; only the status is shared with a typed read. */
+        data class Completed(val status: Int) : Outcome
     }
 
     private data class Exchange(
@@ -640,10 +652,10 @@ class DaemonContractTest {
                 Outcome.Typed(api.instruction(c.callId, c.requestBody!!.getValue("text").jsonPrimitive.content))
             },
             Exchange("call_pause_post.json", setOf("pause"), PauseResult.serializer().descriptor) { api, c ->
-                Outcome.Typed(api.pause(c.callId))
+                Outcome.Completed(api.pause(c.callId).status)
             },
             Exchange("call_resume_post.json", setOf("resume"), PauseResult.serializer().descriptor) { api, c ->
-                Outcome.Typed(api.resume(c.callId))
+                Outcome.Completed(api.resume(c.callId).status)
             },
             Exchange("call_summarize_post.json", setOf("summarize"), SummaryResult.serializer().descriptor) { api, c ->
                 Outcome.Typed(api.summarize(c.callId))
@@ -652,23 +664,23 @@ class DaemonContractTest {
                 Outcome.Typed(api.dtmf(c.callId, c.requestBody!!.getValue("digits").jsonPrimitive.content))
             },
             Exchange("call_hangup_post.json", setOf("hangup"), CallSnapshot.serializer().descriptor) { api, c ->
-                Outcome.Typed(api.hangup(c.callId))
+                Outcome.Completed(api.hangup(c.callId).status)
             },
             Exchange("call_marks_get.json", setOf("marks"), MarksResponse.serializer().descriptor) { api, c ->
                 Outcome.Typed(api.marks(c.callId))
             },
             Exchange("call_marks_post.json", setOf("addMark"), MarksResponse.serializer().descriptor) { api, c ->
                 val body = c.requestBody!!
-                Outcome.Typed(
+                Outcome.Completed(
                     api.addMark(
                         c.callId,
                         body.getValue("mark").jsonPrimitive.content,
                         body.textOrNull("note")
-                    )
+                    ).status
                 )
             },
             Exchange("call_delete.json", setOf("deleteCall"), DeleteCallResult.serializer().descriptor) { api, c ->
-                Outcome.Typed(api.deleteCall(c.callId))
+                Outcome.Completed(api.deleteCall(c.callId).status)
             },
             Exchange("call_audio_get.json", setOf("downloadAudio"), paged = true) { api, c ->
                 val sink = ByteArrayOutputStream()

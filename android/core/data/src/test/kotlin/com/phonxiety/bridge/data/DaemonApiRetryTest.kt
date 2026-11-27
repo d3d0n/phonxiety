@@ -4,6 +4,7 @@ import com.phonxiety.bridge.model.AppGateway
 import com.phonxiety.bridge.model.AppGatewaySource
 import com.phonxiety.bridge.model.AttachmentHeader
 import com.phonxiety.bridge.model.AttachmentOutcome
+import com.phonxiety.bridge.model.CallId
 import com.phonxiety.bridge.model.DeviceApiError
 import com.phonxiety.bridge.model.DeviceApiRequest
 import com.phonxiety.bridge.model.DeviceApiResult
@@ -88,14 +89,14 @@ class DaemonApiRetryTest {
 
     @Test
     fun deleteIsNeverRetried() = runTest {
-        val transport = failingTransport { it.deleteCall("call-1") }
+        val transport = failingTransport { it.deleteCall(CallId("call-1")) }
 
         assertEquals(listOf("DELETE"), transport.requests.map { it.first })
     }
 
     @Test
     fun theEventsLongPollIsNeverRetried() = runTest {
-        val transport = failingTransport { it.events("call-1", since = 4, waitSeconds = 20.0) }
+        val transport = failingTransport { it.events(CallId("call-1"), since = 4, waitSeconds = 20.0) }
 
         assertEquals(listOf("GET"), transport.requests.map { it.first })
         assertEquals("/app/v1/calls/call-1/events", transport.requests.single().second)
@@ -105,7 +106,7 @@ class DaemonApiRetryTest {
     fun aDownloadIsNeverRetried() = runTest {
         val transport = ScriptedApi(ApiResult.Failure(503, "link_down", "no"))
 
-        val result = DefaultDaemonApi(transport).downloadAudio("call-1", "m4a", ByteArrayOutputStream())
+        val result = DefaultDaemonApi(transport).downloadAudio(CallId("call-1"), "m4a", ByteArrayOutputStream())
 
         assertTrue(result is ApiResult.Failure)
         assertEquals(1, transport.downloads)

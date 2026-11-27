@@ -89,7 +89,10 @@ internal fun AudioCard(state: LabUiState, callbacks: LabCallbacks) {
             ErrorCard(
                 title = stringResource(R.string.lab_audio_failed),
                 message = failure.message.asString(),
-                output = failure.code
+                kind = failure.kind,
+                output = failure.code,
+                onRetry = callbacks.onPlayTone,
+                onOpenDoctor = callbacks.onOpenDoctor
             )
         }
     }

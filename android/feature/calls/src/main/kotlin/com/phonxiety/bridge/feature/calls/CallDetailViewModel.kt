@@ -3,8 +3,10 @@ package com.phonxiety.bridge.feature.calls
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.phonxiety.bridge.data.ApiOutcome
+import com.phonxiety.bridge.data.DeleteOutcome
+import com.phonxiety.bridge.data.MarkOutcome
 import com.phonxiety.bridge.data.calls.CallsRepository
+import com.phonxiety.bridge.model.CallId
 import com.phonxiety.bridge.model.CallMark
 import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.TranscriptTurn
@@ -105,16 +107,16 @@ class CallDetailViewModel @Inject constructor(
     private val _state = MutableStateFlow(CallDetailUiState())
     val state: StateFlow<CallDetailUiState> = _state.asStateFlow()
 
-    private var boundCallId: String? = null
+    private var boundCallId: CallId? = null
     private var detailJob: Job? = null
     private var refreshJob: Job? = null
     private var transcriptJob: Job? = null
     private var playerJob: Job? = null
 
-    fun bind(callId: String) {
-        if (callId.isBlank() || boundCallId == callId) return
+    fun bind(callId: CallId) {
+        if (callId.value.isBlank() || boundCallId == callId) return
         boundCallId = callId
-        _state.value = CallDetailUiState(callId = callId)
+        _state.value = CallDetailUiState(callId = callId.value)
         detailJob?.cancel()
         transcriptJob?.cancel()
         refreshJob?.cancel()
@@ -168,7 +170,7 @@ class CallDetailViewModel @Inject constructor(
                     loading = if (failure != null) false else it.loading,
                     offline = failure != null && failure.code !in CALL_MISSING_CODES,
                     missing = failure != null && failure.code in CALL_MISSING_CODES && !storedCopy && it.snapshot == null,
-                    error = failure?.let { f -> CallsFailure.of(f.message, f.code) }
+                    error = failure?.let { f -> CallsFailure.of(f.status, f.code, f.message) }
                 )
             }
         }
@@ -188,7 +190,7 @@ class CallDetailViewModel @Inject constructor(
                 it.copy(
                     loadingTranscript = false,
                     hasMoreTranscript = result.hasMore,
-                    error = failure?.let { f -> CallsFailure.of(f.message, f.code) } ?: it.error
+                    error = failure?.let { f -> CallsFailure.of(f.status, f.code, f.message) } ?: it.error
                 )
             }
         }
@@ -200,10 +202,18 @@ class CallDetailViewModel @Inject constructor(
         _state.update { it.copy(marking = true) }
         viewModelScope.launch {
             when (val outcome = repository.addMark(callId, kind)) {
-                is ApiOutcome.Ok -> _state.update { it.copy(marking = false, marks = outcome.value.marks) }
+                is MarkOutcome.Marked -> _state.update { it.copy(marking = false, marks = outcome.marks) }
 
-                is ApiOutcome.Failure -> _state.update {
-                    it.copy(marking = false, error = CallsFailure.of(outcome.message, outcome.code))
+                is MarkOutcome.CallNotFound -> _state.update {
+                    it.copy(marking = false, error = CallsFailure.of(outcome.status, outcome.code, outcome.message))
+                }
+
+                is MarkOutcome.Refused -> _state.update {
+                    it.copy(marking = false, error = CallsFailure.of(outcome.status, outcome.code, outcome.message))
+                }
+
+                is MarkOutcome.Unknown -> _state.update {
+                    it.copy(marking = false, error = CallsFailure.of(outcome.status, outcome.code, outcome.message))
                 }
             }
         }
@@ -234,14 +244,22 @@ class CallDetailViewModel @Inject constructor(
         }
         viewModelScope.launch {
             when (val outcome = repository.delete(callId)) {
-                is ApiOutcome.Ok -> {
+                is DeleteOutcome.Deleted -> {
                     player.release()
                     _state.update { it.copy(deleting = false, deleted = true) }
                     onDeleted()
                 }
 
-                is ApiOutcome.Failure -> _state.update {
-                    it.copy(deleting = false, error = CallsFailure.of(outcome.message, outcome.code))
+                is DeleteOutcome.NotFound -> _state.update {
+                    it.copy(deleting = false, error = CallsFailure.of(outcome.status, outcome.code, outcome.message))
+                }
+
+                is DeleteOutcome.CallActive -> _state.update {
+                    it.copy(deleting = false, error = CallsFailure.of(outcome.status, outcome.code, outcome.message))
+                }
+
+                is DeleteOutcome.Unknown -> _state.update {
+                    it.copy(deleting = false, error = CallsFailure.of(outcome.status, outcome.code, outcome.message))
                 }
             }
         }
@@ -252,7 +270,7 @@ class CallDetailViewModel @Inject constructor(
         val callId = boundCallId ?: return
         val current = _state.value.audio
         if (current.downloading) return
-        val file = CallSharing.audioFile(context, callId)
+        val file = CallSharing.audioFile(context, callId.value)
         if (file.exists() && file.length() > 0) {
             prepare(file)
             return
@@ -266,7 +284,7 @@ class CallDetailViewModel @Inject constructor(
                 }
 
                 is com.phonxiety.bridge.data.ApiResult.Failure -> _state.update {
-                    it.copy(audio = it.audio.copy(downloading = false, error = CallsFailure.of(result.message, result.code)))
+                    it.copy(audio = it.audio.copy(downloading = false, error = CallsFailure.of(result.status, result.code, result.message)))
                 }
             }
         }

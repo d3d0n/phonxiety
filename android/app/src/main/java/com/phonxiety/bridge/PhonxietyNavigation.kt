@@ -131,20 +131,22 @@ internal fun PhonxietyNavigationHost(
         entryIn<CallsKey>(section) {
             CallsRoute(
                 onOpenCall = { callId -> navigator.push(CallDetailKey(callId)) },
-                onNewCall = { navigator.push(ComposerKey()) }
+                onNewCall = { navigator.push(ComposerKey()) },
+                onOpenDoctor = { navigator.push(DoctorKey) }
             )
         }
         entryIn<LabKey>(section) {
             LabRoute(
                 onBack = onBack,
-                onOpenCall = { callId -> navigator.push(CallDetailKey(callId)) }
+                onOpenCall = { callId -> navigator.push(CallDetailKey(callId)) },
+                onOpenDoctor = { navigator.push(DoctorKey) }
             )
         }
         entryIn<SettingsKey>(section) {
-            SettingsRoute(onBack = onBack)
+            SettingsRoute(onBack = onBack, onOpenDoctor = { navigator.push(DoctorKey) })
         }
         entryIn<UpdatesKey>(section) {
-            UpdatesRoute(onBack = onBack)
+            UpdatesRoute(onBack = onBack, onOpenDoctor = { navigator.push(DoctorKey) })
         }
         entryIn<DoctorKey>(section) {
             DoctorRoute(onBack = onBack)
@@ -153,7 +155,8 @@ internal fun PhonxietyNavigationHost(
             LiveCallRoute(
                 callId = key.callId,
                 onBack = onBack,
-                onOpenDetail = { callId -> navigator.push(CallDetailKey(callId)) }
+                onOpenDetail = { callId -> navigator.push(CallDetailKey(callId)) },
+                onOpenDoctor = { navigator.push(DoctorKey) }
             )
         }
         entryIn<CallDetailKey>(section) { key ->
@@ -170,7 +173,8 @@ internal fun PhonxietyNavigationHost(
                         )
                     )
                 },
-                onOpenLive = { callId -> navigator.push(LiveCallKey(callId)) }
+                onOpenLive = { callId -> navigator.push(LiveCallKey(callId)) },
+                onOpenDoctor = { navigator.push(DoctorKey) }
             )
         }
         entryIn<ComposerKey>(section) { key ->
@@ -180,6 +184,7 @@ internal fun PhonxietyNavigationHost(
                     // The composer is replaced by the call it placed: back returns to the list.
                     navigator.replaceTop(LiveCallKey(callId))
                 },
+                onOpenDoctor = { navigator.push(DoctorKey) },
                 intent = ComposerIntent(
                     destination = key.destination,
                     goal = key.goal,

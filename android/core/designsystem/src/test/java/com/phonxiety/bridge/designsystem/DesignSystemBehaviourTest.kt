@@ -24,6 +24,7 @@ import com.phonxiety.bridge.designsystem.component.LinkPathPill
 import com.phonxiety.bridge.designsystem.component.PrimaryActionButton
 import com.phonxiety.bridge.designsystem.component.ScreenScaffold
 import com.phonxiety.bridge.designsystem.component.ToggleRow
+import com.phonxiety.bridge.model.FailureKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Rule
@@ -89,6 +90,7 @@ class DesignSystemBehaviourTest {
                 ErrorCard(
                     title = "The update failed",
                     message = "The installer refused the package.",
+                    kind = FailureKind.TRANSPORT,
                     actionLabel = "Try again",
                     onAction = { action++ },
                     dismissLabel = "Dismiss",
@@ -102,6 +104,61 @@ class DesignSystemBehaviourTest {
             assertEquals(1, action)
             assertEquals(1, dismiss)
         }
+    }
+
+    @Test
+    fun aTransportFailureOffersARetry() {
+        var retries = 0
+        composeRule.setContent {
+            PhonxietyTheme(dynamicColor = false) {
+                ErrorCard(
+                    title = "The bridge is not answering",
+                    message = "The request did not reach the daemon.",
+                    kind = FailureKind.TRANSPORT,
+                    onRetry = { retries++ },
+                    onOpenDoctor = {}
+                )
+            }
+        }
+        composeRule.onNodeWithText("Retry").performClick()
+        composeRule.runOnIdle { assertEquals(1, retries) }
+    }
+
+    @Test
+    fun aDaemonFailureOffersTheDoctor() {
+        var doctors = 0
+        composeRule.setContent {
+            PhonxietyTheme(dynamicColor = false) {
+                ErrorCard(
+                    title = "The daemon failed",
+                    message = "The daemon could not answer.",
+                    kind = FailureKind.DAEMON,
+                    onRetry = {},
+                    onOpenDoctor = { doctors++ }
+                )
+            }
+        }
+        composeRule.onNodeWithText("Open Doctor").performClick()
+        composeRule.runOnIdle { assertEquals(1, doctors) }
+    }
+
+    @Test
+    fun aRefusedRequestOnlyExplainsItself() {
+        var actions = 0
+        composeRule.setContent {
+            PhonxietyTheme(dynamicColor = false) {
+                ErrorCard(
+                    title = "The request was refused",
+                    message = "The daemon declined it.",
+                    kind = FailureKind.REFUSED,
+                    onRetry = { actions++ },
+                    onOpenDoctor = { actions++ }
+                )
+            }
+        }
+        composeRule.onNodeWithText("Retry").assertDoesNotExist()
+        composeRule.onNodeWithText("Open Doctor").assertDoesNotExist()
+        composeRule.runOnIdle { assertEquals(0, actions) }
     }
 
     @Test
@@ -150,8 +207,10 @@ class DesignSystemBehaviourTest {
                 ErrorCard(
                     title = "The update failed",
                     message = "The installer refused the package.",
-                    actionLabel = "Retry"
-                ) { retries++ }
+                    kind = FailureKind.TRANSPORT,
+                    actionLabel = "Retry",
+                    onAction = { retries++ }
+                )
             }
         }
         composeRule.onNodeWithText("Retry").performClick()
@@ -166,8 +225,8 @@ class DesignSystemBehaviourTest {
         composeRule.setContent {
             PhonxietyTheme(dynamicColor = false) {
                 Column {
-                    ErrorCard("Label only", "No callback.", actionLabel = "Retry")
-                    ErrorCard("Null callback", "Explicitly none.", onAction = null)
+                    ErrorCard("Label only", "No callback.", kind = FailureKind.TRANSPORT, actionLabel = "Retry")
+                    ErrorCard("Null callback", "Explicitly none.", kind = FailureKind.TRANSPORT, onAction = null)
                 }
             }
         }

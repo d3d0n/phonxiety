@@ -28,6 +28,7 @@ import com.phonxiety.bridge.designsystem.asString
 import com.phonxiety.bridge.designsystem.component.ErrorCard
 import com.phonxiety.bridge.designsystem.component.PrimaryActionButton
 import com.phonxiety.bridge.designsystem.component.SheetScaffold
+import com.phonxiety.bridge.model.FailureKind
 
 /**
  * The pairing rejection when no pairing surface is on screen. It carries the same localized words as
@@ -37,6 +38,7 @@ import com.phonxiety.bridge.designsystem.component.SheetScaffold
 @Composable
 internal fun PairingRejectionNote(error: String, onDismiss: () -> Unit) {
     ErrorCard(
+        kind = FailureKind.REFUSED,
         title = stringResource(R.string.onboarding_pair_rejected_title),
         message = pairingRejectionText(error).asString(),
         dismissLabel = stringResource(R.string.onboarding_action_dismiss),

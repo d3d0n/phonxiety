@@ -5,8 +5,9 @@ import android.content.Context
 import android.content.Intent
 import android.service.quicksettings.TileService
 import com.phonxiety.bridge.BridgeRuntime
-import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.DaemonApi
+import com.phonxiety.bridge.data.HangUpOutcome
+import com.phonxiety.bridge.model.CallId
 import com.phonxiety.bridge.model.CallSummary
 import com.phonxiety.bridge.model.LinkState
 import dagger.hilt.EntryPoint
@@ -60,7 +61,7 @@ object CallEnd {
         context: Context,
         callId: String? = BridgeRuntime.state.value.call?.callId,
         linkUp: Boolean = BridgeRuntime.state.value.link is LinkState.Up,
-        daemon: suspend () -> ApiOutcome<*>? = { callId?.let { id -> daemonApiOrNull(context)?.hangup(id) } },
+        daemon: suspend () -> HangUpOutcome? = { callId?.let { id -> daemonApiOrNull(context)?.hangup(CallId(id)) } },
         local: suspend (String?) -> Unit = { id -> BridgeRuntime.endOwnedCall(id) }
     ) {
         if (callId != null && linkUp) {
@@ -72,7 +73,7 @@ object CallEnd {
                 // The daemon's end failed; the call the engine owns is still there to end.
                 null
             }
-            if (outcome is ApiOutcome.Ok) return
+            if (outcome is HangUpOutcome.HungUp) return
         }
         // The id captured on entry: a call that takes over the line while the
         // daemon request waits must not become the call this hang-up ends.

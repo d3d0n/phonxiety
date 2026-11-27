@@ -16,6 +16,7 @@ import com.phonxiety.bridge.data.DaemonApi
 import com.phonxiety.bridge.data.LiveCallFront
 import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.BridgeState
+import com.phonxiety.bridge.model.CallId
 import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.LinkTestResult
 import com.phonxiety.bridge.model.PairingGate
@@ -395,7 +396,7 @@ class LabViewModel @Inject constructor(
         if (!current.audioEnabled || current.audio.busy) return
         _state.update { it.copy(audio = it.audio.copy(busy = true, error = null)) }
         viewModelScope.launch {
-            when (val outcome = api.loopback(enabled, current.callId)) {
+            when (val outcome = api.loopback(enabled, current.callId?.let(::CallId))) {
                 is ApiOutcome.Ok -> _state.update {
                     it.copy(
                         audio = it.audio.copy(
@@ -422,7 +423,7 @@ class LabViewModel @Inject constructor(
         if (!current.audioEnabled || current.audio.busy) return
         _state.update { it.copy(audio = it.audio.copy(busy = true, error = null)) }
         viewModelScope.launch {
-            when (val outcome = api.tone(current.audio.toneHz, current.audio.toneDbfs, TONE_SECONDS, current.callId)) {
+            when (val outcome = api.tone(current.audio.toneHz, current.audio.toneDbfs, TONE_SECONDS, current.callId?.let(::CallId))) {
                 is ApiOutcome.Ok -> _state.update {
                     it.copy(
                         audio = it.audio.copy(
@@ -595,7 +596,7 @@ class LabViewModel @Inject constructor(
         // outlives this is not one this screen is going to see finish.
         while (isCurrent(generation, callId)) {
             polls++
-            when (val outcome = api.call(callId)) {
+            when (val outcome = api.call(CallId(callId))) {
                 is ApiOutcome.Ok -> {
                     record = outcome.value
                     failure = null
@@ -632,7 +633,7 @@ class LabViewModel @Inject constructor(
             if (record?.resultStatus == RESULT_READY || attempt >= RESULT_ATTEMPTS) break
             attempt++
             delay(resultRetryDelayMs)
-            when (val outcome = api.call(callId)) {
+            when (val outcome = api.call(CallId(callId))) {
                 is ApiOutcome.Ok -> {
                     record = outcome.value
                     failure = null
@@ -812,7 +813,7 @@ class LabViewModel @Inject constructor(
                                 it.copy(
                                     diagnostics = it.diagnostics.copy(
                                         exporting = false,
-                                        error = LabFailure.of(downloaded.message, downloaded.code)
+                                        error = LabFailure.of(downloaded.status, downloaded.code, downloaded.message)
                                     )
                                 )
                             }
@@ -886,7 +887,7 @@ class LabViewModel @Inject constructor(
     }
 
     /** The daemon's failure as the screen shows it: the sentence, then the code behind details. */
-    private fun ApiOutcome.Failure.failure(): LabFailure = LabFailure.of(message, code)
+    private fun ApiOutcome.Failure.failure(): LabFailure = LabFailure.of(status, code, message)
 
     private fun CodecProfile.step(): UiText = when {
         codec == "opus" && bitrate != null -> UiText.Res(R.string.lab_trial_step_opus, listOf(bitrate / 1_000))

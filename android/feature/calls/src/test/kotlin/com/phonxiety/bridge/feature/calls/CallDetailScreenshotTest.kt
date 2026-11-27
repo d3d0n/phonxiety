@@ -41,6 +41,7 @@ import com.phonxiety.bridge.designsystem.formatPhoneNumber
 import com.phonxiety.bridge.designsystem.testing.Screenshot
 import com.phonxiety.bridge.designsystem.testing.assertAccessible
 import com.phonxiety.bridge.designsystem.testing.pinAnimationFrame
+import com.phonxiety.bridge.model.CallId
 import com.phonxiety.bridge.model.CallMark
 import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.TranscriptTurn

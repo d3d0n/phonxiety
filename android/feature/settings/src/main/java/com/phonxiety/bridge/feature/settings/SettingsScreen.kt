@@ -92,13 +92,15 @@ data class SettingsCallbacks(
     val onConnectionMode: (String) -> Unit = {},
     val onRelayMode: (String) -> Unit = {},
     val onRelayUrls: (String) -> Unit = {},
-    val onRefreshCandidates: () -> Unit = {}
+    val onRefreshCandidates: () -> Unit = {},
+    val onOpenDoctor: () -> Unit = {}
 )
 
 /** Settings and auto-tune; the daemon's values and the phone's own, side by side. */
 @Composable
 fun SettingsRoute(
     onBack: () -> Unit,
+    onOpenDoctor: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
@@ -138,7 +140,8 @@ fun SettingsRoute(
             onConnectionMode = viewModel::setConnectionMode,
             onRelayMode = viewModel::setRelayMode,
             onRelayUrls = viewModel::setRelayUrls,
-            onRefreshCandidates = viewModel::refreshCandidates
+            onRefreshCandidates = viewModel::refreshCandidates,
+            onOpenDoctor = onOpenDoctor
         ),
         snackbarHost = { SnackbarHost(snackbar) },
         modifier = modifier
@@ -275,7 +278,10 @@ private fun ConnectionCard(phone: PhoneSettings, connection: ConnectionUi, callb
             ErrorCard(
                 title = stringResource(R.string.settings_connection_addresses_error_title),
                 message = stringResource(R.string.settings_connection_addresses_error_message),
-                output = it.asString()
+                kind = connection.errorKind,
+                output = it.asString(),
+                onRetry = callbacks.onRefreshCandidates,
+                onOpenDoctor = callbacks.onOpenDoctor
             )
         }
         if (connection.candidates.isEmpty()) {
@@ -488,7 +494,10 @@ private fun DaemonCard(daemon: DaemonSettingsUi, callbacks: SettingsCallbacks) {
                 message = stringResource(
                     if (daemon.errorOnSave) R.string.settings_daemon_save_error_message else R.string.settings_daemon_error_message
                 ),
-                output = it.asString()
+                kind = daemon.errorKind,
+                output = it.asString(),
+                onRetry = callbacks.onRefreshDaemon,
+                onOpenDoctor = callbacks.onOpenDoctor
             )
         }
         if (daemon.changesApplied.isNotEmpty()) {

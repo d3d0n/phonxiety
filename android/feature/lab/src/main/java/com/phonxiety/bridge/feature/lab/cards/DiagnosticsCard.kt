@@ -43,7 +43,10 @@ internal fun DiagnosticsCard(diagnostics: DiagnosticsUi, callbacks: LabCallbacks
             ErrorCard(
                 title = stringResource(R.string.lab_diagnostics_failed),
                 message = failure.message.asString(),
-                output = failure.code
+                kind = failure.kind,
+                output = failure.code,
+                onRetry = callbacks.onLoadDiagnostics,
+                onOpenDoctor = callbacks.onOpenDoctor
             )
         }
         diagnostics.bundleId?.let {

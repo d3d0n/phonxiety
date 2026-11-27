@@ -3,7 +3,13 @@ package com.phonxiety.bridge.feature.settings
 import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.ApiResult
 import com.phonxiety.bridge.data.DaemonApi
+import com.phonxiety.bridge.data.DeleteOutcome
+import com.phonxiety.bridge.data.HangUpOutcome
+import com.phonxiety.bridge.data.MarkOutcome
+import com.phonxiety.bridge.data.PauseOutcome
+import com.phonxiety.bridge.data.ResumeOutcome
 import com.phonxiety.bridge.model.CallEventsPage
+import com.phonxiety.bridge.model.CallId
 import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.CallsPage
 import com.phonxiety.bridge.model.CompatReport
@@ -42,8 +48,8 @@ open class FakeDaemonApi : DaemonApi {
     var probeHandler: suspend (List<String>?) -> ApiOutcome<ProbeResult> = { unset("probe") }
     var settingsHandler: suspend () -> ApiOutcome<SettingsSnapshot> = { unset("settings") }
     var putSettingsHandler: suspend (JsonObject) -> ApiOutcome<SettingsUpdate> = { unset("putSettings") }
-    var loopbackHandler: suspend (Boolean, String?) -> ApiOutcome<LoopbackResult> = { _, _ -> unset("loopback") }
-    var toneHandler: suspend (Int?, Double?, Double?, String?) -> ApiOutcome<ToneResult> =
+    var loopbackHandler: suspend (Boolean, CallId?) -> ApiOutcome<LoopbackResult> = { _, _ -> unset("loopback") }
+    var toneHandler: suspend (Int?, Double?, Double?, CallId?) -> ApiOutcome<ToneResult> =
         { _, _, _, _ -> unset("tone") }
     var testCallHandler: suspend (TestCallRequest) -> ApiOutcome<CallSnapshot> = { unset("testCall") }
     var diagnosticsHandler: suspend () -> ApiOutcome<JsonObject> = { unset("diagnostics") }
@@ -68,9 +74,9 @@ open class FakeDaemonApi : DaemonApi {
         return putSettingsHandler(values)
     }
 
-    override suspend fun loopback(enabled: Boolean, callId: String?): ApiOutcome<LoopbackResult> = loopbackHandler(enabled, callId)
+    override suspend fun loopback(enabled: Boolean, callId: CallId?): ApiOutcome<LoopbackResult> = loopbackHandler(enabled, callId)
 
-    override suspend fun tone(hz: Int?, dbfs: Double?, seconds: Double?, callId: String?): ApiOutcome<ToneResult> = toneHandler(hz, dbfs, seconds, callId)
+    override suspend fun tone(hz: Int?, dbfs: Double?, seconds: Double?, callId: CallId?): ApiOutcome<ToneResult> = toneHandler(hz, dbfs, seconds, callId)
 
     override suspend fun testCall(request: TestCallRequest): ApiOutcome<CallSnapshot> = testCallHandler(request)
 
@@ -87,24 +93,24 @@ open class FakeDaemonApi : DaemonApi {
     override suspend fun calls(limit: Int?, offset: Int?, before: Double?, outcome: String?, farEnd: String?): ApiOutcome<CallsPage> = unset("calls")
     override suspend fun placeCall(request: PlaceCallRequest): ApiOutcome<CallSnapshot> = unset("placeCall")
     override suspend fun validateCall(request: PlaceCallRequest): ApiOutcome<ValidationResult> = unset("validateCall")
-    override suspend fun call(callId: String): ApiOutcome<CallSnapshot> = unset("call")
-    override suspend fun transcript(callId: String, cursor: Long?, limit: Int?): ApiOutcome<TranscriptPage> = unset("transcript")
-    override suspend fun events(callId: String, since: Long?, waitSeconds: Double?): ApiOutcome<CallEventsPage> = unset("events")
-    override suspend fun instruction(callId: String, text: String): ApiOutcome<InstructionResult> = unset("instruction")
-    override suspend fun pause(callId: String): ApiOutcome<PauseResult> = unset("pause")
-    override suspend fun resume(callId: String): ApiOutcome<PauseResult> = unset("resume")
-    override suspend fun summarize(callId: String): ApiOutcome<SummaryResult> = unset("summarize")
-    override suspend fun dtmf(callId: String, digits: String): ApiOutcome<DtmfResult> = unset("dtmf")
-    override suspend fun hangup(callId: String): ApiOutcome<CallSnapshot> = unset("hangup")
-    override suspend fun marks(callId: String): ApiOutcome<MarksResponse> = unset("marks")
-    override suspend fun addMark(callId: String, mark: String, note: String?): ApiOutcome<MarksResponse> = unset("addMark")
-    override suspend fun deleteCall(callId: String): ApiOutcome<DeleteCallResult> = unset("deleteCall")
+    override suspend fun call(callId: CallId): ApiOutcome<CallSnapshot> = unset("call")
+    override suspend fun transcript(callId: CallId, cursor: Long?, limit: Int?): ApiOutcome<TranscriptPage> = unset("transcript")
+    override suspend fun events(callId: CallId, since: Long?, waitSeconds: Double?): ApiOutcome<CallEventsPage> = unset("events")
+    override suspend fun instruction(callId: CallId, text: String): ApiOutcome<InstructionResult> = unset("instruction")
+    override suspend fun pause(callId: CallId): PauseOutcome = error("pause")
+    override suspend fun resume(callId: CallId): ResumeOutcome = error("resume")
+    override suspend fun summarize(callId: CallId): ApiOutcome<SummaryResult> = unset("summarize")
+    override suspend fun dtmf(callId: CallId, digits: String): ApiOutcome<DtmfResult> = unset("dtmf")
+    override suspend fun hangup(callId: CallId): HangUpOutcome = error("hangup")
+    override suspend fun marks(callId: CallId): ApiOutcome<MarksResponse> = unset("marks")
+    override suspend fun addMark(callId: CallId, mark: String, note: String?): MarkOutcome = error("addMark")
+    override suspend fun deleteCall(callId: CallId): DeleteOutcome = error("deleteCall")
     override suspend fun doctor(): ApiOutcome<DoctorReport> = unset("doctor")
     override suspend fun doctorFix(fix: String): ApiOutcome<DoctorFixResult> = unset("doctorFix")
     override suspend fun updateManifest(channel: String?): ApiOutcome<JsonObject> = unset("updateManifest")
     override suspend fun compat(appApi: Int?, protocol: Int?): ApiOutcome<CompatReport> = unset("compat")
     override suspend fun rotatePair(rotateDeviceToken: Boolean): ApiOutcome<RotateResult> = unset("rotatePair")
-    override suspend fun downloadAudio(callId: String, format: String, sink: OutputStream): ApiResult = ApiResult.Failure(503, "unset", "downloadAudio")
+    override suspend fun downloadAudio(callId: CallId, format: String, sink: OutputStream): ApiResult = ApiResult.Failure(503, "unset", "downloadAudio")
 
     override suspend fun downloadUpdateArtifact(name: String, sink: OutputStream): ApiResult = ApiResult.Failure(503, "unset", "downloadUpdateArtifact")
 }

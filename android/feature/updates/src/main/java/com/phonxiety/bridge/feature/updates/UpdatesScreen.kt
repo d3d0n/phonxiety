@@ -29,11 +29,13 @@ import com.phonxiety.bridge.designsystem.component.LoadingState
 import com.phonxiety.bridge.designsystem.component.ScreenScaffold
 import com.phonxiety.bridge.designsystem.component.StatusPill
 import com.phonxiety.bridge.designsystem.component.StatusTone
+import com.phonxiety.bridge.model.FailureKind
 
 /** The Updates entry point; the app host only supplies navigation. */
 @Composable
 fun UpdatesRoute(
     onBack: () -> Unit,
+    onOpenDoctor: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: UpdatesViewModel = hiltViewModel()
 ) {
@@ -51,6 +53,7 @@ fun UpdatesRoute(
         onDismissRollback = viewModel::dismissRollbackConfirmation,
         onDismissRollbackRecovery = viewModel::dismissRollbackRecovery,
         onDismiss = viewModel::dismiss,
+        onOpenDoctor = onOpenDoctor,
         modifier = modifier
     )
 }
@@ -78,6 +81,7 @@ fun UpdatesScreen(
     onDismissRollback: () -> Unit,
     onDismissRollbackRecovery: () -> Unit,
     onDismiss: () -> Unit,
+    onOpenDoctor: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Box(modifier = modifier.fillMaxSize()) {
@@ -111,7 +115,7 @@ fun UpdatesScreen(
                 when {
                     state.loading && check == null -> LoadingState(stringResource(R.string.updates_loading))
 
-                    check?.error != null -> CheckErrorCard(check, onRefresh)
+                    check?.error != null -> CheckErrorCard(check, onRefresh, onOpenDoctor)
 
                     verdict != null -> {
                         CompatibilityCard(verdict)
@@ -205,7 +209,7 @@ private fun HeaderStatus(state: UpdatesUiState) {
 }
 
 @Composable
-private fun CheckErrorCard(check: UpdateCheck, onRefresh: () -> Unit) {
+private fun CheckErrorCard(check: UpdateCheck, onRefresh: () -> Unit, onOpenDoctor: () -> Unit) {
     val title = when (check.error) {
         UpdateCheckError.LINK_DOWN -> stringResource(R.string.updates_error_link_title)
         UpdateCheckError.NO_MANIFEST -> stringResource(R.string.updates_error_no_manifest_title)
@@ -222,13 +226,19 @@ private fun CheckErrorCard(check: UpdateCheck, onRefresh: () -> Unit) {
     }
     // The one command that fixes a missing document is a separate code line, shown open.
     val command = check.error == UpdateCheckError.NO_MANIFEST
+    val kind = when (check.error) {
+        UpdateCheckError.LINK_DOWN -> FailureKind.TRANSPORT
+        UpdateCheckError.UNKNOWN_CHANNEL -> FailureKind.REFUSED
+        UpdateCheckError.NO_MANIFEST, UpdateCheckError.MANIFEST_INVALID, null -> FailureKind.DAEMON
+    }
     ErrorCard(
         title = title,
         message = message,
+        kind = kind,
         output = if (command) stringResource(R.string.updates_command_publish) else check.detail,
         initiallyExpanded = command,
-        actionLabel = stringResource(R.string.updates_check_again),
-        onAction = onRefresh
+        onRetry = onRefresh,
+        onOpenDoctor = onOpenDoctor
     )
 }
 

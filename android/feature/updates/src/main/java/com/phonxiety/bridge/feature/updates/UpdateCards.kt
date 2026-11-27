@@ -36,6 +36,7 @@ import com.phonxiety.bridge.designsystem.component.SectionCard
 import com.phonxiety.bridge.designsystem.component.StatusPill
 import com.phonxiety.bridge.designsystem.component.StatusTone
 import com.phonxiety.bridge.designsystem.privilegedTitle
+import com.phonxiety.bridge.model.FailureKind
 
 @Composable
 internal fun CompatibilityCard(verdict: UpdateVerdict) {
@@ -312,12 +313,14 @@ internal fun InstallFailureCard(
     retryLabel: String,
     onRetry: () -> Unit,
     onDismiss: () -> Unit,
-    inlineDetail: Boolean = false
+    inlineDetail: Boolean = false,
+    kind: FailureKind = FailureKind.DAEMON
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         ErrorCard(
             title = title,
             message = if (callActive) "$message\n\n$blockedCopy" else message,
+            kind = kind,
             output = detail.takeUnless { inlineDetail },
             actionLabel = retryLabel.takeUnless { callActive },
             onAction = onRetry.takeUnless { callActive },

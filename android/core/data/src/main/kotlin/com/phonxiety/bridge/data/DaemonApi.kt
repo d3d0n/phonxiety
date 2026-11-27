@@ -1,6 +1,7 @@
 package com.phonxiety.bridge.data
 
 import com.phonxiety.bridge.model.CallEventsPage
+import com.phonxiety.bridge.model.CallId
 import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.CallSummary
 import com.phonxiety.bridge.model.CallsPage
@@ -86,37 +87,37 @@ interface DaemonApi {
 
     suspend fun testCall(request: TestCallRequest): ApiOutcome<CallSnapshot>
 
-    suspend fun call(callId: String): ApiOutcome<CallSnapshot>
+    suspend fun call(callId: CallId): ApiOutcome<CallSnapshot>
 
-    suspend fun transcript(callId: String, cursor: Long? = null, limit: Int? = null): ApiOutcome<TranscriptPage>
+    suspend fun transcript(callId: CallId, cursor: Long? = null, limit: Int? = null): ApiOutcome<TranscriptPage>
 
-    suspend fun events(callId: String, since: Long? = null, waitSeconds: Double? = null): ApiOutcome<CallEventsPage>
+    suspend fun events(callId: CallId, since: Long? = null, waitSeconds: Double? = null): ApiOutcome<CallEventsPage>
 
-    suspend fun instruction(callId: String, text: String): ApiOutcome<InstructionResult>
+    suspend fun instruction(callId: CallId, text: String): ApiOutcome<InstructionResult>
 
-    suspend fun pause(callId: String): ApiOutcome<PauseResult>
+    suspend fun pause(callId: CallId): PauseOutcome
 
-    suspend fun resume(callId: String): ApiOutcome<PauseResult>
+    suspend fun resume(callId: CallId): ResumeOutcome
 
-    suspend fun summarize(callId: String): ApiOutcome<SummaryResult>
+    suspend fun summarize(callId: CallId): ApiOutcome<SummaryResult>
 
-    suspend fun dtmf(callId: String, digits: String): ApiOutcome<DtmfResult>
+    suspend fun dtmf(callId: CallId, digits: String): ApiOutcome<DtmfResult>
 
-    suspend fun hangup(callId: String): ApiOutcome<CallSnapshot>
+    suspend fun hangup(callId: CallId): HangUpOutcome
 
-    suspend fun marks(callId: String): ApiOutcome<MarksResponse>
+    suspend fun marks(callId: CallId): ApiOutcome<MarksResponse>
 
-    suspend fun addMark(callId: String, mark: String, note: String? = null): ApiOutcome<MarksResponse>
+    suspend fun addMark(callId: CallId, mark: String, note: String? = null): MarkOutcome
 
-    suspend fun deleteCall(callId: String): ApiOutcome<DeleteCallResult>
+    suspend fun deleteCall(callId: CallId): DeleteOutcome
 
     suspend fun settings(): ApiOutcome<SettingsSnapshot>
 
     suspend fun putSettings(values: JsonObject): ApiOutcome<SettingsUpdate>
 
-    suspend fun loopback(enabled: Boolean, callId: String? = null): ApiOutcome<LoopbackResult>
+    suspend fun loopback(enabled: Boolean, callId: CallId? = null): ApiOutcome<LoopbackResult>
 
-    suspend fun tone(hz: Int? = null, dbfs: Double? = null, seconds: Double? = null, callId: String? = null): ApiOutcome<ToneResult>
+    suspend fun tone(hz: Int? = null, dbfs: Double? = null, seconds: Double? = null, callId: CallId? = null): ApiOutcome<ToneResult>
 
     suspend fun doctor(): ApiOutcome<DoctorReport>
 
@@ -132,7 +133,7 @@ interface DaemonApi {
 
     suspend fun rotatePair(rotateDeviceToken: Boolean = false): ApiOutcome<RotateResult>
 
-    suspend fun downloadAudio(callId: String, format: String = "m4a", sink: OutputStream): ApiResult
+    suspend fun downloadAudio(callId: CallId, format: String = "m4a", sink: OutputStream): ApiResult
 
     suspend fun downloadBundle(bundleId: String, sink: OutputStream): ApiResult
 
@@ -212,56 +213,56 @@ class DefaultDaemonApi @Inject constructor(
 
     override suspend fun testCall(request: TestCallRequest): ApiOutcome<CallSnapshot> = call(CallSnapshot.serializer(), "POST", "/app/v1/test-call", body = encode(TestCallRequest.serializer(), request))
 
-    override suspend fun call(callId: String): ApiOutcome<CallSnapshot> = call(CallSnapshot.serializer(), "GET", "/app/v1/calls/${encodeId(callId)}")
+    override suspend fun call(callId: CallId): ApiOutcome<CallSnapshot> = call(CallSnapshot.serializer(), "GET", "/app/v1/calls/${encodeId(callId)}")
 
-    override suspend fun transcript(callId: String, cursor: Long?, limit: Int?): ApiOutcome<TranscriptPage> {
+    override suspend fun transcript(callId: CallId, cursor: Long?, limit: Int?): ApiOutcome<TranscriptPage> {
         val query = queryOf("cursor" to cursor, "limit" to limit)
         return call(TranscriptPage.serializer(), "GET", "/app/v1/calls/${encodeId(callId)}/transcript", query = query)
     }
 
-    override suspend fun events(callId: String, since: Long?, waitSeconds: Double?): ApiOutcome<CallEventsPage> {
+    override suspend fun events(callId: CallId, since: Long?, waitSeconds: Double?): ApiOutcome<CallEventsPage> {
         val query = queryOf("since" to since, "wait_s" to waitSeconds)
         // The long poll is a wait, not a read: another attempt would only lengthen the caller's.
         return call(CallEventsPage.serializer(), "GET", "/app/v1/calls/${encodeId(callId)}/events", query = query, retryable = false)
     }
 
-    override suspend fun instruction(callId: String, text: String): ApiOutcome<InstructionResult> = call(
+    override suspend fun instruction(callId: CallId, text: String): ApiOutcome<InstructionResult> = call(
         InstructionResult.serializer(),
         "POST",
         "/app/v1/calls/${encodeId(callId)}/instruction",
         body = bodyOf("text" to text)
     )
 
-    override suspend fun pause(callId: String): ApiOutcome<PauseResult> = call(PauseResult.serializer(), "POST", "/app/v1/calls/${encodeId(callId)}/pause")
+    override suspend fun pause(callId: CallId): PauseOutcome = call(PauseResult.serializer(), "POST", "/app/v1/calls/${encodeId(callId)}/pause").asPauseOutcome()
 
-    override suspend fun resume(callId: String): ApiOutcome<PauseResult> = call(PauseResult.serializer(), "POST", "/app/v1/calls/${encodeId(callId)}/resume")
+    override suspend fun resume(callId: CallId): ResumeOutcome = call(PauseResult.serializer(), "POST", "/app/v1/calls/${encodeId(callId)}/resume").asResumeOutcome()
 
-    override suspend fun summarize(callId: String): ApiOutcome<SummaryResult> = call(SummaryResult.serializer(), "POST", "/app/v1/calls/${encodeId(callId)}/summarize")
+    override suspend fun summarize(callId: CallId): ApiOutcome<SummaryResult> = call(SummaryResult.serializer(), "POST", "/app/v1/calls/${encodeId(callId)}/summarize")
 
-    override suspend fun dtmf(callId: String, digits: String): ApiOutcome<DtmfResult> = call(
+    override suspend fun dtmf(callId: CallId, digits: String): ApiOutcome<DtmfResult> = call(
         DtmfResult.serializer(),
         "POST",
         "/app/v1/calls/${encodeId(callId)}/dtmf",
         body = bodyOf("digits" to digits)
     )
 
-    override suspend fun hangup(callId: String): ApiOutcome<CallSnapshot> = call(CallSnapshot.serializer(), "POST", "/app/v1/calls/${encodeId(callId)}/hangup")
+    override suspend fun hangup(callId: CallId): HangUpOutcome = call(CallSnapshot.serializer(), "POST", "/app/v1/calls/${encodeId(callId)}/hangup").asHangUpOutcome()
 
-    override suspend fun marks(callId: String): ApiOutcome<MarksResponse> = call(MarksResponse.serializer(), "GET", "/app/v1/calls/${encodeId(callId)}/marks")
+    override suspend fun marks(callId: CallId): ApiOutcome<MarksResponse> = call(MarksResponse.serializer(), "GET", "/app/v1/calls/${encodeId(callId)}/marks")
 
-    override suspend fun addMark(callId: String, mark: String, note: String?): ApiOutcome<MarksResponse> = call(
+    override suspend fun addMark(callId: CallId, mark: String, note: String?): MarkOutcome = call(
         MarksResponse.serializer(),
         "POST",
         "/app/v1/calls/${encodeId(callId)}/marks",
         body = bodyOf("mark" to mark, "note" to note)
-    )
+    ).asMarkOutcome()
 
-    override suspend fun deleteCall(callId: String): ApiOutcome<DeleteCallResult> = call(
+    override suspend fun deleteCall(callId: CallId): DeleteOutcome = call(
         DeleteCallResult.serializer(),
         "DELETE",
         "/app/v1/calls/${encodeId(callId)}",
-        body = bodyOf("confirm" to callId)
-    )
+        body = bodyOf("confirm" to callId.value)
+    ).asDeleteOutcome()
 
     override suspend fun settings(): ApiOutcome<SettingsSnapshot> = call(SettingsSnapshot.serializer(), "GET", "/app/v1/settings")
 
@@ -272,14 +273,14 @@ class DefaultDaemonApi @Inject constructor(
         body = bodyOf("values" to values)
     )
 
-    override suspend fun loopback(enabled: Boolean, callId: String?): ApiOutcome<LoopbackResult> = call(
+    override suspend fun loopback(enabled: Boolean, callId: CallId?): ApiOutcome<LoopbackResult> = call(
         LoopbackResult.serializer(),
         "POST",
         "/app/v1/loopback",
-        body = bodyOf("enabled" to enabled, "call_id" to callId)
+        body = bodyOf("enabled" to enabled, "call_id" to callId?.value)
     )
 
-    override suspend fun tone(hz: Int?, dbfs: Double?, seconds: Double?, callId: String?): ApiOutcome<ToneResult> = call(
+    override suspend fun tone(hz: Int?, dbfs: Double?, seconds: Double?, callId: CallId?): ApiOutcome<ToneResult> = call(
         ToneResult.serializer(),
         "POST",
         "/app/v1/tone",
@@ -287,7 +288,7 @@ class DefaultDaemonApi @Inject constructor(
             "hz" to hz,
             "dbfs" to dbfs,
             "seconds" to seconds,
-            "call_id" to callId
+            "call_id" to callId?.value
         )
     )
 
@@ -323,7 +324,7 @@ class DefaultDaemonApi @Inject constructor(
         body = bodyOf("device_token" to true.takeIf { rotateDeviceToken })
     )
 
-    override suspend fun downloadAudio(callId: String, format: String, sink: OutputStream): ApiResult = api.download("/app/v1/calls/${encodeId(callId)}/audio", mapOf("format" to format), sink)
+    override suspend fun downloadAudio(callId: CallId, format: String, sink: OutputStream): ApiResult = api.download("/app/v1/calls/${encodeId(callId)}/audio", mapOf("format" to format), sink)
 
     override suspend fun downloadBundle(bundleId: String, sink: OutputStream): ApiResult = api.download("/app/v1/diagnostics/bundle/${encodeId(bundleId)}", emptyMap(), sink)
 
@@ -467,6 +468,9 @@ class DefaultDaemonApi @Inject constructor(
     private fun <T> encode(serializer: SerializationStrategy<T>, value: T): JsonObject = json.encodeToJsonElement(serializer, value).jsonObject
 
     /** Call ids are already restricted by the daemon; refuse path syntax here too. */
+    private fun encodeId(id: CallId): String = encodeId(id.value)
+
+    /** Bundle ids are not calls, but they share the same path-safety rule. */
     private fun encodeId(id: String): String {
         require(id.isNotEmpty() && id.all { it.isLetterOrDigit() || it in "._-" }) { "invalid call id" }
         return id

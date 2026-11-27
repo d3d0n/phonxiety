@@ -4,6 +4,9 @@ import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.ApiResult
 import com.phonxiety.bridge.data.DaemonApi
 import com.phonxiety.bridge.data.DaemonJson
+import com.phonxiety.bridge.data.DeleteOutcome
+import com.phonxiety.bridge.data.MarkOutcome
+import com.phonxiety.bridge.model.CallId
 import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.CallSummary
 import com.phonxiety.bridge.model.DeleteCallResult
@@ -64,25 +67,25 @@ data class TranscriptResult(
 interface CallsRepository {
     fun observeCalls(filter: CallFilter): Flow<List<CallSummary>>
 
-    fun observeCall(callId: String): Flow<CallSummary?>
+    fun observeCall(callId: CallId): Flow<CallSummary?>
 
-    fun observeDetail(callId: String): Flow<CallSnapshot?>
+    fun observeDetail(callId: CallId): Flow<CallSnapshot?>
 
-    fun observeTranscript(callId: String): Flow<List<TranscriptTurn>>
+    fun observeTranscript(callId: CallId): Flow<List<TranscriptTurn>>
 
     fun observeFarEnds(): Flow<List<String>>
 
     suspend fun page(filter: CallFilter, before: Double? = null, limit: Int = PAGE): CallPageResult
 
-    suspend fun detail(callId: String, refresh: Boolean = true): CallDetailResult
+    suspend fun detail(callId: CallId, refresh: Boolean = true): CallDetailResult
 
-    suspend fun transcript(callId: String, cursor: Long? = null, limit: Int = TRANSCRIPT_PAGE): TranscriptResult
+    suspend fun transcript(callId: CallId, cursor: Long? = null, limit: Int = TRANSCRIPT_PAGE): TranscriptResult
 
-    suspend fun addMark(callId: String, mark: String, note: String? = null): ApiOutcome<MarksResponse>
+    suspend fun addMark(callId: CallId, mark: String, note: String? = null): MarkOutcome
 
-    suspend fun delete(callId: String): ApiOutcome<DeleteCallResult>
+    suspend fun delete(callId: CallId): DeleteOutcome
 
-    suspend fun downloadAudio(callId: String, format: String, file: File): ApiResult
+    suspend fun downloadAudio(callId: CallId, format: String, file: File): ApiResult
 
     companion object {
         const val PAGE = 30
@@ -101,11 +104,11 @@ class DefaultCallsRepository @Inject constructor(
         rows.map { it.toSummary() }
     }
 
-    override fun observeCall(callId: String): Flow<CallSummary?> = cache.list.observe(callId).map { it?.toSummary() }
+    override fun observeCall(callId: CallId): Flow<CallSummary?> = cache.list.observe(callId.value).map { it?.toSummary() }
 
-    override fun observeDetail(callId: String): Flow<CallSnapshot?> = cache.detail.observeJson(callId).map { it?.let(::decode) }
+    override fun observeDetail(callId: CallId): Flow<CallSnapshot?> = cache.detail.observeJson(callId.value).map { it?.let(::decode) }
 
-    override fun observeTranscript(callId: String): Flow<List<TranscriptTurn>> = cache.detail.observeTranscript(callId).map { rows -> rows.map { it.toTurn() } }
+    override fun observeTranscript(callId: CallId): Flow<List<TranscriptTurn>> = cache.detail.observeTranscript(callId.value).map { rows -> rows.map { it.toTurn() } }
 
     override fun observeFarEnds(): Flow<List<String>> = cache.list.observeFarEnds()
 
@@ -125,26 +128,26 @@ class DefaultCallsRepository @Inject constructor(
         }
     }
 
-    override suspend fun detail(callId: String, refresh: Boolean): CallDetailResult = withContext(Dispatchers.IO) {
+    override suspend fun detail(callId: CallId, refresh: Boolean): CallDetailResult = withContext(Dispatchers.IO) {
         if (!refresh) {
-            val cached = cache.detail.get(callId)?.detailJson?.let(::decode)
+            val cached = cache.detail.get(callId.value)?.detailJson?.let(::decode)
             return@withContext CallDetailResult(cached, null, cached = true)
         }
         when (val outcome = api.call(callId)) {
             is ApiOutcome.Ok -> {
-                cacheDetail(callId, outcome.value)
+                cacheDetail(callId.value, outcome.value)
                 CallDetailResult(outcome.value, null, cached = false)
             }
 
             is ApiOutcome.Failure -> CallDetailResult(
-                snapshot = cache.detail.get(callId)?.detailJson?.let(::decode),
+                snapshot = cache.detail.get(callId.value)?.detailJson?.let(::decode),
                 failure = outcome,
                 cached = true
             )
         }
     }
 
-    override suspend fun transcript(callId: String, cursor: Long?, limit: Int): TranscriptResult = withContext(Dispatchers.IO) {
+    override suspend fun transcript(callId: CallId, cursor: Long?, limit: Int): TranscriptResult = withContext(Dispatchers.IO) {
         when (val outcome = api.transcript(callId, cursor, limit)) {
             is ApiOutcome.Ok -> {
                 val page = outcome.value
@@ -154,7 +157,7 @@ class DefaultCallsRepository @Inject constructor(
                 // on its way cannot leave turns without a call: it is a quiet no-op instead.
                 if (page.transcript.isNotEmpty()) {
                     cache.transaction {
-                        if (detail.exists(callId)) detail.upsertTranscript(page.transcript.map { it.toEntity(callId) })
+                        if (detail.exists(callId.value)) detail.upsertTranscript(page.transcript.map { it.toEntity(callId.value) })
                     }
                 }
                 TranscriptResult(
@@ -176,27 +179,27 @@ class DefaultCallsRepository @Inject constructor(
         }
     }
 
-    override suspend fun addMark(callId: String, mark: String, note: String?): ApiOutcome<MarksResponse> = withContext(Dispatchers.IO) {
+    override suspend fun addMark(callId: CallId, mark: String, note: String?): MarkOutcome = withContext(Dispatchers.IO) {
         val outcome = api.addMark(callId, mark, note)
-        if (outcome is ApiOutcome.Ok) {
-            val existing = cache.list.get(callId)
+        if (outcome is MarkOutcome.Marked) {
+            val existing = cache.list.get(callId.value)
             if (existing != null) {
-                cache.list.upsert(listOf(existing.copy(marks = outcome.value.marks.size, cachedAt = now())))
+                cache.list.upsert(listOf(existing.copy(marks = outcome.marks.size, cachedAt = now())))
             }
         }
         outcome
     }
 
-    override suspend fun delete(callId: String): ApiOutcome<DeleteCallResult> = withContext(Dispatchers.IO) {
+    override suspend fun delete(callId: CallId): DeleteOutcome = withContext(Dispatchers.IO) {
         val outcome = api.deleteCall(callId)
-        if (outcome is ApiOutcome.Ok) {
+        if (outcome is DeleteOutcome.Deleted) {
             // One delete; the detail row and every transcript turn go with it by cascade.
-            cache.transaction { list.delete(callId) }
+            cache.transaction { list.delete(callId.value) }
         }
         outcome
     }
 
-    override suspend fun downloadAudio(callId: String, format: String, file: File): ApiResult = withContext(Dispatchers.IO) {
+    override suspend fun downloadAudio(callId: CallId, format: String, file: File): ApiResult = withContext(Dispatchers.IO) {
         file.parentFile?.mkdirs()
         val sink = runCatching { FileOutputStream(file) }.getOrElse {
             return@withContext ApiResult.Failure(500, "audio_file_unwritable", it.javaClass.simpleName)

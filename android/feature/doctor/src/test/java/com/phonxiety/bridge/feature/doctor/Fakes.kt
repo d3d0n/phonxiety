@@ -5,10 +5,16 @@ import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.ApiResult
 import com.phonxiety.bridge.data.BridgeStateRepository
 import com.phonxiety.bridge.data.DaemonApi
+import com.phonxiety.bridge.data.DeleteOutcome
+import com.phonxiety.bridge.data.HangUpOutcome
+import com.phonxiety.bridge.data.MarkOutcome
 import com.phonxiety.bridge.data.PairResult
 import com.phonxiety.bridge.data.PairingRepository
+import com.phonxiety.bridge.data.PauseOutcome
+import com.phonxiety.bridge.data.ResumeOutcome
 import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.model.CallEventsPage
+import com.phonxiety.bridge.model.CallId
 import com.phonxiety.bridge.model.CallPhase
 import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.CallState
@@ -267,28 +273,28 @@ class FakeDaemonApi : DaemonApi {
     override suspend fun placeCall(request: PlaceCallRequest): ApiOutcome<CallSnapshot> = unused()
     override suspend fun validateCall(request: PlaceCallRequest): ApiOutcome<ValidationResult> = unused()
     override suspend fun testCall(request: TestCallRequest): ApiOutcome<CallSnapshot> = unused()
-    override suspend fun call(callId: String): ApiOutcome<CallSnapshot> = unused()
-    override suspend fun transcript(callId: String, cursor: Long?, limit: Int?): ApiOutcome<TranscriptPage> = unused()
-    override suspend fun events(callId: String, since: Long?, waitSeconds: Double?): ApiOutcome<CallEventsPage> = unused()
-    override suspend fun instruction(callId: String, text: String): ApiOutcome<InstructionResult> = unused()
-    override suspend fun pause(callId: String): ApiOutcome<PauseResult> = unused()
-    override suspend fun resume(callId: String): ApiOutcome<PauseResult> = unused()
-    override suspend fun summarize(callId: String): ApiOutcome<SummaryResult> = unused()
-    override suspend fun dtmf(callId: String, digits: String): ApiOutcome<DtmfResult> = unused()
-    override suspend fun hangup(callId: String): ApiOutcome<CallSnapshot> = unused()
-    override suspend fun marks(callId: String): ApiOutcome<MarksResponse> = unused()
-    override suspend fun addMark(callId: String, mark: String, note: String?): ApiOutcome<MarksResponse> = unused()
-    override suspend fun deleteCall(callId: String): ApiOutcome<DeleteCallResult> = unused()
+    override suspend fun call(callId: CallId): ApiOutcome<CallSnapshot> = unused()
+    override suspend fun transcript(callId: CallId, cursor: Long?, limit: Int?): ApiOutcome<TranscriptPage> = unused()
+    override suspend fun events(callId: CallId, since: Long?, waitSeconds: Double?): ApiOutcome<CallEventsPage> = unused()
+    override suspend fun instruction(callId: CallId, text: String): ApiOutcome<InstructionResult> = unused()
+    override suspend fun pause(callId: CallId): PauseOutcome = unused()
+    override suspend fun resume(callId: CallId): ResumeOutcome = unused()
+    override suspend fun summarize(callId: CallId): ApiOutcome<SummaryResult> = unused()
+    override suspend fun dtmf(callId: CallId, digits: String): ApiOutcome<DtmfResult> = unused()
+    override suspend fun hangup(callId: CallId): HangUpOutcome = unused()
+    override suspend fun marks(callId: CallId): ApiOutcome<MarksResponse> = unused()
+    override suspend fun addMark(callId: CallId, mark: String, note: String?): MarkOutcome = unused()
+    override suspend fun deleteCall(callId: CallId): DeleteOutcome = unused()
     override suspend fun settings(): ApiOutcome<SettingsSnapshot> = unused()
     override suspend fun putSettings(values: JsonObject): ApiOutcome<SettingsUpdate> = unused()
-    override suspend fun loopback(enabled: Boolean, callId: String?): ApiOutcome<LoopbackResult> = unused()
-    override suspend fun tone(hz: Int?, dbfs: Double?, seconds: Double?, callId: String?): ApiOutcome<ToneResult> = unused()
+    override suspend fun loopback(enabled: Boolean, callId: CallId?): ApiOutcome<LoopbackResult> = unused()
+    override suspend fun tone(hz: Int?, dbfs: Double?, seconds: Double?, callId: CallId?): ApiOutcome<ToneResult> = unused()
     override suspend fun diagnostics(): ApiOutcome<JsonObject> = unused()
     override suspend fun createDiagnosticsBundle(): ApiOutcome<DiagnosticsBundle> = unused()
     override suspend fun updateManifest(channel: String?): ApiOutcome<JsonObject> = unused()
     override suspend fun compat(appApi: Int?, protocol: Int?): ApiOutcome<CompatReport> = unused()
     override suspend fun rotatePair(rotateDeviceToken: Boolean): ApiOutcome<RotateResult> = unused()
-    override suspend fun downloadAudio(callId: String, format: String, sink: OutputStream): ApiResult = unused()
+    override suspend fun downloadAudio(callId: CallId, format: String, sink: OutputStream): ApiResult = unused()
     override suspend fun downloadBundle(bundleId: String, sink: OutputStream): ApiResult = unused()
     override suspend fun downloadUpdateArtifact(name: String, sink: OutputStream): ApiResult = unused()
 

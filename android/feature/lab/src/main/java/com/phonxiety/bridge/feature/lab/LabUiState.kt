@@ -1,13 +1,18 @@
 package com.phonxiety.bridge.feature.lab
 
 import com.phonxiety.bridge.designsystem.UiText
+import com.phonxiety.bridge.model.FailureKind
 import com.phonxiety.bridge.model.LinkTestResult
 import kotlinx.serialization.json.JsonObject
 
 /** A failure from the daemon: the sentence a person reads, and the code support needs. */
-data class LabFailure(val message: UiText, val code: String? = null) {
+data class LabFailure(val message: UiText, val code: String? = null, val kind: FailureKind = FailureKind.DAEMON) {
     companion object {
-        fun of(message: String, code: String?): LabFailure = LabFailure(UiText.Literal(message), code)
+        fun of(status: Int, code: String?, message: String): LabFailure = LabFailure(
+            message = UiText.Literal(message),
+            code = code,
+            kind = FailureKind.of(status, code)
+        )
     }
 }
 

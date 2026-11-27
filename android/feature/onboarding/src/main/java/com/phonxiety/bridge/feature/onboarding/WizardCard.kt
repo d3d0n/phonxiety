@@ -43,6 +43,7 @@ import com.phonxiety.bridge.designsystem.component.SetupStep
 import com.phonxiety.bridge.designsystem.component.SetupStepList
 import com.phonxiety.bridge.designsystem.component.SetupStepState
 import com.phonxiety.bridge.designsystem.component.StatusPill
+import com.phonxiety.bridge.model.FailureKind
 import com.phonxiety.bridge.root.DetectedProvider
 import com.phonxiety.bridge.root.InstallOperation
 import com.phonxiety.bridge.root.ModuleController
@@ -94,6 +95,7 @@ internal fun WizardCard(state: OnboardingUiState, callbacks: OnboardingCallbacks
                     )
                 }
                 ErrorCard(
+                    kind = FailureKind.REFUSED,
                     title = if (pending.isEmpty()) {
                         stringResource(R.string.onboarding_grant_title_any)
                     } else {
@@ -148,6 +150,7 @@ internal fun WizardCard(state: OnboardingUiState, callbacks: OnboardingCallbacks
 
             is WizardState.InstallFailed -> {
                 ErrorCard(
+                    kind = FailureKind.DAEMON,
                     title = stringResource(installFailureTitle(wizard.operation)),
                     message = stringResource(
                         if (wizard.operation == InstallOperation.PREPARE_METAMODULE) {
@@ -193,6 +196,7 @@ internal fun WizardCard(state: OnboardingUiState, callbacks: OnboardingCallbacks
                 )
                 if (state.pairingError != null) {
                     ErrorCard(
+                        kind = FailureKind.REFUSED,
                         title = stringResource(R.string.onboarding_pair_rejected_title),
                         message = pairingRejectionText(state.pairingError).asString(),
                         output = state.pairingError,
@@ -221,6 +225,7 @@ internal fun WizardCard(state: OnboardingUiState, callbacks: OnboardingCallbacks
 
             is WizardState.Doctor -> {
                 ErrorCard(
+                    kind = FailureKind.DAEMON,
                     title = stringResource(doctorTitle(wizard.reason)),
                     message = stringResource(doctorMessage(wizard.reason)),
                     output = wizard.output()
@@ -229,6 +234,7 @@ internal fun WizardCard(state: OnboardingUiState, callbacks: OnboardingCallbacks
 
             is WizardState.Indeterminate -> {
                 ErrorCard(
+                    kind = FailureKind.DAEMON,
                     title = stringResource(unknownTitle(wizard.reason)),
                     message = stringResource(unknownMessage(wizard.reason)),
                     output = listOfNotNull(wizard.detail, wizard.output).joinToString("\n")
@@ -238,6 +244,7 @@ internal fun WizardCard(state: OnboardingUiState, callbacks: OnboardingCallbacks
 
             is WizardState.Conflict -> {
                 ErrorCard(
+                    kind = FailureKind.REFUSED,
                     title = stringResource(R.string.onboarding_conflict_title),
                     message = stringResource(
                         R.string.onboarding_conflict_message,
@@ -383,6 +390,7 @@ private fun RebootContent(state: WizardState.RebootPending) {
     }
     if (state.failure != null) {
         ErrorCard(
+            kind = FailureKind.DAEMON,
             title = stringResource(R.string.onboarding_reboot_failed_title),
             message = stringResource(R.string.onboarding_reboot_failed_message),
             output = state.failure

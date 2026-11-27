@@ -45,6 +45,7 @@ import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.model.CallPhase
 import com.phonxiety.bridge.model.CallState
 import com.phonxiety.bridge.model.DeviceState
+import com.phonxiety.bridge.model.FailureKind
 import com.phonxiety.bridge.model.LinkKind
 import com.phonxiety.bridge.model.LinkState
 import com.phonxiety.bridge.model.PathKind
@@ -144,9 +145,10 @@ fun DashboardScreen(
                     ErrorCard(
                         title = stringResource(R.string.dashboard_link_error_title),
                         message = error.message,
+                        kind = FailureKind.of(0, error.code),
                         output = error.code,
-                        actionLabel = stringResource(R.string.dashboard_open_doctor),
-                        onAction = onOpenDoctor
+                        onRetry = onRunLinkTest,
+                        onOpenDoctor = onOpenDoctor
                     )
                 }
                 if (!state.paired) {

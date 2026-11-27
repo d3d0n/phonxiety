@@ -10,6 +10,7 @@ import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.BridgeStateRepository
 import com.phonxiety.bridge.data.DaemonApi
 import com.phonxiety.bridge.designsystem.UiText
+import com.phonxiety.bridge.model.FailureKind
 import com.phonxiety.bridge.model.LinkState
 import com.phonxiety.bridge.model.PairingGate
 import com.phonxiety.bridge.model.PathKind
@@ -130,6 +131,7 @@ class SettingsViewModel @Inject constructor(
                     daemon = it.daemon.copy(
                         loading = false,
                         error = UiText.Literal(outcome.describe()),
+                        errorKind = FailureKind.of(outcome.status, outcome.code),
                         errorOnSave = false
                     )
                 )
@@ -188,6 +190,7 @@ class SettingsViewModel @Inject constructor(
                         daemon = it.daemon.copy(
                             saving = false,
                             error = UiText.Literal(outcome.describe()),
+                            errorKind = FailureKind.of(outcome.status, outcome.code),
                             errorOnSave = true
                         )
                     )
@@ -301,7 +304,8 @@ class SettingsViewModel @Inject constructor(
                     it.copy(
                         connection = it.connection.copy(
                             refreshing = false,
-                            error = UiText.Literal(outcome.describe())
+                            error = UiText.Literal(outcome.describe()),
+                            errorKind = FailureKind.of(outcome.status, outcome.code)
                         )
                     )
                 }

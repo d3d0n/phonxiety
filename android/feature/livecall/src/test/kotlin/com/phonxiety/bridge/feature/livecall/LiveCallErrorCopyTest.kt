@@ -9,6 +9,7 @@ import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ApplicationProvider
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
 import com.phonxiety.bridge.designsystem.UiText
+import com.phonxiety.bridge.model.FailureKind
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -42,6 +43,7 @@ class LiveCallErrorCopyTest {
                     LiveCallError(
                         message = UiText.Literal("the daemon is not reachable"),
                         code = "link_down",
+                        kind = FailureKind.TRANSPORT,
                         onReload = { reloads++ },
                         hangUpFailed = true,
                         onRetryHangUp = { hangUps++ },
@@ -71,6 +73,7 @@ class LiveCallErrorCopyTest {
                     LiveCallError(
                         message = UiText.Literal("the daemon refused"),
                         code = "forbidden",
+                        kind = FailureKind.REFUSED,
                         onReload = {},
                         hangUpFailed = true,
                         onRetryHangUp = { hangUps++ },
@@ -87,15 +90,16 @@ class LiveCallErrorCopyTest {
     }
 
     @Test
-    fun anotherFailureKeepsTheGenericRetry() {
+    fun aTransportFailureKeepsTheGenericRetry() {
         var reloads = 0
         var hangUps = 0
         composeRule.setContent {
             PhonxietyTheme(dynamicColor = false) {
                 Box {
                     LiveCallError(
-                        message = UiText.Literal("the daemon refused"),
-                        code = "bad_request",
+                        message = UiText.Literal("the link dropped"),
+                        code = "link_down",
+                        kind = FailureKind.TRANSPORT,
                         onReload = { reloads++ },
                         hangUpFailed = false,
                         onRetryHangUp = { hangUps++ },
@@ -110,5 +114,29 @@ class LiveCallErrorCopyTest {
         composeRule.onNodeWithText(text(R.string.live_call_retry)).performClick()
         assertEquals(1, reloads)
         assertEquals(0, hangUps)
+    }
+
+    @Test
+    fun aRefusedActionIsExplainedWithoutARetry() {
+        var reloads = 0
+        composeRule.setContent {
+            PhonxietyTheme(dynamicColor = false) {
+                Box {
+                    LiveCallError(
+                        message = UiText.Literal("the daemon refused"),
+                        code = "bad_request",
+                        kind = FailureKind.REFUSED,
+                        onReload = { reloads++ },
+                        hangUpFailed = false,
+                        onRetryHangUp = {},
+                        onOpenCallScreen = null
+                    )
+                }
+            }
+        }
+
+        composeRule.onNodeWithText(text(R.string.live_call_action_failed_title)).assertExists()
+        composeRule.onNodeWithText(text(R.string.live_call_retry)).assertDoesNotExist()
+        composeRule.runOnIdle { assertEquals(0, reloads) }
     }
 }

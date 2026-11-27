@@ -3,12 +3,15 @@ package com.phonxiety.bridge.feature.calls
 import app.cash.turbine.test
 import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.ApiResult
+import com.phonxiety.bridge.data.DeleteOutcome
+import com.phonxiety.bridge.data.MarkOutcome
 import com.phonxiety.bridge.data.calls.CallDetailResult
 import com.phonxiety.bridge.data.calls.CallFilter
 import com.phonxiety.bridge.data.calls.CallPageResult
 import com.phonxiety.bridge.data.calls.CallsRepository
 import com.phonxiety.bridge.data.calls.TranscriptResult
 import com.phonxiety.bridge.designsystem.UiText
+import com.phonxiety.bridge.model.CallId
 import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.CallSummary
 import com.phonxiety.bridge.model.DeleteCallResult
@@ -174,11 +177,11 @@ private class FakeCallsRepository : CallsRepository {
         }
     }
 
-    override fun observeCall(callId: String): Flow<CallSummary?> = cached.map { rows -> rows.firstOrNull { it.callId == callId } }
+    override fun observeCall(callId: CallId): Flow<CallSummary?> = cached.map { rows -> rows.firstOrNull { it.callId == callId.value } }
 
-    override fun observeDetail(callId: String): Flow<CallSnapshot?> = MutableStateFlow<CallSnapshot?>(null)
+    override fun observeDetail(callId: CallId): Flow<CallSnapshot?> = MutableStateFlow<CallSnapshot?>(null)
 
-    override fun observeTranscript(callId: String): Flow<List<TranscriptTurn>> = MutableStateFlow(emptyList())
+    override fun observeTranscript(callId: CallId): Flow<List<TranscriptTurn>> = MutableStateFlow(emptyList())
 
     override fun observeFarEnds(): Flow<List<String>> = MutableStateFlow(emptyList())
 
@@ -193,13 +196,13 @@ private class FakeCallsRepository : CallsRepository {
         }
     }
 
-    override suspend fun detail(callId: String, refresh: Boolean): CallDetailResult = CallDetailResult(null, null, cached = true)
+    override suspend fun detail(callId: CallId, refresh: Boolean): CallDetailResult = CallDetailResult(null, null, cached = true)
 
-    override suspend fun transcript(callId: String, cursor: Long?, limit: Int): TranscriptResult = TranscriptResult(emptyList(), cursor, false, false, null)
+    override suspend fun transcript(callId: CallId, cursor: Long?, limit: Int): TranscriptResult = TranscriptResult(emptyList(), cursor, false, false, null)
 
-    override suspend fun addMark(callId: String, mark: String, note: String?): ApiOutcome<MarksResponse> = ApiOutcome.Ok(200, MarksResponse())
+    override suspend fun addMark(callId: CallId, mark: String, note: String?): MarkOutcome = MarkOutcome.Marked(200, MarksResponse().marks)
 
-    override suspend fun delete(callId: String): ApiOutcome<DeleteCallResult> = ApiOutcome.Ok(200, DeleteCallResult())
+    override suspend fun delete(callId: CallId): DeleteOutcome = DeleteOutcome.Deleted(200)
 
-    override suspend fun downloadAudio(callId: String, format: String, file: File): ApiResult = ApiResult.Failure(501, "unused", "unused")
+    override suspend fun downloadAudio(callId: CallId, format: String, file: File): ApiResult = ApiResult.Failure(501, "unused", "unused")
 }

@@ -39,6 +39,7 @@ import com.phonxiety.bridge.designsystem.component.ErrorCard
 import com.phonxiety.bridge.designsystem.component.LoadingState
 import com.phonxiety.bridge.designsystem.component.StatusPill
 import com.phonxiety.bridge.designsystem.component.StatusTone
+import com.phonxiety.bridge.model.FailureKind
 import com.phonxiety.bridge.model.PartialTurn
 import com.phonxiety.bridge.model.TranscriptTurn
 import kotlinx.coroutines.launch
@@ -334,6 +335,7 @@ private fun UnknownStatusCard(
 ) {
     ErrorCard(
         title = stringResource(R.string.live_call_status_unknown_title),
+        kind = FailureKind.DAEMON,
         message = stringResource(
             if (isLinkLoss(reason)) {
                 R.string.live_call_status_unknown_link_lost

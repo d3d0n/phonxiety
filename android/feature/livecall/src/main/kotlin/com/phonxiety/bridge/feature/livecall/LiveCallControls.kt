@@ -55,6 +55,7 @@ import com.phonxiety.bridge.designsystem.component.StatusPill
 import com.phonxiety.bridge.designsystem.component.StatusTone
 import com.phonxiety.bridge.designsystem.resultText
 import com.phonxiety.bridge.model.CallMark
+import com.phonxiety.bridge.model.FailureKind
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -113,6 +114,7 @@ internal fun ControlsColumn(
     onReload: () -> Unit,
     onOpenCallScreen: () -> Unit,
     onRetryHangUp: () -> Unit,
+    onOpenDoctor: () -> Unit = {},
     modifier: Modifier,
     showError: Boolean = true
 ) {
@@ -125,7 +127,9 @@ internal fun ControlsColumn(
                 LiveCallError(
                     message = message,
                     code = state.errorCode,
+                    kind = state.errorKind,
                     onReload = onReload,
+                    onOpenDoctor = onOpenDoctor,
                     hangUpFailed = state.hangUpFailed,
                     onRetryHangUp = onRetryHangUp,
                     onOpenCallScreen = if (state.callScreenAction) onOpenCallScreen else null
@@ -442,27 +446,37 @@ private fun DtmfCard(onDtmf: (String) -> Unit, enabled: Boolean) {
 internal fun LiveCallError(
     message: UiText,
     code: String?,
+    kind: FailureKind,
     onReload: () -> Unit,
     modifier: Modifier = Modifier,
+    onOpenDoctor: () -> Unit = {},
     hangUpFailed: Boolean = false,
     onRetryHangUp: () -> Unit = {},
     onOpenCallScreen: (() -> Unit)? = null
 ) {
     val callScreen = if (hangUpFailed) onOpenCallScreen else null
-    val actionLabel = when {
+    // The hang-up's own recovery is not a generic retry: the call is still up, so it offers the
+    // platform's call screen or the daemon-side hang-up again. Everything else follows the kind.
+    val bespokeLabel = when {
         callScreen != null -> stringResource(R.string.live_call_open_call_screen)
         hangUpFailed -> stringResource(R.string.live_call_hang_up)
-        else -> stringResource(R.string.live_call_retry)
+        else -> null
     }
-    val action = callScreen ?: if (hangUpFailed) onRetryHangUp else onReload
     ErrorCard(
         title = stringResource(
             if (hangUpFailed) R.string.live_call_hang_up_failed_title else R.string.live_call_action_failed_title
         ),
         message = message.asString(),
+        kind = kind,
         output = code,
-        actionLabel = actionLabel,
-        onAction = action,
+        actionLabel = bespokeLabel,
+        onAction = when {
+            callScreen != null -> callScreen
+            hangUpFailed -> onRetryHangUp
+            else -> null
+        },
+        onRetry = onReload,
+        onOpenDoctor = onOpenDoctor,
         modifier = modifier
     )
 }

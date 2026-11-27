@@ -76,7 +76,8 @@ data class LabCallbacks(
     val onLogLevel: (String) -> Unit = {},
     val onCopyLogs: () -> Unit = {},
     val onExportLogs: () -> Unit = {},
-    val onFrameTap: (Boolean) -> Unit = {}
+    val onFrameTap: (Boolean) -> Unit = {},
+    val onOpenDoctor: () -> Unit = {}
 )
 
 /** The frozen key the navigation host re-taps to bring this section's first item back. */
@@ -87,6 +88,7 @@ internal const val LAB_SCROLL_TO_TOP_KEY = "lab"
 fun LabRoute(
     onBack: () -> Unit,
     onOpenCall: (String) -> Unit,
+    onOpenDoctor: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: LabViewModel = hiltViewModel()
 ) {
@@ -157,7 +159,8 @@ fun LabRoute(
                 scope.launch { snackbar.showSnackbar(resources.getString(R.string.lab_log_copied)) }
             },
             onExportLogs = viewModel::exportLogs,
-            onFrameTap = viewModel::setFrameTap
+            onFrameTap = viewModel::setFrameTap,
+            onOpenDoctor = onOpenDoctor
         ),
         modifier = modifier
     )

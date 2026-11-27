@@ -51,6 +51,7 @@ import com.phonxiety.bridge.designsystem.component.ToggleRow
 import com.phonxiety.bridge.designsystem.testing.Screenshot
 import com.phonxiety.bridge.designsystem.testing.assertAccessible
 import com.phonxiety.bridge.designsystem.testing.pinAnimationFrame
+import com.phonxiety.bridge.model.FailureKind
 import java.util.Locale
 import java.util.TimeZone
 import org.junit.After
@@ -285,6 +286,7 @@ private fun PreviewBody(preview: Preview) {
             ErrorCard(
                 title = "The module install failed",
                 message = "The installer refused the package. Retry is safe; nothing was mounted.",
+                kind = FailureKind.DAEMON,
                 output = "ksud module install /data/local/tmp/phonxiety_bridge.zip\n" +
                     "! module.prop: unsupported versionCode",
                 initiallyExpanded = true,
@@ -296,6 +298,7 @@ private fun PreviewBody(preview: Preview) {
             ErrorCard(
                 title = "The update failed",
                 message = "The installer refused the package.",
+                kind = FailureKind.TRANSPORT,
                 actionLabel = "Check again",
                 onAction = {}
             )

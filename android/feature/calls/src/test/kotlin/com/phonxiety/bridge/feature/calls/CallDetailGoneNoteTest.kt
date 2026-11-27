@@ -6,7 +6,9 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.test.core.app.ApplicationProvider
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
+import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.CallSnapshot
+import com.phonxiety.bridge.model.FailureKind
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -30,14 +32,14 @@ class CallDetailGoneNoteTest {
 
     @Test
     fun aStoredRecordTheComputerNoLongerHasSaysSo() {
-        show(CallDetailUiState(callId = "call-1", snapshot = cached, loading = false, error = CallsFailure.of("gone", "call_not_found")))
+        show(CallDetailUiState(callId = "call-1", snapshot = cached, loading = false, error = CallsFailure(UiText.Literal("gone"), "call_not_found", FailureKind.REFUSED)))
 
         composeRule.onNodeWithText(context.getString(R.string.call_detail_gone_on_computer)).assertIsDisplayed()
     }
 
     @Test
     fun anotherRefreshFailureDoesNotSayTheCallIsGone() {
-        show(CallDetailUiState(callId = "call-1", snapshot = cached, loading = false, offline = true, error = CallsFailure.of("busy", "daemon_busy")))
+        show(CallDetailUiState(callId = "call-1", snapshot = cached, loading = false, offline = true, error = CallsFailure(UiText.Literal("busy"), "daemon_busy", FailureKind.DAEMON)))
 
         composeRule.onNodeWithText(context.getString(R.string.call_detail_offline)).assertIsDisplayed()
         composeRule.onNodeWithText(context.getString(R.string.call_detail_gone_on_computer)).assertDoesNotExist()
@@ -46,7 +48,7 @@ class CallDetailGoneNoteTest {
     @Test
     fun aCallGoneAfterAFailedRefreshShowsOnlyTheGoneNote() {
         // An earlier refresh failed and left the offline note; a later answer says the call is gone.
-        show(CallDetailUiState(callId = "call-1", snapshot = cached, loading = false, offline = true, error = CallsFailure.of("gone", "call_not_found")))
+        show(CallDetailUiState(callId = "call-1", snapshot = cached, loading = false, offline = true, error = CallsFailure(UiText.Literal("gone"), "call_not_found", FailureKind.REFUSED)))
 
         composeRule.onNodeWithText(context.getString(R.string.call_detail_gone_on_computer)).assertIsDisplayed()
         composeRule.onNodeWithText(context.getString(R.string.call_detail_offline)).assertDoesNotExist()

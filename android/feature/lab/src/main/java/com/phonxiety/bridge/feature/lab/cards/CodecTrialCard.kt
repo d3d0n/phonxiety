@@ -42,7 +42,10 @@ internal fun CodecTrialCard(trial: CodecTrialUi, callbacks: LabCallbacks) {
             ErrorCard(
                 title = stringResource(R.string.lab_trial_failed),
                 message = failure.message.asString(),
-                output = failure.code
+                kind = failure.kind,
+                output = failure.code,
+                onRetry = callbacks.onRunCodecTrial,
+                onOpenDoctor = callbacks.onOpenDoctor
             )
         }
         if (trial.runs.isNotEmpty()) {

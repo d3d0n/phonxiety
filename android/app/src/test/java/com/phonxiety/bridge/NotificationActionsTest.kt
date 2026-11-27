@@ -4,7 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
-import com.phonxiety.bridge.data.ApiOutcome
+import com.phonxiety.bridge.data.HangUpOutcome
 import com.phonxiety.bridge.feature.widgets.CallEnd
 import com.phonxiety.bridge.model.CallPhase
 import com.phonxiety.bridge.model.CallState
@@ -101,7 +101,7 @@ class NotificationActionsTest {
             context,
             callId = "call-1",
             linkUp = true,
-            daemon = { ApiOutcome.Ok(200, Unit) },
+            daemon = { HangUpOutcome.HungUp(200, com.phonxiety.bridge.model.CallSnapshot(callId = "call-1")) },
             local = { _ -> local.incrementAndGet() }
         )
 
@@ -131,7 +131,7 @@ class NotificationActionsTest {
             context,
             callId = "call-1",
             linkUp = true,
-            daemon = { ApiOutcome.Failure(500, "daemon_error", "no") },
+            daemon = { HangUpOutcome.Unknown(500, "daemon_error", "no") },
             local = { _ -> local.incrementAndGet() }
         )
 
@@ -149,7 +149,7 @@ class NotificationActionsTest {
             linkUp = true,
             daemon = {
                 daemon.incrementAndGet()
-                ApiOutcome.Ok(200, Unit)
+                HangUpOutcome.HungUp(200, com.phonxiety.bridge.model.CallSnapshot(callId = "call-1"))
             },
             local = { _ -> local.incrementAndGet() }
         )

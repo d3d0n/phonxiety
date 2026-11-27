@@ -109,6 +109,34 @@ fun ErrorCard(
     )
 }
 
+/** The action a card shows: an explicit recovery first, then the one [kind] itself implies. */
+internal data class ErrorCardAction(val label: String, val action: () -> Unit)
+
+@Composable
+internal fun errorCardAction(
+    kind: FailureKind,
+    actionLabel: String?,
+    onAction: (() -> Unit)?,
+    onRetry: (() -> Unit)?,
+    onOpenDoctor: (() -> Unit)?
+): ErrorCardAction? {
+    // A caller's own recovery (the phone's call screen, an install retry) is never a retry of a
+    // refused request, so it survives the refused kind. The implied actions do not.
+    if (actionLabel != null && onAction != null) return ErrorCardAction(actionLabel, onAction)
+    if (kind == FailureKind.REFUSED) return null
+    return when (kind) {
+        FailureKind.TRANSPORT -> onRetry?.let {
+            ErrorCardAction(stringResource(R.string.designsystem_action_retry), it)
+        }
+
+        FailureKind.DAEMON -> onOpenDoctor?.let {
+            ErrorCardAction(stringResource(R.string.designsystem_action_open_doctor), it)
+        }
+
+        FailureKind.REFUSED -> null
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ErrorCardContent(

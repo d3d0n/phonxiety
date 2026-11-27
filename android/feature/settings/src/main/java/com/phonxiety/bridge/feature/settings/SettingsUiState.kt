@@ -2,6 +2,7 @@ package com.phonxiety.bridge.feature.settings
 
 import com.phonxiety.bridge.PhoneSettings
 import com.phonxiety.bridge.designsystem.UiText
+import com.phonxiety.bridge.model.FailureKind
 import com.phonxiety.bridge.net.StoredCandidate
 import com.phonxiety.bridge.net.isTailnet
 import kotlinx.serialization.SerialName
@@ -113,6 +114,8 @@ data class DaemonSettingsUi(
     val loading: Boolean = false,
     val saving: Boolean = false,
     val error: UiText? = null,
+    /** What [error] means for the action its card offers. */
+    val errorKind: FailureKind = FailureKind.DAEMON,
     /** True when [error] came from a refused save: the edits stay, and reloading would drop them. */
     val errorOnSave: Boolean = false,
     val values: DaemonSettingsValues = DaemonSettingsValues(),
@@ -144,7 +147,8 @@ data class AutoTuneUi(
 data class ConnectionUi(
     val candidates: List<StoredCandidate> = emptyList(),
     val refreshing: Boolean = false,
-    val error: UiText? = null
+    val error: UiText? = null,
+    val errorKind: FailureKind = FailureKind.DAEMON
 ) {
     val tailnetCount: Int get() = candidates.count { it.isTailnet }
 

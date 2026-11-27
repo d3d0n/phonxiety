@@ -3,9 +3,10 @@ package com.phonxiety.bridge.feature.widgets
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.phonxiety.bridge.BridgeRuntime
-import com.phonxiety.bridge.data.ApiOutcome
+import com.phonxiety.bridge.data.HangUpOutcome
 import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.model.CallPhase
+import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.CallState
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.awaitCancellation
@@ -37,7 +38,7 @@ class CallEndHangUpTest {
             linkUp = true,
             daemon = {
                 daemon.incrementAndGet()
-                ApiOutcome.Ok(200, Unit)
+                HangUpOutcome.HungUp(200, CallSnapshot(callId = "call-1"))
             },
             local = { _ -> local.incrementAndGet() }
         )
@@ -57,7 +58,7 @@ class CallEndHangUpTest {
             linkUp = true,
             daemon = {
                 daemon.incrementAndGet()
-                ApiOutcome.Failure(500, "daemon_error", "no")
+                HangUpOutcome.Unknown(500, "daemon_error", "no")
             },
             local = { _ -> local.incrementAndGet() }
         )

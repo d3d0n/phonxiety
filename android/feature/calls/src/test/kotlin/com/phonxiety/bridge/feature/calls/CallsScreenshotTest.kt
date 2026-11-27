@@ -34,6 +34,7 @@ import com.phonxiety.bridge.designsystem.testing.Screenshot
 import com.phonxiety.bridge.designsystem.testing.assertAccessible
 import com.phonxiety.bridge.designsystem.testing.pinAnimationFrame
 import com.phonxiety.bridge.model.CallSummary
+import com.phonxiety.bridge.model.FailureKind
 import java.util.Locale
 import java.util.TimeZone
 import org.junit.After
@@ -152,7 +153,7 @@ class CallsScreenshotTest {
     @Test
     @Category(Screenshot::class)
     fun theOfflineCopy() = render("offline_411_light") {
-        setScreen(filled().copy(offline = true, error = CallsFailure(UiText.Literal("The bridge service isn't running."), "link_down")))
+        setScreen(filled().copy(offline = true, error = CallsFailure(UiText.Literal("The bridge service isn't running."), "link_down", FailureKind.TRANSPORT)))
     }
 
     @Test
@@ -264,7 +265,7 @@ class CallsScreenshotTest {
             CallsUiState(
                 loaded = true,
                 calls = filled().calls,
-                error = CallsFailure(UiText.Literal("The bridge didn't answer."), "link_down")
+                error = CallsFailure(UiText.Literal("The bridge didn't answer."), "link_down", FailureKind.TRANSPORT)
             )
         )
         composeRule.onNodeWithText("The bridge didn't answer.").assertExists()

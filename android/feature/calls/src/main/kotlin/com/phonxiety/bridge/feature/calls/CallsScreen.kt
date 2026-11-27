@@ -86,6 +86,7 @@ import kotlinx.coroutines.launch
 fun CallsRoute(
     onOpenCall: (String) -> Unit,
     onNewCall: () -> Unit,
+    onOpenDoctor: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: CallsViewModel = hiltViewModel()
 ) {
@@ -100,6 +101,7 @@ fun CallsRoute(
         onClearFilters = viewModel::clearFilters,
         onOpenCall = onOpenCall,
         onNewCall = onNewCall,
+        onOpenDoctor = onOpenDoctor,
         modifier = modifier
     )
 }
@@ -116,6 +118,7 @@ fun CallsScreen(
     onClearFilters: () -> Unit,
     onOpenCall: (String) -> Unit,
     onNewCall: () -> Unit,
+    onOpenDoctor: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     // The history list is the screen's scroll surface, so the section's re-tap belongs here.
@@ -156,10 +159,11 @@ fun CallsScreen(
                 ErrorCard(
                     title = stringResource(R.string.calls_refresh_failed),
                     message = failure.message.asString(),
+                    kind = failure.kind,
                     output = failure.code,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    actionLabel = stringResource(R.string.calls_retry),
-                    onAction = onRefresh
+                    onRetry = onRefresh,
+                    onOpenDoctor = onOpenDoctor
                 )
             }
             PullToRefreshBox(

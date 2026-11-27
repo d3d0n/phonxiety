@@ -74,8 +74,10 @@ import com.phonxiety.bridge.designsystem.formatDuration
 import com.phonxiety.bridge.designsystem.formatElapsedTime
 import com.phonxiety.bridge.designsystem.formatPhoneNumber
 import com.phonxiety.bridge.designsystem.resultText
+import com.phonxiety.bridge.model.CallId
 import com.phonxiety.bridge.model.CallMark
 import com.phonxiety.bridge.model.CallSnapshot
+import com.phonxiety.bridge.model.FailureKind
 import com.phonxiety.bridge.model.TranscriptTurn
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -91,10 +93,11 @@ fun CallDetailRoute(
     onBack: () -> Unit,
     onCallAgain: (CallBrief) -> Unit,
     onOpenLive: (String) -> Unit,
+    onOpenDoctor: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: CallDetailViewModel = hiltViewModel()
 ) {
-    LaunchedEffect(callId) { viewModel.bind(callId) }
+    LaunchedEffect(callId) { viewModel.bind(CallId(callId)) }
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     CallDetailScreen(
@@ -120,6 +123,7 @@ fun CallDetailRoute(
         onRequestDelete = viewModel::requestDelete,
         onDismissDelete = viewModel::dismissDelete,
         onConfirmDelete = { viewModel.confirmDelete(onBack) },
+        onOpenDoctor = onOpenDoctor,
         modifier = modifier
     )
 }
@@ -141,6 +145,7 @@ fun CallDetailScreen(
     onRequestDelete: () -> Unit,
     onDismissDelete: () -> Unit,
     onConfirmDelete: () -> Unit,
+    onOpenDoctor: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val snapshot = state.snapshot
@@ -171,9 +176,10 @@ fun CallDetailScreen(
                 ErrorCard(
                     title = stringResource(R.string.call_detail_read_failed),
                     message = failure?.message?.asString() ?: stringResource(R.string.call_detail_read_failed_body),
+                    kind = failure?.kind ?: FailureKind.DAEMON,
                     output = failure?.code,
-                    actionLabel = stringResource(R.string.call_detail_retry),
-                    onAction = onRefresh,
+                    onRetry = onRefresh,
+                    onOpenDoctor = onOpenDoctor,
                     modifier = Modifier.padding(16.dp)
                 )
             }

@@ -22,6 +22,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
+import com.phonxiety.bridge.model.CallId
 import com.phonxiety.bridge.model.DaemonInfo
 import com.phonxiety.bridge.model.VoiceControls
 import org.junit.Assert.assertEquals
@@ -86,7 +87,7 @@ class LiveCallRecreationTest {
             }
         }
         composeRule.activity.setContent { content() }
-        viewModel.bind(CALL_ID)
+        viewModel.bind(CallId(CALL_ID))
         composeRule.waitUntil(TIMEOUT_MS) { viewModel.state.value.loaded }
 
         viewModel.requestHangUp()

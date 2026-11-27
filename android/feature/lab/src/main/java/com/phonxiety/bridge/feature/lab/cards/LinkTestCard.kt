@@ -103,7 +103,10 @@ internal fun LinkTestCard(link: LinkTestUi, callbacks: LabCallbacks) {
             ErrorCard(
                 title = stringResource(R.string.lab_link_failed),
                 message = failure.message.asString(),
-                output = failure.code
+                kind = failure.kind,
+                output = failure.code,
+                onRetry = callbacks.onRunLinkTest,
+                onOpenDoctor = callbacks.onOpenDoctor
             )
         }
         link.last?.let { result ->

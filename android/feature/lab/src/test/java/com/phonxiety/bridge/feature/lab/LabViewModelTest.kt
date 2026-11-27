@@ -425,12 +425,12 @@ class LabViewModelTest {
         api.testCallHandler = { ApiOutcome.Ok(200, CallSnapshot(callId = "call-9", profile = "test")) }
         api.callHandler = { callId ->
             if (api.callRequests.size < 3) {
-                ApiOutcome.Ok(200, CallSnapshot(callId = callId, state = "ended", resultStatus = "pending"))
+                ApiOutcome.Ok(200, CallSnapshot(callId = callId.value, state = "ended", resultStatus = "pending"))
             } else {
                 ApiOutcome.Ok(
                     200,
                     CallSnapshot(
-                        callId = callId,
+                        callId = callId.value,
                         state = "ended",
                         callOutcome = "answered",
                         resultStatus = "ready",
@@ -476,7 +476,7 @@ class LabViewModelTest {
     fun `a record whose summary never arrives stops waiting`() = runTest(testDispatcher) {
         api.testCallHandler = { ApiOutcome.Ok(200, CallSnapshot(callId = "call-9", profile = "test")) }
         api.callHandler = { callId ->
-            ApiOutcome.Ok(200, CallSnapshot(callId = callId, state = "ended", resultStatus = "pending"))
+            ApiOutcome.Ok(200, CallSnapshot(callId = callId.value, state = "ended", resultStatus = "pending"))
         }
         val vm = viewModel()
         vm.resultRetryDelayMs = 1
@@ -510,7 +510,7 @@ class LabViewModelTest {
             ApiOutcome.Ok(
                 200,
                 CallSnapshot(
-                    callId = callId,
+                    callId = callId.value,
                     state = "failed",
                     callOutcome = "failed",
                     resultStatus = "ready",
@@ -543,7 +543,7 @@ class LabViewModelTest {
             ApiOutcome.Ok(200, CallSnapshot(callId = "call-${placed.size}", profile = "test"))
         }
         api.callHandler = { callId ->
-            ApiOutcome.Ok(200, CallSnapshot(callId = callId, state = "ended", resultStatus = "ready", summary = "done"))
+            ApiOutcome.Ok(200, CallSnapshot(callId = callId.value, state = "ended", resultStatus = "ready", summary = "done"))
         }
         // The daemon starts the probes itself, but this phone has loopback only.
         api.infoHandler = {
@@ -603,7 +603,7 @@ class LabViewModelTest {
             ApiOutcome.Ok(200, CallSnapshot(callId = "call-tone", profile = "test"))
         }
         api.callHandler = { callId ->
-            ApiOutcome.Ok(200, CallSnapshot(callId = callId, state = "ended", resultStatus = "ready", summary = "done"))
+            ApiOutcome.Ok(200, CallSnapshot(callId = callId.value, state = "ended", resultStatus = "ready", summary = "done"))
         }
         api.infoHandler = {
             ApiOutcome.Ok(200, DaemonInfo(voiceControls = VoiceControls(testCallProbes = true, tone = true)))
@@ -627,7 +627,7 @@ class LabViewModelTest {
     fun `leaving the lab stops the read and coming back resumes it`() = runTest(testDispatcher) {
         api.testCallHandler = { ApiOutcome.Ok(200, CallSnapshot(callId = "call-hidden", profile = "test")) }
         api.callHandler = { callId ->
-            ApiOutcome.Ok(200, CallSnapshot(callId = callId, state = "ended", resultStatus = "pending"))
+            ApiOutcome.Ok(200, CallSnapshot(callId = callId.value, state = "ended", resultStatus = "pending"))
         }
         // The second read of the record is held: the card is already published and the read parked
         // inside the fake, so "waiting" is a state the test stands on rather than races past.
@@ -662,7 +662,7 @@ class LabViewModelTest {
     fun `a bridge update behind the call record starts no read`() = runTest(testDispatcher) {
         api.testCallHandler = { ApiOutcome.Ok(200, CallSnapshot(callId = "call-behind", profile = "test")) }
         api.callHandler = { callId ->
-            ApiOutcome.Ok(200, CallSnapshot(callId = callId, state = "ended", resultStatus = "pending"))
+            ApiOutcome.Ok(200, CallSnapshot(callId = callId.value, state = "ended", resultStatus = "pending"))
         }
         val heldRead = CompletableDeferred<Unit>()
         var reads = 0
@@ -713,7 +713,7 @@ class LabViewModelTest {
     @Test
     fun `a call the bridge never closes ends on an unfinished card`() = runTest(testDispatcher) {
         api.testCallHandler = { ApiOutcome.Ok(200, CallSnapshot(callId = "call-long", profile = "test")) }
-        api.callHandler = { callId -> ApiOutcome.Ok(200, CallSnapshot(callId = callId, state = "active")) }
+        api.callHandler = { callId -> ApiOutcome.Ok(200, CallSnapshot(callId = callId.value, state = "active")) }
         val vm = viewModel()
         vm.setTestNumber("+12025550123")
         withTimeout(5_000) { vm.state.first { it.testCall.number == "+12025550123" } }
@@ -735,13 +735,13 @@ class LabViewModelTest {
             ApiOutcome.Ok(200, CallSnapshot(callId = "call-$placements", profile = "test"))
         }
         api.callHandler = { callId ->
-            if (callId == "call-1") {
-                ApiOutcome.Ok(200, CallSnapshot(callId = callId, state = "ended", resultStatus = "pending"))
+            if (callId.value == "call-1") {
+                ApiOutcome.Ok(200, CallSnapshot(callId = callId.value, state = "ended", resultStatus = "pending"))
             } else {
                 ApiOutcome.Ok(
                     200,
                     CallSnapshot(
-                        callId = callId,
+                        callId = callId.value,
                         state = "ended",
                         callOutcome = "answered",
                         resultStatus = "ready",

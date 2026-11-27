@@ -72,7 +72,10 @@ internal fun ProbeCard(probe: ProbeUi, callbacks: LabCallbacks) {
             ErrorCard(
                 title = stringResource(R.string.lab_probe_failed),
                 message = failure.message.asString(),
-                output = failure.code
+                kind = failure.kind,
+                output = failure.code,
+                onRetry = callbacks.onRunProbe,
+                onOpenDoctor = callbacks.onOpenDoctor
             )
         }
         probe.rows.forEach { row -> ProbeRow(row) }

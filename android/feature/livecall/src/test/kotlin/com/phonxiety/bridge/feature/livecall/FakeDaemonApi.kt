@@ -2,7 +2,18 @@ package com.phonxiety.bridge.feature.livecall
 
 import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.DaemonApi
+import com.phonxiety.bridge.data.DeleteOutcome
+import com.phonxiety.bridge.data.HangUpOutcome
+import com.phonxiety.bridge.data.MarkOutcome
+import com.phonxiety.bridge.data.PauseOutcome
+import com.phonxiety.bridge.data.ResumeOutcome
+import com.phonxiety.bridge.data.asDeleteOutcome
+import com.phonxiety.bridge.data.asHangUpOutcome
+import com.phonxiety.bridge.data.asMarkOutcome
+import com.phonxiety.bridge.data.asPauseOutcome
+import com.phonxiety.bridge.data.asResumeOutcome
 import com.phonxiety.bridge.model.CallEventsPage
+import com.phonxiety.bridge.model.CallId
 import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.CallsPage
 import com.phonxiety.bridge.model.DaemonInfo
@@ -75,7 +86,7 @@ class FakeDaemonApi : DaemonApi {
         return info
     }
 
-    override suspend fun events(callId: String, since: Long?, waitSeconds: Double?): ApiOutcome<CallEventsPage> {
+    override suspend fun events(callId: CallId, since: Long?, waitSeconds: Double?): ApiOutcome<CallEventsPage> {
         eventsRequests += since
         return if (events.isEmpty()) {
             ApiOutcome.Failure(504, "timeout", "nothing more happened")
@@ -84,7 +95,7 @@ class FakeDaemonApi : DaemonApi {
         }
     }
 
-    override suspend fun call(callId: String): ApiOutcome<CallSnapshot> = callSnapshot
+    override suspend fun call(callId: CallId): ApiOutcome<CallSnapshot> = callSnapshot
 
     override suspend fun validateCall(request: PlaceCallRequest): ApiOutcome<ValidationResult> {
         validateRequests += request
@@ -96,41 +107,41 @@ class FakeDaemonApi : DaemonApi {
         return place
     }
 
-    override suspend fun instruction(callId: String, text: String): ApiOutcome<InstructionResult> {
+    override suspend fun instruction(callId: CallId, text: String): ApiOutcome<InstructionResult> {
         instructionRequests += text
         return instruction
     }
 
-    override suspend fun pause(callId: String): ApiOutcome<PauseResult> {
+    override suspend fun pause(callId: CallId): PauseOutcome {
         pauseCalls++
-        return pause
+        return pause.asPauseOutcome()
     }
 
-    override suspend fun resume(callId: String): ApiOutcome<PauseResult> {
+    override suspend fun resume(callId: CallId): ResumeOutcome {
         resumeCalls++
-        return resume
+        return resume.asResumeOutcome()
     }
 
-    override suspend fun summarize(callId: String): ApiOutcome<SummaryResult> {
+    override suspend fun summarize(callId: CallId): ApiOutcome<SummaryResult> {
         summarizeCalls++
         return summarize
     }
 
-    override suspend fun dtmf(callId: String, digits: String): ApiOutcome<DtmfResult> {
+    override suspend fun dtmf(callId: CallId, digits: String): ApiOutcome<DtmfResult> {
         dtmfRequests += digits
         return dtmf
     }
 
-    override suspend fun addMark(callId: String, mark: String, note: String?): ApiOutcome<MarksResponse> {
+    override suspend fun addMark(callId: CallId, mark: String, note: String?): MarkOutcome {
         markRequests += mark
-        return marks
+        return marks.asMarkOutcome()
     }
 
-    override suspend fun hangup(callId: String): ApiOutcome<CallSnapshot> {
-        hangupRequests += callId
+    override suspend fun hangup(callId: CallId): HangUpOutcome {
+        hangupRequests += callId.value
         hangupCalls++
         hangupGate?.await()
-        return hangup
+        return hangup.asHangUpOutcome()
     }
 
     override suspend fun status(): ApiOutcome<DaemonStatus> = ApiOutcome.Failure(501, "unused", "unused")
@@ -145,19 +156,19 @@ class FakeDaemonApi : DaemonApi {
 
     override suspend fun testCall(request: TestCallRequest): ApiOutcome<CallSnapshot> = ApiOutcome.Failure(501, "unused", "unused")
 
-    override suspend fun transcript(callId: String, cursor: Long?, limit: Int?): ApiOutcome<TranscriptPage> = ApiOutcome.Failure(501, "unused", "unused")
+    override suspend fun transcript(callId: CallId, cursor: Long?, limit: Int?): ApiOutcome<TranscriptPage> = ApiOutcome.Failure(501, "unused", "unused")
 
-    override suspend fun marks(callId: String): ApiOutcome<MarksResponse> = marks
+    override suspend fun marks(callId: CallId): ApiOutcome<MarksResponse> = marks
 
-    override suspend fun deleteCall(callId: String): ApiOutcome<DeleteCallResult> = ApiOutcome.Failure(501, "unused", "unused")
+    override suspend fun deleteCall(callId: CallId): DeleteOutcome = ApiOutcome.Failure(501, "unused", "unused").asDeleteOutcome()
 
     override suspend fun settings(): ApiOutcome<SettingsSnapshot> = ApiOutcome.Failure(501, "unused", "unused")
 
     override suspend fun putSettings(values: JsonObject): ApiOutcome<SettingsUpdate> = ApiOutcome.Failure(501, "unused", "unused")
 
-    override suspend fun loopback(enabled: Boolean, callId: String?): ApiOutcome<LoopbackResult> = ApiOutcome.Failure(501, "unused", "unused")
+    override suspend fun loopback(enabled: Boolean, callId: CallId?): ApiOutcome<LoopbackResult> = ApiOutcome.Failure(501, "unused", "unused")
 
-    override suspend fun tone(hz: Int?, dbfs: Double?, seconds: Double?, callId: String?): ApiOutcome<ToneResult> = ApiOutcome.Failure(501, "unused", "unused")
+    override suspend fun tone(hz: Int?, dbfs: Double?, seconds: Double?, callId: CallId?): ApiOutcome<ToneResult> = ApiOutcome.Failure(501, "unused", "unused")
 
     override suspend fun doctor(): ApiOutcome<DoctorReport> = ApiOutcome.Failure(501, "unused", "unused")
 
@@ -173,7 +184,7 @@ class FakeDaemonApi : DaemonApi {
 
     override suspend fun rotatePair(rotateDeviceToken: Boolean): ApiOutcome<RotateResult> = ApiOutcome.Failure(501, "unused", "unused")
 
-    override suspend fun downloadAudio(callId: String, format: String, sink: OutputStream): com.phonxiety.bridge.data.ApiResult = com.phonxiety.bridge.data.ApiResult.Success(200, JsonObject(emptyMap()))
+    override suspend fun downloadAudio(callId: CallId, format: String, sink: OutputStream): com.phonxiety.bridge.data.ApiResult = com.phonxiety.bridge.data.ApiResult.Success(200, JsonObject(emptyMap()))
 
     override suspend fun downloadUpdateArtifact(name: String, sink: OutputStream): com.phonxiety.bridge.data.ApiResult = com.phonxiety.bridge.data.ApiResult.Failure(501, "unused", "unused")
 

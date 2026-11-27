@@ -20,6 +20,7 @@ import com.phonxiety.bridge.feature.doctor.DoctorCallbacks
 import com.phonxiety.bridge.feature.doctor.DoctorSeverity
 import com.phonxiety.bridge.feature.doctor.DoctorUiState
 import com.phonxiety.bridge.feature.doctor.R
+import com.phonxiety.bridge.model.FailureKind
 
 @Composable
 internal fun SummaryCard(state: DoctorUiState, callbacks: DoctorCallbacks) {
@@ -34,6 +35,7 @@ internal fun SummaryCard(state: DoctorUiState, callbacks: DoctorCallbacks) {
             state.readError != null -> ErrorCard(
                 title = stringResource(R.string.doctor_read_error_title),
                 message = stringResource(R.string.doctor_read_error_message),
+                kind = FailureKind.DAEMON,
                 output = requireNotNull(state.readError).asString(),
                 actionLabel = stringResource(R.string.doctor_action_run_checks),
                 onAction = callbacks.onRefresh

@@ -106,7 +106,7 @@ class CallsViewModel @Inject constructor(
                     it.copy(
                         refreshing = false,
                         offline = true,
-                        error = CallsFailure.of(failure.message, failure.code)
+                        error = CallsFailure.of(failure.status, failure.code, failure.message)
                     )
                 }
             } else {
@@ -131,7 +131,7 @@ class CallsViewModel @Inject constructor(
             val failure = result.failure
             if (failure != null) {
                 busy.update {
-                    it.copy(loadingMore = false, offline = true, error = CallsFailure.of(failure.message, failure.code))
+                    it.copy(loadingMore = false, offline = true, error = CallsFailure.of(failure.status, failure.code, failure.message))
                 }
             } else {
                 val known = current.items.mapTo(HashSet()) { it.callId }

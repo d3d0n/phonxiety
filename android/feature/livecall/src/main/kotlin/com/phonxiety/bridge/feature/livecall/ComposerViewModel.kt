@@ -7,6 +7,7 @@ import com.phonxiety.bridge.data.DaemonApi
 import com.phonxiety.bridge.data.LiveCallFront
 import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.ApiLimits
+import com.phonxiety.bridge.model.FailureKind
 import com.phonxiety.bridge.model.PlaceCallRequest
 import com.phonxiety.bridge.model.ValidationIssue
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -62,7 +63,8 @@ data class ComposerUiState(
     val loadedFromPrefill: Boolean = false,
     /** The placement itself failed; the card under the form says so. */
     val placeError: UiText? = null,
-    val placeErrorDetail: String? = null
+    val placeErrorDetail: String? = null,
+    val placeErrorKind: FailureKind = FailureKind.DAEMON
 ) {
     /** The exact payload: nothing is added between this and the dial. */
     val request: PlaceCallRequest
@@ -234,7 +236,8 @@ class ComposerViewModel @Inject constructor(
                             placing = false,
                             confirming = false,
                             placeError = UiText.Literal(outcome.message),
-                            placeErrorDetail = outcome.code
+                            placeErrorDetail = outcome.code,
+                            placeErrorKind = FailureKind.of(outcome.status, outcome.code)
                         )
                     }
                 }

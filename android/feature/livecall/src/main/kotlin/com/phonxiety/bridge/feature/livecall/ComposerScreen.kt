@@ -83,6 +83,7 @@ import com.phonxiety.bridge.designsystem.component.SectionCard
 import com.phonxiety.bridge.designsystem.component.StatusPill
 import com.phonxiety.bridge.designsystem.component.StatusTone
 import com.phonxiety.bridge.designsystem.formatPhoneNumber
+import com.phonxiety.bridge.model.FailureKind
 import java.text.NumberFormat
 
 /** Where a composer can be opened from: fresh, or prefilled by "call again". */
@@ -97,6 +98,7 @@ data class ComposerIntent(
 fun ComposerRoute(
     onBack: () -> Unit,
     onPlaced: (String) -> Unit,
+    onOpenDoctor: () -> Unit,
     modifier: Modifier = Modifier,
     intent: ComposerIntent = ComposerIntent(),
     viewModel: ComposerViewModel = hiltViewModel()
@@ -123,6 +125,7 @@ fun ComposerRoute(
         onReview = viewModel::review,
         onDismissReview = viewModel::dismissReview,
         onConfirm = viewModel::confirm,
+        onOpenDoctor = onOpenDoctor,
         modifier = modifier
     )
 }
@@ -147,6 +150,7 @@ fun ComposerScreen(
     onReview: () -> Unit,
     onDismissReview: () -> Unit,
     onConfirm: () -> Unit,
+    onOpenDoctor: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val focusManager = LocalFocusManager.current
@@ -200,6 +204,7 @@ fun ComposerScreen(
                         ErrorCard(
                             title = stringResource(R.string.live_call_action_failed_title),
                             message = issue.headline.asString(),
+                            kind = FailureKind.REFUSED,
                             output = issue.detail
                         )
                     }
@@ -207,7 +212,10 @@ fun ComposerScreen(
                         ErrorCard(
                             title = stringResource(R.string.composer_error_title),
                             message = message.asString(),
-                            output = state.placeErrorDetail
+                            kind = state.placeErrorKind,
+                            output = state.placeErrorDetail,
+                            onRetry = onConfirm,
+                            onOpenDoctor = onOpenDoctor
                         )
                     }
                 }

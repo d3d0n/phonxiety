@@ -142,7 +142,10 @@ internal fun TestCallCard(state: LabUiState, callbacks: LabCallbacks) {
             ErrorCard(
                 title = stringResource(R.string.lab_test_failed),
                 message = failure.message.asString(),
-                output = failure.code
+                kind = failure.kind,
+                output = failure.code,
+                onRetry = callbacks.onRequestTestCall,
+                onOpenDoctor = callbacks.onOpenDoctor
             )
         }
     }
@@ -219,6 +222,7 @@ internal fun TestCallResultCard(result: TestCallResultUi, onOpenCall: (String) -
             result.error != null -> ErrorCard(
                 title = stringResource(R.string.lab_test_result_failed),
                 message = result.error.message.asString(),
+                kind = result.error.kind,
                 output = result.error.code
             )
 

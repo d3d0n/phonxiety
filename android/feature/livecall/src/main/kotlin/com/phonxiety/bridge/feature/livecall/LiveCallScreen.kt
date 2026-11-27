@@ -59,6 +59,7 @@ import com.phonxiety.bridge.designsystem.component.StatusPill
 import com.phonxiety.bridge.designsystem.component.StatusTone
 import com.phonxiety.bridge.designsystem.farEndLabel
 import com.phonxiety.bridge.designsystem.formatPhoneNumber
+import com.phonxiety.bridge.model.CallId
 import kotlinx.coroutines.delay
 
 /** The live call entry point; the host only supplies navigation. */
@@ -67,10 +68,11 @@ fun LiveCallRoute(
     callId: String,
     onBack: () -> Unit,
     onOpenDetail: (String) -> Unit,
+    onOpenDoctor: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: LiveCallViewModel = hiltViewModel()
 ) {
-    LaunchedEffect(callId) { viewModel.bind(callId) }
+    LaunchedEffect(callId) { viewModel.bind(CallId(callId)) }
     val state by viewModel.state.collectAsStateWithLifecycle()
     val now by tickingNow()
     KeepScreenOn()
@@ -90,6 +92,7 @@ fun LiveCallRoute(
         onOpenCallScreen = viewModel::openCallScreen,
         onRetryHangUp = viewModel::hangUp,
         onOpenDetail = onOpenDetail,
+        onOpenDoctor = onOpenDoctor,
         nowEpochMs = now,
         modifier = modifier
     )
@@ -117,6 +120,7 @@ fun LiveCallScreen(
     onOpenCallScreen: () -> Unit,
     onRetryHangUp: () -> Unit,
     onOpenDetail: (String) -> Unit,
+    onOpenDoctor: () -> Unit = {},
     modifier: Modifier = Modifier,
     nowEpochMs: Long = System.currentTimeMillis()
 ) {
@@ -158,6 +162,7 @@ fun LiveCallScreen(
                     onOpenCallScreen = onOpenCallScreen,
                     onRetryHangUp = onRetryHangUp,
                     onOpenDetail = onOpenDetail,
+                    onOpenDoctor = onOpenDoctor,
                     nowEpochMs = nowEpochMs
                 )
             }
@@ -182,6 +187,7 @@ private fun LiveCallBody(
     onOpenCallScreen: () -> Unit,
     onRetryHangUp: () -> Unit,
     onOpenDetail: (String) -> Unit,
+    onOpenDoctor: () -> Unit,
     nowEpochMs: Long
 ) {
     val transcript = @Composable { modifier: Modifier ->
@@ -199,6 +205,7 @@ private fun LiveCallBody(
             onReload = onReload,
             onOpenCallScreen = onOpenCallScreen,
             onRetryHangUp = onRetryHangUp,
+            onOpenDoctor = onOpenDoctor,
             showError = showError,
             modifier = modifier
         )
@@ -246,7 +253,9 @@ private fun LiveCallBody(
                             LiveCallError(
                                 message = message,
                                 code = state.errorCode,
+                                kind = state.errorKind,
                                 onReload = onReload,
+                                onOpenDoctor = onOpenDoctor,
                                 hangUpFailed = state.hangUpFailed,
                                 onRetryHangUp = onRetryHangUp,
                                 onOpenCallScreen = if (state.callScreenAction) onOpenCallScreen else null,

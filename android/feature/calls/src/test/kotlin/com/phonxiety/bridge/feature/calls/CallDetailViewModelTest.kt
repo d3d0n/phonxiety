@@ -4,11 +4,14 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.ApiResult
+import com.phonxiety.bridge.data.DeleteOutcome
+import com.phonxiety.bridge.data.MarkOutcome
 import com.phonxiety.bridge.data.calls.CallDetailResult
 import com.phonxiety.bridge.data.calls.CallFilter
 import com.phonxiety.bridge.data.calls.CallPageResult
 import com.phonxiety.bridge.data.calls.CallsRepository
 import com.phonxiety.bridge.data.calls.TranscriptResult
+import com.phonxiety.bridge.model.CallId
 import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.CallSummary
 import com.phonxiety.bridge.model.DeleteCallResult
@@ -66,7 +69,7 @@ class CallDetailViewModelTest {
     }
 
     private fun viewModel(): CallDetailViewModel = CallDetailViewModel(context, repository, SilentPlayer).also {
-        it.bind(CALL_ID)
+        it.bind(CallId(CALL_ID))
     }
 
     @Test
@@ -274,32 +277,32 @@ private class RecordingCallsRepository : CallsRepository {
 
     override fun observeCalls(filter: CallFilter): Flow<List<CallSummary>> = flowOf(emptyList())
 
-    override fun observeCall(callId: String): Flow<CallSummary?> = flowOf(null)
+    override fun observeCall(callId: CallId): Flow<CallSummary?> = flowOf(null)
 
-    override fun observeDetail(callId: String): Flow<CallSnapshot?> = detailFlow
+    override fun observeDetail(callId: CallId): Flow<CallSnapshot?> = detailFlow
 
-    override fun observeTranscript(callId: String): Flow<List<TranscriptTurn>> = flowOf(emptyList())
+    override fun observeTranscript(callId: CallId): Flow<List<TranscriptTurn>> = flowOf(emptyList())
 
     override fun observeFarEnds(): Flow<List<String>> = flowOf(emptyList())
 
     override suspend fun page(filter: CallFilter, before: Double?, limit: Int): CallPageResult = CallPageResult(emptyList(), hasMore = false, nextBefore = null, failure = null)
 
-    override suspend fun detail(callId: String, refresh: Boolean): CallDetailResult {
+    override suspend fun detail(callId: CallId, refresh: Boolean): CallDetailResult {
         detailRequests++
         gate?.await()
         return CallDetailResult(networkSnapshot, failure = detailFailure, cached = networkSnapshot == null)
     }
 
-    override suspend fun transcript(callId: String, cursor: Long?, limit: Int): TranscriptResult = TranscriptResult(emptyList(), nextCursor = null, hasMore = false, complete = true, failure = null)
+    override suspend fun transcript(callId: CallId, cursor: Long?, limit: Int): TranscriptResult = TranscriptResult(emptyList(), nextCursor = null, hasMore = false, complete = true, failure = null)
 
-    override suspend fun addMark(callId: String, mark: String, note: String?): ApiOutcome<MarksResponse> = ApiOutcome.Ok(200, MarksResponse())
+    override suspend fun addMark(callId: CallId, mark: String, note: String?): MarkOutcome = MarkOutcome.Marked(200, MarksResponse().marks)
 
-    override suspend fun delete(callId: String): ApiOutcome<DeleteCallResult> {
-        deleted += callId
-        return ApiOutcome.Ok(200, DeleteCallResult())
+    override suspend fun delete(callId: CallId): DeleteOutcome {
+        deleted += callId.value
+        return DeleteOutcome.Deleted(200)
     }
 
-    override suspend fun downloadAudio(callId: String, format: String, file: File): ApiResult = ApiResult.Failure(501, "unused", "unused")
+    override suspend fun downloadAudio(callId: CallId, format: String, file: File): ApiResult = ApiResult.Failure(501, "unused", "unused")
 
     private companion object {
         val CALL = CallSnapshot(callId = "call-1", destination = "+998901234567", state = "ended", callOutcome = "answered")
