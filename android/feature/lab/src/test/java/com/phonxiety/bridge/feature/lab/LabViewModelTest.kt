@@ -211,6 +211,127 @@ class LabViewModelTest {
     }
 
     @Test
+    fun `a loopback failure and its retry end with the call they belong to`() = runTest(testDispatcher) {
+        api.loopbackHandler = { _, _ -> ApiOutcome.Failure(503, "link_down", "the daemon is unreachable") }
+        val vm = viewModel()
+        bridge.flow.value = BridgeState(call = CallState("call-1", "+1•••23", CallPhase.ACTIVE, 0L))
+        withTimeout(5_000) { vm.state.first { it.callPhase == "active" } }
+        vm.setLoopback(true)
+        withTimeout(5_000) { vm.state.first { it.audio.error != null } }
+
+        bridge.flow.value = BridgeState(call = CallState("call-1", "+1•••23", CallPhase.ENDED, 0L))
+        withTimeout(5_000) { vm.state.first { it.callPhase == "ended" } }
+
+        val audio = vm.state.value.audio
+        assertNull("the failure went with its call", audio.error)
+        assertNull("and so did its Retry", audio.failedOp)
+    }
+
+    @Test
+    fun `a failure from the previous call offers no retry on the next one`() = runTest(testDispatcher) {
+        val requests = mutableListOf<Pair<Boolean, String?>>()
+        api.loopbackHandler = { enabled, callId ->
+            requests += enabled to callId?.value
+            if (requests.size == 1) {
+                ApiOutcome.Failure(503, "link_down", "the daemon is unreachable")
+            } else {
+                ApiOutcome.Ok(200, LoopbackResult(enabled = enabled, result = null))
+            }
+        }
+        val vm = viewModel()
+        bridge.flow.value = BridgeState(call = CallState("call-1", "+1•••23", CallPhase.ACTIVE, 0L))
+        withTimeout(5_000) { vm.state.first { it.callPhase == "active" } }
+        vm.setLoopback(true)
+        withTimeout(5_000) { vm.state.first { it.audio.error != null } }
+
+        bridge.flow.value = BridgeState(call = CallState("call-2", "+1•••23", CallPhase.ACTIVE, 0L))
+        withTimeout(5_000) { vm.state.first { it.callId == "call-2" } }
+
+        assertNull("B is offered no Retry for A's failure", vm.state.value.audio.error)
+        assertNull(vm.state.value.audio.failedOp)
+        vm.retryAudio()
+        advanceUntilIdle()
+        assertEquals("nothing is sent to B", listOf(true to "call-1"), requests)
+    }
+
+    @Test
+    fun `a late answer to the previous call changes nothing on the next one`() = runTest(testDispatcher) {
+        val answer = CompletableDeferred<ApiOutcome<LoopbackResult>>()
+        api.loopbackHandler = { _, _ -> answer.await() }
+        val vm = viewModel()
+        bridge.flow.value = BridgeState(call = CallState("call-1", "+1•••23", CallPhase.ACTIVE, 0L))
+        withTimeout(5_000) { vm.state.first { it.callPhase == "active" } }
+        vm.setLoopback(true)
+        runCurrent()
+        assertTrue(vm.state.value.audio.busy)
+
+        bridge.flow.value = BridgeState(call = CallState("call-2", "+1•••23", CallPhase.ACTIVE, 0L))
+        withTimeout(5_000) { vm.state.first { it.callId == "call-2" } }
+
+        answer.complete(ApiOutcome.Ok(200, LoopbackResult(enabled = true, result = null)))
+        withTimeout(5_000) { vm.state.first { !it.audio.busy } }
+
+        val audio = vm.state.value.audio
+        assertNull(audio.error)
+        assertFalse("A's loopback is not B's", audio.loopbackOn)
+        assertNull("A's answer is not B's note", audio.note)
+    }
+
+    @Test
+    fun `a late failure of the previous call is not shown on the next one`() = runTest(testDispatcher) {
+        val answer = CompletableDeferred<ApiOutcome<ToneResult>>()
+        api.toneHandler = { _, _, _, _ -> answer.await() }
+        val vm = viewModel()
+        bridge.flow.value = BridgeState(call = CallState("call-1", "+1•••23", CallPhase.ACTIVE, 0L))
+        withTimeout(5_000) { vm.state.first { it.callPhase == "active" } }
+        vm.playTone()
+        runCurrent()
+
+        bridge.flow.value = BridgeState(call = CallState("call-2", "+1•••23", CallPhase.ACTIVE, 0L))
+        withTimeout(5_000) { vm.state.first { it.callId == "call-2" } }
+
+        answer.complete(ApiOutcome.Failure(503, "link_down", "the daemon is unreachable"))
+        withTimeout(5_000) { vm.state.first { !it.audio.busy } }
+
+        assertNull("A's failure is not B's", vm.state.value.audio.error)
+        assertNull(vm.state.value.audio.failedOp)
+    }
+
+    @Test
+    fun `a failed tone is retried with its own frequency and level`() = runTest(testDispatcher) {
+        val tones = mutableListOf<Triple<Int?, Double?, String?>>()
+        api.toneHandler = { hz, dbfs, _, callId ->
+            tones += Triple(hz, dbfs, callId?.value)
+            if (tones.size == 1) {
+                ApiOutcome.Failure(503, "link_down", "the daemon is unreachable")
+            } else {
+                ApiOutcome.Ok(200, ToneResult(started = true))
+            }
+        }
+        val vm = viewModel()
+        bridge.flow.value = BridgeState(call = CallState("call-1", "+1•••23", CallPhase.ACTIVE, 0L))
+        withTimeout(5_000) { vm.state.first { it.callPhase == "active" } }
+
+        vm.setToneHz(700)
+        vm.setToneDbfs(-12.0)
+        vm.playTone()
+        withTimeout(5_000) { vm.state.first { it.audio.error != null } }
+        assertEquals(AudioOp.TONE, vm.state.value.audio.failedOp)
+
+        // The sliders move after the failure: Retry still replays the tone that failed.
+        vm.setToneHz(3_000)
+        vm.setToneDbfs(-30.0)
+        vm.retryAudio()
+        withTimeout(5_000) { vm.state.first { it.audio.note != null } }
+
+        val expected = listOf<Triple<Int?, Double?, String?>>(
+            Triple(700, -12.0, "call-1"),
+            Triple(700, -12.0, "call-1")
+        )
+        assertEquals(expected, tones)
+    }
+
+    @Test
     fun `a failed bundle export is retried as an export and not a read`() = runTest(testDispatcher) {
         var exports = 0
         var reads = 0

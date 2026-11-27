@@ -147,7 +147,17 @@ class LabViewModel @Inject constructor(
     private fun applyBridgeState(bridge: BridgeState) {
         val phase = bridge.call?.phase?.name?.lowercase(Locale.US)
         val callId = bridge.call?.callId
-        _state.update { it.copy(callPhase = phase, callId = callId) }
+        _state.update { state ->
+            // A failure is a Retry for one call only: once that call ends or another takes its
+            // place, the failure and its Retry go with it rather than pointing at the new call.
+            val audio = state.audio
+            val live = phase == PHASE_ACTIVE && callId != null && callId == audio.failedCallId
+            state.copy(
+                callPhase = phase,
+                callId = callId,
+                audio = if (audio.failedOp != null && !live) audio.withoutFailure() else audio
+            )
+        }
         // The accepted call's record is watched from placement, because a test call can fail
         // before Telecom ever reports it here. This phone's ENDED only asks for the read the
         // record may already answer.
@@ -394,34 +404,36 @@ class LabViewModel @Inject constructor(
     fun setLoopback(enabled: Boolean) {
         val current = _state.value
         if (!current.audioEnabled || current.audio.busy) return
-        _state.update { it.copy(audio = it.audio.copy(busy = true, error = null, failedOp = null, failedLoopback = null)) }
+        val callId = current.callId
+        _state.update { it.copy(audio = it.audio.withoutFailure().copy(busy = true)) }
         viewModelScope.launch {
-            when (val outcome = api.loopback(enabled, current.callId?.let(::CallId))) {
-                is ApiOutcome.Ok -> _state.update {
+            when (val outcome = api.loopback(enabled, callId?.let(::CallId))) {
+                is ApiOutcome.Ok -> applyAudioAnswer(callId) {
                     it.copy(
-                        audio = it.audio.copy(
-                            busy = false,
-                            loopbackOn = outcome.value.enabled,
-                            error = null,
-                            failedOp = null,
-                            failedLoopback = null,
-                            note = if (outcome.value.enabled) UiText.Res(R.string.lab_audio_on) else null
-                        )
+                        loopbackOn = outcome.value.enabled,
+                        note = if (outcome.value.enabled) UiText.Res(R.string.lab_audio_on) else null
                     )
                 }
 
-                is ApiOutcome.Failure -> _state.update {
+                is ApiOutcome.Failure -> applyAudioAnswer(callId) {
                     it.copy(
-                        audio = it.audio.copy(
-                            busy = false,
-                            error = outcome.failure(),
-                            failedOp = AudioOp.LOOPBACK,
-                            failedLoopback = enabled
-                        )
+                        error = outcome.failure(),
+                        failedOp = AudioOp.LOOPBACK,
+                        failedLoopback = enabled,
+                        failedCallId = callId
                     )
                 }
             }
         }
+    }
+
+    /**
+     * Applies an audio answer only while the call it was asked inside is still the live one: a late
+     * answer from a previous call stops the spinner and changes nothing else.
+     */
+    private fun applyAudioAnswer(callId: String?, update: (AudioUi) -> AudioUi) = _state.update { state ->
+        val live = state.audioEnabled && state.callId == callId
+        state.copy(audio = (if (live) update(state.audio.withoutFailure()) else state.audio).copy(busy = false))
     }
 
     fun setToneHz(hz: Int) = _state.update { it.copy(audio = it.audio.copy(toneHz = hz.coerceIn(100, 4_000))) }
@@ -429,43 +441,47 @@ class LabViewModel @Inject constructor(
     fun setToneDbfs(dbfs: Double) = _state.update { it.copy(audio = it.audio.copy(toneDbfs = dbfs.coerceIn(-60.0, 0.0))) }
 
     fun playTone() {
+        val audio = _state.value.audio
+        playTone(audio.toneHz, audio.toneDbfs)
+    }
+
+    /** Plays [hz] at [dbfs] inside the live call; Retry replays the tone that failed, not the sliders. */
+    private fun playTone(hz: Int, dbfs: Double) {
         val current = _state.value
         if (!current.audioEnabled || current.audio.busy) return
-        _state.update { it.copy(audio = it.audio.copy(busy = true, error = null, failedOp = null, failedLoopback = null)) }
+        val callId = current.callId
+        _state.update { it.copy(audio = it.audio.withoutFailure().copy(busy = true)) }
         viewModelScope.launch {
-            when (val outcome = api.tone(current.audio.toneHz, current.audio.toneDbfs, TONE_SECONDS, current.callId?.let(::CallId))) {
-                is ApiOutcome.Ok -> _state.update {
-                    it.copy(
-                        audio = it.audio.copy(
-                            busy = false,
-                            error = null,
-                            failedOp = null,
-                            failedLoopback = null,
-                            note = UiText.Res(R.string.lab_audio_played, listOf(TONE_SECONDS.toInt()))
-                        )
-                    )
+            when (val outcome = api.tone(hz, dbfs, TONE_SECONDS, callId?.let(::CallId))) {
+                is ApiOutcome.Ok -> applyAudioAnswer(callId) {
+                    it.copy(note = UiText.Res(R.string.lab_audio_played, listOf(TONE_SECONDS.toInt())))
                 }
 
-                is ApiOutcome.Failure -> _state.update {
+                is ApiOutcome.Failure -> applyAudioAnswer(callId) {
                     it.copy(
-                        audio = it.audio.copy(
-                            busy = false,
-                            error = outcome.failure(),
-                            failedOp = AudioOp.TONE,
-                            failedLoopback = null
-                        )
+                        error = outcome.failure(),
+                        failedOp = AudioOp.TONE,
+                        failedCallId = callId,
+                        failedToneHz = hz,
+                        failedToneDbfs = dbfs
                     )
                 }
             }
         }
     }
 
-    /** Repeats the audio operation whose failure is on screen: the same loopback, or a tone. */
+    /** Repeats the audio operation whose failure is on screen: the same loopback, or the same tone. */
     fun retryAudio() {
         val audio = _state.value.audio
         when (audio.failedOp) {
             AudioOp.LOOPBACK -> audio.failedLoopback?.let(::setLoopback)
-            AudioOp.TONE -> playTone()
+
+            AudioOp.TONE -> {
+                val hz = audio.failedToneHz
+                val dbfs = audio.failedToneDbfs
+                if (hz != null && dbfs != null) playTone(hz, dbfs)
+            }
+
             null -> Unit
         }
     }

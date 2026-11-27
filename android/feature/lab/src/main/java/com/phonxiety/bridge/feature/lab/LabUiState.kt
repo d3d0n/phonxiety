@@ -35,7 +35,7 @@ data class LabUiState(
     val share: ShareRequest? = null
 ) {
     /** Loopback and a tone only make sense while this phone owns a live call. */
-    val audioEnabled: Boolean get() = callPhase == "active" && callId != null
+    val audioEnabled: Boolean get() = callPhase == PHASE_ACTIVE && callId != null
 
     // The bridge keeps the last call it saw after it ends. That record is no call to run audio
     // inside any more, so the card asks for a new one instead of one to go active.
@@ -43,7 +43,7 @@ data class LabUiState(
         get() = when {
             loopbackSupported == false && toneSupported == false -> UiText.Res(R.string.lab_audio_reason_none)
             callPhase == null || callPhase == "ended" -> UiText.Res(R.string.lab_audio_reason_no_call)
-            callPhase != "active" -> UiText.Res(R.string.lab_audio_reason_not_active)
+            callPhase != PHASE_ACTIVE -> UiText.Res(R.string.lab_audio_reason_not_active)
             else -> null
         }
 
@@ -103,6 +103,9 @@ data class ProbeRowUi(
 /** The audio action whose failure is on screen; a retry repeats exactly that one. */
 enum class AudioOp { LOOPBACK, TONE }
 
+/** The bridge's word for a call this phone owns right now: the only call audio runs inside. */
+internal const val PHASE_ACTIVE = "active"
+
 data class AudioUi(
     val loopbackOn: Boolean = false,
     val toneHz: Int = 1_000,
@@ -113,7 +116,23 @@ data class AudioUi(
     val failedOp: AudioOp? = null,
     /** The loopback value a failed loopback asked for; Retry re-requests the same one. */
     val failedLoopback: Boolean? = null,
+    /** The call the failed operation asked inside: its failure, and its Retry, live only with it. */
+    val failedCallId: String? = null,
+    /** The frequency a failed tone asked for; Retry replays that exact request, not the sliders. */
+    val failedToneHz: Int? = null,
+    /** The level a failed tone asked for, kept with [failedToneHz]. */
+    val failedToneDbfs: Double? = null,
     val note: UiText? = null
+)
+
+/** The failure and its Retry gone: a new request, or the end of its call, takes them with it. */
+internal fun AudioUi.withoutFailure(): AudioUi = copy(
+    error = null,
+    failedOp = null,
+    failedLoopback = null,
+    failedCallId = null,
+    failedToneHz = null,
+    failedToneDbfs = null
 )
 
 data class TestCallUi(
