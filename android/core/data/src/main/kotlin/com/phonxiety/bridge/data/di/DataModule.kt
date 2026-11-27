@@ -3,6 +3,7 @@ package com.phonxiety.bridge.data.di
 import android.content.Context
 import com.phonxiety.bridge.data.AppApi
 import com.phonxiety.bridge.data.BridgeStateRepository
+import com.phonxiety.bridge.data.CallEventsSource
 import com.phonxiety.bridge.data.DaemonApi
 import com.phonxiety.bridge.data.DefaultDaemonApi
 import com.phonxiety.bridge.data.DevicePairingRepository
@@ -143,6 +144,12 @@ abstract class DataModule {
     abstract fun moduleUpdateSeam(impl: DefaultModuleUpdateSeam): ModuleUpdateSeam
 
     companion object {
+        @Provides
+        @Singleton
+        fun callEventsSource(daemonApi: DaemonApi): CallEventsSource = CallEventsSource { callId, since, waitSeconds ->
+            daemonApi.events(callId, since, waitSeconds)
+        }
+
         @Provides
         @Singleton
         fun updateArtifactSource(daemonApi: DaemonApi): UpdateArtifactSource = UpdateArtifactSource { name, sink ->

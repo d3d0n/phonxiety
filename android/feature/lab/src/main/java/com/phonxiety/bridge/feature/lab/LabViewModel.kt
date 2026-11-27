@@ -13,6 +13,7 @@ import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.ApiResult
 import com.phonxiety.bridge.data.BridgeStateRepository
 import com.phonxiety.bridge.data.DaemonApi
+import com.phonxiety.bridge.data.LiveCallFeed
 import com.phonxiety.bridge.data.LiveCallFront
 import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.BridgeState
@@ -34,6 +35,7 @@ import kotlin.math.roundToLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -43,6 +45,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * The test lab: every tool calls the daemon's app API and keeps the numbers locally, so the
@@ -54,7 +57,8 @@ class LabViewModel @Inject constructor(
     bridgeState: BridgeStateRepository,
     private val phonePreferences: PhonePreferences,
     private val lanPathCheck: LanPathCheck,
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val liveCallFeed: LiveCallFeed
 ) : ViewModel() {
     private val history = LabHistoryStore(File(context.filesDir, "lab/link-tests.json"))
     private val _state = MutableStateFlow(LabUiState())
@@ -638,28 +642,45 @@ class LabViewModel @Inject constructor(
         var record: CallSnapshot? = null
         var failure: LabFailure? = null
         var finished = false
-        // Waiting for the daemon's verdict: the daemon caps a test call at 60 s, so a record that
-        // outlives this is not one this screen is going to see finish.
-        while (isCurrent(generation, callId)) {
-            polls++
-            when (val outcome = api.call(CallId(callId))) {
-                is ApiOutcome.Ok -> {
-                    record = outcome.value
-                    failure = null
-                    failuresInARow = 0
-                    if (outcome.value.finished()) {
-                        finished = true
-                        break
+        // The call's events can say the daemon finished before the record does: one conflated
+        // token wakes one record read, and the record stays the card's source.
+        val callEnded = Channel<Unit>(Channel.CONFLATED)
+        var watcher: Job? = null
+        try {
+            // Waiting for the daemon's verdict: the daemon caps a test call at 60 s, so a record
+            // that outlives this is not one this screen is going to see finish.
+            while (isCurrent(generation, callId)) {
+                polls++
+                when (val outcome = api.call(CallId(callId))) {
+                    is ApiOutcome.Ok -> {
+                        record = outcome.value
+                        failure = null
+                        failuresInARow = 0
+                        if (outcome.value.finished()) {
+                            finished = true
+                            break
+                        }
+                        if (watcher == null) {
+                            watcher = viewModelScope.launch {
+                                liveCallFeed.state(CallId(callId)).first { it.ended }
+                                callEnded.trySend(Unit)
+                            }
+                        }
+                    }
+
+                    is ApiOutcome.Failure -> {
+                        failure = outcome.failure()
+                        failuresInARow++
                     }
                 }
-
-                is ApiOutcome.Failure -> {
-                    failure = outcome.failure()
-                    failuresInARow++
+                if (failuresInARow >= RESULT_ATTEMPTS || polls >= LIVE_POLLS) break
+                // A terminal page wakes the loop early; otherwise this is the old retry delay.
+                if (callEnded.tryReceive().isFailure) {
+                    withTimeoutOrNull(resultRetryDelayMs) { callEnded.receive() }
                 }
             }
-            if (failuresInARow >= RESULT_ATTEMPTS || polls >= LIVE_POLLS) break
-            delay(resultRetryDelayMs)
+        } finally {
+            watcher?.cancel()
         }
         if (!isCurrent(generation, callId)) return
         if (!finished) {

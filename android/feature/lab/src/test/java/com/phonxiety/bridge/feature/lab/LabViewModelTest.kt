@@ -10,12 +10,16 @@ import com.phonxiety.bridge.PhonePreferences
 import com.phonxiety.bridge.PhoneSettings
 import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.BridgeStateRepository
+import com.phonxiety.bridge.data.CallEventsSource
+import com.phonxiety.bridge.data.LiveCallFeed
 import com.phonxiety.bridge.data.LiveCallFront
 import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.AppGateway
 import com.phonxiety.bridge.model.AttachmentHeader
 import com.phonxiety.bridge.model.AttachmentOutcome
 import com.phonxiety.bridge.model.BridgeState
+import com.phonxiety.bridge.model.CallEvent
+import com.phonxiety.bridge.model.CallEventsPage
 import com.phonxiety.bridge.model.CallPhase
 import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.CallState
@@ -38,8 +42,10 @@ import java.io.File
 import java.io.IOException
 import java.io.OutputStream
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -50,6 +56,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestDispatcher
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
@@ -84,6 +91,9 @@ class LabViewModelTest {
     /** Every view model this test made, cancelled when it ends. */
     private val viewModels = mutableListOf<LabViewModel>()
 
+    /** The feed's own scopes: its loop outlives a screen, so the test owns and cancels them. */
+    private val feedScopes = mutableListOf<CoroutineScope>()
+
     private lateinit var context: Context
     private lateinit var api: FakeDaemonApi
     private lateinit var prefs: FakePhonePreferences
@@ -109,6 +119,8 @@ class LabViewModelTest {
         // No read, collector or retry outlives the test that started it.
         viewModels.forEach { it.viewModelScope.cancel() }
         viewModels.clear()
+        feedScopes.forEach { it.cancel() }
+        feedScopes.clear()
         PairingGate.resetForTest()
         Dispatchers.resetMain()
     }
@@ -119,7 +131,17 @@ class LabViewModelTest {
         PairingGate.expect(CandidateMerge.identity(stored))
     }
 
-    private fun viewModel(): LabViewModel = LabViewModel(api, bridge, prefs, lanCheck, context).apply {
+    /** The shared call feed of this test's daemon, on the test clock so its delays are virtual. */
+    private fun TestScope.feed(): LiveCallFeed {
+        val scope = CoroutineScope(SupervisorJob() + testDispatcher)
+        feedScopes += scope
+        return LiveCallFeed(
+            CallEventsSource { callId, since, waitSeconds -> api.events(callId, since, waitSeconds) },
+            scope
+        )
+    }
+
+    private fun TestScope.viewModel(): LabViewModel = LabViewModel(api, bridge, prefs, lanCheck, context, feed()).apply {
         // The record of a placed call is read on a one-second cadence in the app; tests do not wait.
         resultRetryDelayMs = 1
         viewModels += this
@@ -907,6 +929,53 @@ class LabViewModelTest {
     }
 
     @Test
+    fun `a terminal event reads the record before the retry delay`() = runTest(testDispatcher) {
+        api.testCallHandler = { ApiOutcome.Ok(200, CallSnapshot(callId = "call-event", profile = "test")) }
+        api.callHandler = { callId ->
+            if (api.callRequests.size < 2) {
+                ApiOutcome.Ok(200, CallSnapshot(callId = callId.value, state = "active"))
+            } else {
+                ApiOutcome.Ok(
+                    200,
+                    CallSnapshot(
+                        callId = callId.value,
+                        state = "ended",
+                        resultStatus = "ready",
+                        summary = "The line answered and the tone was heard."
+                    )
+                )
+            }
+        }
+        api.eventsHandler = {
+            ApiOutcome.Ok(
+                200,
+                CallEventsPage(
+                    callId = "call-event",
+                    revision = 1,
+                    state = "ended",
+                    events = listOf(CallEvent(type = "ended", revision = 1, state = "ended"))
+                )
+            )
+        }
+        val vm = viewModel()
+        vm.resultRetryDelayMs = 10_000
+        vm.setTestNumber("+12025550123")
+        withTimeout(5_000) { vm.state.first { it.testCall.number == "+12025550123" } }
+        vm.requestTestCall()
+        vm.confirmTestCall()
+        withTimeout(5_000) { vm.state.first { it.testCall.callId != null } }
+
+        // The record still says "active", and the retry delay is ten seconds. A second read this
+        // early can only be the call's own terminal event waking the wait.
+        advanceTimeBy(2)
+        runCurrent()
+        assertEquals("the terminal page woke the record read", 2, api.callRequests.size)
+
+        withTimeout(5_000) { vm.state.first { it.testCall.result?.summary == "The line answered and the tone was heard." } }
+        assertFalse(vm.state.value.testCall.result!!.unfinished)
+    }
+
+    @Test
     fun `a new placement never inherits the previous call's result`() = runTest(testDispatcher) {
         var placements = 0
         api.testCallHandler = { _ ->
@@ -1034,7 +1103,7 @@ class LabViewModelTest {
     @Test
     fun `a failed switch write's late read never undoes a newer tap`() = runTest(testDispatcher) {
         val store = HeldReadFrameTapPreferences(PhoneSettings(frameTap = false))
-        val vm = LabViewModel(api, bridge, store, lanCheck, context).apply {
+        val vm = LabViewModel(api, bridge, store, lanCheck, context, feed()).apply {
             resultRetryDelayMs = 1
             viewModels += this
         }

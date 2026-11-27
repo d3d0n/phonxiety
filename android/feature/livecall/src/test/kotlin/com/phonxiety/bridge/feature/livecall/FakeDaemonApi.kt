@@ -50,6 +50,7 @@ import kotlinx.serialization.json.JsonObject
  */
 class FakeDaemonApi : DaemonApi {
     val eventsRequests = mutableListOf<Long?>()
+    var callReads = 0
     val validateRequests = mutableListOf<PlaceCallRequest>()
     val placedRequests = mutableListOf<PlaceCallRequest>()
     val instructionRequests = mutableListOf<String>()
@@ -95,7 +96,10 @@ class FakeDaemonApi : DaemonApi {
         }
     }
 
-    override suspend fun call(callId: CallId): ApiOutcome<CallSnapshot> = callSnapshot
+    override suspend fun call(callId: CallId): ApiOutcome<CallSnapshot> {
+        callReads++
+        return callSnapshot
+    }
 
     override suspend fun validateCall(request: PlaceCallRequest): ApiOutcome<ValidationResult> {
         validateRequests += request

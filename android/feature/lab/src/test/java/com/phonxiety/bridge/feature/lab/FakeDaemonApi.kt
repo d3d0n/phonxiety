@@ -53,6 +53,7 @@ open class FakeDaemonApi : DaemonApi {
         { _, _, _, _ -> unset("tone") }
     var testCallHandler: suspend (TestCallRequest) -> ApiOutcome<CallSnapshot> = { unset("testCall") }
     var callHandler: suspend (CallId) -> ApiOutcome<CallSnapshot> = { unset("call") }
+    var eventsHandler: suspend (Long?) -> ApiOutcome<CallEventsPage> = { unset("events") }
 
     /** Every record the lab asked for, in order. */
     val callRequests = mutableListOf<String>()
@@ -109,7 +110,7 @@ open class FakeDaemonApi : DaemonApi {
         return callHandler(callId)
     }
     override suspend fun transcript(callId: CallId, cursor: Long?, limit: Int?): ApiOutcome<TranscriptPage> = unset("transcript")
-    override suspend fun events(callId: CallId, since: Long?, waitSeconds: Double?): ApiOutcome<CallEventsPage> = unset("events")
+    override suspend fun events(callId: CallId, since: Long?, waitSeconds: Double?): ApiOutcome<CallEventsPage> = eventsHandler(since)
     override suspend fun instruction(callId: CallId, text: String): ApiOutcome<InstructionResult> = unset("instruction")
     override suspend fun pause(callId: CallId): PauseOutcome = error("pause")
     override suspend fun resume(callId: CallId): ResumeOutcome = error("resume")

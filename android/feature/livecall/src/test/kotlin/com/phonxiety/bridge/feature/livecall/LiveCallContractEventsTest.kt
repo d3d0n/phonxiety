@@ -1,5 +1,6 @@
 package com.phonxiety.bridge.feature.livecall
 
+import com.phonxiety.bridge.data.freshEvents
 import com.phonxiety.bridge.model.CallEvent
 import com.phonxiety.bridge.model.CallMark
 import com.phonxiety.bridge.model.TranscriptTurn

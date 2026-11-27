@@ -2,6 +2,8 @@ package com.phonxiety.bridge.feature.livecall
 
 import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.BridgeStateRepository
+import com.phonxiety.bridge.data.CallEventsSource
+import com.phonxiety.bridge.data.LiveCallFeed
 import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.AudioState
 import com.phonxiety.bridge.model.BridgeState
@@ -18,10 +20,14 @@ import com.phonxiety.bridge.model.SummaryResult
 import com.phonxiety.bridge.model.TranscriptTurn
 import com.phonxiety.bridge.model.VoiceControls
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
@@ -47,6 +53,9 @@ import org.junit.Test
 class LiveCallViewModelTest {
     private val dispatcher = StandardTestDispatcher()
 
+    /** The feed's own scopes: its loop outlives a screen, so the test owns and cancels them. */
+    private val feedScopes = mutableListOf<CoroutineScope>()
+
     @Before
     fun setUp() {
         Dispatchers.setMain(dispatcher)
@@ -54,6 +63,8 @@ class LiveCallViewModelTest {
 
     @After
     fun tearDown() {
+        feedScopes.forEach { it.cancel() }
+        feedScopes.clear()
         Dispatchers.resetMain()
     }
 
@@ -636,7 +647,7 @@ class LiveCallViewModelTest {
         val api = FakeDaemonApi()
         api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = null))
         val bridge = FakeBridgeState()
-        val viewModel = LiveCallViewModel(api, bridge, FakeCallScreenOpener())
+        val viewModel = LiveCallViewModel(api, bridge, FakeCallScreenOpener(), feed(api))
         viewModel.bind(CallId(CALL_ID))
         runCurrent()
 
@@ -705,7 +716,7 @@ class LiveCallViewModelTest {
         // The snapshot answers after Telecom already dialed, and still says "preparing".
         api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "preparing"))
         val bridge = FakeBridgeState()
-        val viewModel = LiveCallViewModel(api, bridge, FakeCallScreenOpener())
+        val viewModel = LiveCallViewModel(api, bridge, FakeCallScreenOpener(), feed(api))
         viewModel.bind(CallId(CALL_ID))
         runCurrent()
         assertEquals("preparing", viewModel.state.value.state)
@@ -732,7 +743,7 @@ class LiveCallViewModelTest {
         api.info = ApiOutcome.Ok(200, DaemonInfo(voiceControls = VoiceControls(hangup = true)))
         api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "preparing"))
         val bridge = FakeBridgeState()
-        val viewModel = LiveCallViewModel(api, bridge, FakeCallScreenOpener())
+        val viewModel = LiveCallViewModel(api, bridge, FakeCallScreenOpener(), feed(api))
         viewModel.bind(CallId(CALL_ID))
         runCurrent()
 
@@ -789,7 +800,7 @@ class LiveCallViewModelTest {
         val placedAt = (System.currentTimeMillis() - 600_000) / 1_000.0
         api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "preparing", createdAt = placedAt, connectedAt = null))
         val bridge = FakeBridgeState()
-        val viewModel = LiveCallViewModel(api, bridge, FakeCallScreenOpener())
+        val viewModel = LiveCallViewModel(api, bridge, FakeCallScreenOpener(), feed(api))
         viewModel.bind(CallId(CALL_ID))
         runCurrent()
 
@@ -864,7 +875,7 @@ class LiveCallViewModelTest {
             BridgeState(call = CallState(CALL_ID, "+998 ·· 67", CallPhase.ACTIVE, connectedAtMs - 80_000, connectedAtMs))
         )
 
-        val viewModel = LiveCallViewModel(api, bridge, FakeCallScreenOpener())
+        val viewModel = LiveCallViewModel(api, bridge, FakeCallScreenOpener(), feed(api))
         viewModel.bind(CallId(CALL_ID))
         runCurrent()
 
@@ -891,7 +902,7 @@ class LiveCallViewModelTest {
         val placedAt = (System.currentTimeMillis() - 600_000) / 1_000.0
         api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "active", createdAt = placedAt, connectedAt = null))
         val bridge = FakeBridgeState()
-        val viewModel = LiveCallViewModel(api, bridge, FakeCallScreenOpener())
+        val viewModel = LiveCallViewModel(api, bridge, FakeCallScreenOpener(), feed(api))
         viewModel.bind(CallId(CALL_ID))
         runCurrent()
 
@@ -935,7 +946,7 @@ class LiveCallViewModelTest {
             snapshot(state = "active", createdAt = (System.currentTimeMillis() - 60_000) / 1_000.0, connectedAt = null)
         )
         val bridge = FakeBridgeState()
-        val viewModel = LiveCallViewModel(api, bridge, FakeCallScreenOpener())
+        val viewModel = LiveCallViewModel(api, bridge, FakeCallScreenOpener(), feed(api))
         viewModel.bind(CallId(CALL_ID))
         runCurrent()
 
@@ -971,7 +982,7 @@ class LiveCallViewModelTest {
         val api = FakeDaemonApi()
         api.callSnapshot = ApiOutcome.Failure(404, "call_not_found", "no call")
         val bridge = FakeBridgeState()
-        val viewModel = LiveCallViewModel(api, bridge, FakeCallScreenOpener())
+        val viewModel = LiveCallViewModel(api, bridge, FakeCallScreenOpener(), feed(api))
         viewModel.bind(CallId(CALL_ID))
         runCurrent()
 
@@ -996,10 +1007,48 @@ class LiveCallViewModelTest {
         advanceUntilIdle()
     }
 
-    private fun viewModel(
+    /**
+     * A page that dropped events is not a cursor problem: the record is the only complete copy,
+     * so the screen re-reads it and then continues from the page's own revision.
+     */
+    @Test
+    fun aTruncatedPageRereadsTheWholeRecord() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "active", transcript = listOf(turn(1, "agent", "Hello"))))
+        api.events += ApiOutcome.Ok(200, page(revision = 4, events = emptyList(), truncated = true))
+        api.events += ApiOutcome.Ok(200, page(revision = 5, events = listOf(endedEvent(5))))
+
+        val viewModel = viewModel(api)
+        viewModel.bind(CallId(CALL_ID))
+        advanceUntilIdle()
+
+        // The first read is bind's own; the truncated page asks for the record again; the terminal
+        // page picks up the final record once.
+        assertEquals(3, api.callReads)
+        assertEquals("the cursor still advances past the dropped events", listOf<Long?>(0L, 4L), api.eventsRequests)
+        assertEquals(listOf(1L), viewModel.state.value.turns.map { it.sequence })
+        assertTrue(viewModel.state.value.ended)
+    }
+
+    /**
+     * A feed of this test's daemon, running on the test clock: the screen consumes the shared
+     * stream, and the test drives the pages the stream carries.
+     */
+    private fun TestScope.feed(api: FakeDaemonApi): LiveCallFeed {
+        // The feed is a process-wide object with its own job, not a child of the test: give it the
+        // test clock but not the test's failure semantics, and cancel it in tearDown.
+        val scope = CoroutineScope(SupervisorJob() + dispatcher)
+        feedScopes += scope
+        return LiveCallFeed(
+            CallEventsSource { callId, since, waitSeconds -> api.events(callId, since, waitSeconds) },
+            scope
+        )
+    }
+
+    private fun TestScope.viewModel(
         api: FakeDaemonApi,
         callScreen: CallScreenOpener = FakeCallScreenOpener()
-    ): LiveCallViewModel = LiveCallViewModel(api, FakeBridgeState(), callScreen)
+    ): LiveCallViewModel = LiveCallViewModel(api, FakeBridgeState(), callScreen, feed(api))
 
     private companion object {
         const val CALL_ID = "call-2026-11-26"
@@ -1060,11 +1109,12 @@ fun turn(sequence: Long, role: String, text: String): TranscriptTurn = Transcrip
     finalTurn = true
 )
 
-fun page(revision: Long, events: List<CallEvent>): CallEventsPage = CallEventsPage(
+fun page(revision: Long, events: List<CallEvent>, truncated: Boolean = false): CallEventsPage = CallEventsPage(
     callId = "call-2026-11-26",
     revision = revision,
     state = events.lastOrNull()?.state,
-    events = events
+    events = events,
+    truncated = truncated
 )
 
 fun stateEvent(revision: Long, state: String): CallEvent = CallEvent(type = "state", revision = revision, state = state)

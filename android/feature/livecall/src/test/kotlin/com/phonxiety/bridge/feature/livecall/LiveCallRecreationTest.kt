@@ -21,10 +21,15 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.phonxiety.bridge.data.ApiOutcome
+import com.phonxiety.bridge.data.CallEventsSource
+import com.phonxiety.bridge.data.LiveCallFeed
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
 import com.phonxiety.bridge.model.CallId
 import com.phonxiety.bridge.model.DaemonInfo
 import com.phonxiety.bridge.model.VoiceControls
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Rule
@@ -51,8 +56,14 @@ class LiveCallRecreationTest {
         hangup = ApiOutcome.Ok(200, snapshot(state = "ending"))
     }
 
+    /** The feed only exists so the screen has its shared stream; this call ends through hang-up. */
+    private val feed = LiveCallFeed(
+        CallEventsSource { callId, since, waitSeconds -> api.events(callId, since, waitSeconds) },
+        CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    )
+
     private val factory = viewModelFactory {
-        initializer { LiveCallViewModel(api, FakeBridgeState(), FakeCallScreenOpener()) }
+        initializer { LiveCallViewModel(api, FakeBridgeState(), FakeCallScreenOpener(), feed) }
     }
 
     @Test

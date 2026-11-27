@@ -6,10 +6,14 @@ import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.BridgeStateRepository
 import com.phonxiety.bridge.data.DaemonApi
 import com.phonxiety.bridge.data.HangUpOutcome
+import com.phonxiety.bridge.data.LiveCallFeed
+import com.phonxiety.bridge.data.LiveCallFeedState
 import com.phonxiety.bridge.data.MarkOutcome
 import com.phonxiety.bridge.data.PauseOutcome
 import com.phonxiety.bridge.data.ResumeOutcome
+import com.phonxiety.bridge.data.callHasEnded
 import com.phonxiety.bridge.data.daemonCallState
+import com.phonxiety.bridge.data.freshEvents
 import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.AudioState
 import com.phonxiety.bridge.model.CallEvent
@@ -24,13 +28,12 @@ import com.phonxiety.bridge.model.VoiceControls
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 
@@ -204,29 +207,47 @@ private val PHONE_PHASES_THAT_ADVANCE_PREPARING = setOf("dialing", "active")
 class LiveCallViewModel @Inject constructor(
     private val api: DaemonApi,
     private val bridgeState: BridgeStateRepository,
-    private val callScreen: CallScreenOpener
+    private val callScreen: CallScreenOpener,
+    private val liveCallFeed: LiveCallFeed
 ) : ViewModel() {
     private val _state = MutableStateFlow(LiveCallUiState())
     val state: StateFlow<LiveCallUiState> = _state.asStateFlow()
 
     private var boundCallId: CallId? = null
-    private var eventsJob: Job? = null
+    private var feedJob: Job? = null
     private var audioJob: Job? = null
-    private var revision = 0L
+
+    /**
+     * The last revision already reduced into [state]. It is not the request cursor — the feed owns
+     * `since` — only the mark that keeps an event from being drawn twice when the feed re-emits
+     * its accumulated list.
+     */
+    private var eventsThrough = 0L
+    private var truncatedPages = 0
+    private var finalRecordLoaded = false
     private val seenSequences = mutableSetOf<Long>()
 
     /** Idempotent: a recomposition or a second entry for the same call must not restart the poll. */
     fun bind(callId: CallId) {
         if (callId.value.isBlank() || boundCallId == callId) return
         boundCallId = callId
-        revision = 0
+        feedJob?.cancel()
+        eventsThrough = 0
+        truncatedPages = 0
+        finalRecordLoaded = false
         seenSequences.clear()
         _state.value = LiveCallUiState(callId = callId.value, loading = true)
         collectBridge()
         viewModelScope.launch { loadInfo() }
-        viewModelScope.launch {
+        feedJob = viewModelScope.launch {
             loadDetail(callId)
-            eventsJob = launch { pollEvents(callId) }
+            // The record already ends the call: there is nothing left to poll, exactly as the old
+            // loop checked before its first request.
+            if (_state.value.terminal) return@launch
+            liveCallFeed.state(callId).collect { feed ->
+                applyFeed(feed, callId)
+                if (_state.value.terminal) currentCoroutineContext().cancel()
+            }
         }
     }
 
@@ -542,50 +563,42 @@ class LiveCallViewModel @Inject constructor(
         }
     }
 
-    private suspend fun pollEvents(callId: CallId) {
-        var failures = 0
-        while (currentCoroutineContext().isActive && !_state.value.terminal) {
-            when (val outcome = api.events(callId, since = revision, waitSeconds = EVENTS_WAIT_SECONDS)) {
-                is ApiOutcome.Ok -> {
-                    failures = 0
-                    val page = outcome.value
-                    if (page.truncated) {
-                        // The feed dropped events we never saw: the record is the only complete copy.
-                        loadDetail(callId)
-                    } else {
-                        // Exactly the daemon's own cursor rule: one event is applied once.
-                        applyEvents(freshEvents(page.events, revision))
-                    }
-                    revision = maxOf(revision, page.revision)
-                    _state.update {
-                        val ended = terminalState(page.state) || it.ended
-                        it.copy(
-                            reconnecting = false,
-                            state = page.state ?: it.state,
-                            callOutcome = page.callOutcome ?: it.callOutcome,
-                            resultStatus = page.resultStatus ?: it.resultStatus,
-                            endedAtMs = it.endedAtMs ?: if (ended) System.currentTimeMillis() else null,
-                            ended = ended,
-                            hangingUp = it.hangingUp && !ended,
-                            pendingHangUp = it.pendingHangUp && !ended
-                        ).withCallEnded(ended)
-                    }
-                }
-
-                is ApiOutcome.Failure -> {
-                    failures++
-                    _state.update { it.copy(reconnecting = true) }
-                    delay(backoffMs(failures))
-                }
-            }
+    /**
+     * Applies what the shared feed has accumulated: only the events this screen has not drawn yet,
+     * the page's own state, and the record read the feed asks for when it dropped events or the
+     * call ended. The feed re-emits its whole list, so the mark above keeps actions this screen
+     * already took (a mark, a summary) from being undone by an older event.
+     */
+    private suspend fun applyFeed(feed: LiveCallFeedState, callId: CallId) {
+        if (feed.callId != callId.value) return
+        if (feed.truncatedPages > truncatedPages) {
+            truncatedPages = feed.truncatedPages
+            // The feed dropped events we never saw: the record is the only complete copy.
+            loadDetail(callId)
         }
-        // The call is over: pick up the final summary, fields and marks once.
-        if (_state.value.terminal) loadDetail(callId)
-    }
-
-    private fun applyEvents(events: List<CallEvent>) {
-        if (events.isEmpty()) return
-        _state.value = reduceCallEvents(_state.value, events, seenSequences)
+        val fresh = freshEvents(feed.events, eventsThrough)
+        if (fresh.isNotEmpty()) {
+            eventsThrough = fresh.last().revision
+            _state.value = reduceCallEvents(_state.value, fresh, seenSequences)
+        }
+        val ended = feed.ended || _state.value.ended
+        _state.update {
+            it.copy(
+                reconnecting = feed.reconnecting,
+                state = feed.state ?: it.state,
+                callOutcome = feed.callOutcome ?: it.callOutcome,
+                resultStatus = feed.resultStatus ?: it.resultStatus,
+                endedAtMs = it.endedAtMs ?: if (ended) System.currentTimeMillis() else null,
+                ended = ended,
+                hangingUp = it.hangingUp && !ended,
+                pendingHangUp = it.pendingHangUp && !ended
+            ).withCallEnded(ended)
+        }
+        if (feed.ended && !finalRecordLoaded) {
+            finalRecordLoaded = true
+            // The call is over: pick up the final summary, fields and marks once.
+            loadDetail(callId)
+        }
     }
 
     private fun mergeTurns(incoming: List<TranscriptTurn>): List<TranscriptTurn> {
@@ -597,24 +610,8 @@ class LiveCallViewModel @Inject constructor(
         return merged.sortedBy { it.sequence }
     }
 
-    private fun terminalState(state: String?): Boolean = isTerminalState(state)
-
-    private fun backoffMs(failures: Int): Long = (FAILURE_BACKOFF_MS * failures.coerceIn(1, 5)).coerceAtMost(MAX_BACKOFF_MS)
-
-    private companion object {
-        const val EVENTS_WAIT_SECONDS = 25.0
-        const val FAILURE_BACKOFF_MS = 1_000L
-        const val MAX_BACKOFF_MS = 5_000L
-    }
+    private fun terminalState(state: String?): Boolean = callHasEnded(state)
 }
-
-/**
- * The daemon's cursor rule: only events past [since] are new, and an event without a
- * revision (decoded as 0) is never applied.  The contract test drives the shared
- * `call_events_*` pages through this function before reducing them, so an event that
- * loses its revision is caught here instead of silently never reaching the screen.
- */
-internal fun freshEvents(events: List<CallEvent>, since: Long): List<CallEvent> = events.filter { it.revision > since }
 
 /**
  * One batch of polled events applied to [state], in the order the cursor delivered
@@ -672,7 +669,7 @@ internal fun reduceCallEvents(
             )
 
             "state" -> {
-                val ended = isTerminalState(event.state) || next.ended
+                val ended = callHasEnded(event.state) || next.ended
                 next = next.copy(
                     state = event.state ?: next.state,
                     callOutcome = event.callOutcome ?: next.callOutcome,
@@ -702,11 +699,6 @@ internal fun reduceCallEvents(
 
 /** The event's own timestamp in epoch milliseconds; "now" when the daemon sent none. */
 private fun CallEvent.secondsEpochMs(): Long = at?.let(::parseIsoSeconds)?.let { seconds -> (seconds * 1000).toLong() } ?: System.currentTimeMillis()
-
-/** A daemon call state that ends the call. */
-private val TERMINAL_STATES = setOf("ended", "cancelled", "failed", "unknown")
-
-private fun isTerminalState(state: String?): Boolean = state in TERMINAL_STATES
 
 /**
  * The call's own end retires the hang-up failure: its card and its action both describe a call

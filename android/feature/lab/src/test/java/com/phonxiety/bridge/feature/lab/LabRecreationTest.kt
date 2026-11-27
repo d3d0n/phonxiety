@@ -14,6 +14,8 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.test.core.app.ApplicationProvider
+import com.phonxiety.bridge.data.CallEventsSource
+import com.phonxiety.bridge.data.LiveCallFeed
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
 import kotlinx.coroutines.cancel
 import org.junit.After
@@ -35,12 +37,15 @@ class LabRecreationTest {
     val composeRule = createAndroidComposeRule<ComponentActivity>()
 
     private val context: Context = ApplicationProvider.getApplicationContext()
+    private val api = FakeDaemonApi()
     private val viewModel = LabViewModel(
-        api = FakeDaemonApi(),
+        api = api,
         bridgeState = FakeBridgeStateRepository(),
         phonePreferences = FakePhonePreferences(),
         lanPathCheck = FakeLanPathCheck(),
-        context = context
+        context = context,
+        // No test call is placed here, so the feed is never collected; it only completes the graph.
+        liveCallFeed = LiveCallFeed(CallEventsSource { callId, since, waitSeconds -> api.events(callId, since, waitSeconds) })
     )
 
     @After
