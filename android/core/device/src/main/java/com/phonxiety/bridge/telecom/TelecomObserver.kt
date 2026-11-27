@@ -161,6 +161,8 @@ internal class TelecomObserver(
         if (!isRunning()) return
         var detached: com.phonxiety.bridge.AttachedAudio? = null
         var toneOwner: CallSession.OwnedCall? = null
+        var target: CallSession.OwnedCall? = null
+        var mapped = "dialing"
         var finish = false
         var cause: DisconnectCause? = null
         synchronized(session.lock) {
@@ -168,16 +170,18 @@ internal class TelecomObserver(
             if (current == null || current.call !== call || current.finished) return
             current.telecomState = state
             cause = CallCorrelation.disconnectCause(call)
-            val mapped = CallCorrelation.mapState(state)
+            mapped = CallCorrelation.mapState(state)
             if (mapped == "ending" || mapped == "ended") {
                 current.generation.set(Long.MAX_VALUE)
                 detached = current.detachAudio()
                 current.epoch = -1
                 toneOwner = current
             }
-            report.report(current, mapped, cause)
+            target = current
             finish = mapped == "ended"
         }
+        // Outside the lock: the publisher plans under it but never holds it across the send.
+        target?.let { report.report(it, mapped, cause) }
         releaseDetachedAudio(store, detached) { audio.closeAsync(it) }
         toneOwner?.let { cancelTone(it) }
         if (finish) finishOwned(call, cause)
@@ -187,6 +191,8 @@ internal class TelecomObserver(
         if (!isRunning()) return
         var detached: com.phonxiety.bridge.AttachedAudio? = null
         var toneOwner: CallSession.OwnedCall? = null
+        var target: CallSession.OwnedCall? = null
+        var mapped = "dialing"
         var finish = false
         var cause: DisconnectCause? = null
         synchronized(session.lock) {
@@ -194,16 +200,18 @@ internal class TelecomObserver(
             if (current == null || current.call !== call || current.finished) return
             current.telecomState = details.state
             cause = CallCorrelation.disconnectCause(details)
-            val mapped = CallCorrelation.mapState(details.state)
+            mapped = CallCorrelation.mapState(details.state)
             if (mapped == "ending" || mapped == "ended") {
                 current.generation.set(Long.MAX_VALUE)
                 detached = current.detachAudio()
                 current.epoch = -1
                 toneOwner = current
             }
-            report.report(current, mapped, cause)
+            target = current
             finish = mapped == "ended"
         }
+        // Outside the lock: the publisher plans under it but never holds it across the send.
+        target?.let { report.report(it, mapped, cause) }
         releaseDetachedAudio(store, detached) { audio.closeAsync(it) }
         toneOwner?.let { cancelTone(it) }
         if (finish) finishOwned(call, cause)

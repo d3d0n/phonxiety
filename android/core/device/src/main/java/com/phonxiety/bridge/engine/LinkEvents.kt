@@ -80,7 +80,6 @@ internal class LinkEvents(
         // Nothing else may reach this link before its hello: the daemon
         // reads the first control frame as the handshake.
         val sent = sendHello()
-        if (sent) onHelloAccepted()
         settings.applyWifiLock()
         return sent
     }
@@ -182,6 +181,9 @@ internal class LinkEvents(
         val sent = links().sendHello(DeviceProtocol.encode(helloMessage))
         hello.delivered = sent
         if (sent) {
+            // A terminal report the previous link refused goes out first, before the
+            // hello releases the app requests that were waiting for a usable link.
+            onHelloAccepted()
             requests.helloQueued()
             capabilityWatch.helloSent(capabilities)
             settings.applyWifiLock()
