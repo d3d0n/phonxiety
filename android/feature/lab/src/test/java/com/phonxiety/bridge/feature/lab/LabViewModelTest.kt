@@ -44,6 +44,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
@@ -808,6 +809,47 @@ class LabViewModelTest {
     }
 
     @Test
+    fun `the message switch never flips back while its writes are on their way`() = runTest(testDispatcher) {
+        val store = GatedFrameTapPreferences(PhoneSettings(frameTap = false))
+        prefs = store
+        val vm = viewModel()
+        advanceUntilIdle()
+        assertFalse("the store's initial off", vm.state.value.frameTap)
+        val seen = mutableListOf<Boolean>()
+        backgroundScope.launch(testDispatcher) { vm.state.collect { seen += it.frameTap } }
+
+        vm.setFrameTap(true)
+        runCurrent()
+        assertTrue("the tap shows at once", vm.state.value.frameTap)
+        assertTrue("the first write is the one the store took", store.awaitFrameTapWrite())
+
+        vm.setFrameTap(false)
+        runCurrent()
+        assertFalse("the newest tap is the switch", vm.state.value.frameTap)
+        assertFalse(store.awaitFrameTapWrite())
+        val afterOff = seen.size
+
+        // An unrelated write leaves the switch's stored value as it was: an old snapshot.
+        store.writeElsewhere { it.copy(testNumber = "+998900000000") }
+        runCurrent()
+        assertFalse("an old snapshot does not undo the choice", vm.state.value.frameTap)
+
+        // The earlier "on" write lands. Its value is not the choice any more.
+        store.releaseFrameTapWrite()
+        runCurrent()
+        assertFalse("the switch never shows on again", vm.state.value.frameTap)
+        assertTrue("the store did take the older write", store.settings.value.frameTap)
+
+        // The last write lands: it is the choice that stands.
+        store.releaseFrameTapWrite()
+        advanceUntilIdle()
+        assertFalse("the store kept the last choice", store.settings.value.frameTap)
+        assertFalse(vm.state.value.frameTap)
+        assertEquals(listOf(true, false), store.frameTapWrites)
+        assertFalse("the switch was never on after the user chose off", seen.drop(afterOff).any { it })
+    }
+
+    @Test
     fun `probe results replace the rows without losing the selection`() = runTest(testDispatcher) {
         api.probeHandler = { candidates ->
             ApiOutcome.Ok(
@@ -1190,6 +1232,43 @@ class GatedPhonePreferences(initial: PhoneSettings = PhoneSettings()) : FakePhon
         releases.receive()
         settings.value = next
         written += next.testNumber
+        return next
+    }
+}
+
+/**
+ * A store whose switch writes the test releases by hand: [awaitFrameTapWrite] says which value a
+ * write has just taken, [releaseFrameTapWrite] lets the oldest held write land, and
+ * [writeElsewhere] lands an unrelated write over the same stored snapshot.
+ */
+class GatedFrameTapPreferences(initial: PhoneSettings = PhoneSettings()) : FakePhonePreferences(initial) {
+    private val started = Channel<Boolean>(Channel.UNLIMITED)
+    private val releases = Channel<Unit>(Channel.UNLIMITED)
+
+    /** The switch value each held write actually stored, in the order the writes landed. */
+    val frameTapWrites = mutableListOf<Boolean>()
+
+    /** Waits until a switch write starts and returns the value it will store. */
+    suspend fun awaitFrameTapWrite(): Boolean = started.receive()
+
+    /** Lets the oldest held switch write land. */
+    fun releaseFrameTapWrite() {
+        releases.trySend(Unit)
+    }
+
+    /** An unrelated preference write: the stored snapshot re-emits with the switch unchanged. */
+    fun writeElsewhere(block: (PhoneSettings) -> PhoneSettings) {
+        settings.value = block(settings.value)
+    }
+
+    override suspend fun update(block: (PhoneSettings) -> PhoneSettings): PhoneSettings {
+        started.send(block(settings.value).frameTap)
+        releases.receive()
+        // A real edit reads the store when it runs, not when it was asked: the value stored is the
+        // one the block makes of whatever the store holds at that moment.
+        val next = block(settings.value)
+        settings.value = next
+        frameTapWrites += next.frameTap
         return next
     }
 }

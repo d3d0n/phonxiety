@@ -30,6 +30,7 @@ import java.io.File
 import java.util.Locale
 import javax.inject.Inject
 import kotlin.math.roundToLong
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -86,6 +87,13 @@ class LabViewModel @Inject constructor(
     /** A keystroke landed: a seed read that answers afterwards may not replace what was typed. */
     private var numberEdited = false
 
+    /**
+     * Switch writes this screen has started and the store has not answered yet. A stored snapshot
+     * that arrives meanwhile is older than the tap, so it may not move the switch; the answers to
+     * these writes decide what it shows.
+     */
+    private var frameTapWrites = 0
+
     init {
         viewModelScope.launch {
             _state.update { it.copy(link = it.link.copy(history = history.load())) }
@@ -104,9 +112,12 @@ class LabViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
-            // The transport reads the same preference; the switch shows what is stored, not what
-            // this screen last tapped.
-            phonePreferences.settings.collect { stored -> _state.update { it.copy(frameTap = stored.frameTap) } }
+            // The transport reads the same preference, so the switch shows what is stored — except
+            // while this screen's own writes are on their way: the snapshots they emit are older
+            // than the tap that started them, and only their answers may move the switch.
+            phonePreferences.settings.collect { stored ->
+                if (frameTapWrites == 0) _state.update { it.copy(frameTap = stored.frameTap) }
+            }
         }
         viewModelScope.launch {
             bridgeState.state.collect { bridge -> applyBridgeState(bridge) }
@@ -718,7 +729,23 @@ class LabViewModel @Inject constructor(
     fun setFrameTap(enabled: Boolean) {
         if (_state.value.frameTap == enabled) return
         _state.update { it.copy(frameTap = enabled) }
-        viewModelScope.launch { phonePreferences.update { it.copy(frameTap = enabled) } }
+        frameTapWrites++
+        viewModelScope.launch {
+            val written = try {
+                phonePreferences.update { it.copy(frameTap = enabled) }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // A write that failed is not a choice the switch can show; the store's value is.
+                null
+            } finally {
+                frameTapWrites--
+            }
+            // The last write to land is the choice that stands; an answer to an older tap is not.
+            if (frameTapWrites > 0) return@launch
+            val settled = written ?: phonePreferences.settings.first()
+            _state.update { it.copy(frameTap = settled.frameTap) }
+        }
     }
 
     // -- diagnostics ----------------------------------------------------
