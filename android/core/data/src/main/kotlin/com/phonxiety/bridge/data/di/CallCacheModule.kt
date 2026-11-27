@@ -2,7 +2,6 @@ package com.phonxiety.bridge.data.di
 
 import android.content.Context
 import androidx.room.Room
-import com.phonxiety.bridge.data.calls.CallCache
 import com.phonxiety.bridge.data.calls.CallCacheDatabase
 import com.phonxiety.bridge.data.calls.CallsRepository
 import com.phonxiety.bridge.data.calls.DefaultCallsRepository
