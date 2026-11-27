@@ -18,10 +18,10 @@ import androidx.annotation.VisibleForTesting
  *
  * - the *initial* cover that follows the placement. [expectPlacement] opens one opportunity,
  *   [remember] arms the return inside it, and [closeOpportunity] ends it for good — a resumed
- *   screen, a deliberate leave, an expired wait for the placement reply, or a hangup all close it.
- *   A placement reply that lands after the opportunity closed therefore cannot reopen it, and a
- *   later cover of any other screen (an incoming call above an owned one included) finds nothing
- *   to spend.
+ *   screen, a deliberate leave, the cap that bounds a placement which never dials, or a hangup all
+ *   close it. A placement reply that lands after the opportunity closed therefore cannot reopen it,
+ *   and a later cover of any other screen (an incoming call above an owned one included) finds
+ *   nothing to spend.
  * - the *answer* cover: Telecom's in-call UI raises itself again when the call goes ACTIVE, over the
  *   live screen the initial return had put in front. [armAnswerCover] opens one wait per cover and
  *   [claimAnswerReturn] spends it at most once per call. [closeAnswerCover] ends a wait the screen
@@ -31,8 +31,10 @@ import androidx.annotation.VisibleForTesting
  *   the screen came forward — and it ends the permit for good, so a later cover (a hold, a reopened
  *   dialer) is left to Telecom's own screen.
  *
- * Each opportunity has its own deadline, so a placement or an answer that never covered anything
- * cannot stay armed indefinitely.
+ * The placement opportunity is bounded by [PLACEMENT_CAP_MS] measured from the tap, because the
+ * daemon runs its voice session before the dial and Telecom's cover therefore follows the tap by
+ * seconds; the answer wait has its own short deadline, measured from the cover it opened at. A
+ * placement or an answer that never covered anything cannot stay armed indefinitely either way.
  */
 object LiveCallFront {
     private val lock = Any()
@@ -215,7 +217,7 @@ object LiveCallFront {
     }
 
     private fun stillOpen(nowElapsed: Long): Boolean = opportunityOpen &&
-        nowElapsed - opportunityOpenedAt <= OPPORTUNITY_TTL_MS
+        nowElapsed - opportunityOpenedAt <= PLACEMENT_CAP_MS
 
     private fun answerStillOpen(nowElapsed: Long): Boolean = nowElapsed - answerOpenedAt <= ANSWER_TTL_MS
 
@@ -243,15 +245,21 @@ object LiveCallFront {
     }
 
     /**
-     * Long enough for a link round-trip plus the activity's retry budget, short enough that a
-     * placement which never covered anything cannot be spent on a later, unrelated cover.
+     * How long the whole placement opportunity lives, counted from [expectPlacement]. The daemon
+     * prepares the voice session before it dials, so its reply and Telecom's cover follow the tap by
+     * 5–15 s on a normal call, and the daemon's own signaling timeout can stretch that further; a
+     * window shorter than the placement would close before the phone's own call reached Telecom,
+     * and the cover would find nothing to arm. The cap is generous but finite, so a placement that
+     * never dials cannot be spent on a later, unrelated cover. Every other rule still closes the
+     * opportunity earlier: a resume, a deliberate leave, a hangup, a rejected placement, a spent
+     * return.
      */
     @VisibleForTesting
-    const val OPPORTUNITY_TTL_MS = 10_000L
+    const val PLACEMENT_CAP_MS = 45_000L
 
     /**
-     * The answer cover opens at the stop that follows the answer; the wait for the call's ACTIVE
-     * state has to fit inside this window, and a cover after it is somebody else's screen.
+     * The answer cover opens at the pause (or stop) that follows the answer; the wait for the call's
+     * ACTIVE state has to fit inside this window, and a cover after it is somebody else's screen.
      */
     @VisibleForTesting
     const val ANSWER_TTL_MS = 6_000L

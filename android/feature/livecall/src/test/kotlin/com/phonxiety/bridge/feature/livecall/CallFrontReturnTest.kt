@@ -105,6 +105,59 @@ class CallFrontReturnTest {
     }
 
     @Test
+    fun aPlacementWhoseVoiceSessionDelaysTheCoverStillReturnsOverIt() {
+        val front = controller()
+
+        // The phone's own timings for a composer placement: the daemon answered the composer about
+        // 4 s after the tap, and Telecom's cover came after the voice session, about 13 s after the
+        // tap.
+        LiveCallFront.expectPlacement(now)
+        idle(4_000)
+        LiveCallFront.remember("c1", now)
+        call = dialing("c1")
+        idle(9_000)
+
+        front.onPause(canReturn = true)
+        idle(400)
+
+        assertEquals("the cover follows the voice session; the return waits for it", 1, returns)
+        assertNull(LiveCallFront.pendingCallId(now))
+        assertFalse(LiveCallFront.awaitsCover(now))
+    }
+
+    @Test
+    fun aPlacementThatNeverDialsClosesAtTheCap() {
+        val front = controller()
+        LiveCallFront.expectPlacement(now)
+
+        // The daemon never dialled: the opportunity cannot stay armed past its cap.
+        idle(LiveCallFront.PLACEMENT_CAP_MS + 1)
+        front.onPause(canReturn = true)
+        idle(400)
+
+        assertEquals(0, returns)
+        assertFalse(LiveCallFront.awaitsCover(now))
+    }
+
+    @Test
+    fun aDeliberateLeaveDuringTheLongPlacementStillRejectsTheReturn() {
+        val front = controller()
+        LiveCallFront.expectPlacement(now)
+        idle(4_000)
+        LiveCallFront.remember("c1", now)
+        call = dialing("c1")
+        idle(5_000)
+
+        // The user walked away before Telecom's cover: the long opportunity closes at once.
+        front.onUserLeaveHint()
+        front.onPause(canReturn = true)
+        idle(4_000)
+
+        assertEquals(0, returns)
+        assertNull(LiveCallFront.pendingCallId(now))
+    }
+
+    @Test
     fun thePlacementCoverReturnsWhenOnlyThePauseIsDelivered() {
         val front = controller()
 
@@ -669,8 +722,8 @@ class CallFrontReturnTest {
         idle(400)
         assertEquals(0, returns)
 
-        // The other call outlasts the placement opportunity's own deadline: the permit is gone.
-        idle(LiveCallFront.OPPORTUNITY_TTL_MS)
+        // The other call outlasts the placement opportunity's own cap: the permit is gone.
+        idle(LiveCallFront.PLACEMENT_CAP_MS)
         assertFalse(LiveCallFront.awaitsCover(now))
 
         // Its screen ending later cannot pull this call forward either.
@@ -774,7 +827,7 @@ class CallFrontReturnTest {
         val front = controller()
         LiveCallFront.expectPlacement(now)
         call = dialing("c1")
-        now += LiveCallFront.OPPORTUNITY_TTL_MS + 1
+        now += LiveCallFront.PLACEMENT_CAP_MS + 1
 
         LiveCallFront.remember("c1", now)
         front.onStop(canReturn = true)
