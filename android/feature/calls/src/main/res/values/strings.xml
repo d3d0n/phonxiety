@@ -58,6 +58,7 @@
     <string name="call_detail_read_failed_body">The bridge didn\'t answer.</string>
     <string name="call_detail_retry">Retry</string>
     <string name="call_detail_offline">Showing the copy saved on this phone.</string>
+    <string name="call_detail_gone_on_computer">The computer no longer has this call. This is the copy saved on this phone.</string>
     <string name="call_detail_refresh">Refresh</string>
 
     <string name="call_detail_live_title">Live call</string>

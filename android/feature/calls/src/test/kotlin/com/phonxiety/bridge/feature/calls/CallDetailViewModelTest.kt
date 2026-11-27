@@ -193,6 +193,7 @@ class CallDetailViewModelTest {
         assertEquals("the stored record is not replaced", CACHED, viewModel.state.value.snapshot)
         assertFalse("a stored record is not a missing call", viewModel.state.value.missing)
         assertNotNull("the refusal is still reported", viewModel.state.value.error)
+        assertTrue("the screen says the computer no longer has it", viewModel.state.value.goneOnComputer)
     }
 
     @Test

@@ -63,6 +63,10 @@ data class CallDetailUiState(
     val live: Boolean
         get() = snapshot?.live != null && (snapshot?.state?.let { it !in TERMINAL_STATES } ?: true)
     val hasRecording: Boolean get() = snapshot?.recording != null
+
+    /** The computer no longer has the call this screen shows from the copy saved on the phone. */
+    val goneOnComputer: Boolean
+        get() = snapshot != null && error?.code?.let { it in CALL_MISSING_CODES } == true
     val brief: CallBrief?
         get() {
             val snapshot = snapshot ?: return null
@@ -162,8 +166,8 @@ class CallDetailViewModel @Inject constructor(
                     // A success leaves the record to the cache's emission; only a refusal ends
                     // the wait here, with the cache still on screen when it holds a copy.
                     loading = if (failure != null) false else it.loading,
-                    offline = failure != null && failure.code !in MISSING_CODES,
-                    missing = failure != null && failure.code in MISSING_CODES && !storedCopy && it.snapshot == null,
+                    offline = failure != null && failure.code !in CALL_MISSING_CODES,
+                    missing = failure != null && failure.code in CALL_MISSING_CODES && !storedCopy && it.snapshot == null,
                     error = failure?.let { f -> CallsFailure.of(f.message, f.code) }
                 )
             }
@@ -304,11 +308,10 @@ class CallDetailViewModel @Inject constructor(
     override fun onCleared() {
         player.release()
     }
-
-    private companion object {
-        val MISSING_CODES = setOf("call_not_found", "404")
-    }
 }
+
+/** The refusals that mean the computer no longer has the call. */
+internal val CALL_MISSING_CODES = setOf("call_not_found", "404")
 
 private fun JsonObject.string(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
 

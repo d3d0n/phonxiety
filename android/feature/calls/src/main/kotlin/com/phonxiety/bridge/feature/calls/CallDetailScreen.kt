@@ -247,7 +247,10 @@ private fun CallDetailBody(
         if (state.live) {
             item { LiveCard(callId = state.callId, onOpenLive = onOpenLive) }
         }
-        if (state.offline) {
+        // A call the computer no longer has outranks a passing failure: one note, the one that holds.
+        if (state.goneOnComputer) {
+            item { GoneNote() }
+        } else if (state.offline) {
             item { OfflineNote(onRefresh = onRefresh) }
         }
         item { ResultCard(state) }
@@ -384,6 +387,21 @@ private fun OfflineNote(onRefresh: () -> Unit) {
                 Text(stringResource(R.string.call_detail_refresh))
             }
         }
+    }
+}
+
+@Composable
+private fun GoneNote() {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.secondaryContainer
+    ) {
+        Text(
+            text = stringResource(R.string.call_detail_gone_on_computer),
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)
+        )
     }
 }
 
