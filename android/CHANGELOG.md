@@ -19,9 +19,11 @@ and run cellular calls through this phone.
 
 ## Getting around
 
-- **Each tab keeps its own history:** switching tabs and coming back returns to the same screen. Tapping the active tab again returns to its first screen, and on the dashboard then scrolls back to the top.
+- **Each tab keeps its own history:** switching tabs and coming back returns to the same screen. Tapping the active tab again returns to its first screen, and then scrolls back to the top.
 - **A thin strip above the tabs** says when the computer link is down, reconnecting or relayed. It hides itself once the link is direct and healthy.
 - The keyboard never covers a field or a message, and back gestures preview where they lead.
+- The keyboard's action key does what it says: Search in the calls list, then the keyboard closes; Next through the settings and Done on the last field.
+- Screen readers announce each call in the list as a button that opens it.
 
 ## Pairing you can trust
 
@@ -36,7 +38,7 @@ and run cellular calls through this phone.
 
 ## Safer actions
 
-- Unpairing and installing updates ask first. A second tap never repeats them, and an answer survives rotating the phone.
+- Unpairing, installing an update, deleting a call, a doctor repair and the lab's test call each ask first. A second tap never repeats them, and the question survives rotating the phone.
 - "Install again" after a failed update works, and an update offer that disappears no longer reopens its question by itself.
 
 ## Reliability

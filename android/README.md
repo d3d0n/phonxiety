@@ -42,7 +42,7 @@ Outside the Gradle modules:
 
 - A screen's state is one `UiState` held by its ViewModel.
 - A destructive or irreversible action asks first. The question lives in that state, so it survives rotation, and the answer is consumed once: a second tap never repeats the action.
-- Tapping the active tab returns to the section's first screen. Tapped again there, it scrolls back to the top when that screen registers its key with `RegisterScrollToTop` (`"dashboard"`, `"calls"`, `"lab"`, `"settings"`); a screen that registers nothing ignores it.
+- Tapping the active tab returns to the section's first screen; tapped again there, it scrolls back to the top. Each section's first screen registers its key with `RegisterScrollToTop`: `"dashboard"`, `"calls"`, `"lab"`, `"settings"`.
 - The interface is English. Strings live in resources.
 
 **`:core:device`**
