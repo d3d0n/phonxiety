@@ -379,7 +379,7 @@ class DefaultDaemonApi @Inject constructor(
         while (true) {
             val outcome = attempt(operation, deserializer, method, path, query, body)
             val failure = outcome as? ApiOutcome.Failure ?: return outcome
-            if (retries == MAX_RETRIES || !failure.isWorthAnotherAttempt()) return failure
+            if (retries == MAX_RETRIES || !operation.canRetry || !failure.isWorthAnotherAttempt()) return failure
             val pause = retryDelayMillis(retries + 1)
             if (!fits(startedAt, pause)) return failure
             retries++

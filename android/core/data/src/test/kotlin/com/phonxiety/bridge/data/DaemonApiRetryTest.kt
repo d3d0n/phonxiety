@@ -238,11 +238,11 @@ class DaemonApiRetryTest {
     }
 
     @Test
-    fun aPairingChangeRightAfterTheGuardReachesNoOtherGateway() = runTest {
+    fun aPairingChangeSeenByTheGuardStopsTheRetry() = runTest {
         val old = FakeGateway(status = 503)
         val fresh = FakeGateway(status = 200)
         var lookups = 0
-        // The source answers the old gateway for the lookup the guard makes, then the new one.
+        // The pairing has moved by the time the guard looks: it stops before any retry.
         val source = AppGatewaySource { if (++lookups <= 2) old else fresh }
         val api = DefaultDaemonApi(LinkAppApi(source)).apply {
             retryRandom = Random(1)
@@ -277,6 +277,25 @@ class DaemonApiRetryTest {
 
         assertEquals("the new gateway must never be asked", 0, fresh.requests.size)
         assertEquals("pairing_changed", (outcome as ApiOutcome.Failure).code)
+    }
+
+    @Test
+    fun anOperationOpenedWithNoGatewayAnswersLinkDownAndNeverReachesALaterOne() = runTest {
+        val later = FakeGateway(status = 200)
+        var lookups = 0
+        // No gateway when the read opens; another pairing's comes up right after.
+        val source = AppGatewaySource { if (++lookups <= 1) null else later }
+        val api = DefaultDaemonApi(LinkAppApi(source)).apply {
+            retryRandom = Random(1)
+            retryClock = { currentTime }
+        }
+
+        val outcome = api.diagnostics()
+
+        assertEquals("a gateway that came up later must never be asked", 0, later.requests.size)
+        assertEquals(503, (outcome as ApiOutcome.Failure).status)
+        assertEquals("link_down", outcome.code)
+        assertEquals("no pause was spent", 0L, currentTime)
     }
 
     @Test

@@ -55,6 +55,12 @@ interface ApiOperation {
     /** True while the gateway this channel was bound to is still the current one. */
     fun isCurrent(): Boolean
 
+    /**
+     * False for an operation that could not bind a gateway: its one answer is
+     * final, because a gateway that comes up later may belong to another pairing.
+     */
+    val canRetry: Boolean get() = true
+
     suspend fun request(
         method: String,
         path: String,

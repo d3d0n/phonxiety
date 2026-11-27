@@ -68,11 +68,11 @@ internal class AppApiEnvelope(
     /**
      * Binds one operation to the gateway resolved now: every send on the returned
      * channel uses that object, never a fresh lookup, so a retry cannot reach the
-     * daemon that replaced it.  With no gateway installed there is nothing to pin,
-     * so the channel resolves per send as a single request always did — a read
-     * issued while the service starts can still meet the gateway that comes up.
+     * daemon that replaced it.  With no gateway installed the operation answers
+     * [NO_SERVICE] at once, as a single request always did, and is never retried:
+     * a gateway that comes up during a pause may already belong to another pairing.
      */
-    fun operation(): ApiOperation = gateways.gateway()?.let(::PinnedOperation) ?: UnpinnedOperation()
+    fun operation(): ApiOperation = gateways.gateway()?.let(::PinnedOperation) ?: NoGatewayOperation
 
     suspend fun request(
         method: String,
@@ -80,8 +80,7 @@ internal class AppApiEnvelope(
         query: Map<String, String> = emptyMap(),
         body: JsonObject? = null
     ): ApiResult {
-        val gateway = gateways.gateway()
-            ?: return ApiResult.Failure(503, "link_down", "the bridge service is not running")
+        val gateway = gateways.gateway() ?: return NO_SERVICE
         val token = gateway.appToken
             ?: return ApiResult.Failure(401, "app_token_missing", "pair again to receive an app token")
         return exchange(gateway, token, method, path, query, body)
@@ -103,16 +102,18 @@ internal class AppApiEnvelope(
         }
     }
 
-    /** No gateway to pin: each send resolves the current one. */
-    private inner class UnpinnedOperation : ApiOperation {
-        override fun isCurrent(): Boolean = true
+    /** No gateway when the operation opened: its one answer is final. */
+    private object NoGatewayOperation : ApiOperation {
+        override val canRetry: Boolean = false
+
+        override fun isCurrent(): Boolean = false
 
         override suspend fun request(
             method: String,
             path: String,
             query: Map<String, String>,
             body: JsonObject?
-        ): ApiResult = this@AppApiEnvelope.request(method, path, query, body)
+        ): ApiResult = NO_SERVICE
     }
 
     private suspend fun exchange(
@@ -154,8 +155,7 @@ internal class AppApiEnvelope(
         query: Map<String, String>,
         sink: OutputStream
     ): ApiResult {
-        val gateway = gateways.gateway()
-            ?: return ApiResult.Failure(503, "link_down", "the bridge service is not running")
+        val gateway = gateways.gateway() ?: return NO_SERVICE
         val token = gateway.appToken
             ?: return ApiResult.Failure(401, "app_token_missing", "pair again to receive an app token")
         if (gateway.supportsAttachments) {
@@ -242,3 +242,6 @@ internal class AppApiEnvelope(
         )
     }
 }
+
+/** The answer while no bridge gateway is installed: the service is not running. */
+private val NO_SERVICE = ApiResult.Failure(503, "link_down", "the bridge service is not running")
