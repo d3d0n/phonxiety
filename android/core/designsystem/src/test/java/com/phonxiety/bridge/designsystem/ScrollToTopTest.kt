@@ -4,9 +4,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -114,6 +117,80 @@ class ScrollToTopTest {
         composeRule.runOnIdle {
             assertEquals(0, staleCalls)
             assertEquals(2, currentCalls)
+        }
+    }
+
+    @Test
+    fun registrationsSharingOneCallbackUnregisterIndependently() {
+        val registry = ScrollToTopRegistry()
+        var calls = 0
+        val shared: () -> Unit = { calls++ }
+        val first = registry.register("one", shared)
+        registry.register("two", shared)
+
+        registry.unregister(first)
+        registry.dispatch("two")
+
+        assertEquals(1, calls)
+    }
+
+    @Test
+    fun aCallbackChangeInAReplacedScreenCannotReclaimTheDestination() {
+        val registry = ScrollToTopRegistry()
+        var version by mutableStateOf(0)
+        var staleCalls = 0
+        var currentCalls = 0
+        composeRule.setContent {
+            CompositionLocalProvider(LocalScrollToTop provides registry) {
+                Column {
+                    val callback: () -> Unit = remember(version) {
+                        { staleCalls++ }
+                    }
+                    RegisterScrollToTop(DESTINATION, callback)
+                    RegisterScrollToTop(DESTINATION) { currentCalls++ }
+                }
+            }
+        }
+        version = 1
+        composeRule.waitForIdle()
+        composeRule.runOnIdle { registry.dispatch(DESTINATION) }
+        composeRule.runOnIdle {
+            assertEquals(0, staleCalls)
+            assertEquals(1, currentCalls)
+        }
+    }
+
+    @Test
+    fun aCallbackChangeIsUsedWithoutReregistering() {
+        val registry = ScrollToTopRegistry()
+        var version by mutableStateOf(0)
+        var seen = -1
+        composeRule.setContent {
+            CompositionLocalProvider(LocalScrollToTop provides registry) {
+                val callback: () -> Unit = remember(version) {
+                    { seen = version }
+                }
+                RegisterScrollToTop(DESTINATION, callback)
+            }
+        }
+        version = 1
+        composeRule.waitForIdle()
+        composeRule.runOnIdle { registry.dispatch(DESTINATION) }
+        composeRule.runOnIdle { assertEquals(1, seen) }
+    }
+
+    @Test
+    fun withoutAProviderRegistrationFailsLoudlyInDebug() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        context.applicationInfo.flags =
+            context.applicationInfo.flags or android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE
+        try {
+            assertThrows(IllegalStateException::class.java) {
+                composeRule.setContent { RegisterScrollToTop(DESTINATION) {} }
+            }
+        } finally {
+            context.applicationInfo.flags =
+                context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE.inv()
         }
     }
 
