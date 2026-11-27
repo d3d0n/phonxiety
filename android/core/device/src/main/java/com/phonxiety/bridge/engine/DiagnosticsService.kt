@@ -32,9 +32,10 @@ import kotlinx.serialization.json.jsonObject
 /**
  * The `diagnostics` command and the device telemetry loop.
  *
- * The command captures the call and link fields under the session lock, then
- * reads crash records and encodes off the command thread, so a disk read never
- * delays the next command.  Telemetry runs on the engine scope.
+ * The diagnostics command runs on the command executor, where it captures the
+ * call and link fields under the session lock, reads the crash records and
+ * encodes the answer; it was the same thread before the engine was split.  The
+ * telemetry loop runs on the engine scope on its own interval.
  */
 internal class DiagnosticsService(
     private val context: Context,
