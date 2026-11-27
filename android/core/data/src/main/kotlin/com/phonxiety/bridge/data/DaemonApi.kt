@@ -31,10 +31,15 @@ import com.phonxiety.bridge.model.ValidationResult
 import java.io.OutputStream
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.random.Random
+import kotlinx.coroutines.delay
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.SerializationStrategy
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
@@ -140,6 +145,12 @@ class DefaultDaemonApi @Inject constructor(
 ) : DaemonApi {
     internal val json: Json = DaemonJson
 
+    /**
+     * Test seam for the retry jitter.  Production uses [Random.Default]; a test seeds
+     * it so the pauses are exact and the virtual clock they run on is predictable.
+     */
+    internal var retryRandom: Random = Random.Default
+
     override suspend fun info(): ApiOutcome<DaemonInfo> = call(DaemonInfo.serializer(), "GET", "/app/v1/info")
 
     override suspend fun status(): ApiOutcome<DaemonStatus> = call(DaemonStatus.serializer(), "GET", "/app/v1/status")
@@ -148,28 +159,26 @@ class DefaultDaemonApi @Inject constructor(
         LinkTestResult.serializer(),
         "POST",
         "/app/v1/link-test",
-        body = buildJsonObject {
-            if (seconds != null) put("seconds", seconds)
-            if (codec != null) put("codec", codec)
-            if (transport != null) put("transport", transport)
-            if (bitrate != null) put("bitrate", bitrate)
-        }
+        body = bodyOf(
+            "seconds" to seconds,
+            "codec" to codec,
+            "transport" to transport,
+            "bitrate" to bitrate
+        )
     )
 
-    override suspend fun linkTests(limit: Int?): ApiOutcome<LinkTests> = call(LinkTests.serializer(), "GET", "/app/v1/link-test", query = limit?.let { mapOf("limit" to it.toString()) } ?: emptyMap())
+    override suspend fun linkTests(limit: Int?): ApiOutcome<LinkTests> = call(
+        LinkTests.serializer(),
+        "GET",
+        "/app/v1/link-test",
+        query = queryOf("limit" to limit)
+    )
 
     override suspend fun probe(candidates: List<String>?): ApiOutcome<ProbeResult> = call(
         ProbeResult.serializer(),
         "POST",
         "/app/v1/probe",
-        body = candidates?.let {
-            buildJsonObject {
-                put(
-                    "candidates",
-                    kotlinx.serialization.json.buildJsonArray { it.forEach { name -> add(kotlinx.serialization.json.JsonPrimitive(name)) } }
-                )
-            }
-        }
+        body = candidates?.let { bodyOf("candidates" to it) }
     )
 
     override suspend fun calls(
@@ -179,13 +188,13 @@ class DefaultDaemonApi @Inject constructor(
         outcome: String?,
         farEnd: String?
     ): ApiOutcome<CallsPage> {
-        val query = buildMap {
-            limit?.let { put("limit", it.toString()) }
-            offset?.let { put("offset", it.toString()) }
-            before?.let { put("before", it.toString()) }
-            outcome?.let { put("outcome", it) }
-            farEnd?.let { put("farEnd", it) }
-        }
+        val query = queryOf(
+            "limit" to limit,
+            "offset" to offset,
+            "before" to before,
+            "outcome" to outcome,
+            "farEnd" to farEnd
+        )
         return call(CallsPage.serializer(), "GET", "/app/v1/calls", query = query)
     }
 
@@ -198,26 +207,21 @@ class DefaultDaemonApi @Inject constructor(
     override suspend fun call(callId: String): ApiOutcome<CallSnapshot> = call(CallSnapshot.serializer(), "GET", "/app/v1/calls/${encodeId(callId)}")
 
     override suspend fun transcript(callId: String, cursor: Long?, limit: Int?): ApiOutcome<TranscriptPage> {
-        val query = buildMap {
-            cursor?.let { put("cursor", it.toString()) }
-            limit?.let { put("limit", it.toString()) }
-        }
+        val query = queryOf("cursor" to cursor, "limit" to limit)
         return call(TranscriptPage.serializer(), "GET", "/app/v1/calls/${encodeId(callId)}/transcript", query = query)
     }
 
     override suspend fun events(callId: String, since: Long?, waitSeconds: Double?): ApiOutcome<CallEventsPage> {
-        val query = buildMap {
-            since?.let { put("since", it.toString()) }
-            waitSeconds?.let { put("wait_s", it.toString()) }
-        }
-        return call(CallEventsPage.serializer(), "GET", "/app/v1/calls/${encodeId(callId)}/events", query = query)
+        val query = queryOf("since" to since, "wait_s" to waitSeconds)
+        // The long poll is a wait, not a read: another attempt would only lengthen the caller's.
+        return call(CallEventsPage.serializer(), "GET", "/app/v1/calls/${encodeId(callId)}/events", query = query, retryable = false)
     }
 
     override suspend fun instruction(callId: String, text: String): ApiOutcome<InstructionResult> = call(
         InstructionResult.serializer(),
         "POST",
         "/app/v1/calls/${encodeId(callId)}/instruction",
-        body = buildJsonObject { put("text", text) }
+        body = bodyOf("text" to text)
     )
 
     override suspend fun pause(callId: String): ApiOutcome<PauseResult> = call(PauseResult.serializer(), "POST", "/app/v1/calls/${encodeId(callId)}/pause")
@@ -230,7 +234,7 @@ class DefaultDaemonApi @Inject constructor(
         DtmfResult.serializer(),
         "POST",
         "/app/v1/calls/${encodeId(callId)}/dtmf",
-        body = buildJsonObject { put("digits", digits) }
+        body = bodyOf("digits" to digits)
     )
 
     override suspend fun hangup(callId: String): ApiOutcome<CallSnapshot> = call(CallSnapshot.serializer(), "POST", "/app/v1/calls/${encodeId(callId)}/hangup")
@@ -241,17 +245,14 @@ class DefaultDaemonApi @Inject constructor(
         MarksResponse.serializer(),
         "POST",
         "/app/v1/calls/${encodeId(callId)}/marks",
-        body = buildJsonObject {
-            put("mark", mark)
-            if (note != null) put("note", note)
-        }
+        body = bodyOf("mark" to mark, "note" to note)
     )
 
     override suspend fun deleteCall(callId: String): ApiOutcome<DeleteCallResult> = call(
         DeleteCallResult.serializer(),
         "DELETE",
         "/app/v1/calls/${encodeId(callId)}",
-        body = buildJsonObject { put("confirm", callId) }
+        body = bodyOf("confirm" to callId)
     )
 
     override suspend fun settings(): ApiOutcome<SettingsSnapshot> = call(SettingsSnapshot.serializer(), "GET", "/app/v1/settings")
@@ -260,29 +261,26 @@ class DefaultDaemonApi @Inject constructor(
         SettingsUpdate.serializer(),
         "PUT",
         "/app/v1/settings",
-        body = buildJsonObject { put("values", values) }
+        body = bodyOf("values" to values)
     )
 
     override suspend fun loopback(enabled: Boolean, callId: String?): ApiOutcome<LoopbackResult> = call(
         LoopbackResult.serializer(),
         "POST",
         "/app/v1/loopback",
-        body = buildJsonObject {
-            put("enabled", enabled)
-            if (callId != null) put("call_id", callId)
-        }
+        body = bodyOf("enabled" to enabled, "call_id" to callId)
     )
 
     override suspend fun tone(hz: Int?, dbfs: Double?, seconds: Double?, callId: String?): ApiOutcome<ToneResult> = call(
         ToneResult.serializer(),
         "POST",
         "/app/v1/tone",
-        body = buildJsonObject {
-            if (hz != null) put("hz", hz)
-            if (dbfs != null) put("dbfs", dbfs)
-            if (seconds != null) put("seconds", seconds)
-            if (callId != null) put("call_id", callId)
-        }
+        body = bodyOf(
+            "hz" to hz,
+            "dbfs" to dbfs,
+            "seconds" to seconds,
+            "call_id" to callId
+        )
     )
 
     override suspend fun doctor(): ApiOutcome<DoctorReport> = call(DoctorReport.serializer(), "GET", "/app/v1/doctor")
@@ -291,7 +289,7 @@ class DefaultDaemonApi @Inject constructor(
         DoctorFixResult.serializer(),
         "POST",
         "/app/v1/doctor/fix",
-        body = buildJsonObject { put("fix", fix) }
+        body = bodyOf("fix" to fix)
     )
 
     override suspend fun diagnostics(): ApiOutcome<JsonObject> = call(JsonObject.serializer(), "GET", "/app/v1/diagnostics")
@@ -302,14 +300,11 @@ class DefaultDaemonApi @Inject constructor(
         JsonObject.serializer(),
         "GET",
         "/app/v1/update/manifest",
-        query = channel?.let { mapOf("channel" to it) } ?: emptyMap()
+        query = queryOf("channel" to channel)
     )
 
     override suspend fun compat(appApi: Int?, protocol: Int?): ApiOutcome<CompatReport> {
-        val query = buildMap {
-            appApi?.let { put("app_api", it.toString()) }
-            protocol?.let { put("protocol", it.toString()) }
-        }
+        val query = queryOf("app_api" to appApi, "protocol" to protocol)
         return call(CompatReport.serializer(), "GET", "/app/v1/compat", query = query)
     }
 
@@ -317,7 +312,7 @@ class DefaultDaemonApi @Inject constructor(
         RotateResult.serializer(),
         "POST",
         "/app/v1/pair/rotate",
-        body = buildJsonObject { if (rotateDeviceToken) put("device_token", true) }
+        body = bodyOf("device_token" to true.takeIf { rotateDeviceToken })
     )
 
     override suspend fun downloadAudio(callId: String, format: String, sink: OutputStream): ApiResult = api.download("/app/v1/calls/${encodeId(callId)}/audio", mapOf("format" to format), sink)
@@ -330,12 +325,40 @@ class DefaultDaemonApi @Inject constructor(
         sink
     )
 
+    /**
+     * Runs one request and, for a read whose answer says "not now", up to
+     * [MAX_RETRIES] more attempts with a jittered pause between them.
+     *
+     * No deadline is created here.  The caller's own operation deadline is the one
+     * that counts: it cancels the pause, so the attempts can never outlive it, and
+     * the link's own per-exchange deadline still bounds every single attempt.
+     */
     private suspend fun <T> call(
         deserializer: DeserializationStrategy<T>,
         method: String,
         path: String,
         query: Map<String, String> = emptyMap(),
-        body: JsonObject? = null
+        body: JsonObject? = null,
+        retryable: Boolean = true
+    ): ApiOutcome<T> {
+        var retries = 0
+        while (true) {
+            val outcome = attempt(deserializer, method, path, query, body)
+            val failure = outcome as? ApiOutcome.Failure ?: return outcome
+            if (!retryable || method != "GET" || retries == MAX_RETRIES || !failure.isWorthAnotherAttempt()) {
+                return failure
+            }
+            retries++
+            delay(retryDelayMillis(retries))
+        }
+    }
+
+    private suspend fun <T> attempt(
+        deserializer: DeserializationStrategy<T>,
+        method: String,
+        path: String,
+        query: Map<String, String>,
+        body: JsonObject?
     ): ApiOutcome<T> = when (val result = api.request(method, path, query, body)) {
         is ApiResult.Failure -> ApiOutcome.Failure(result.status, result.code, result.message)
 
@@ -346,11 +369,54 @@ class DefaultDaemonApi @Inject constructor(
         }
     }
 
+    /** A gateway or an engine that answered "not now"; anything else is the caller's answer. */
+    private fun ApiOutcome.Failure.isWorthAnotherAttempt(): Boolean = status in RETRYABLE_STATUS || code == "transport_error"
+
+    /** Wait before retry [retry]: a base per attempt plus a random part under that base. */
+    private fun retryDelayMillis(retry: Int): Long {
+        val base = RETRY_BASE_MILLIS shl (retry - 1)
+        return base + retryRandom.nextLong(base)
+    }
+
+    /** Query parameters in call order; a null value is left out, so it never reaches the wire. */
+    private fun queryOf(vararg fields: Pair<String, Any?>): Map<String, String> = buildMap {
+        for ((name, value) in fields) if (value != null) put(name, value.toString())
+    }
+
+    /**
+     * One JSON object body; a null value leaves its key out of the object entirely,
+     * so an omitted optional parameter is an absent parameter, not an explicit null.
+     */
+    private fun bodyOf(vararg fields: Pair<String, Any?>): JsonObject = buildJsonObject {
+        for ((name, value) in fields) {
+            when (value) {
+                null -> Unit
+                is JsonElement -> put(name, value)
+                is Boolean -> put(name, value)
+                is Number -> put(name, value)
+                is String -> put(name, value)
+                is List<*> -> put(name, buildJsonArray { value.forEach { add(JsonPrimitive(it.toString())) } })
+                else -> throw IllegalArgumentException("$name: a body value must be a JSON value or a list of strings")
+            }
+        }
+    }
+
     private fun <T> encode(serializer: SerializationStrategy<T>, value: T): JsonObject = json.encodeToJsonElement(serializer, value).jsonObject
 
     /** Call ids are already restricted by the daemon; refuse path syntax here too. */
     private fun encodeId(id: String): String {
         require(id.isNotEmpty() && id.all { it.isLetterOrDigit() || it in "._-" }) { "invalid call id" }
         return id
+    }
+
+    private companion object {
+        /** A read gets two more attempts; a write, a download and the long poll never do. */
+        const val MAX_RETRIES = 2
+
+        /** First pause 200–399 ms, second 400–799 ms: long enough for a restarted gateway. */
+        const val RETRY_BASE_MILLIS = 200L
+
+        /** A gateway that could not answer now; a 4xx is the caller's own answer. */
+        val RETRYABLE_STATUS = setOf(502, 503, 504)
     }
 }

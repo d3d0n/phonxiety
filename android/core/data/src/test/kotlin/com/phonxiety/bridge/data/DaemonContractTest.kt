@@ -344,8 +344,15 @@ class DaemonContractTest {
         val invoke: suspend (DefaultDaemonApi, Contract) -> Outcome
     )
 
-    /** An element only some response variants carry: why, and the files that may omit it. */
-    private class Allowance(val reason: String, val omittedIn: Set<String>)
+    /**
+     * An element only some response variants carry: why, the files that may omit it,
+     * and, when only particular objects may, those objects by their string `name`.
+     */
+    private class Allowance(
+        val reason: String,
+        val omittedIn: Set<String>,
+        val omittedFor: Set<String>? = null
+    )
 
     /**
      * Walks the decoded model against the file's JSON through the [SerialDescriptor]:
@@ -357,7 +364,13 @@ class DaemonContractTest {
      * nullable element.  `JsonElement`/`JsonObject` fields are not descended.
      */
     private class StructureChecker {
-        private class Sample(val group: String?, val keys: Set<String>, val file: String)
+        /** [name] identifies an object whose type carries a string `name`; null otherwise. */
+        private class Sample(
+            val group: String?,
+            val keys: Set<String>,
+            val file: String,
+            val name: String?
+        )
 
         private val samples = LinkedHashMap<String, MutableList<Sample>>()
         private val descriptors = LinkedHashMap<String, SerialDescriptor>()
@@ -382,11 +395,30 @@ class DaemonContractTest {
                         problems += "$type lists $key as omittable in $file, but no $type sample" +
                             " came from that file"
                     }
-                    for (file in allowance.omittedIn) {
-                        val fromFile = objects.filter { it.file == file }
-                        if (fromFile.isNotEmpty() && fromFile.none { key !in it.keys }) {
-                            problems += "$file: $type lists $key as omittable, but every sample" +
-                                " from that file carries it"
+                    val scoped = allowance.omittedFor
+                    if (scoped == null) {
+                        for (file in allowance.omittedIn) {
+                            val fromFile = objects.filter { it.file == file }
+                            if (fromFile.isNotEmpty() && fromFile.none { key !in it.keys }) {
+                                problems += "$file: $type lists $key as omittable, but every sample" +
+                                    " from that file carries it"
+                            }
+                        }
+                    } else {
+                        for (name in scoped) {
+                            val named = objects.filter { it.file in allowance.omittedIn && it.name == name }
+                            if (named.isEmpty()) {
+                                problems += "$type lists $name in SOMETIMES, but no sample names it"
+                            } else if (named.none { key !in it.keys }) {
+                                problems += "$name: $type lists $key as omittable, but every sample" +
+                                    " carrying that name has it"
+                            }
+                        }
+                        for (sample in objects.filter { it.file in allowance.omittedIn }) {
+                            if (key !in sample.keys && sample.name !in scoped) {
+                                problems += "${sample.file}: $type \"${sample.name}\" omits $key," +
+                                    " which SOMETIMES allows only for $scoped"
+                            }
                         }
                     }
                 }
@@ -398,8 +430,7 @@ class DaemonContractTest {
                     for ((group, members) in objects.groupBy { it.group }) {
                         val seen = members.flatMap { it.keys }.toSet()
                         for (member in members) {
-                            val omittable = sometimes.filter { member.file in it.value.omittedIn }.keys
-                            val missing = (seen - member.keys) - omittable
+                            val missing = (seen - member.keys) - omittable(type, member)
                             if (missing.isNotEmpty()) {
                                 problems += "${member.file}: $type \"$group\" misses $missing," +
                                     " which another sample of the same event kind carries"
@@ -413,9 +444,9 @@ class DaemonContractTest {
                     }
                 } else {
                     for (sample in objects) {
-                        val omittable = sometimes.filter { sample.file in it.value.omittedIn }.keys
+                        val allowed = omittable(type, sample)
                         val missing = descriptor.elementNames.filter {
-                            it !in sample.keys && it !in omittable && it !in never.keys
+                            it !in sample.keys && it !in allowed && it !in never.keys
                         }
                         if (missing.isNotEmpty()) {
                             problems += "${sample.file}: $type misses $missing; every answer of a type" +
@@ -426,6 +457,14 @@ class DaemonContractTest {
             }
             assertTrue(problems.joinToString("\n"), problems.isEmpty())
         }
+
+        /** The elements [sample] may omit: a file-wide allowance, or one that names it. */
+        private fun omittable(type: String, sample: Sample): Set<String> = SOMETIMES[type].orEmpty()
+            .filter { (_, allowance) ->
+                sample.file in allowance.omittedIn &&
+                    (allowance.omittedFor == null || sample.name in allowance.omittedFor)
+            }
+            .keys
 
         private fun visit(
             descriptor: SerialDescriptor,
@@ -480,7 +519,9 @@ class DaemonContractTest {
             } else {
                 null
             }
-            samples.getOrPut(type) { mutableListOf() }.add(Sample(group, obj.keys, file))
+            samples.getOrPut(type) { mutableListOf() }.add(
+                Sample(group, obj.keys, file, (obj["name"] as? JsonPrimitive)?.contentOrNull)
+            )
             val indexes = descriptor.elementNames.withIndex().associate { (index, name) -> name to index }
             for ((key, value) in obj) {
                 val where = "$file at ${path.ifEmpty { descriptor.serialName }}"
@@ -801,7 +842,8 @@ class DaemonContractTest {
             ProbeCandidate.serializer().descriptor.serialName to mapOf(
                 "detail" to Allowance(
                     "a candidate that was never measured has no detail line",
-                    setOf("probe_post.json")
+                    setOf("probe_post.json"),
+                    omittedFor = setOf("tailscale")
                 )
             )
         )
