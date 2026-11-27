@@ -115,7 +115,6 @@
     <string name="live_call_hang_up_keep">Keep talking</string>
 
     <string name="live_call_action_failed_title">The daemon did not accept that</string>
-    <string name="live_call_retry">Retry</string>
     <string name="live_call_hang_up_failed_title">The call is still up</string>
     <string name="live_call_open_call_screen">Open the phone\'s call screen</string>
 

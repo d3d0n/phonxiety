@@ -81,8 +81,8 @@ fun UpdatesScreen(
     onDismissRollback: () -> Unit,
     onDismissRollbackRecovery: () -> Unit,
     onDismiss: () -> Unit,
-    onOpenDoctor: () -> Unit = {},
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onOpenDoctor: () -> Unit = {}
 ) {
     Box(modifier = modifier.fillMaxSize()) {
         ScreenScaffold(

@@ -8,6 +8,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ApplicationProvider
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
+import com.phonxiety.bridge.designsystem.R as DesignR
 import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.FailureKind
 import org.junit.Assert.assertEquals
@@ -55,7 +56,7 @@ class LiveCallErrorCopyTest {
 
         composeRule.onNodeWithText(text(R.string.live_call_hang_up_failed_title)).assertExists()
         composeRule.onNodeWithText(text(R.string.live_call_action_failed_title)).assertDoesNotExist()
-        composeRule.onNodeWithText(text(R.string.live_call_retry)).assertDoesNotExist()
+        composeRule.onNodeWithText(text(DesignR.string.designsystem_action_retry)).assertDoesNotExist()
         composeRule.onNodeWithText(text(R.string.live_call_open_call_screen)).assertDoesNotExist()
 
         composeRule.onNodeWithText(text(R.string.live_call_hang_up)).performClick()
@@ -111,7 +112,7 @@ class LiveCallErrorCopyTest {
 
         composeRule.onNodeWithText(text(R.string.live_call_action_failed_title)).assertExists()
         composeRule.onNodeWithText(text(R.string.live_call_hang_up_failed_title)).assertDoesNotExist()
-        composeRule.onNodeWithText(text(R.string.live_call_retry)).performClick()
+        composeRule.onNodeWithText(text(DesignR.string.designsystem_action_retry)).performClick()
         assertEquals(1, reloads)
         assertEquals(0, hangUps)
     }
@@ -136,7 +137,7 @@ class LiveCallErrorCopyTest {
         }
 
         composeRule.onNodeWithText(text(R.string.live_call_action_failed_title)).assertExists()
-        composeRule.onNodeWithText(text(R.string.live_call_retry)).assertDoesNotExist()
+        composeRule.onNodeWithText(text(DesignR.string.designsystem_action_retry)).assertDoesNotExist()
         composeRule.runOnIdle { assertEquals(0, reloads) }
     }
 }

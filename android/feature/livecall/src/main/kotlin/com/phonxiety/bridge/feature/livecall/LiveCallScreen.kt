@@ -120,8 +120,8 @@ fun LiveCallScreen(
     onOpenCallScreen: () -> Unit,
     onRetryHangUp: () -> Unit,
     onOpenDetail: (String) -> Unit,
-    onOpenDoctor: () -> Unit = {},
     modifier: Modifier = Modifier,
+    onOpenDoctor: () -> Unit = {},
     nowEpochMs: Long = System.currentTimeMillis()
 ) {
     Surface(

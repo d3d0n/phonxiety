@@ -150,8 +150,8 @@ fun ComposerScreen(
     onReview: () -> Unit,
     onDismissReview: () -> Unit,
     onConfirm: () -> Unit,
-    onOpenDoctor: () -> Unit = {},
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onOpenDoctor: () -> Unit = {}
 ) {
     val focusManager = LocalFocusManager.current
     val fields = remember { ComposerFieldFocus() }

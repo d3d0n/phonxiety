@@ -145,8 +145,8 @@ fun CallDetailScreen(
     onRequestDelete: () -> Unit,
     onDismissDelete: () -> Unit,
     onConfirmDelete: () -> Unit,
-    onOpenDoctor: () -> Unit = {},
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onOpenDoctor: () -> Unit = {}
 ) {
     val snapshot = state.snapshot
     Surface(

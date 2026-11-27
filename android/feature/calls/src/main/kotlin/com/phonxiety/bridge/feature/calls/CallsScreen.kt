@@ -118,8 +118,8 @@ fun CallsScreen(
     onClearFilters: () -> Unit,
     onOpenCall: (String) -> Unit,
     onNewCall: () -> Unit,
-    onOpenDoctor: () -> Unit = {},
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onOpenDoctor: () -> Unit = {}
 ) {
     // The history list is the screen's scroll surface, so the section's re-tap belongs here.
     // The list state outlives the list itself, so a dispatch while the page is still loading is a

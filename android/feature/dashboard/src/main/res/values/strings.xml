@@ -15,7 +15,6 @@
     <string name="dashboard_phase_ended">Ended</string>
 
     <string name="dashboard_link_error_title">The link dropped</string>
-    <string name="dashboard_open_doctor">Open Doctor</string>
 
     <string name="dashboard_unpaired_title">This phone is not paired</string>
     <string name="dashboard_unpaired_message">Pair it with the computer that runs the daemon, then the wizard finishes setup by itself.</string>
