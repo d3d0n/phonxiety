@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import segno
 
-from phonxiety.cli import PAIRING_QR_MAX_VERSION, _cmd_pair, build_parser
+from phonxiety.cli import PAIRING_QR_MAX_VERSION, CliError, _cmd_pair, build_parser
 
 PIN = "ab" * 32
 LAN = ["wss://192.168.1.10:18763/device"]
@@ -20,7 +20,12 @@ TAILSCALE = ["wss://100.64.0.2:18763/device"]
 
 
 def _settings() -> SimpleNamespace:
-    return SimpleNamespace(device_token="device-token", app_token="host-app-token")
+    return SimpleNamespace(
+        device_token="device-token",
+        app_token="host-app-token",
+        device_port=18763,
+        state_dir="/tmp/phonxiety-test-state",
+    )
 
 
 def _pairing(**overrides: object) -> dict[str, object]:
@@ -71,6 +76,37 @@ class PairIrohTests(unittest.TestCase):
         self.assertEqual(PIN, data["cert_sha256"])
         self.assertEqual(LAN, data["lan"])
         self.assertEqual(TAILSCALE, data["tailscale"])
+
+
+    def test_an_oversized_pairing_is_refused_with_an_actionable_error(self) -> None:
+        args = build_parser().parse_args(["pair"])
+        output = io.StringIO()
+        with mock.patch("phonxiety.cli._settings", return_value=_settings()), \
+                mock.patch("phonxiety.cli._ensure_daemon"), \
+                mock.patch("phonxiety.cli._daemon_get", return_value=_pairing(iroh="t" * 4000)), \
+                mock.patch("phonxiety.cli._render_pairing_qr") as render, \
+                redirect_stdout(output):
+            with self.assertRaises(CliError) as caught:
+                _cmd_pair(args)
+        render.assert_not_called()
+        self.assertIn("--json", str(caught.exception))
+
+    def test_json_stays_usable_when_the_pairing_does_not_fit_a_qr(self) -> None:
+        text, render = self.run_pair(["--json"], _pairing(iroh="t" * 4000))
+
+        render.assert_not_called()
+        self.assertEqual("t" * 4000, json.loads(text)["iroh"])
+
+    def test_an_address_qr_goes_through_the_same_size_check(self) -> None:
+        args = build_parser().parse_args(["pair", "--host", "10.0.0.2"])
+        with mock.patch("phonxiety.cli._settings", return_value=_settings()), \
+                mock.patch("phonxiety.net.tls.device_identity", return_value=("cert", "key", PIN)), \
+                mock.patch("phonxiety.cli._qr_version", return_value=PAIRING_QR_MAX_VERSION + 1), \
+                mock.patch("phonxiety.cli._render_pairing_qr") as render:
+            with self.assertRaises(CliError) as caught:
+                _cmd_pair(args)
+        render.assert_not_called()
+        self.assertIn("--json", str(caught.exception))
 
     def test_a_payload_too_long_for_any_qr_is_still_trimmed_to_a_scannable_one(self) -> None:
         long = "wss://" + "a" * 300 + ":18763/device"

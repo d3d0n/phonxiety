@@ -28,7 +28,6 @@ import com.phonxiety.bridge.model.CallPhase
 import com.phonxiety.bridge.model.Capabilities
 import com.phonxiety.bridge.model.ControlEnvelope
 import com.phonxiety.bridge.model.CrashDiagnostics
-import com.phonxiety.bridge.model.DaemonInfo
 import com.phonxiety.bridge.model.DeviceActiveCall
 import com.phonxiety.bridge.model.DeviceApiError
 import com.phonxiety.bridge.model.DeviceApiRequest
@@ -51,7 +50,6 @@ import com.phonxiety.bridge.net.ConnectionMode
 import com.phonxiety.bridge.net.DeviceLink
 import com.phonxiety.bridge.net.ExecutorLinkScheduler
 import com.phonxiety.bridge.net.IrohSupport
-import com.phonxiety.bridge.net.LinkCandidateRefresh
 import com.phonxiety.bridge.net.LinkSelector
 import com.phonxiety.bridge.net.LinkSupervisor
 import com.phonxiety.bridge.net.RelayModeSetting
@@ -62,7 +60,6 @@ import java.io.File
 import java.io.OutputStream
 import java.security.MessageDigest
 import java.util.Locale
-import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
@@ -183,7 +180,7 @@ class BridgeEngine(
 
     /**
      * What the last queued `hello` told the daemon.  Kept apart from the UI's
-     * [Capabilities], which [refreshCapabilities] also writes with the daemon's
+     * [Capabilities], which the app-info answer also writes with the daemon's
      * voice-control support.
      */
     private val capabilityWatch = CapabilityWatch()
@@ -205,7 +202,11 @@ class BridgeEngine(
 
     /** The app API credential; the daemon re-sends it on every connect, so it can change at runtime. */
     @Volatile
-    private var appToken: String? = config.appToken
+    override var appToken: String? = config.appToken
+        private set
+
+    /** The pairing this engine was built for; a service start compares it before reusing the engine. */
+    internal val pairingIdentity: String = CandidateMerge.identity(config)
     private val startedElapsed = SystemClock.elapsedRealtime()
     private var telemetryJob: Job? = null
 
@@ -245,11 +246,33 @@ class BridgeEngine(
         clock = { SystemClock.elapsedRealtime() }
     )
 
-    /** Asks the daemon for its other addresses once the hello is answered. */
-    private val candidateRefresh = LinkCandidateRefresh(
-        store = CandidateStore.of(appContext),
-        appToken = { appToken },
-        exchange = { exchange(it) }
+    private val candidateStore = CandidateStore.of(appContext)
+
+    /**
+     * The one info request of a connection: asked after the daemon delivered
+     * app access, only while idle, and applied only to the pairing that built
+     * this engine.
+     */
+    private val appInfo = AppInfoRefresh(
+        store = candidateStore,
+        identity = { pairingIdentity },
+        admission = admission,
+        callOwned = { ownsCall() },
+        linkUp = { links.isUp() && helloDelivered },
+        token = { appToken },
+        scope = engineScope,
+        exchange = { exchange(it) },
+        apply = { info ->
+            val current = stateStore.state.value.capabilities
+            stateStore.capabilities(
+                Capabilities(
+                    callControl = info.voiceControls.hangup || info.voiceControls.instruction,
+                    frameworkAudio = current.frameworkAudio,
+                    appApi = info.appApi,
+                    daemonVersion = info.daemonVersion
+                )
+            )
+        }
     )
 
     private val telecom: TelecomManager? = appContext.getSystemService(TelecomManager::class.java)
@@ -333,8 +356,13 @@ class BridgeEngine(
         try {
             scheduler.schedule({
                 // A config written from outside the app (the host pairing task) must
-                // not leave another daemon's addresses behind this token.
-                safe { CandidateStore.of(appContext).bind(CandidateMerge.identity(config)) }
+                // not leave another daemon's addresses behind this token.  The
+                // addresses that file carries enter through the same binding the
+                // QR path uses, and a failed binding leaves none usable.
+                safe {
+                    val bound = candidateStore.rebind(pairingIdentity, BridgeConfigLoader.candidates(appContext, config))
+                    if (bound == null) BridgeLog.w(TAG, "could not bind learned addresses to this pairing")
+                }
                 safe { adoptExistingCalls() }
                 safe { restoreAbandonedMuteAtStartup() }
                 safe { links.start() }
@@ -345,6 +373,8 @@ class BridgeEngine(
         scheduler.scheduleWithFixedDelay({ safe { links.tick() } }, 1, 1, TimeUnit.SECONDS)
         scheduler.scheduleWithFixedDelay({ safe { publishRoute() } }, 1, 1, TimeUnit.SECONDS)
         scheduler.scheduleWithFixedDelay({ safe { considerSwitch() } }, SELECTION_INTERVAL_S, SELECTION_INTERVAL_S, TimeUnit.SECONDS)
+        // An info request deferred by a call runs as soon as the link is idle.
+        scheduler.scheduleWithFixedDelay({ safe { appInfo.tick() } }, 2, 2, TimeUnit.SECONDS)
         scheduler.scheduleWithFixedDelay(
             { safe { refreshCapabilitiesOnChange() } },
             CAPABILITY_WATCH_INTERVAL_S,
@@ -559,13 +589,10 @@ class BridgeEngine(
                     is BridgeConfig.Iroh -> IrohSupport.endpointId(config.ticket)
                 }
             )
+            appInfo.linkOpened()
             // Nothing else may reach this link before its hello: the daemon
             // reads the first control frame as the handshake.
             val hello = sendHello()
-            if (hello) {
-                engineScope.launch { refreshCapabilities() }
-                engineScope.launch(Dispatchers.IO) { candidateRefresh.refresh() }
-            }
             applyWifiLock()
             return hello
         }
@@ -581,7 +608,7 @@ class BridgeEngine(
         override fun onLinkDown(reason: String) {
             lastRouteKey = null
             helloDelivered = false
-            candidateRefresh.linkDown()
+            appInfo.linkDown()
             capabilityWatch.helloGone()
             applyWifiLock()
             stateStore.linkDown(LinkError(code = reason, message = linkMessage(reason), atEpochMs = System.currentTimeMillis()))
@@ -2158,52 +2185,36 @@ class BridgeEngine(
         apiPending.clear()
     }
 
-    /** Stores the token the daemon handed over the authenticated link, then refreshes capabilities. */
+    /**
+     * Stores the token the daemon handed over the authenticated link, then asks
+     * for info once on this connection.  A token that did not change still asks:
+     * the answer carries the capability and address set this connection has not
+     * read yet.
+     */
     private suspend fun acceptAppToken(token: String) {
-        if (token == appToken) return
-        val stored = withContext(Dispatchers.IO) {
-            runCatching {
-                val current = BridgeConfigLoader.loadOrNull(appContext) ?: return@runCatching false
-                val updated = when (current) {
-                    is BridgeConfig.Address -> current.copy(appToken = token)
-                    is BridgeConfig.Iroh -> current.copy(appToken = token)
-                }
-                BridgeConfigLoader.write(appContext, updated)
-                true
-            }.getOrDefault(false)
+        if (token != appToken) {
+            val stored = withContext(Dispatchers.IO) {
+                runCatching { storeAppToken(token) }.getOrDefault(false)
+            }
+            if (!stored) {
+                BridgeLog.w(TAG, "could not store the app token from the daemon")
+                return
+            }
+            appToken = token
+            BridgeLog.i(TAG, "app API access granted by the daemon")
         }
-        if (!stored) {
-            BridgeLog.w(TAG, "could not store the app token from the daemon")
-            return
-        }
-        appToken = token
-        BridgeLog.i(TAG, "app API access granted by the daemon")
-        refreshCapabilities()
+        appInfo.delivered()
     }
 
-    private suspend fun refreshCapabilities() {
-        val token = appToken ?: return
-        val request = DeviceApiRequest(
-            id = UUID.randomUUID().toString(),
-            method = "GET",
-            path = "/app/v1/info",
-            appToken = token
-        )
-        val result = withTimeoutOrNull(APP_REQUEST_TIMEOUT_MS) { exchange(request) } ?: return
-        val element = result.result ?: return
-        if (result.status !in 200..299) return
-        val info = runCatching {
-            json.decodeFromJsonElement(DaemonInfo.serializer(), element)
-        }.getOrNull() ?: return
-        val current = stateStore.state.value.capabilities
-        stateStore.capabilities(
-            Capabilities(
-                callControl = info.voiceControls.hangup || info.voiceControls.instruction,
-                frameworkAudio = current.frameworkAudio,
-                appApi = info.appApi,
-                daemonVersion = info.daemonVersion
-            )
-        )
+    /**
+     * Writes [token] only while the stored config still belongs to this
+     * engine's pairing.  A late `app_access` from the previous daemon may not
+     * overwrite the pairing that replaced it.
+     */
+    private fun storeAppToken(token: String): Boolean {
+        val stored = BridgeConfigLoader.updateAppToken(appContext, pairingIdentity, token)
+        if (!stored) BridgeLog.w(TAG, "the pairing moved; the app token was not stored")
+        return stored
     }
 
     // ------------------------------------------------------------------

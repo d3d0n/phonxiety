@@ -121,24 +121,26 @@ internal object CandidatePlanner {
         discovered: List<DiscoveredDaemon> = emptyList(),
         storeIdentity: String? = null
     ): List<Candidate> {
-        // A store written for another pairing holds another daemon's addresses.
-        // They are never dialled with this config's token, even before the
-        // store is rebound to the current pairing.
-        val foreignStore = storeIdentity != null && storeIdentity != CandidateMerge.identity(config)
-        val storedPins = if (foreignStore) {
-            emptyList()
-        } else {
+        // Only a document bound to this exact pairing may contribute.  An
+        // identity-less document (from before identities, or a binding that
+        // never succeeded) and another daemon's document are both unusable:
+        // their addresses and their single pin belong to a pairing this token
+        // was not issued for.
+        val bound = storeIdentity != null && storeIdentity == CandidateMerge.identity(config)
+        val storedPins = if (bound) {
             stored.mapNotNull { it.certSha256?.takeIf(String::isNotBlank)?.lowercase() }.distinct()
+        } else {
+            emptyList()
         }
         val pin = when (config) {
             is BridgeConfig.Address -> config.certSha256?.lowercase()
 
             // An iroh pairing carries its pin when the QR (or config file) had one.
-            // Without it, only an unambiguous stored pin can be trusted; mixed
-            // pins mean the document still holds another daemon's addresses.
+            // Without it, only a bound document's unambiguous pin can be trusted;
+            // mixed pins mean the document still holds another daemon's addresses.
             is BridgeConfig.Iroh -> config.certSha256?.lowercase() ?: storedPins.singleOrNull()
         }
-        val ambiguous = !foreignStore && config is BridgeConfig.Iroh &&
+        val ambiguous = bound && config is BridgeConfig.Iroh &&
             config.certSha256 == null && storedPins.size > 1
         val primary = when (config) {
             is BridgeConfig.Iroh -> Candidate.iroh()
@@ -147,7 +149,7 @@ internal object CandidatePlanner {
                 Candidate.address(config.url, config.certSha256, source = CandidateStore.Source.PAIRED, primary = true)
         }
         val addresses = buildList {
-            if (!foreignStore) {
+            if (bound) {
                 for (candidate in stored) {
                     val cert = candidate.certSha256 ?: continue
                     if (cert.isBlank()) continue

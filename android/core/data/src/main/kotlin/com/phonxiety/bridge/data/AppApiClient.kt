@@ -1,14 +1,12 @@
 package com.phonxiety.bridge.data
 
-import android.content.Context
-import com.phonxiety.bridge.BridgeConfigLoader
+import com.phonxiety.bridge.model.AppGateway
 import com.phonxiety.bridge.model.AppGatewaySource
 import com.phonxiety.bridge.model.AttachmentHeader
 import com.phonxiety.bridge.model.AttachmentOutcome
 import com.phonxiety.bridge.model.AttachmentPage
 import com.phonxiety.bridge.model.DeviceApiRequest
 import com.phonxiety.bridge.model.DeviceApiResult
-import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.OutputStream
 import java.util.Base64
 import java.util.UUID
@@ -27,13 +25,9 @@ import kotlinx.serialization.json.put
 /** One app API call over the live device link. */
 @Singleton
 class LinkAppApi @Inject constructor(
-    @ApplicationContext context: Context,
     gateways: AppGatewaySource
 ) : AppApi {
-    private val envelope = AppApiEnvelope(
-        gateways = gateways,
-        appToken = { withContext(Dispatchers.IO) { BridgeConfigLoader.loadOrNull(context)?.appToken } }
-    )
+    private val envelope = AppApiEnvelope(gateways = gateways)
 
     override suspend fun request(
         method: String,
@@ -53,13 +47,16 @@ class LinkAppApi @Inject constructor(
 
 /**
  * The request/response envelope: one id per request, one 30 s deadline, the
- * stored app token, and the daemon's `{code, message}` mapped into
+ * gateway's own app token, and the daemon's `{code, message}` mapped into
  * [ApiResult.Failure].  Bulk data uses the attachment stream when the live
  * transport offers one and paged base64 otherwise.
+ *
+ * The credential is read from the gateway that carries the request, never
+ * from storage on its own: a pairing change replaces the gateway, so the new
+ * daemon's token cannot be attached to the previous daemon's link.
  */
 internal class AppApiEnvelope(
     private val gateways: AppGatewaySource,
-    private val appToken: suspend () -> String?,
     private val timeoutMs: Long = 30_000L,
     private val pageBytes: Int = 192 * 1024,
     private val nextId: () -> String = { UUID.randomUUID().toString() }
@@ -78,8 +75,19 @@ internal class AppApiEnvelope(
     ): ApiResult {
         val gateway = gateways.gateway()
             ?: return ApiResult.Failure(503, "link_down", "the bridge service is not running")
-        val token = appToken()
+        val token = gateway.appToken
             ?: return ApiResult.Failure(401, "app_token_missing", "pair again to receive an app token")
+        return exchange(gateway, token, method, path, query, body)
+    }
+
+    private suspend fun exchange(
+        gateway: AppGateway,
+        token: String,
+        method: String,
+        path: String,
+        query: Map<String, String>,
+        body: JsonObject?
+    ): ApiResult {
         val request = DeviceApiRequest(
             id = nextId(),
             method = method,
@@ -107,7 +115,7 @@ internal class AppApiEnvelope(
     ): ApiResult {
         val gateway = gateways.gateway()
             ?: return ApiResult.Failure(503, "link_down", "the bridge service is not running")
-        val token = appToken()
+        val token = gateway.appToken
             ?: return ApiResult.Failure(401, "app_token_missing", "pair again to receive an app token")
         if (gateway.supportsAttachments) {
             val header = AttachmentHeader(
@@ -135,10 +143,12 @@ internal class AppApiEnvelope(
                 AttachmentOutcome.Unsupported -> Unit
             }
         }
-        return pagedDownload(path, query, sink)
+        return pagedDownload(gateway, token, path, query, sink)
     }
 
     private suspend fun pagedDownload(
+        gateway: AppGateway,
+        token: String,
         path: String,
         query: Map<String, String>,
         sink: OutputStream
@@ -150,7 +160,7 @@ internal class AppApiEnvelope(
                 "offset" to offset.toString(),
                 "limit" to pageBytes.toString()
             )
-            val response = request("GET", path, pageQuery)
+            val response = exchange(gateway, token, "GET", path, pageQuery, null)
             if (response is ApiResult.Failure) return response
             val success = response as ApiResult.Success
             val page = try {

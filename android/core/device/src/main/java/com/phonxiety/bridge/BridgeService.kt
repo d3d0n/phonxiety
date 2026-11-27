@@ -6,12 +6,20 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.IBinder
+import com.phonxiety.bridge.net.CandidateMerge
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.map
+
+/**
+ * A start reuses the running engine only for the pairing it was built for.
+ * Any other stored identity — or no engine at all — builds a new one, so the
+ * previous daemon's link never serves a request for the new pairing.
+ */
+internal fun mustBuildEngine(runningIdentity: String?, storedIdentity: String): Boolean = runningIdentity != storedIdentity
 
 /**
  * Idle device link.  The app starts it when it is paired, from [MainActivity]
@@ -81,29 +89,47 @@ class BridgeService : Service() {
             stopSelf(startId)
             return Service.START_NOT_STICKY
         }
-        if (engine != null) return Service.START_STICKY
 
         val config = try {
             BridgeConfigLoader.load(this)
         } catch (e: BridgeConfigException) {
-            BridgeLog.e(TAG, "bridge config unavailable: ${e.code}")
+            BridgeLog.w(TAG, "bridge config unavailable: ${e.code}")
             BridgeRuntime.forgetPairing()
             tearDownForeground()
             stopSelf(startId)
             return Service.START_NOT_STICKY
         } catch (e: Exception) {
-            BridgeLog.e(TAG, "bridge config unreadable: ${e.javaClass.simpleName}")
+            BridgeLog.w(TAG, "bridge config unreadable: ${e.javaClass.simpleName}")
             BridgeRuntime.forgetPairing()
             tearDownForeground()
             stopSelf(startId)
             return Service.START_NOT_STICKY
         }
 
+        val identity = CandidateMerge.identity(config)
+        // Close the previous pairing's gateway before anything else: from this
+        // line on, a request either gets the engine built below or none at all.
+        BridgeRuntime.expectPairing(identity)
+
+        val current = engine
+        if (!mustBuildEngine(current?.pairingIdentity, identity)) return Service.START_STICKY
+        if (current != null) {
+            // Re-pairing replaced the stored config: the engine still holds the
+            // previous daemon's token and link, so it is torn down before the
+            // new one is built rather than left to serve a single request.
+            BridgeLog.i(TAG, "pairing changed: replacing the live link")
+            BridgeRuntime.detach(current)
+            card?.cancel()
+            card = null
+            engine = null
+            current.close()
+        }
+
         BridgeRuntime.rememberPairing(config.kind)
         // The card follows the state, which carries the path, the latency and the call.
         val created = BridgeEngine(applicationContext, config)
         engine = created
-        BridgeRuntime.attach(created)
+        BridgeRuntime.attach(created, identity)
         card = slot.follow(created.state.map(BridgeNotice::of), scope) { notice ->
             Notifications.bridge(this, notice)
         }

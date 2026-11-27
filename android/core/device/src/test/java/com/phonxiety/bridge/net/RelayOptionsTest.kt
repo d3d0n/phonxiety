@@ -49,7 +49,9 @@ class RelayOptionsTest {
         val dir = createTempDirectory("candidates").toFile()
         val store = CandidateStore(File(dir, "link-candidates.json"))
         assertTrue(store.load().isEmpty())
+        store.bind("cert:$pin")
         val stored = store.merge(
+            "cert:$pin",
             listOf(
                 StoredCandidate("wss://192.168.1.10:18763/device", pin, CandidateStore.Source.MDNS),
                 StoredCandidate("wss://192.168.1.10:18763/device", pin, CandidateStore.Source.LEARNED),
@@ -57,7 +59,7 @@ class RelayOptionsTest {
                 StoredCandidate("wss://192.168.1.11:18763/device", null, CandidateStore.Source.MDNS),
                 StoredCandidate("https://not-a-link.example", pin, CandidateStore.Source.LEARNED)
             )
-        )
+        )!!
         assertEquals(2, stored.size)
         assertEquals(CandidateStore.Source.LEARNED, stored[0].source)
         assertEquals(listOf("wss://192.168.1.10:18763/device", "wss://100.64.0.9:18763/device"), store.load().map { it.url })

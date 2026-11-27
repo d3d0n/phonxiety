@@ -8,6 +8,13 @@ import java.io.OutputStream
  * by the data layer; no caller ever touches the transport.
  */
 interface AppGateway {
+    /**
+     * The app API credential this gateway was built for.  A request takes it
+     * from the same gateway that carries it, so a pairing change can never
+     * pair one daemon's address with another daemon's token.
+     */
+    val appToken: String?
+
     /** True when the live link can carry a phone-opened attachment stream. */
     val supportsAttachments: Boolean
 

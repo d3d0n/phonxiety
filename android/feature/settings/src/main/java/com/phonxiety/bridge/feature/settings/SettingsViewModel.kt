@@ -11,6 +11,7 @@ import com.phonxiety.bridge.data.BridgeStateRepository
 import com.phonxiety.bridge.data.DaemonApi
 import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.LinkState
+import com.phonxiety.bridge.model.PairingGate
 import com.phonxiety.bridge.model.PathKind
 import com.phonxiety.bridge.net.CandidateMerge
 import com.phonxiety.bridge.net.CandidateStore
@@ -47,7 +48,7 @@ class SettingsViewModel @Inject constructor(
     private val api: DaemonApi,
     private val bridgeState: BridgeStateRepository,
     private val phonePreferences: PhonePreferences,
-    @ApplicationContext context: Context
+    @ApplicationContext private val context: Context
 ) : ViewModel() {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -273,12 +274,30 @@ class SettingsViewModel @Inject constructor(
         if (current.refreshing) return
         _state.update { it.copy(connection = it.connection.copy(refreshing = true, error = null)) }
         viewModelScope.launch {
+            val epoch = PairingGate.epoch()
             when (val outcome = api.info()) {
                 is ApiOutcome.Ok -> {
-                    val stored = CandidateMerge.store(candidateStore, outcome.value.connection)
+                    // The answer belongs to the pairing the gateway served; a
+                    // rebind while it was in flight leaves it unapplied, and the
+                    // store is bound to that pairing rather than to whatever file
+                    // happens to be on disk by now.
+                    val identity = PairingGate.expectedIdentity()?.takeIf { PairingGate.epoch() == epoch }
+                    // A binding that cannot be written leaves no learned address
+                    // usable; a first binding replaces whatever an older pairing left.
+                    val bound = identity?.let(candidateStore::bind)
+                    val stored = if (identity == null || bound == null) {
+                        null
+                    } else {
+                        CandidateMerge.store(candidateStore, outcome.value.connection, identity)
+                            ?: bound.candidates
+                    }
                     _state.update {
                         it.copy(
-                            connection = it.connection.copy(candidates = stored, refreshing = false, error = null)
+                            connection = it.connection.copy(
+                                candidates = stored ?: candidateStore.load(),
+                                refreshing = false,
+                                error = null
+                            )
                         )
                     }
                 }

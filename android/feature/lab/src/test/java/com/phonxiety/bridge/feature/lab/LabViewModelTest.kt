@@ -20,12 +20,14 @@ import com.phonxiety.bridge.model.ConnectionInfo
 import com.phonxiety.bridge.model.DaemonInfo
 import com.phonxiety.bridge.model.LinkTests
 import com.phonxiety.bridge.model.LoopbackResult
+import com.phonxiety.bridge.model.PairingGate
 import com.phonxiety.bridge.model.ProbeCandidate
 import com.phonxiety.bridge.model.ProbeResult
 import com.phonxiety.bridge.model.TestCallRequest
 import com.phonxiety.bridge.model.TestCallTone
 import com.phonxiety.bridge.model.ToneResult
 import com.phonxiety.bridge.model.VoiceControls
+import com.phonxiety.bridge.net.CandidateMerge
 import com.phonxiety.bridge.net.LanPathProbe
 import java.io.File
 import kotlinx.coroutines.CompletableDeferred
@@ -87,6 +89,7 @@ class LabViewModelTest {
         prefs = FakePhonePreferences()
         bridge = FakeBridgeStateRepository()
         lanCheck = FakeLanPathCheck()
+        PairingGate.resetForTest()
         LiveCallFront.resetForTest()
     }
 
@@ -96,6 +99,12 @@ class LabViewModelTest {
         viewModels.forEach { it.viewModelScope.cancel() }
         viewModels.clear()
         Dispatchers.resetMain()
+    }
+
+    /** Stores a pairing and makes it the one the gate expects, as a running service does. */
+    private fun pair(config: BridgeConfig) {
+        val stored = BridgeConfigLoader.write(context, config)
+        PairingGate.expect(CandidateMerge.identity(stored))
     }
 
     private fun viewModel(): LabViewModel = LabViewModel(api, bridge, prefs, lanCheck, context).apply {
@@ -777,7 +786,7 @@ class LabViewModelTest {
             )
         }
         api.infoHandler = { ApiOutcome.Ok(200, DaemonInfo(connection = ConnectionInfo(lan = listOf(url), certificate = pin))) }
-        BridgeConfigLoader.write(context, BridgeConfig.Address(url, "dev-token", pin))
+        pair(BridgeConfig.Address(url, "dev-token", pin))
         lanCheck.results = { urls -> urls.map { LanPathProbe(it, reachable = true, rttMs = 9) } }
         val vm = viewModel()
         vm.toggleProbeCandidate("iroh")
@@ -800,6 +809,44 @@ class LabViewModelTest {
     }
 
     @Test
+    fun `a re-pair while the info answer is in flight stops the phone probe`() = runTest(testDispatcher) {
+        val url = "wss://192.0.2.10:18763/device"
+        val pin = "cc".repeat(32)
+        api.probeHandler = {
+            ApiOutcome.Ok(
+                200,
+                ProbeResult(
+                    candidates = listOf(ProbeCandidate("lan", available = true, reachable = true, rttMs = 4.0)),
+                    checkedAt = "2026-11-26T10:00:00+00:00"
+                )
+            )
+        }
+        var infoCalls = 0
+        api.infoHandler = {
+            // The view model reads info once on start; the pairing moves while
+            // the probe's own answer is in flight.
+            infoCalls += 1
+            if (infoCalls > 1) PairingGate.expect("cert:another-daemon")
+            ApiOutcome.Ok(200, DaemonInfo(connection = ConnectionInfo(lan = listOf(url), certificate = pin)))
+        }
+        pair(BridgeConfig.Address(url, "dev-token", pin))
+        lanCheck.results = { urls -> urls.map { LanPathProbe(it, reachable = true, rttMs = 9) } }
+        val vm = viewModel()
+        vm.toggleProbeCandidate("iroh")
+        vm.toggleProbeCandidate("tailscale")
+
+        vm.runProbe()
+        vm.awaitIoState { it.probe.rows.isNotEmpty() }
+
+        // The handshake would have carried the new pairing's device token to
+        // the previous daemon's pinned address; it never opens a socket.
+        assertTrue(lanCheck.calls.isEmpty())
+        val row = vm.state.value.probe.rows.single()
+        assertEquals(ProbeVerdict.NOT_CHECKED, row.verdict)
+        assertEquals(UiText.Res(R.string.lab_probe_note_stale), row.note)
+    }
+
+    @Test
     fun `a phone that cannot reach the listener says so while the daemon still answers`() = runTest(testDispatcher) {
         val url = "wss://192.0.2.10:18763/device"
         val pin = "cc".repeat(32)
@@ -815,7 +862,7 @@ class LabViewModelTest {
             )
         }
         api.infoHandler = { ApiOutcome.Ok(200, DaemonInfo(connection = ConnectionInfo(lan = listOf(url), certificate = pin))) }
-        BridgeConfigLoader.write(context, BridgeConfig.Address(url, "dev-token", pin))
+        pair(BridgeConfig.Address(url, "dev-token", pin))
         lanCheck.results = { urls -> urls.map { LanPathProbe(it, reachable = false, rttMs = null) } }
         val vm = viewModel()
         vm.toggleProbeCandidate("iroh")

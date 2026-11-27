@@ -466,6 +466,11 @@ def _fitted_pairing_payload(
             lan_urls.pop()
         payload = build()
         version = _qr_version(payload)
+    if version > PAIRING_QR_MAX_VERSION:
+        raise CliError(
+            f"the pairing itself does not fit a QR code (version {version} needs more than "
+            f"{PAIRING_QR_MAX_VERSION}); use --json to write the phone configuration instead"
+        )
     return payload, before, (len(payload), version)
 
 
@@ -509,7 +514,7 @@ def _cmd_pair(args: argparse.Namespace) -> None:
             "app_token": settings.app_token,
             "cert": fingerprint,
         }
-        payload = _pairing_payload(query, None, [])
+        qr_input = (query, None, [], [])
         summary = [f"Daemon address:      {url}", f"Certificate SHA-256: {fingerprint}"]
     else:
         _ensure_daemon(settings)
@@ -538,16 +543,23 @@ def _cmd_pair(args: argparse.Namespace) -> None:
             config["lan"] = lan
         if tailscale:
             config["tailscale"] = tailscale
-        payload, before, after = _fitted_pairing_payload(base, certificate, lan, tailscale)
-        qr_report = (before, after)
+        qr_input = (base, certificate, lan, tailscale)
         summary = [
             f"Daemon endpoint: {pairing.get('endpoint_id')}",
             "The phone dials this id over iroh: no address, no VPN app.",
         ]
+    # JSON is a transfer format, not a QR code: it stays available when the
+    # pairing itself is too large for a scannable code.
     if args.json:
         print(json.dumps(config, separators=(",", ":")))
         return
 
+    payload, before, after = _fitted_pairing_payload(*qr_input)
+    if args.host or args.lan or args.tailscale:
+        # An address QR has no optional addresses: it is checked, not trimmed.
+        qr_report = None
+    else:
+        qr_report = (before, after)
     _render_pairing_qr(payload)
     print("\n".join(summary))
     if qr_report is not None:

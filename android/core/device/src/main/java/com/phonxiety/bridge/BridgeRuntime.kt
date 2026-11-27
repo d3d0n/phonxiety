@@ -3,6 +3,7 @@ package com.phonxiety.bridge
 import android.telecom.Call
 import com.phonxiety.bridge.model.AppGateway
 import com.phonxiety.bridge.model.BridgeState
+import com.phonxiety.bridge.model.PairingGate
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -58,9 +59,10 @@ object BridgeRuntime {
     fun currentRoute(): Route? = engine?.currentRoute()?.let { Route(relay = it.relay, rttMs = it.rttMs) }
 
     /** Installs the service's engine and mirrors its state process-wide. */
-    fun attach(current: BridgeEngine) {
+    fun attach(current: BridgeEngine, identity: String) {
         stateJob?.cancel()
         engine = current
+        PairingGate.install(current, identity)
         stateJob = scope.launch {
             current.state.collect { mutableState.value = it }
         }
@@ -68,6 +70,7 @@ object BridgeRuntime {
 
     /** Detaches [current] if it is still the installed engine. */
     fun detach(current: BridgeEngine) {
+        PairingGate.uninstall(current)
         if (engine !== current) return
         stateJob?.cancel()
         stateJob = null
@@ -75,8 +78,18 @@ object BridgeRuntime {
         mutableState.value = BridgeState()
     }
 
-    /** The live app-API gateway, or null while the service is not running. */
-    fun appGateway(): AppGateway? = engine
+    /**
+     * Points every app-API caller at [identity]: a different pairing closes the
+     * installed gateway in the same step, so no request can leave through the
+     * previous daemon while the service is still being rebuilt.
+     */
+    fun expectPairing(identity: String?) = PairingGate.expect(identity)
+
+    /** The current pairing generation, for an answer that must not outlive it. */
+    fun pairingEpoch(): Long = PairingGate.epoch()
+
+    /** The live app-API gateway for the expected pairing, or null while the service is not running. */
+    fun appGateway(): AppGateway? = PairingGate.gateway()
 
     fun rememberPairing(kind: BridgeConfig.Kind) {
         pairingKind = kind
@@ -84,6 +97,7 @@ object BridgeRuntime {
 
     fun forgetPairing() {
         pairingKind = null
+        PairingGate.expect(null)
     }
 
     fun currentCalls(): List<Call> {

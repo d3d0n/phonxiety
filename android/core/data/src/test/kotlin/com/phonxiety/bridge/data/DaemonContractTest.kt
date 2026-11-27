@@ -97,7 +97,6 @@ class DaemonContractTest {
                 EnvelopeTransport(
                     AppApiEnvelope(
                         AppGatewaySource { gateway },
-                        { APP_TOKEN },
                         pageBytes = PAGE_BYTES
                     )
                 )
@@ -309,6 +308,7 @@ class DaemonContractTest {
         private val total: Long = page.getValue("total").jsonPrimitive.content.toLong()
         val requests = mutableListOf<DeviceApiRequest>()
 
+        override val appToken: String = APP_TOKEN
         override val supportsAttachments: Boolean = false
 
         override suspend fun exchange(request: DeviceApiRequest): DeviceApiResult {

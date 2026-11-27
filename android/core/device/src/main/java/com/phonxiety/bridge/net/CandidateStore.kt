@@ -50,10 +50,23 @@ private data class CandidateDocument(
  * mode and a candidate is only used once it answers.
  */
 class CandidateStore(private val file: File) {
-    fun load(): List<StoredCandidate> = document().candidates
+    /** One document read: the addresses and the pairing they belong to, never separately. */
+    data class Snapshot(val candidates: List<StoredCandidate>, val pairing: String?)
+
+    // Every read and write goes through one monitor, so two writers cannot
+    // interleave a read of the old identity with a write of the new one.
+    private val lock = Any()
+
+    /** The addresses and the pairing identity from one read. */
+    fun snapshot(): Snapshot = synchronized(lock) {
+        val document = document()
+        Snapshot(document.candidates, document.pairing)
+    }
+
+    fun load(): List<StoredCandidate> = snapshot().candidates
 
     /** The pairing the stored addresses belong to, or null for a document from before identities. */
-    fun pairingIdentity(): String? = document().pairing
+    fun pairingIdentity(): String? = snapshot().pairing
 
     private fun document(): CandidateDocument = try {
         if (!file.isFile || file.length() > MAX_BYTES) {
@@ -81,36 +94,45 @@ class CandidateStore(private val file: File) {
         false
     }
 
-    /** Adds [learned] to the stored set and returns the result; the pairing identity stays. */
-    fun merge(learned: List<StoredCandidate>): List<StoredCandidate> {
+    /**
+     * Adds [learned] to the document only while it still belongs to
+     * [expected].  Null means the answer was not stored: the store has been
+     * rebound to another pairing, no binding ever succeeded, or the write
+     * failed.  A late answer from the previous daemon therefore never becomes
+     * an address of the current one.
+     */
+    fun merge(expected: String, learned: List<StoredCandidate>): List<StoredCandidate>? = synchronized(lock) {
         val current = document()
+        if (current.pairing != expected) return null
         val merged = CandidateStore.dedupe(current.candidates + learned)
-        writeDocument(current.pairing, merged)
-        return merged
+        if (!writeDocument(current.pairing, merged)) return null
+        merged
     }
 
     /**
      * Makes [pairing] the document's identity.  A different pairing's
      * addresses are discarded in one atomic write, so no address learned for
-     * one daemon can be dialled with another daemon's token.
+     * one daemon can be dialled with another daemon's token.  Null means the
+     * binding could not be written; callers must not use any learned address
+     * until a later binding succeeds.
      */
-    fun bind(pairing: String): List<StoredCandidate> {
+    fun bind(pairing: String): Snapshot? = synchronized(lock) {
         val current = document()
-        if (current.pairing == pairing) return current.candidates
-        writeDocument(pairing, emptyList())
-        return emptyList()
+        if (current.pairing == pairing) return Snapshot(current.candidates, pairing)
+        if (!writeDocument(pairing, emptyList())) return null
+        Snapshot(emptyList(), pairing)
     }
 
     /** [bind], then merge this pairing's own addresses (the QR's) in the same write. */
-    fun rebind(pairing: String, candidates: List<StoredCandidate>): List<StoredCandidate> {
+    fun rebind(pairing: String, candidates: List<StoredCandidate>): Snapshot? = synchronized(lock) {
         val current = document()
         val next = if (current.pairing == pairing) {
             CandidateStore.dedupe(current.candidates + candidates)
         } else {
             CandidateStore.dedupe(candidates)
         }
-        writeDocument(pairing, next)
-        return next
+        if (!writeDocument(pairing, next)) return null
+        Snapshot(next, pairing)
     }
 
     /** Where a stored address came from; shown in the settings screen and used in logs. */
@@ -154,8 +176,9 @@ class CandidateStore(private val file: File) {
 
 /**
  * The one place a set of addresses becomes stored candidates: the QR pairing
- * path, the engine's own refresh after a hello and the settings refresh all
- * call it, so every stored address carries the same pin and source.
+ * path, the host-written pairing file, the engine's own refresh and the
+ * settings refresh all call it, so every stored address carries the same pin
+ * and source.
  */
 object CandidateMerge {
     private val PIN = Regex("^[0-9a-fA-F]{64}$")
@@ -178,8 +201,11 @@ object CandidateMerge {
         )
     }
 
-    /** Stores [connection]'s addresses and returns the whole set. */
-    fun store(store: CandidateStore, connection: ConnectionInfo?): List<StoredCandidate> = store.merge(learned(connection))
+    /**
+     * Stores [connection]'s addresses for [identity]; null when the store has
+     * been rebound to another pairing and the answer no longer applies.
+     */
+    fun store(store: CandidateStore, connection: ConnectionInfo?, identity: String): List<StoredCandidate>? = store.merge(identity, learned(connection))
 
     /**
      * What identifies the paired daemon across token rotations and refreshes:

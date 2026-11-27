@@ -3,6 +3,7 @@ package com.phonxiety.bridge.data
 import android.content.Context
 import com.phonxiety.bridge.BridgeConfigException
 import com.phonxiety.bridge.BridgeConfigLoader
+import com.phonxiety.bridge.BridgeLog
 import com.phonxiety.bridge.BridgeRuntime
 import com.phonxiety.bridge.BridgeService
 import com.phonxiety.bridge.PairingLink
@@ -44,6 +45,8 @@ class RuntimeBridgeStateRepository @Inject constructor() : BridgeStateRepository
  * start and after returning to the app) and when the bridge service publishes a new link state, the
  * moment it has reloaded the config. Nothing polls.
  */
+private const val TAG = "PhonxietyBridge"
+
 @Singleton
 class DevicePairingRepository internal constructor(
     private val context: Context,
@@ -100,10 +103,19 @@ class DevicePairingRepository internal constructor(
                     val previous = BridgeConfigLoader.snapshot(context)
                     try {
                         val stored = BridgeConfigLoader.write(context, parsed.config)
+                        val identity = CandidateMerge.identity(stored)
+                        // The stored config has moved; the previous daemon's gateway
+                        // stops answering in the same step, so no request can carry
+                        // this pairing's credentials through it while the service
+                        // is still being rebuilt.
+                        BridgeRuntime.expectPairing(identity)
                         // The QR's other addresses belong to this pairing only: a
                         // different daemon's stored addresses are replaced together
                         // with the identity in one write.
-                        CandidateStore.of(context).rebind(CandidateMerge.identity(stored), parsed.candidates)
+                        val bound = CandidateStore.of(context).rebind(identity, parsed.candidates)
+                        if (bound == null) {
+                            BridgeLog.w(TAG, "could not store this pairing's addresses")
+                        }
                         try {
                             BridgeRuntime.rememberPairing(stored.kind)
                             startService(context)
@@ -132,13 +144,22 @@ class DevicePairingRepository internal constructor(
      * believes it is paired.
      */
     private fun rollBackPairing(previous: ByteArray?) {
-        if (!BridgeConfigLoader.restore(context, previous)) return
+        if (!BridgeConfigLoader.restore(context, previous)) {
+            BridgeRuntime.forgetPairing()
+            return
+        }
         val stored = BridgeConfigLoader.loadOrNull(context)
-        if (stored == null) BridgeRuntime.forgetPairing() else BridgeRuntime.rememberPairing(stored.kind)
+        if (stored == null) {
+            BridgeRuntime.forgetPairing()
+        } else {
+            BridgeRuntime.expectPairing(CandidateMerge.identity(stored))
+            BridgeRuntime.rememberPairing(stored.kind)
+        }
     }
 
     override suspend fun unpair() = withContext(Dispatchers.IO) {
         mutex.withLock {
+            BridgeRuntime.expectPairing(null)
             BridgeConfigLoader.delete(context)
             BridgeRuntime.forgetPairing()
             BridgeService.stop(context)

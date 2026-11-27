@@ -18,9 +18,11 @@ import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.LinkTestResult
+import com.phonxiety.bridge.model.PairingGate
 import com.phonxiety.bridge.model.ProbeCandidate
 import com.phonxiety.bridge.model.TestCallRequest
 import com.phonxiety.bridge.model.TestCallTone
+import com.phonxiety.bridge.net.CandidateMerge
 import com.phonxiety.bridge.net.LanPathProbe
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -280,17 +282,30 @@ class LabViewModel @Inject constructor(
     private suspend fun withPhoneCheck(candidates: List<ProbeCandidate>): List<ProbeRowUi> {
         val rows = candidates.map(::daemonRow)
         val lan = candidates.firstOrNull { it.name == "lan" } ?: return rows
+        // The addresses and the credential that probes them must come from the
+        // same pairing.  A re-pair while the answer was in flight is refused
+        // before any probe: the pinned handshake would otherwise carry the new
+        // pairing's device token to the previous daemon.
+        val epoch = PairingGate.epoch()
         val info = (api.info() as? ApiOutcome.Ok)?.value
         val urls = info?.connection?.lan.orEmpty()
         val pin = info?.connection?.certificate
-        val token = BridgeConfigLoader.loadOrNull(context)?.token
-        val probes = if (urls.isNotEmpty() && token != null) {
+        val stored = BridgeConfigLoader.loadOrNull(context)
+        // Without a live gateway the stored credential is usable only while the
+        // gate still expects that very pairing.
+        val expected = PairingGate.expectedIdentity()
+        val token = PairingGate.gateway()?.appToken
+            ?: stored?.takeIf { expected == CandidateMerge.identity(it) }?.token
+        val stale = PairingGate.epoch() != epoch
+        val probes = if (!stale && urls.isNotEmpty() && token != null) {
             withContext(Dispatchers.IO) { runCatching { lanPathCheck.probe(urls, pin, token) }.getOrNull() }
         } else {
             null
         }
         val answered = probes?.firstOrNull { it.reachable }
         val updated = when {
+            stale -> notChecked(lan, R.string.lab_probe_note_stale)
+
             info == null -> notChecked(lan, R.string.lab_probe_note_no_info)
 
             urls.isEmpty() -> notChecked(lan, R.string.lab_probe_note_no_lan)

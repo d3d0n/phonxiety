@@ -49,7 +49,7 @@ class LinkSelectionTest {
             StoredCandidate("wss://192.168.1.10:18763/device", pin),
             StoredCandidate("wss://192.168.1.11:18763/device", null)
         )
-        val plan = CandidatePlanner.plan(config, stored)
+        val plan = CandidatePlanner.plan(config, stored, storeIdentity = CandidateMerge.identity(config))
         assertEquals(listOf(LinkKind.IROH, LinkKind.TAILSCALE, LinkKind.WEBSOCKET), plan.map { it.kind })
         assertFalse(plan.drop(1).any { it.id.endsWith("192.168.1.11:18763/device") })
     }
@@ -77,7 +77,7 @@ class LinkSelectionTest {
             DiscoveredDaemon("192.168.1.31", 18763, pin, 3, "phonxiety-a")
         )
 
-        val plan = CandidatePlanner.plan(config, stored, discovered)
+        val plan = CandidatePlanner.plan(config, stored, discovered, CandidateMerge.identity(config))
 
         assertEquals(listOf(LinkKind.IROH, LinkKind.WEBSOCKET), plan.map { it.kind })
         assertEquals("wss://192.168.1.31:18763/device", plan[1].url)

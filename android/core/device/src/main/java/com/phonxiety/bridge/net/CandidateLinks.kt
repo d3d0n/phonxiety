@@ -158,8 +158,8 @@ internal class CandidateLinkFactory(
 
     private fun plan(): List<Candidate> {
         startDiscovery()
-        val stored = store.load()
-        return CandidatePlanner.plan(config, stored, discovered.toList(), store.pairingIdentity())
+        val stored = store.snapshot()
+        return CandidatePlanner.plan(config, stored.candidates, discovered.toList(), stored.pairing)
     }
 
     private fun reports(plan: List<Candidate>): List<ProbeReport> {

@@ -8,6 +8,7 @@ import com.phonxiety.bridge.net.IrohSupport
 import com.phonxiety.bridge.net.StoredCandidate
 import java.io.File
 import java.util.Locale
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -165,6 +166,19 @@ sealed class PairingResult {
 }
 
 /**
+ * The `lan` and `tailscale` addresses a pairing carries besides its transport,
+ * exactly as written in the pairing file or the QR.
+ */
+data class PairingAddresses(
+    val lan: List<String> = emptyList(),
+    val tailscale: List<String> = emptyList()
+) {
+    val all: List<String> get() = lan + tailscale
+
+    val isEmpty: Boolean get() = lan.isEmpty() && tailscale.isEmpty()
+}
+
+/**
  * Reads, writes and deletes the paired-daemon file in device-protected storage:
  *
  *   config.json
@@ -180,6 +194,9 @@ sealed class PairingResult {
 object BridgeConfigLoader {
     private const val FILE_NAME = "config.json"
     private const val MAX_BYTES = 64 * 1024L
+
+    /** Serializes the app's own writes, so a token update cannot tear a pairing change. */
+    private val writeLock = Any()
 
     private fun configFile(context: Context): File = File(AppStorage.deviceProtected(context).filesDir, FILE_NAME)
 
@@ -227,8 +244,55 @@ object BridgeConfigLoader {
         null
     }
 
-    /** Validates and stores [config] atomically in device-protected storage. */
-    fun write(context: Context, config: BridgeConfig): BridgeConfig {
+    /**
+     * The addresses the pairing file carries besides its transport.  The host
+     * pairing task writes them; the app's own QR path stores them in the
+     * candidate document instead, so an empty answer is normal.  Only `wss://`
+     * entries survive; the pin is applied by [candidates].
+     */
+    fun addresses(context: Context): PairingAddresses {
+        AppStorage.migrateFile(context, FILE_NAME)
+        val file = configFile(context)
+        if (!file.isFile || file.length() <= 0L || file.length() > MAX_BYTES) return PairingAddresses()
+        val json = runCatching { JSONObject(file.readText(Charsets.UTF_8)) }.getOrNull()
+            ?: return PairingAddresses()
+        return PairingAddresses(
+            lan = addressArray(json, "lan"),
+            tailscale = addressArray(json, "tailscale")
+        )
+    }
+
+    /**
+     * The host-written addresses as validated, pinned candidates — the same
+     * form the QR path produces, so both enter the store through one binding.
+     */
+    fun candidates(context: Context, config: BridgeConfig): List<StoredCandidate> {
+        val pin = when (config) {
+            is BridgeConfig.Address -> config.certSha256
+            is BridgeConfig.Iroh -> config.certSha256
+        }
+        return CandidateMerge.fromPairing(pin, addresses(context).all)
+    }
+
+    private fun addressArray(json: JSONObject, name: String): List<String> {
+        val array = json.optJSONArray(name) ?: return emptyList()
+        return (0 until array.length()).mapNotNull { index ->
+            array.optString(index).trim().takeIf { it.startsWith(BridgeConfig.SCHEME, ignoreCase = true) }
+        }.filter { it.isNotEmpty() }
+    }
+
+    /**
+     * Validates and stores [config] atomically in device-protected storage.
+     *
+     * [addresses] are the pairing's other addresses; a writer that reloads a
+     * host-written pairing and only changes a token hands them back so its own
+     * write does not drop what the host put there.
+     */
+    fun write(
+        context: Context,
+        config: BridgeConfig,
+        addresses: PairingAddresses? = null
+    ): BridgeConfig = synchronized(writeLock) {
         val stored = when (config) {
             is BridgeConfig.Address ->
                 BridgeConfig.validateAddress(config.url, config.token, config.certSha256, config.appToken)
@@ -253,6 +317,10 @@ object BridgeConfigLoader {
                 if (stored.certSha256 != null) json.put("cert_sha256", stored.certSha256)
             }
         }
+        if (addresses != null) {
+            if (addresses.lan.isNotEmpty()) json.put("lan", JSONArray(addresses.lan))
+            if (addresses.tailscale.isNotEmpty()) json.put("tailscale", JSONArray(addresses.tailscale))
+        }
         try {
             AppStorage.writeAtomically(
                 configFile(context),
@@ -261,7 +329,24 @@ object BridgeConfigLoader {
         } catch (_: Exception) {
             throw BridgeConfigException(BridgeConfigError.WRITE_FAILED)
         }
-        return stored
+        stored
+    }
+
+    /**
+     * Stores [token] only while the pairing file still belongs to
+     * [pairingIdentity].  The read, the identity check and the write happen
+     * under one lock, so a pairing change cannot land between them and leave
+     * one daemon's app token in the other daemon's file.
+     */
+    fun updateAppToken(context: Context, pairingIdentity: String, token: String): Boolean = synchronized(writeLock) {
+        val current = loadOrNull(context) ?: return false
+        if (CandidateMerge.identity(current) != pairingIdentity) return false
+        val updated = when (current) {
+            is BridgeConfig.Address -> current.copy(appToken = token)
+            is BridgeConfig.Iroh -> current.copy(appToken = token)
+        }
+        write(context, updated, addresses(context))
+        true
     }
 
     /**

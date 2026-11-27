@@ -1,11 +1,16 @@
 package com.phonxiety.bridge.net
 
 import com.phonxiety.bridge.BridgeConfig
+import com.phonxiety.bridge.model.ConnectionInfo
 import com.phonxiety.bridge.model.LinkKind
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import kotlin.concurrent.thread
 import kotlin.io.path.createTempDirectory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -88,13 +93,110 @@ class CandidateStoreTest {
 
     @Test
     fun aDocumentWrittenBeforeIdentitiesIsReplacedByTheFirstBinding() {
-        val store = store()
-        store.merge(listOf(StoredCandidate(lanA, pinA, CandidateStore.Source.LEARNED)))
-        assertEquals(null, store.pairingIdentity())
+        val file = File(createTempDirectory("candidates").toFile(), "link-candidates.json")
+        file.writeText(
+            """{"candidates":[{"url":"$lanA","cert_sha256":"$pinA","source":"daemon"}]}"""
+        )
+        val store = CandidateStore(file)
+        assertNull(store.pairingIdentity())
 
-        store.bind(CandidateMerge.identity(config("ticket-b", pinB)))
+        val bound = store.bind(CandidateMerge.identity(config("ticket-b", pinB)))
 
+        assertNotNull(bound)
         assertTrue(store.load().isEmpty())
         assertEquals("cert:$pinB", store.pairingIdentity())
+    }
+
+    @Test
+    fun aLateAnswerFromThePreviousPairingIsNeverStoredUnderTheNewOne() {
+        val store = store()
+        val configA = config("ticket-a", pinA)
+        store.rebind(
+            CandidateMerge.identity(configA),
+            listOf(StoredCandidate(lanA, pinA, CandidateStore.Source.PAIRED))
+        )
+        val configB = BridgeConfig.validateIroh("ticket-b", "device-token-b")
+        store.rebind(CandidateMerge.identity(configB), emptyList())
+
+        val stored = store.merge(
+            CandidateMerge.identity(configA),
+            CandidateMerge.learned(ConnectionInfo(lan = listOf(lanA), certificate = pinA))
+        )
+
+        assertNull(stored)
+        assertTrue(store.load().isEmpty())
+        assertEquals(CandidateMerge.identity(configB), store.pairingIdentity())
+        assertEquals(
+            listOf(LinkKind.IROH),
+            CandidatePlanner.plan(configB, store.load(), emptyList(), store.pairingIdentity()).map { it.kind }
+        )
+    }
+
+    @Test
+    fun aCertificateRotationCannotReuseThePreviousDaemonsAddresses() {
+        val store = store()
+        val before = config("ticket-a", pinA)
+        store.rebind(
+            CandidateMerge.identity(before),
+            listOf(StoredCandidate(lanA, pinA, CandidateStore.Source.PAIRED))
+        )
+        val rotated = config("ticket-a", pinB)
+        store.rebind(CandidateMerge.identity(rotated), emptyList())
+
+        assertNull(
+            store.merge(
+                CandidateMerge.identity(before),
+                CandidateMerge.learned(ConnectionInfo(lan = listOf(lanA), certificate = pinA))
+            )
+        )
+        val plan = CandidatePlanner.plan(rotated, store.load(), emptyList(), store.pairingIdentity())
+        assertEquals(listOf(LinkKind.IROH), plan.map { it.kind })
+        assertFalse(plan.any { it.url == lanA })
+    }
+
+    @Test
+    fun aFailedBindingLeavesNoCandidateUsableForAPinlessPairing() {
+        val file = File(createTempDirectory("candidates").toFile(), "link-candidates.json")
+        file.writeText(
+            """{"candidates":[{"url":"$lanA","cert_sha256":"$pinA","source":"daemon"}]}"""
+        )
+        val store = CandidateStore(file)
+        // The write cannot land: the staging path is occupied by a directory.
+        assertTrue(File(file.parentFile, file.name + ".tmp").mkdirs())
+
+        val pinlessB = BridgeConfig.validateIroh("ticket-b", "device-token-b")
+        assertNull(store.bind(CandidateMerge.identity(pinlessB)))
+
+        // The identity-less document survives, but a pinless pairing never
+        // infers its single pin from it: A's address is not in the plan.
+        assertNull(store.pairingIdentity())
+        val plan = CandidatePlanner.plan(pinlessB, store.load(), emptyList(), store.pairingIdentity())
+        assertEquals(listOf(LinkKind.IROH), plan.map { it.kind })
+    }
+
+    @Test
+    fun concurrentMergesCannotBringThePreviousPairingsAddressesBack() {
+        val store = store()
+        val identityA = CandidateMerge.identity(config("ticket-a", pinA))
+        val identityB = CandidateMerge.identity(config("ticket-b", pinB))
+        store.rebind(identityA, listOf(StoredCandidate(lanA, pinA, CandidateStore.Source.PAIRED)))
+        val start = CountDownLatch(1)
+        val writers = (1..8).map { index ->
+            thread {
+                start.await()
+                repeat(20) {
+                    store.merge(
+                        identityA,
+                        listOf(StoredCandidate("wss://192.168.9.$index:18763/device", pinA, CandidateStore.Source.LEARNED))
+                    )
+                }
+            }
+        }
+        start.countDown()
+        repeat(20) { store.rebind(identityB, emptyList()) }
+        writers.forEach { it.join() }
+
+        assertEquals(identityB, store.pairingIdentity())
+        assertTrue(store.load().none { it.certSha256 == pinA })
     }
 }

@@ -2,6 +2,8 @@ package com.phonxiety.bridge.feature.settings
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.phonxiety.bridge.BridgeConfig
+import com.phonxiety.bridge.BridgeConfigLoader
 import com.phonxiety.bridge.PhoneCodec
 import com.phonxiety.bridge.PhonePreferences
 import com.phonxiety.bridge.PhoneSettings
@@ -16,8 +18,10 @@ import com.phonxiety.bridge.model.DeviceState
 import com.phonxiety.bridge.model.LinkTestFrames
 import com.phonxiety.bridge.model.LinkTestResult
 import com.phonxiety.bridge.model.LinkTests
+import com.phonxiety.bridge.model.PairingGate
 import com.phonxiety.bridge.model.SettingsSnapshot
 import com.phonxiety.bridge.model.SettingsUpdate
+import com.phonxiety.bridge.net.CandidateMerge
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -57,6 +61,8 @@ class SettingsViewModelTest {
         Dispatchers.setMain(Dispatchers.Unconfined)
         context = ApplicationProvider.getApplicationContext()
         File(context.filesDir, "settings").deleteRecursively()
+        BridgeConfigLoader.delete(context)
+        PairingGate.resetForTest()
         api = FakeDaemonApi()
         prefs = FakePhonePreferences()
         bridge = FakeBridgeStateRepository()
@@ -65,6 +71,8 @@ class SettingsViewModelTest {
 
     @After
     fun tearDown() {
+        BridgeConfigLoader.delete(context)
+        PairingGate.resetForTest()
         Dispatchers.resetMain()
     }
 
@@ -188,6 +196,9 @@ class SettingsViewModelTest {
             )
         }
         api.settingsHandler = { ApiOutcome.Ok(200, snapshot(DaemonSettingsValues(irohRelays = listOf("https://daemon.example")))) }
+        // A pairing is stored, as it is whenever the service is up and answers.
+        val stored = BridgeConfigLoader.write(context, BridgeConfig.Iroh("ticket", "device-token", certSha256 = pin))
+        PairingGate.expect(CandidateMerge.identity(stored))
         val vm = viewModel()
         withTimeout(5_000) { vm.state.first { it.connection.candidates.size == 2 } }
 

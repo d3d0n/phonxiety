@@ -59,6 +59,7 @@
     <string name="lab_probe_not_reached">Not reached</string>
     <string name="lab_probe_not_checked">Not checked</string>
     <string name="lab_probe_note_no_info">This phone couldn\'t read the bridge\'s LAN addresses.</string>
+    <string name="lab_probe_note_stale">The pairing changed while the bridge answered, so this check was not run.</string>
     <string name="lab_probe_note_no_lan">The bridge reports no LAN address.</string>
     <string name="lab_probe_note_unpaired">This phone isn\'t paired, so it can\'t authenticate a probe.</string>
     <string name="lab_probe_note_check_failed">The phone\'s own check failed.</string>
