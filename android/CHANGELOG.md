@@ -30,6 +30,7 @@ and run cellular calls through this phone.
 - **The pairing code carries the computer's LAN and Tailscale addresses**, so the phone finds the daemon on every network without opening Settings.
 - **Re-pairing to another computer never carries over** the previous computer's token or addresses.
 - `phonxiety pair` refuses a code too large to scan.
+- **Pairing from the computer** (`mise run phone:pair`) stops the whole app and confirms it is gone before it replaces the configuration. It puts the old setup back only when the phone itself reports that it stopped before replacing anything; otherwise it leaves the app stopped and says what it knows. Its exit codes are documented at the top of the script.
 
 ## Calls
 
