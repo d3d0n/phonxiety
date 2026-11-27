@@ -379,9 +379,16 @@ class DeviceHub:
             self._apply_prefs(event)
             return
         if kind == "call_state":
-            self.info["active_call"] = None if event.get("state") == "ended" else {
-                "call_id": event.get("call_id"), "state": event.get("state")
-            }
+            if event.get("state") == "ended":
+                # A late `ended` for an older call must not wipe a successor's metadata:
+                # only the call it names (or a link that recorded nothing) clears the slot.
+                current = self.info.get("active_call")
+                if current is None or current.get("call_id") == event.get("call_id"):
+                    self.info["active_call"] = None
+            else:
+                self.info["active_call"] = {
+                    "call_id": event.get("call_id"), "state": event.get("state")
+                }
         try:
             self._events.put_nowait(event)
         except asyncio.QueueFull as exc:

@@ -276,5 +276,31 @@ class OpusStreamTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decoded, [1920, 1920, 1920])
 
 
+class CallStateInfoTests(unittest.IsolatedAsyncioTestCase):
+    """The link's `info["active_call"]` follows the newest call, not the last event."""
+
+    async def _state(self, hub: DeviceHub, call_id: str, state: str) -> None:
+        await hub._receive_event({"type": "call_state", "call_id": call_id, "state": state})
+
+    async def test_a_late_ended_for_an_older_call_keeps_the_successor(self) -> None:
+        hub = DeviceHub()
+        await self._state(hub, "old", "active")
+        await self._state(hub, "new", "dialing")
+
+        await self._state(hub, "old", "ended")
+
+        self.assertEqual({"call_id": "new", "state": "dialing"}, hub.info.get("active_call"))
+
+    async def test_ended_clears_its_own_call_or_an_empty_slot(self) -> None:
+        hub = DeviceHub()
+        await self._state(hub, "call-1", "active")
+        await self._state(hub, "call-1", "ended")
+        self.assertIsNone(hub.info.get("active_call"))
+
+        # Nothing recorded: an ending for any id still leaves the slot empty.
+        await self._state(hub, "call-2", "ended")
+        self.assertIsNone(hub.info.get("active_call"))
+
+
 if __name__ == "__main__":
     unittest.main()
