@@ -6,6 +6,7 @@ import com.phonxiety.bridge.PhoneSettingsStore
 import com.phonxiety.bridge.bridgeScope
 import java.io.File
 import java.io.FileOutputStream
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -55,8 +56,12 @@ internal interface FrameTapSink {
     }
 }
 
-/** One link's view of the process-wide dump: its own [linkId] and frame sequence. */
-private class FrameTapSession(private val dump: FrameTapDump, private val linkId: Long) : FrameTapSink {
+/**
+ * One link's view of the process-wide dump: its own [linkId] and frame
+ * sequence.  [enabled] reads the live setting, so a toggle reaches links that
+ * are already running.
+ */
+internal class FrameTapSession(private val dump: FrameTapDump, private val linkId: Long) : FrameTapSink {
     private val seq = AtomicLong(0)
 
     override val enabled: Boolean get() = dump.enabled
@@ -69,7 +74,14 @@ private class FrameTapSession(private val dump: FrameTapDump, private val linkId
 
 /**
  * The process-wide frame tap: one dump and one setting watcher, and a fresh
- * [FrameTapSession] per link attempt so a toggle takes effect on the next dial.
+ * [FrameTapSession] per link attempt so each attempt gets its own record
+ * sequence.
+ *
+ * The toggle applies to links that are already running, not only to the next
+ * dial: every queued record is tagged with the enable generation it was queued
+ * in, and the appender writes only records from the live generation.  Turning
+ * the tap off therefore discards what is still queued, and turning it back on
+ * never writes those older records.
  *
  * Off unless the phone's `frame_tap` preference is on.  The dump lives in
  * device-protected storage beside the iroh key, rotates at
@@ -101,7 +113,10 @@ internal object FrameTap {
                 scope = scope
             )
             scope.launch {
-                PhoneSettingsStore.of(app).settings.collect { settings -> enabled = settings.frameTap }
+                PhoneSettingsStore.of(app).settings.collect { settings ->
+                    enabled = settings.frameTap
+                    created.noteSetting(settings.frameTap)
+                }
             }
             dump = created
             return created
@@ -114,9 +129,14 @@ internal object FrameTap {
  *
  * Records arrive from transport threads through one bounded channel and are
  * written by one appender coroutine; a full channel drops the record and counts
- * it, so a slow disk never back-pressures a call.  Two files of
- * [MAX_BYTES], `frame-tap.log` and `frame-tap.1.log`, keep the total bounded:
- * the current file becomes the previous one and the oldest is replaced.
+ * it, so a slow disk never back-pressures a call.  Each record carries the
+ * enable generation it was queued in: the appender writes only records from the
+ * live generation, so a toggle discards whatever was queued across it.
+ *
+ * Two files of [MAX_BYTES], `frame-tap.log` and `frame-tap.1.log`, keep the
+ * total bounded: the current file becomes the previous one and the oldest is
+ * replaced.  If that rotation fails, the size bound wins: the record is
+ * dropped instead of letting the current file grow past [MAX_BYTES].
  */
 internal class FrameTapDump(
     private val isEnabled: () -> Boolean,
@@ -134,8 +154,13 @@ internal class FrameTapDump(
         const val PREVIOUS = "frame-tap.1.log"
     }
 
-    private val records = Channel<String>(capacity)
+    private val records = Channel<Queued>(capacity)
     private val dropped = AtomicLong(0)
+
+    /** Bumped on every setting change; records from an older one are discarded. */
+    private val generation = AtomicLong(0)
+
+    private val setting = AtomicBoolean(false)
 
     /** The one appender; completes once [close] is called and the queue is drained. */
     internal val job: Job = scope.launch { append() }
@@ -144,9 +169,22 @@ internal class FrameTapDump(
 
     fun clockMs(): Long = clock()
 
+    /** One queued record and the generation it was accepted in. */
+    private class Queued(val line: String, val generation: Long)
+
+    /**
+     * The setting changed: every record queued before this call belongs to a
+     * dead generation.  [FrameTap]'s watcher calls this for each emission, so a
+     * disable discards what is queued and a re-enable never resurrects it.
+     */
+    fun noteSetting(on: Boolean) {
+        if (setting.getAndSet(on) != on) generation.incrementAndGet()
+    }
+
     fun record(record: FrameRecord) {
         if (!isEnabled()) return
-        if (records.trySend(record.encode()).isFailure) dropped.incrementAndGet()
+        val queued = Queued(record.encode(), generation.get())
+        if (records.trySend(queued).isFailure) dropped.incrementAndGet()
     }
 
     /** Stops accepting records; the appender writes what it holds and returns. */
@@ -158,13 +196,22 @@ internal class FrameTapDump(
         val current = File(dir, CURRENT)
         val previous = File(dir, PREVIOUS)
         var size = current.length()
-        for (line in records) {
+        for (queued in records) {
+            // A toggle since this record was queued invalidates it: nothing
+            // from a disabled window is written, and re-enabling does not
+            // resurrect what an earlier enable queued.
+            if (!isEnabled() || queued.generation != generation.get()) continue
             val lost = dropped.getAndSet(0)
-            val text = (if (lost > 0) "dropped=$lost\n" else "") + line + "\n"
+            val text = (if (lost > 0) "dropped=$lost\n" else "") + queued.line + "\n"
             val bytes = text.toByteArray(Charsets.UTF_8)
             if (size + bytes.size > maxBytes) {
                 runCatching { previous.delete() }
-                runCatching { current.renameTo(previous) }
+                if (!runCatching { current.renameTo(previous) }.getOrDefault(false)) {
+                    // Without a fresh file this record would pass the bound:
+                    // the bound wins, and `size` keeps the real file length.
+                    dropped.incrementAndGet()
+                    continue
+                }
                 size = 0
             }
             if (runCatching {
