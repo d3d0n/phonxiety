@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -22,8 +21,6 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -37,25 +34,28 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.phonxiety.bridge.PhoneCodec
 import com.phonxiety.bridge.PhoneSettings
+import com.phonxiety.bridge.designsystem.LocalPhonxietyType
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
+import com.phonxiety.bridge.designsystem.RegisterScrollToTop
 import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.designsystem.asString
 import com.phonxiety.bridge.designsystem.component.ErrorCard
@@ -71,6 +71,7 @@ import com.phonxiety.bridge.net.RelayOptions
 import java.text.NumberFormat
 import java.util.Date
 import kotlin.math.roundToInt
+import kotlinx.coroutines.launch
 
 /** Every action the settings screen offers; the route wires them to [SettingsViewModel]. */
 data class SettingsCallbacks(
@@ -153,6 +154,13 @@ fun SettingsScreen(
     snackbarHost: @Composable () -> Unit = {}
 ) {
     val daemon = state.daemon
+    // The section's re-tap belongs to this screen's own scroll surface; the host holds the
+    // registry and this registration disappears when the screen leaves the composition.
+    val scrollState = rememberScrollState()
+    val scope = rememberCoroutineScope()
+    RegisterScrollToTop("settings") {
+        scope.launch { scrollState.animateScrollTo(0) }
+    }
     ScreenScaffold(
         title = stringResource(R.string.settings_title),
         modifier = modifier,
@@ -164,7 +172,7 @@ fun SettingsScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
+                    .verticalScroll(scrollState)
                     .padding(vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
@@ -242,7 +250,8 @@ private fun ConnectionCard(phone: PhoneSettings, connection: ConnectionUi, callb
             RelayModeSetting.CUSTOM -> FormField(
                 label = stringResource(R.string.settings_connection_relays_custom),
                 value = RelayOptions.join(phone.relayUrls),
-                singleLine = false
+                singleLine = false,
+                url = true
             ) { callbacks.onRelayUrls(it) }
 
             RelayModeSetting.DAEMON -> {
@@ -442,6 +451,10 @@ private fun DeviceCard(phone: PhoneSettings, callbacks: SettingsCallbacks) {
 
 @Composable
 private fun DaemonCard(daemon: DaemonSettingsUi, callbacks: SettingsCallbacks) {
+    // The daemon form is eleven fields deep. The chain is declared once, in reading order, so the
+    // keyboard's Next walks the form as it is drawn and the last field closes the keyboard.
+    val fields = rememberFocusChain(DAEMON_FORM_FIELDS)
+    val focusManager = LocalFocusManager.current
     SectionCard(
         title = stringResource(R.string.settings_card_daemon_title),
         subtitle = stringResource(R.string.settings_card_daemon_subtitle),
@@ -503,7 +516,9 @@ private fun DaemonCard(daemon: DaemonSettingsUi, callbacks: SettingsCallbacks) {
         FormField(
             label = stringResource(R.string.settings_daemon_relays),
             value = daemon.form.irohRelays,
-            singleLine = false
+            singleLine = false,
+            url = true,
+            focus = fields[0]
         ) { value -> callbacks.onForm { it.copy(irohRelays = value) } }
 
         GroupLabel(stringResource(R.string.settings_daemon_group_audio))
@@ -530,7 +545,8 @@ private fun DaemonCard(daemon: DaemonSettingsUi, callbacks: SettingsCallbacks) {
             value = daemon.form.opusBitrate,
             numeric = true,
             hint = stringResource(R.string.settings_daemon_units_bits),
-            isError = DaemonNumericField.OPUS_BITRATE in daemon.invalidFields
+            isError = DaemonNumericField.OPUS_BITRATE in daemon.invalidFields,
+            focus = fields[1]
         ) { value -> callbacks.onForm { it.copy(opusBitrate = value) } }
 
         GroupLabel(stringResource(R.string.settings_daemon_group_calls))
@@ -539,29 +555,34 @@ private fun DaemonCard(daemon: DaemonSettingsUi, callbacks: SettingsCallbacks) {
             value = daemon.form.ringTimeout,
             numeric = true,
             hint = stringResource(R.string.settings_daemon_units_seconds),
-            isError = DaemonNumericField.RING_TIMEOUT in daemon.invalidFields
+            isError = DaemonNumericField.RING_TIMEOUT in daemon.invalidFields,
+            focus = fields[2]
         ) { value -> callbacks.onForm { it.copy(ringTimeout = value) } }
         FormField(
             label = stringResource(R.string.settings_daemon_max_call_length),
             value = daemon.form.maxDuration,
             numeric = true,
             hint = stringResource(R.string.settings_daemon_units_seconds),
-            isError = DaemonNumericField.MAX_DURATION in daemon.invalidFields
+            isError = DaemonNumericField.MAX_DURATION in daemon.invalidFields,
+            focus = fields[3]
         ) { value -> callbacks.onForm { it.copy(maxDuration = value) } }
         FormField(
             label = stringResource(R.string.settings_daemon_result_fields),
             value = daemon.form.defaultResultFields,
-            hint = stringResource(R.string.settings_daemon_result_fields_support)
+            hint = stringResource(R.string.settings_daemon_result_fields_support),
+            focus = fields[4]
         ) { value -> callbacks.onForm { it.copy(defaultResultFields = value) } }
         FormField(
             label = stringResource(R.string.settings_daemon_constraints),
             value = daemon.form.defaultConstraints,
-            singleLine = false
+            singleLine = false,
+            focus = fields[5]
         ) { value -> callbacks.onForm { it.copy(defaultConstraints = value) } }
         FormField(
             label = stringResource(R.string.settings_daemon_language_hint),
             value = daemon.form.languageHint,
-            hint = stringResource(R.string.settings_daemon_language_hint_support)
+            hint = stringResource(R.string.settings_daemon_language_hint_support),
+            focus = fields[6]
         ) { value -> callbacks.onForm { it.copy(languageHint = value) } }
 
         GroupLabel(stringResource(R.string.settings_daemon_group_voice))
@@ -580,19 +601,25 @@ private fun DaemonCard(daemon: DaemonSettingsUi, callbacks: SettingsCallbacks) {
         }
         FormField(
             label = stringResource(R.string.settings_daemon_codex_voice),
-            value = daemon.form.codexVoice
+            value = daemon.form.codexVoice,
+            focus = fields[7]
         ) { value -> callbacks.onForm { it.copy(codexVoice = value) } }
         FormField(
             label = stringResource(R.string.settings_daemon_codex_model),
-            value = daemon.form.codexTaskModel
+            value = daemon.form.codexTaskModel,
+            focus = fields[8]
         ) { value -> callbacks.onForm { it.copy(codexTaskModel = value) } }
         FormField(
             label = stringResource(R.string.settings_daemon_gemini_voice),
-            value = daemon.form.geminiVoice
+            value = daemon.form.geminiVoice,
+            focus = fields[9]
         ) { value -> callbacks.onForm { it.copy(geminiVoice = value) } }
         FormField(
             label = stringResource(R.string.settings_daemon_gemini_model),
-            value = daemon.form.geminiModel
+            value = daemon.form.geminiModel,
+            imeAction = ImeAction.Done,
+            onDone = { focusManager.clearFocus() },
+            focus = fields[10]
         ) { value -> callbacks.onForm { it.copy(geminiModel = value) } }
 
         InCardTextButton(
@@ -758,44 +785,8 @@ private fun InCardTextButton(label: String, onClick: () -> Unit, enabled: Boolea
 private fun MonospaceLines(lines: List<String>) {
     Text(
         text = lines.joinToString("\n"),
-        style = MaterialTheme.typography.bodySmall,
-        fontFamily = FontFamily.Monospace,
+        style = LocalPhonxietyType.current.code(MaterialTheme.typography.bodySmall),
         color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-}
-
-@Composable
-private fun FormField(
-    label: String,
-    value: String,
-    singleLine: Boolean = true,
-    numeric: Boolean = false,
-    hint: String? = null,
-    isError: Boolean = false,
-    onChange: (String) -> Unit
-) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onChange,
-        label = { Text(label) },
-        singleLine = singleLine,
-        isError = isError,
-        supportingText = when {
-            isError -> {
-                { Text(stringResource(R.string.settings_error_whole_number)) }
-            }
-
-            hint != null -> {
-                { Text(hint) }
-            }
-
-            else -> null
-        },
-        keyboardOptions = KeyboardOptions(keyboardType = if (numeric) KeyboardType.Number else KeyboardType.Text),
-        colors = OutlinedTextFieldDefaults.colors(
-            unfocusedBorderColor = MaterialTheme.colorScheme.onSurfaceVariant
-        ),
-        modifier = Modifier.fillMaxWidth()
     )
 }
 

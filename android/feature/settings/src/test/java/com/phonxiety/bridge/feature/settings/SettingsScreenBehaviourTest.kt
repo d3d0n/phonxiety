@@ -2,17 +2,30 @@ package com.phonxiety.bridge.feature.settings
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.text.input.ImeAction
 import com.phonxiety.bridge.PhoneCodec
+import com.phonxiety.bridge.designsystem.LocalScrollToTop
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
+import com.phonxiety.bridge.designsystem.ScrollToTopRegistry
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -107,5 +120,73 @@ class SettingsScreenBehaviourTest {
         assertEquals(true, invalid.daemon.dirty)
         assertEquals(false, invalid.daemon.valid)
         assertEquals(null, invalid.daemon.form.toValuesOrNull())
+    }
+
+    @Test
+    fun theSectionsReTapBringsTheTopBack() {
+        val registry = ScrollToTopRegistry()
+        composeRule.setContent {
+            PhonxietyTheme(dynamicColor = false) {
+                CompositionLocalProvider(LocalScrollToTop provides registry) {
+                    Surface(color = MaterialTheme.colorScheme.background) {
+                        SettingsScreen(state = state())
+                    }
+                }
+            }
+        }
+        val top = composeRule.onNodeWithText(CONNECTION_CARD_SUBTITLE)
+        composeRule.onNodeWithText("Revert everything").performScrollTo()
+        composeRule.waitForIdle()
+        top.assertIsNotDisplayed()
+
+        composeRule.runOnIdle { registry.dispatch("settings") }
+        composeRule.waitForIdle()
+        top.assertIsDisplayed()
+    }
+
+    @Test
+    fun everyFormFieldDeclaresTheKeyboardActionTheFormNeeds() {
+        composeRule.setContent {
+            PhonxietyTheme(dynamicColor = false) {
+                Surface(color = MaterialTheme.colorScheme.background) {
+                    SettingsScreen(state = state())
+                }
+            }
+        }
+        field("Ring timeout").performScrollTo()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.ImeAction, ImeAction.Next))
+        field("Gemini model").performScrollTo()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.ImeAction, ImeAction.Done))
+        // A multiline field keeps Enter for its newline instead of jumping onward.
+        field("Daemon relay URLs, one per line").performScrollTo()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.ImeAction, ImeAction.Default))
+    }
+
+    @Test
+    fun theLastFieldClosesTheFormWhenItsDoneIsPressed() {
+        composeRule.setContent {
+            PhonxietyTheme(dynamicColor = false) {
+                Surface(color = MaterialTheme.colorScheme.background) {
+                    SettingsScreen(state = state())
+                }
+            }
+        }
+        val last = field("Gemini model").performScrollTo()
+        last.performClick()
+        last.assertIsFocused()
+
+        composeRule.runOnIdle {
+            // The field's semantics action is the IME's own action; invoking it runs Done.
+            last.fetchSemanticsNode().config[SemanticsActions.OnImeAction].action?.invoke()
+        }
+        composeRule.waitForIdle()
+        last.assertIsNotFocused()
+    }
+
+    private fun field(label: String) = composeRule.onNode(hasSetTextAction() and hasText(label))
+
+    private companion object {
+        const val CONNECTION_CARD_SUBTITLE =
+            "Which transport reaches the daemon, and which relays the phone's iroh endpoint uses"
     }
 }

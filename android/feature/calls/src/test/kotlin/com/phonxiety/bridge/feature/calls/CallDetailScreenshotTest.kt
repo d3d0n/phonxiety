@@ -94,7 +94,9 @@ class CallDetailScreenshotTest {
         dark: Boolean = false,
         fontScale: Float = 1f,
         width: Dp = 411.dp,
-        onDelete: () -> Unit = {}
+        onRequestDelete: () -> Unit = {},
+        onDismissDelete: () -> Unit = {},
+        onConfirmDelete: () -> Unit = {}
     ) {
         composeRule.setContent {
             val density = LocalDensity.current
@@ -122,7 +124,9 @@ class CallDetailScreenshotTest {
                             onSeek = {},
                             onShareAudio = {},
                             onShareTranscript = {},
-                            onDelete = onDelete
+                            onRequestDelete = onRequestDelete,
+                            onDismissDelete = onDismissDelete,
+                            onConfirmDelete = onConfirmDelete
                         )
                     }
                 }
@@ -202,10 +206,8 @@ class CallDetailScreenshotTest {
 
     @Test
     fun theDeleteConfirmation() {
-        setScreen(finished())
-        scrollToNode("Delete this call")
-        // A semantics click starts no ripple, so the capture does not depend on animation timing.
-        composeRule.onNodeWithText("Delete this call").performSemanticsAction(SemanticsActions.OnClick)
+        // The question is screen state now, so the capture starts with it open.
+        setScreen(finished().copy(confirmingDelete = true))
         // Let the dialog's enter animation finish: a half-faded scrim is a different image.
         composeRule.mainClock.advanceTimeBy(1_000)
         composeRule.waitForIdle()
@@ -348,7 +350,9 @@ class CallDetailScreenshotTest {
                         onSeek = {},
                         onShareAudio = {},
                         onShareTranscript = {},
-                        onDelete = {}
+                        onRequestDelete = {},
+                        onDismissDelete = {},
+                        onConfirmDelete = {}
                     )
                 }
             }
@@ -525,14 +529,30 @@ class CallDetailScreenshotTest {
     }
 
     @Test
-    fun keepingTheCallDeletesNothing() {
+    fun theDeleteButtonOnlyAsksAndNeverDeletes() {
+        var requests = 0
         var deletes = 0
-        setScreen(finished(), onDelete = { deletes++ })
+        setScreen(finished(), onRequestDelete = { requests++ }, onConfirmDelete = { deletes++ })
         scrollToNode("Delete this call")
         // A semantics click starts no ripple, so the capture does not depend on animation timing.
         composeRule.onNodeWithText("Delete this call").performSemanticsAction(SemanticsActions.OnClick)
+        composeRule.waitForIdle()
+        assertEquals(1, requests)
+        assertEquals(0, deletes)
+    }
+
+    @Test
+    fun keepingTheCallDeletesNothing() {
+        var dismissals = 0
+        var deletes = 0
+        setScreen(
+            finished().copy(confirmingDelete = true),
+            onDismissDelete = { dismissals++ },
+            onConfirmDelete = { deletes++ }
+        )
         composeRule.onNodeWithText("Keep it").performClick()
         composeRule.waitForIdle()
+        assertEquals(1, dismissals)
         assertEquals(0, deletes)
     }
 

@@ -55,6 +55,8 @@ data class CallDetailUiState(
     val loadingTranscript: Boolean = false,
     val deleting: Boolean = false,
     val deleted: Boolean = false,
+    /** The question is open; only the ViewModel opens and closes it, so a rotation keeps it. */
+    val confirmingDelete: Boolean = false,
     val marking: Boolean = false,
     val audio: CallAudioUiState = CallAudioUiState()
 ) {
@@ -186,10 +188,29 @@ class CallDetailViewModel @Inject constructor(
         }
     }
 
-    fun delete(onDeleted: () -> Unit) {
+    /** Opens the destructive question; the screen only renders it. */
+    fun requestDelete() {
+        val current = _state.value
+        if (current.deleting || current.deleted || current.missing) return
+        _state.update { it.copy(confirmingDelete = true) }
+    }
+
+    /** Closes the question without running anything. */
+    fun dismissDelete() = _state.update { it.copy(confirmingDelete = false) }
+
+    /**
+     * Runs the deletion the reader confirmed. The pending question is consumed atomically before
+     * the launch, so a second tap on the same dialog finds nothing to confirm and the daemon is
+     * asked exactly once.
+     */
+    fun confirmDelete(onDeleted: () -> Unit) {
         val callId = boundCallId ?: return
-        if (_state.value.deleting) return
-        _state.update { it.copy(deleting = true) }
+        while (true) {
+            val current = _state.value
+            if (!current.confirmingDelete || current.deleting) return
+            val consumed = current.copy(confirmingDelete = false, deleting = true)
+            if (_state.compareAndSet(current, consumed)) break
+        }
         viewModelScope.launch {
             when (val outcome = repository.delete(callId)) {
                 is ApiOutcome.Ok -> {

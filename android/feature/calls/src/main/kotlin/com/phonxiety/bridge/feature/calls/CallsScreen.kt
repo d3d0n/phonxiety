@@ -20,8 +20,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -43,18 +46,26 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.phonxiety.bridge.designsystem.LocalPhonxietyType
+import com.phonxiety.bridge.designsystem.RegisterScrollToTop
 import com.phonxiety.bridge.designsystem.asString
 import com.phonxiety.bridge.designsystem.component.EmptyState
 import com.phonxiety.bridge.designsystem.component.ErrorCard
@@ -68,6 +79,7 @@ import com.phonxiety.bridge.designsystem.formatPhoneNumber
 import com.phonxiety.bridge.model.CallSummary
 import java.text.DateFormat
 import java.util.Date
+import kotlinx.coroutines.launch
 
 /** The history entry point; the host supplies navigation only. */
 @Composable
@@ -106,6 +118,14 @@ fun CallsScreen(
     onNewCall: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // The history list is the screen's scroll surface, so the section's re-tap belongs here.
+    // The list state outlives the list itself, so a dispatch while the page is still loading is a
+    // safe no-op instead of a crash in the host.
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    RegisterScrollToTop("calls") {
+        scope.launch { listState.animateScrollToItem(0) }
+    }
     Surface(
         modifier = modifier
             .fillMaxSize()
@@ -174,6 +194,7 @@ fun CallsScreen(
 
                     else -> CallsList(
                         state = state,
+                        listState = listState,
                         onOpenCall = onOpenCall,
                         onLoadMore = onLoadMore
                     )
@@ -185,6 +206,8 @@ fun CallsScreen(
 
 @Composable
 private fun SearchField(query: String, onQueryChange: (String) -> Unit) {
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
     OutlinedTextField(
         value = query,
         onValueChange = onQueryChange,
@@ -207,10 +230,31 @@ private fun SearchField(query: String, onQueryChange: (String) -> Unit) {
         },
         singleLine = true,
         shape = MaterialTheme.shapes.medium,
+        // The search filters what is already on screen as the reader types, so the keyboard's own
+        // action finishes the search instead of inserting a newline or hopping to another field.
+        keyboardOptions = KeyboardOptions(
+            imeAction = ImeAction.Search,
+            autoCorrectEnabled = false
+        ),
+        keyboardActions = searchKeyboardActions(focusManager, keyboard),
         colors = OutlinedTextFieldDefaults.colors(
             unfocusedBorderColor = MaterialTheme.colorScheme.onSurfaceVariant
         )
     )
+}
+
+/**
+ * The keyboard's Search action finishes the search: the field lets go and the keyboard goes with
+ * it. Kept as two functions so the dismissal itself is testable without a real IME.
+ */
+internal fun searchKeyboardActions(
+    focusManager: FocusManager,
+    keyboard: SoftwareKeyboardController?
+): KeyboardActions = KeyboardActions(onSearch = { dismissSearch(focusManager, keyboard) })
+
+internal fun dismissSearch(focusManager: FocusManager, keyboard: SoftwareKeyboardController?) {
+    focusManager.clearFocus()
+    keyboard?.hide()
 }
 
 /**
@@ -325,10 +369,10 @@ private fun OfflineBanner(onRefresh: () -> Unit) {
 @Composable
 private fun CallsList(
     state: CallsUiState,
+    listState: LazyListState,
     onOpenCall: (String) -> Unit,
     onLoadMore: () -> Unit
 ) {
-    val listState = rememberLazyListState()
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
@@ -374,7 +418,11 @@ private fun CallRow(call: CallSummary, onClick: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clickable(
+                onClickLabel = stringResource(R.string.calls_open_call),
+                role = Role.Button,
+                onClick = onClick
+            )
             .padding(vertical = 12.dp)
     ) {
         if (stacked) {
@@ -399,8 +447,7 @@ private fun CallText(call: CallSummary, modifier: Modifier = Modifier) {
     Column(modifier = modifier) {
         Text(
             text = call.destination?.let(::formatPhoneNumber) ?: stringResource(R.string.calls_unknown_number),
-            style = MaterialTheme.typography.titleMedium,
-            fontFamily = FontFamily.Monospace
+            style = LocalPhonxietyType.current.code(MaterialTheme.typography.titleMedium)
         )
         call.farEnd?.takeIf { it.isNotBlank() }?.let { farEnd ->
             Text(

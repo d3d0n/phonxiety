@@ -19,6 +19,7 @@
     <string name="calls_recording_available">Recording</string>
     <string name="calls_place_call">Place a call</string>
     <string name="calls_status_unknown">Unknown</string>
+    <string name="calls_open_call">Open the call</string>
 
     <string name="calls_empty_title">No calls yet</string>
     <string name="calls_empty_body">Calls you start from the bridge appear here with their summary.</string>

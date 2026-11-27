@@ -55,12 +55,12 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.phonxiety.bridge.data.Speaker
 import com.phonxiety.bridge.data.speakerOf
+import com.phonxiety.bridge.designsystem.LocalPhonxietyType
 import com.phonxiety.bridge.designsystem.asString
 import com.phonxiety.bridge.designsystem.component.EmptyState
 import com.phonxiety.bridge.designsystem.component.ErrorCard
@@ -117,7 +117,9 @@ fun CallDetailRoute(
             val file = CallSharing.transcriptFile(context, state.callId, state.transcript)
             CallSharing.shareFile(context, file, "text/plain", "phonxiety transcript ${state.callId}")
         },
-        onDelete = { viewModel.delete(onBack) },
+        onRequestDelete = viewModel::requestDelete,
+        onDismissDelete = viewModel::dismissDelete,
+        onConfirmDelete = { viewModel.confirmDelete(onBack) },
         modifier = modifier
     )
 }
@@ -136,7 +138,9 @@ fun CallDetailScreen(
     onSeek: (Long) -> Unit,
     onShareAudio: () -> Unit,
     onShareTranscript: () -> Unit,
-    onDelete: () -> Unit,
+    onRequestDelete: () -> Unit,
+    onDismissDelete: () -> Unit,
+    onConfirmDelete: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val snapshot = state.snapshot
@@ -188,10 +192,32 @@ fun CallDetailScreen(
                 onSeek = onSeek,
                 onShareAudio = onShareAudio,
                 onShareTranscript = onShareTranscript,
-                onDelete = onDelete
+                onRequestDelete = onRequestDelete
             )
         }
     }
+    // The question is the screen's, not the list item's: it stays drawn wherever the list is
+    // scrolled, and it is still there after the composition is rebuilt.
+    if (state.confirmingDelete) {
+        DeleteConfirmationDialog(onDismiss = onDismissDelete, onConfirm = onConfirmDelete)
+    }
+}
+
+@Composable
+private fun DeleteConfirmationDialog(onDismiss: () -> Unit, onConfirm: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.call_detail_delete_confirm_title)) },
+        text = { Text(stringResource(R.string.call_detail_delete_confirm_body)) },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(stringResource(R.string.call_detail_delete_confirm))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.call_detail_delete_keep)) }
+        }
+    )
 }
 
 @Composable
@@ -209,7 +235,7 @@ private fun CallDetailBody(
     onSeek: (Long) -> Unit,
     onShareAudio: () -> Unit,
     onShareTranscript: () -> Unit,
-    onDelete: () -> Unit
+    onRequestDelete: () -> Unit
 ) {
     var showDetails by rememberSaveable { mutableStateOf(false) }
     LazyColumn(
@@ -251,7 +277,7 @@ private fun CallDetailBody(
         }
         item { TranscriptCard(state = state, onLoadMore = onLoadMoreTranscript) }
         item { DetailActions(state = state, onCallAgain = onCallAgain, onShareTranscript = onShareTranscript) }
-        item { DeleteCard(state = state, onDelete = onDelete) }
+        item { DeleteCard(state = state, onRequestDelete = onRequestDelete) }
         item { Spacer(Modifier.width(4.dp)) }
     }
 }
@@ -620,8 +646,7 @@ private fun RecordingCard(
             failure.code?.let {
                 Text(
                     text = it,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
+                    style = LocalPhonxietyType.current.code(MaterialTheme.typography.labelSmall),
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
@@ -633,8 +658,7 @@ private fun RecordingCard(
 private fun PlaybackTime(text: String) {
     Text(
         text = text,
-        style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"),
-        fontFamily = FontFamily.Monospace,
+        style = LocalPhonxietyType.current.code(MaterialTheme.typography.bodyMedium, tabular = true),
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
 }
@@ -733,14 +757,13 @@ private fun DetailActions(
 }
 
 @Composable
-private fun DeleteCard(state: CallDetailUiState, onDelete: () -> Unit) {
-    var confirming by rememberSaveable { mutableStateOf(false) }
+private fun DeleteCard(state: CallDetailUiState, onRequestDelete: () -> Unit) {
     SectionCard(
         title = stringResource(R.string.call_detail_delete_title),
         subtitle = stringResource(R.string.call_detail_delete_subtitle)
     ) {
         Button(
-            onClick = { confirming = true },
+            onClick = onRequestDelete,
             enabled = !state.deleting,
             colors = ButtonDefaults.buttonColors(
                 containerColor = MaterialTheme.colorScheme.errorContainer,
@@ -755,26 +778,6 @@ private fun DeleteCard(state: CallDetailUiState, onDelete: () -> Unit) {
                 )
             )
         }
-    }
-    if (confirming) {
-        AlertDialog(
-            onDismissRequest = { confirming = false },
-            title = { Text(stringResource(R.string.call_detail_delete_confirm_title)) },
-            text = { Text(stringResource(R.string.call_detail_delete_confirm_body)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        confirming = false
-                        onDelete()
-                    }
-                ) {
-                    Text(stringResource(R.string.call_detail_delete_confirm))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirming = false }) { Text(stringResource(R.string.call_detail_delete_keep)) }
-            }
-        )
     }
 }
 
