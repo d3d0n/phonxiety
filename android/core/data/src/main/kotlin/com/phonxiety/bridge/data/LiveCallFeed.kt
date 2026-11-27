@@ -13,9 +13,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.FlowCollector
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -114,9 +115,20 @@ class LiveCallFeed constructor(
 
     private var touches = 0L
 
-    /** The accumulated stream of [callId], shared by every collector of that call. */
-    fun state(callId: CallId): StateFlow<LiveCallFeedState> = synchronized(lock) {
-        entryLocked(callId).view
+    /**
+     * The accumulated stream of [callId], shared by every collector of that call. Each collection
+     * resolves the entry the map holds when it starts and counts itself on that entry under the
+     * map lock, so a stream handed out before an eviction attaches to the fresh entry and can never
+     * restart the forgotten one.
+     */
+    fun state(callId: CallId): Flow<LiveCallFeedState> = flow {
+        beforeAttach()
+        val entry = synchronized(lock) { entryLocked(callId).also { it.attached() } }
+        try {
+            emitAll(entry.published)
+        } finally {
+            synchronized(lock) { entry.detached() }
+        }
     }
 
     /** The current entry of [callId], created if the call is not held yet. Caller holds [lock]. */
@@ -141,9 +153,14 @@ class LiveCallFeed constructor(
         feeds[callId.value]?.collectors ?: 0
     }
 
+    /** What [callId]'s current entry holds, without creating one; an empty state when not held. */
+    internal fun valueOf(callId: CallId): LiveCallFeedState = synchronized(lock) {
+        feeds[callId.value]?.published?.value ?: LiveCallFeedState(callId.value)
+    }
+
     private inner class CallFeed(private val callId: CallId) {
         private var accumulated = LiveCallFeedState(callId.value)
-        private val published = MutableStateFlow(accumulated)
+        val published = MutableStateFlow(accumulated)
 
         /** Transcripts already accepted, so a page replayed with a new revision writes one turn. */
         private val appliedSequences = mutableSetOf<Long>()
@@ -158,31 +175,8 @@ class LiveCallFeed constructor(
 
         val finished: Boolean get() = accumulated.ended
 
-        val view: StateFlow<LiveCallFeedState> = object : StateFlow<LiveCallFeedState> {
-            override val value: LiveCallFeedState get() = published.value
-            override val replayCache: List<LiveCallFeedState> get() = published.replayCache
-
-            override suspend fun collect(collector: FlowCollector<LiveCallFeedState>): Nothing {
-                // A view outlives the entry it was handed out with, so it never keeps that entry
-                // across collections. Resolving the current entry here, and counting the collector
-                // on it under the map lock, is what stops an evicted entry from being restarted
-                // through an old view: the collection always belongs to whatever the map holds now.
-                this@LiveCallFeed.beforeAttach()
-                val entry = synchronized(lock) {
-                    val current = this@LiveCallFeed.entryLocked(callId)
-                    current.attached()
-                    current
-                }
-                try {
-                    entry.published.collect(collector)
-                } finally {
-                    synchronized(lock) { entry.detached() }
-                }
-            }
-        }
-
         /** Caller holds [lock]. */
-        private fun attached() {
+        fun attached() {
             collectors++
             touches++
             touchedAt = touches
@@ -194,7 +188,7 @@ class LiveCallFeed constructor(
         }
 
         /** Caller holds [lock]. */
-        private fun detached() {
+        fun detached() {
             if (collectors > 0) collectors--
             if (collectors > 0) return
             // The request belongs to the call, not the screen: nobody is left, so the loop stops
