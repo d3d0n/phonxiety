@@ -193,9 +193,10 @@ class LabScreenScreenshotTest {
     fun theLatencyTileStackOnePerRowAtTwoHundredPercent() {
         setScreen(previewLabState(), fontScale = 2f, width = 320.dp)
         val labels = listOf("Median", "p95", "Worst", "Loss")
-        val lefts = labels.map { composeRule.onNodeWithText(it).getUnclippedBoundsInRoot().left.value }
+        fun label(text: String) = composeRule.onNodeWithText(text, ignoreCase = true)
+        val lefts = labels.map { label(it).getUnclippedBoundsInRoot().left.value }
         assertEquals("every tile starts at the content edge", 1, lefts.map { Math.round(it) }.distinct().size)
-        val tops = labels.map { composeRule.onNodeWithText(it).getUnclippedBoundsInRoot().top.value }
+        val tops = labels.map { label(it).getUnclippedBoundsInRoot().top.value }
         for (index in 1 until tops.size) {
             assertTrue("${labels[index]} sits under ${labels[index - 1]}", tops[index] > tops[index - 1])
         }
@@ -207,10 +208,10 @@ class LabScreenScreenshotTest {
     @Test
     fun theLatencyTilesKeepTwoPerRowAtNormalText() {
         setScreen(previewLabState())
-        val median = composeRule.onNodeWithText("Median").getUnclippedBoundsInRoot()
-        val p95 = composeRule.onNodeWithText("p95").getUnclippedBoundsInRoot()
-        val worst = composeRule.onNodeWithText("Worst").getUnclippedBoundsInRoot()
-        val loss = composeRule.onNodeWithText("Loss").getUnclippedBoundsInRoot()
+        val median = composeRule.onNodeWithText("Median", ignoreCase = true).getUnclippedBoundsInRoot()
+        val p95 = composeRule.onNodeWithText("p95", ignoreCase = true).getUnclippedBoundsInRoot()
+        val worst = composeRule.onNodeWithText("Worst", ignoreCase = true).getUnclippedBoundsInRoot()
+        val loss = composeRule.onNodeWithText("Loss", ignoreCase = true).getUnclippedBoundsInRoot()
         assertEquals("the first pair shares a row", median.top.value, p95.top.value, 1f)
         assertEquals("the second pair shares a row", worst.top.value, loss.top.value, 1f)
         assertTrue("p95 sits right of the median", p95.left.value > median.left.value)
@@ -474,7 +475,7 @@ class LabScreenScreenshotTest {
         val subtitle = composeRule
             .onNodeWithText("The bridge's own record of the call it placed.")
             .getUnclippedBoundsInRoot()
-        val durationLabel = composeRule.onNodeWithText("Duration").getUnclippedBoundsInRoot()
+        val durationLabel = composeRule.onNodeWithText("Duration", ignoreCase = true).getUnclippedBoundsInRoot()
         assertEquals(
             "the content follows the subtitle at the card's own spacing, with no empty status row",
             10f,

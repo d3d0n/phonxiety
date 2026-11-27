@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.phonxiety.bridge.data.bitrateKbps
+import com.phonxiety.bridge.designsystem.BrandLockup
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
 import com.phonxiety.bridge.designsystem.component.EmptyState
 import com.phonxiety.bridge.designsystem.component.ErrorCard
@@ -236,7 +237,7 @@ private fun DashboardHeader(bridge: BridgeState, paired: Boolean) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(text = stringResource(R.string.dashboard_title), style = MaterialTheme.typography.headlineMedium)
+            BrandLockup(height = 22.dp)
             Text(
                 text = stringResource(R.string.dashboard_subtitle),
                 style = MaterialTheme.typography.bodyMedium,

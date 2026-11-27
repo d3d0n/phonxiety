@@ -1,4 +1,10 @@
-<h1 align="center">phonxiety</h1>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/logo/phonxiety-lockup-color-dark-bg.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/brand/logo/phonxiety-lockup-color-light-bg.svg">
+    <img alt="phonxiety" src="docs/brand/logo/phonxiety-lockup-color-light-bg.svg" height="64">
+  </picture>
+</p>
 
 <p align="center">
   <strong>Your AI assistant makes the phone call. From your own SIM, through your own phone.</strong>

@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Dark backgrounds: Void with Trace ink, the brand's dark scheme. -->
 <resources>
-    <color name="phonxiety_widget_background">#FF14141B</color>
-    <color name="phonxiety_widget_text">#FFF2F2F7</color>
-    <color name="phonxiety_widget_muted">#FFB4B4C0</color>
-    <color name="phonxiety_widget_good">#FF4ED9B2</color>
-    <color name="phonxiety_widget_warn">#FFF3B860</color>
-    <color name="phonxiety_widget_bad">#FFF2B8B5</color>
-    <color name="phonxiety_widget_on_bad">#FF3A0A08</color>
+    <color name="phonxiety_widget_background">#FF0A0710</color>
+    <color name="phonxiety_widget_text">#FFF6D8FF</color>
+    <color name="phonxiety_widget_muted">#FFB99CCC</color>
+    <color name="phonxiety_widget_good">#FF86E7C3</color>
+    <color name="phonxiety_widget_warn">#FFFFC98A</color>
+    <color name="phonxiety_widget_bad">#FFFFB4A8</color>
+    <color name="phonxiety_widget_on_bad">#FF6B1B12</color>
 </resources>

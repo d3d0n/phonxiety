@@ -328,14 +328,14 @@ class DashboardScreenshotTest {
     fun noAudioStreamShowsNoFabricatedZeros() {
         setScreen(bridge = DashboardSamples.direct.copy(audio = AudioState()))
         composeRule.onNodeWithText("No audio stream. It starts with a call.").assertExists()
-        composeRule.onNodeWithText("Playback drops").assertDoesNotExist()
+        composeRule.onNodeWithText("Playback drops", ignoreCase = true).assertDoesNotExist()
     }
 
     @Test
     fun theCallCardCountsFromTheConnectNotTheRing() {
         setScreen(bridge = DashboardSamples.relayInCall)
         // 74 s of ring is not the call: the tile is the 40 s since the answer, like the system chip.
-        composeRule.onNodeWithText("Duration").assertExists()
+        composeRule.onNodeWithText("Duration", ignoreCase = true).assertExists()
         composeRule.onNodeWithText("00:40").assertExists()
         // 74 s would read as 01:14, so the ring is never shown as this tile's duration.
         composeRule.onNodeWithText("01:14").assertDoesNotExist()
@@ -345,10 +345,10 @@ class DashboardScreenshotTest {
     fun theRingIsDialingAndNotADuration() {
         setScreen(bridge = DashboardSamples.dialing)
         // The header pill and the tile both name the phase; neither calls the ring a duration.
-        composeRule.onAllNodesWithText("Dialing").assertCountEquals(2)
+        composeRule.onAllNodesWithText("Dialing", ignoreCase = true).assertCountEquals(2)
         composeRule.onNodeWithText("00:09").assertExists()
-        composeRule.onNodeWithText("Duration").assertDoesNotExist()
-        composeRule.onNodeWithText("Connected at").assertExists()
+        composeRule.onNodeWithText("Duration", ignoreCase = true).assertDoesNotExist()
+        composeRule.onNodeWithText("Connected at", ignoreCase = true).assertExists()
     }
 
     @Test
@@ -364,7 +364,7 @@ class DashboardScreenshotTest {
             nowEpochMs = DashboardSamples.now + 5 * 60_000
         )
         composeRule.onNodeWithText("Ended").assertExists()
-        composeRule.onNodeWithText("Duration").assertExists()
+        composeRule.onNodeWithText("Duration", ignoreCase = true).assertExists()
         composeRule.onNodeWithText("00:30").assertExists()
         composeRule.onNodeWithText("05:30").assertDoesNotExist()
     }

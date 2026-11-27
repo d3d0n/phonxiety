@@ -2,67 +2,164 @@ package com.phonxiety.bridge.designsystem
 
 import androidx.compose.ui.graphics.Color
 
-/** Raw brand colours; only the theme maps them to Material roles. */
+/**
+ * Raw brand colours, straight from the brand kit. Only the theme maps them to Material roles.
+ *
+ * Signal is the arrow mark and nothing else: no text role and no background role may use it, so a
+ * screen keeps its reading contrast whether or not the mark is on it.
+ */
 internal object PhonxietyColors {
-    val Indigo = Color(0xFF3F4A7E)
-    val LightIndigo = Color(0xFFBAC3FF)
-    val IndigoContainer = Color(0xFFDEE0FF)
-    val IndigoOnContainer = Color(0xFF121C4C)
-    val DarkIndigoContainer = Color(0xFF2A3568)
-    val DarkOnPrimary = Color(0xFF0A1546)
-    val LightInversePrimary = Color(0xFFBAC3FF)
+    /** Main dark background. */
+    val Void = Color(0xFF0A0710)
 
-    val Slate = Color(0xFF5A5D72)
-    val LightSlate = Color(0xFFC2C5DD)
-    val SlateContainer = Color(0xFFDEE1F9)
-    val SlateOnContainer = Color(0xFF171A2C)
-    val DarkSlateContainer = Color(0xFF414659)
+    /** The arrow mark on dark backgrounds; never text, never a background. */
+    val Signal = Color(0xFFFF4FD8)
 
-    val Teal = Color(0xFF146C5E)
-    val LightTeal = Color(0xFF8BD5C6)
-    val TealContainer = Color(0xFFA7F2E0)
-    val TealOnContainer = Color(0xFF00201A)
-    val DarkTealContainer = Color(0xFF005045)
-    val DarkOnTeal = Color(0xFF00382F)
+    /** Names and headings on dark backgrounds. */
+    val Trace = Color(0xFFF6D8FF)
 
-    val Red = Color(0xFFBA1A1A)
-    val LightRed = Color(0xFFFFB4AB)
-    val RedContainer = Color(0xFFFFDAD6)
-    val DarkRedContainer = Color(0xFF93000A)
+    /** Plates: the icon background and container fills. */
+    val Plate = Color(0xFF5B2A86)
 
-    val LightBackground = Color(0xFFFBF8FF)
-    val LightSurfaceContainerLowest = Color(0xFFFFFFFF)
-    val LightSurfaceContainerLow = Color(0xFFF5F2FB)
-    val LightSurfaceContainer = Color(0xFFEFEDF5)
-    val LightSurfaceContainerHigh = Color(0xFFE9E7F0)
-    val LightSurfaceContainerHighest = Color(0xFFE3E1EA)
-    val LightOnSurface = Color(0xFF1B1B21)
-    val LightSurfaceVariant = Color(0xFFE3E1EC)
-    val LightOnSurfaceVariant = Color(0xFF46464F)
-    val LightOutline = Color(0xFF767680)
-    val LightOutlineVariant = Color(0xFFC7C5D0)
+    /** Captions and secondary text on dark backgrounds. */
+    val Mute = Color(0xFFB99CCC)
 
-    val DarkBackground = Color(0xFF131318)
-    val DarkSurfaceContainerLowest = Color(0xFF0E0E13)
-    val DarkSurfaceContainerLow = Color(0xFF1B1B21)
-    val DarkSurfaceContainer = Color(0xFF1F1F25)
-    val DarkSurfaceContainerHigh = Color(0xFF292930)
-    val DarkSurfaceContainerHighest = Color(0xFF34343B)
-    val DarkOnSurface = Color(0xFFE4E1E9)
-    val DarkSurfaceVariant = Color(0xFF46464F)
-    val DarkOnSurfaceVariant = Color(0xFFC7C5D0)
-    val DarkOutline = Color(0xFF90909A)
-    val DarkOutlineVariant = Color(0xFF46464F)
+    /** Main light background. */
+    val Paper = Color(0xFFF4F1F6)
+
+    /** The arrow mark on light backgrounds: Signal, darkened until it clears AA on Paper. */
+    val SignalOnLight = Color(0xFFB3128F)
+
+    /** Ink of the wordmark on light backgrounds, from the kit. */
+    val Ink = Color(0xFF140A1E)
+
+    /** Void lightened toward Plate, 10 %: the first step above the background in dark mode. */
+    val DarkSurfaceLow = Color(0xFF120A1C)
+
+    /** Void toward Plate, 16 %. */
+    val DarkSurfaceContainer = Color(0xFF170D23)
+
+    /** Void toward Plate, 22 %. */
+    val DarkSurfaceHigh = Color(0xFF1C0F2A)
+
+    /** Void toward Plate, 30 %. */
+    val DarkSurfaceHighest = Color(0xFF221233)
+
+    /** Void toward Plate, 38 %: the surface-variant role. */
+    val DarkSurfaceVariant = Color(0xFF29143D)
+
+    /** One step below Void, for sheets that sit under the background. */
+    val DarkSurfaceLowest = Color(0xFF070410)
+
+    /** Mute pulled 22 % toward Void: a 5.2:1 boundary on the darkest backgrounds. */
+    val DarkOutline = Color(0xFF8E7AA0)
+
+    /** A 3.9:1 boundary on Void and 3.4:1 on the highest container. */
+    val DarkOutlineVariant = Color(0xFF7A6688)
+
+    /** Secondary lilac for the dark scheme, between Trace and Plate. */
+    val DarkSecondary = Color(0xFFD9B8F5)
+
+    /** A deeper plate for secondary containers. */
+    val DarkSecondaryContainer = Color(0xFF3B2152)
+
+    /** A cool lilac that stays clear of Signal. */
+    val DarkTertiary = Color(0xFFCBB4F0)
+
+    /** Tertiary container on dark. */
+    val DarkTertiaryContainer = Color(0xFF3A1C55)
+
+    /** On a tertiary container. */
+    val DarkOnTertiaryContainer = Color(0xFFEDD9FF)
+
+    val DarkOnTertiary = Color(0xFF1C0A2B)
+
+    /** Error on dark: a warm coral, deliberately not magenta. */
+    val DarkError = Color(0xFFFFB4A8)
+
+    val DarkOnError = Color(0xFF690005)
+
+    val DarkErrorContainer = Color(0xFF6E1B12)
+
+    val DarkOnErrorContainer = Color(0xFFFFDAD3)
+
+    /** Light container steps: Paper toward Plate, in single-digit percentages. */
+    val LightSurfaceLowest = Color(0xFFFFFFFF)
+
+    val LightSurfaceLow = Color(0xFFFAF7FC)
+
+    val LightSurfaceContainer = Color(0xFFF0EAF5)
+
+    val LightSurfaceHigh = Color(0xFFEBE3F2)
+
+    val LightSurfaceHighest = Color(0xFFE5DBEE)
+
+    val LightSurfaceVariant = Color(0xFFEBE3F2)
+
+    /** Captions on Paper: 7.4:1, and still 6.2:1 on the highest container. */
+    val LightOnSurfaceVariant = Color(0xFF5C4570)
+
+    /** A 4.3:1 boundary on Paper, used where a control outline must be seen. */
+    val LightOutline = Color(0xFF7D6B8B)
+
+    val LightOutlineVariant = Color(0xFF857092)
+
+    val LightPrimaryContainer = Color(0xFFEBDCF7)
+
+    val LightOnPrimaryContainer = Color(0xFF2E1146)
+
+    val LightSecondary = Color(0xFF62427C)
+
+    val LightSecondaryContainer = Color(0xFFEEE4F5)
+
+    val LightOnSecondaryContainer = Color(0xFF2E1146)
+
+    val LightTertiary = Color(0xFF7E3D9F)
+
+    val LightTertiaryContainer = Color(0xFFF3DDFB)
+
+    val LightOnTertiaryContainer = Color(0xFF3A0F4C)
+
+    val LightError = Color(0xFFB3261E)
+
+    val LightOnError = Color(0xFFFFFFFF)
+
+    val LightErrorContainer = Color(0xFFFFDAD6)
+
+    val LightOnErrorContainer = Color(0xFF410002)
 
     val White = Color(0xFFFFFFFF)
 
-    /**
-     * Signal colours for pills and meters; tones are semantic, not raw component colours.
-     * Success and warning never come from the wallpaper palette, so an "OK" pill cannot turn
-     * salmon under a warm system accent.
-     */
-    val Warn = Color(0xFF8A5300)
-    val WarnContainer = Color(0xFFFFE2BE)
-    val WarnDark = Color(0xFFFFB870)
-    val WarnContainerDark = Color(0xFF4A2F00)
+    /** Success, warning and error pairs for both backgrounds; none is magenta. */
+    val PositiveContainer = Color(0xFFC6F0DF)
+
+    val OnPositiveContainer = Color(0xFF07402F)
+
+    val PositiveIndicator = Color(0xFF0B6B4F)
+
+    val PositiveContainerDark = Color(0xFF0E3B2E)
+
+    val OnPositiveContainerDark = Color(0xFF86E7C3)
+
+    val PositiveIndicatorDark = Color(0xFF6FE0B8)
+
+    val WarningContainer = Color(0xFFFFE3BF)
+
+    val OnWarningContainer = Color(0xFF6B3D00)
+
+    val WarningContainerDark = Color(0xFF4A2E00)
+
+    val OnWarningContainerDark = Color(0xFFFFC98A)
+
+    val NegativeContainer = Color(0xFFFFDAD6)
+
+    val OnNegativeContainer = Color(0xFF6B1B12)
+
+    val NegativeIndicator = Color(0xFFB3261E)
+
+    val NegativeContainerDark = Color(0xFF4A120C)
+
+    val OnNegativeContainerDark = Color(0xFFFFB4A8)
+
+    val NegativeIndicatorDark = Color(0xFFFF8F80)
 }

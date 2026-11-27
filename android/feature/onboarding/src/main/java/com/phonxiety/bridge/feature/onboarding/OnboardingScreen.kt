@@ -54,6 +54,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.phonxiety.bridge.designsystem.BrandLockup
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
 import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.designsystem.asString
@@ -235,6 +236,7 @@ private fun PairingRejectionNote(error: String, onDismiss: () -> Unit) {
 @Composable
 private fun SetupHeader() {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        BrandLockup(height = 24.dp)
         Text(
             text = stringResource(R.string.onboarding_title),
             style = MaterialTheme.typography.headlineMedium,

@@ -1,14 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    App colour names mapped to the platform's dynamic Material roles.  The
-    values-night copy selects the dark roles, so the palette follows the system
-    light/dark setting without a Material library.  Only the window chrome the
-    activity theme uses remains; Compose surfaces get their colours from
-    :core:designsystem.
+    Platform window chrome only; Compose surfaces get their colours from
+    :core:designsystem.  The values are the brand's light scheme: Paper background,
+    Void text, Plate primary.  values-night carries the dark scheme.
 -->
 <resources>
-    <color name="surface">@android:color/system_surface_light</color>
-    <color name="primary">@android:color/system_primary_light</color>
+    <color name="surface">#F4F1F6</color>
+    <color name="primary">#5B2A86</color>
 
-    <color name="ic_launcher_background">#23235B</color>
+    <color name="ic_launcher_background">#5B2A86</color>
 </resources>

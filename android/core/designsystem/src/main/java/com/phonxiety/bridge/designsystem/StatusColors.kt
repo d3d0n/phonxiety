@@ -10,8 +10,9 @@ import androidx.compose.ui.graphics.Color
 data class StatusColorPair(val container: Color, val content: Color)
 
 /**
- * Status tones as theme tokens. Success and warning are fixed pairs, so they keep their meaning
- * under any wallpaper palette; error and neutral follow the Material roles the platform defines.
+ * Status tones as theme tokens. Every tone is a fixed brand pair, so success, warning and error
+ * keep their meaning and their contrast under any dynamic scheme. None of them is magenta: Signal
+ * belongs to the arrow alone.
  */
 @Immutable
 data class StatusColors(
@@ -34,30 +35,40 @@ val LocalStatusColors = staticCompositionLocalOf { statusColorsFor(PhonxietyLigh
 internal fun statusColorsFor(scheme: ColorScheme, dark: Boolean): StatusColors = StatusColors(
     positive = if (dark) {
         StatusColorPair(
-            container = PhonxietyColors.DarkTealContainer,
-            content = PhonxietyColors.TealContainer
+            container = PhonxietyColors.PositiveContainerDark,
+            content = PhonxietyColors.OnPositiveContainerDark
         )
     } else {
         StatusColorPair(
-            container = PhonxietyColors.TealContainer,
-            content = PhonxietyColors.TealOnContainer
+            container = PhonxietyColors.PositiveContainer,
+            content = PhonxietyColors.OnPositiveContainer
         )
     },
     warning = if (dark) {
         StatusColorPair(
-            container = PhonxietyColors.WarnContainerDark,
-            content = PhonxietyColors.WarnDark
+            container = PhonxietyColors.WarningContainerDark,
+            content = PhonxietyColors.OnWarningContainerDark
         )
     } else {
         StatusColorPair(
-            container = PhonxietyColors.WarnContainer,
-            content = PhonxietyColors.Warn
+            container = PhonxietyColors.WarningContainer,
+            content = PhonxietyColors.OnWarningContainer
         )
     },
-    negative = StatusColorPair(container = scheme.errorContainer, content = scheme.onErrorContainer),
+    negative = if (dark) {
+        StatusColorPair(
+            container = PhonxietyColors.NegativeContainerDark,
+            content = PhonxietyColors.OnNegativeContainerDark
+        )
+    } else {
+        StatusColorPair(
+            container = PhonxietyColors.NegativeContainer,
+            content = PhonxietyColors.OnNegativeContainer
+        )
+    },
     neutral = StatusColorPair(container = scheme.surfaceVariant, content = scheme.onSurfaceVariant),
     accent = StatusColorPair(container = scheme.primaryContainer, content = scheme.onPrimaryContainer),
-    positiveIndicator = if (dark) PhonxietyColors.LightTeal else PhonxietyColors.Teal,
-    negativeIndicator = if (dark) PhonxietyColors.LightRed else PhonxietyColors.Red,
+    positiveIndicator = if (dark) PhonxietyColors.PositiveIndicatorDark else PhonxietyColors.PositiveIndicator,
+    negativeIndicator = if (dark) PhonxietyColors.NegativeIndicatorDark else PhonxietyColors.NegativeIndicator,
     neutralIndicator = scheme.outline
 )

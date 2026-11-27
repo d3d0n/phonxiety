@@ -146,7 +146,7 @@ object Notifications {
                 text = context.getString(R.string.notification_bridge_offline_text)
             }
         }
-        val builder = base(context, BRIDGE_CHANNEL, R.drawable.ic_link)
+        val builder = base(context, BRIDGE_CHANNEL, R.drawable.ic_notification_arrow)
             .setContentTitle(title)
             .setContentText(text)
             .setOngoing(true)
@@ -174,7 +174,7 @@ object Notifications {
             else -> R.string.notification_call_ready
         }
         val startedAt = shown?.startedAtEpochMs
-        val builder = base(context, CALL_CHANNEL, R.drawable.ic_bridge)
+        val builder = base(context, CALL_CHANNEL, R.drawable.ic_notification_arrow)
             .setContentTitle(context.getString(title))
             .setContentText(shown?.destinationMasked ?: context.getString(R.string.notification_call_ready_text))
             .setOngoing(true)
@@ -195,7 +195,7 @@ object Notifications {
         if (shown != null) {
             builder.addAction(
                 Notification.Action.Builder(
-                    Icon.createWithResource(context, R.drawable.ic_bridge),
+                    Icon.createWithResource(context, R.drawable.ic_notification_arrow),
                     context.getString(R.string.action_hang_up),
                     hangUp(context)
                 ).build()
@@ -205,7 +205,7 @@ object Notifications {
     }
 
     /** The reminder posted after the reboot the wizard asked for; the wizard itself is the tap. */
-    fun setup(context: Context, title: String, text: String): Notification = base(context, SETUP_CHANNEL, R.drawable.ic_bridge)
+    fun setup(context: Context, title: String, text: String): Notification = base(context, SETUP_CHANNEL, R.drawable.ic_notification_arrow)
         .setContentTitle(title)
         .setContentText(text)
         .setCategory(Notification.CATEGORY_ERROR)
@@ -223,7 +223,7 @@ object Notifications {
 
     /** The lock-screen copy: the app and what the surface is, never who is on the call. */
     private fun publicVersion(context: Context, channel: String, text: Int, request: Int): Notification = Notification.Builder(context, channel)
-        .setSmallIcon(R.drawable.ic_bridge)
+        .setSmallIcon(R.drawable.ic_notification_arrow)
         .setContentTitle(context.getString(R.string.notification_public_title))
         .setContentText(context.getString(text))
         .setContentIntent(open(context, request + PUBLIC_REQUEST, ROUTE_DASHBOARD))

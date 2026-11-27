@@ -14,16 +14,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 
 /**
- * The app theme: Material 3 Expressive motion and shapes, a branded indigo/teal palette, and
- * wallpaper-derived colour when the device supports dynamic colour.
+ * The app theme: Material 3 Expressive motion, brand shapes and type, and the brand palette.
  *
- * The palette is deliberately one source of truth with [PhonxietyColors] so screenshots, previews
- * and the app render the same colours whether or not dynamic colour is on.
+ * Dynamic colour is off by default: the brand is the design, and a wallpaper-derived scheme cannot
+ * guarantee Signal stays reserved or that the derived tones keep their contrast. The parameter
+ * remains for tests and for a future opt-in.
  */
 @Composable
 fun PhonxietyTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = true,
+    dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val context = LocalContext.current
@@ -35,6 +35,7 @@ fun PhonxietyTheme(
     }
     val statusColors = statusColorsFor(colorScheme, darkTheme)
     val type = remember { PhonxietyType() }
+    val brand = if (darkTheme) BrandTokens.Dark else BrandTokens.Light
     MaterialExpressiveTheme(
         colorScheme = colorScheme,
         motionScheme = MotionScheme.expressive(),
@@ -44,76 +45,85 @@ fun PhonxietyTheme(
             CompositionLocalProvider(
                 LocalStatusColors provides statusColors,
                 LocalPhonxietyType provides type,
+                LocalBrand provides brand,
                 content = content
             )
         }
     )
 }
 
-/** The branded fallback palette in light mode. */
+/** The branded fallback palette in light mode: Paper background, Void text, Plate primary. */
 internal val PhonxietyLightColors: ColorScheme = lightColorScheme(
-    primary = PhonxietyColors.Indigo,
-    onPrimary = PhonxietyColors.White,
-    primaryContainer = PhonxietyColors.IndigoContainer,
-    onPrimaryContainer = PhonxietyColors.IndigoOnContainer,
-    secondary = PhonxietyColors.Slate,
+    primary = PhonxietyColors.Plate,
+    onPrimary = PhonxietyColors.Paper,
+    primaryContainer = PhonxietyColors.LightPrimaryContainer,
+    onPrimaryContainer = PhonxietyColors.LightOnPrimaryContainer,
+    secondary = PhonxietyColors.LightSecondary,
     onSecondary = PhonxietyColors.White,
-    secondaryContainer = PhonxietyColors.SlateContainer,
-    onSecondaryContainer = PhonxietyColors.SlateOnContainer,
-    tertiary = PhonxietyColors.Teal,
+    secondaryContainer = PhonxietyColors.LightSecondaryContainer,
+    onSecondaryContainer = PhonxietyColors.LightOnSecondaryContainer,
+    tertiary = PhonxietyColors.LightTertiary,
     onTertiary = PhonxietyColors.White,
-    tertiaryContainer = PhonxietyColors.TealContainer,
-    onTertiaryContainer = PhonxietyColors.TealOnContainer,
-    error = PhonxietyColors.Red,
-    errorContainer = PhonxietyColors.RedContainer,
-    background = PhonxietyColors.LightBackground,
-    onBackground = PhonxietyColors.LightOnSurface,
-    surface = PhonxietyColors.LightBackground,
-    onSurface = PhonxietyColors.LightOnSurface,
+    tertiaryContainer = PhonxietyColors.LightTertiaryContainer,
+    onTertiaryContainer = PhonxietyColors.LightOnTertiaryContainer,
+    error = PhonxietyColors.LightError,
+    onError = PhonxietyColors.LightOnError,
+    errorContainer = PhonxietyColors.LightErrorContainer,
+    onErrorContainer = PhonxietyColors.LightOnErrorContainer,
+    background = PhonxietyColors.Paper,
+    onBackground = PhonxietyColors.Void,
+    surface = PhonxietyColors.Paper,
+    onSurface = PhonxietyColors.Void,
     surfaceVariant = PhonxietyColors.LightSurfaceVariant,
-    surfaceContainerLowest = PhonxietyColors.LightSurfaceContainerLowest,
-    surfaceContainerLow = PhonxietyColors.LightSurfaceContainerLow,
+    surfaceContainerLowest = PhonxietyColors.LightSurfaceLowest,
+    surfaceContainerLow = PhonxietyColors.LightSurfaceLow,
     surfaceContainer = PhonxietyColors.LightSurfaceContainer,
-    surfaceContainerHigh = PhonxietyColors.LightSurfaceContainerHigh,
-    surfaceContainerHighest = PhonxietyColors.LightSurfaceContainerHighest,
+    surfaceContainerHigh = PhonxietyColors.LightSurfaceHigh,
+    surfaceContainerHighest = PhonxietyColors.LightSurfaceHighest,
+    surfaceDim = PhonxietyColors.LightSurfaceHighest,
+    surfaceBright = PhonxietyColors.White,
     onSurfaceVariant = PhonxietyColors.LightOnSurfaceVariant,
     outline = PhonxietyColors.LightOutline,
     outlineVariant = PhonxietyColors.LightOutlineVariant,
-    inverseSurface = PhonxietyColors.LightOnSurface,
-    inverseOnSurface = PhonxietyColors.LightBackground,
-    inversePrimary = PhonxietyColors.LightInversePrimary
+    inverseSurface = PhonxietyColors.Void,
+    inverseOnSurface = PhonxietyColors.Trace,
+    inversePrimary = PhonxietyColors.Trace
 )
 
-/** The branded fallback palette in dark mode. */
+/** The branded palette in dark mode: Void surfaces graded toward Plate, Trace text. */
 internal val PhonxietyDarkColors: ColorScheme = darkColorScheme(
-    primary = PhonxietyColors.LightIndigo,
-    onPrimary = PhonxietyColors.DarkOnPrimary,
-    primaryContainer = PhonxietyColors.DarkIndigoContainer,
-    onPrimaryContainer = PhonxietyColors.IndigoContainer,
-    secondary = PhonxietyColors.LightSlate,
-    onSecondary = PhonxietyColors.DarkOnSurface,
-    secondaryContainer = PhonxietyColors.DarkSlateContainer,
-    onSecondaryContainer = PhonxietyColors.SlateContainer,
-    tertiary = PhonxietyColors.LightTeal,
-    onTertiary = PhonxietyColors.DarkOnTeal,
-    tertiaryContainer = PhonxietyColors.DarkTealContainer,
-    onTertiaryContainer = PhonxietyColors.TealContainer,
-    error = PhonxietyColors.LightRed,
-    errorContainer = PhonxietyColors.DarkRedContainer,
-    background = PhonxietyColors.DarkBackground,
-    onBackground = PhonxietyColors.DarkOnSurface,
-    surface = PhonxietyColors.DarkBackground,
-    onSurface = PhonxietyColors.DarkOnSurface,
+    primary = PhonxietyColors.Trace,
+    onPrimary = PhonxietyColors.Void,
+    primaryContainer = PhonxietyColors.Plate,
+    onPrimaryContainer = PhonxietyColors.Trace,
+    secondary = PhonxietyColors.DarkSecondary,
+    onSecondary = PhonxietyColors.Void,
+    secondaryContainer = PhonxietyColors.DarkSecondaryContainer,
+    onSecondaryContainer = PhonxietyColors.Trace,
+    tertiary = PhonxietyColors.DarkTertiary,
+    onTertiary = PhonxietyColors.DarkOnTertiary,
+    tertiaryContainer = PhonxietyColors.DarkTertiaryContainer,
+    onTertiaryContainer = PhonxietyColors.DarkOnTertiaryContainer,
+    error = PhonxietyColors.DarkError,
+    onError = PhonxietyColors.DarkOnError,
+    errorContainer = PhonxietyColors.DarkErrorContainer,
+    onErrorContainer = PhonxietyColors.DarkOnErrorContainer,
+    background = PhonxietyColors.Void,
+    onBackground = PhonxietyColors.Trace,
+    surface = PhonxietyColors.Void,
+    onSurface = PhonxietyColors.Trace,
     surfaceVariant = PhonxietyColors.DarkSurfaceVariant,
-    surfaceContainerLowest = PhonxietyColors.DarkSurfaceContainerLowest,
-    surfaceContainerLow = PhonxietyColors.DarkSurfaceContainerLow,
+    surfaceContainerLowest = PhonxietyColors.DarkSurfaceLowest,
+    surfaceContainerLow = PhonxietyColors.DarkSurfaceLow,
     surfaceContainer = PhonxietyColors.DarkSurfaceContainer,
-    surfaceContainerHigh = PhonxietyColors.DarkSurfaceContainerHigh,
-    surfaceContainerHighest = PhonxietyColors.DarkSurfaceContainerHighest,
-    onSurfaceVariant = PhonxietyColors.DarkOnSurfaceVariant,
+    surfaceContainerHigh = PhonxietyColors.DarkSurfaceHigh,
+    surfaceContainerHighest = PhonxietyColors.DarkSurfaceHighest,
+    surfaceDim = PhonxietyColors.Void,
+    surfaceBright = PhonxietyColors.DarkSurfaceHigh,
+    onSurfaceVariant = PhonxietyColors.Mute,
     outline = PhonxietyColors.DarkOutline,
     outlineVariant = PhonxietyColors.DarkOutlineVariant,
-    inverseSurface = PhonxietyColors.DarkOnSurface,
-    inverseOnSurface = PhonxietyColors.DarkBackground,
-    inversePrimary = PhonxietyColors.Indigo
+    inverseSurface = PhonxietyColors.Trace,
+    inverseOnSurface = PhonxietyColors.Void,
+    inversePrimary = PhonxietyColors.Plate
 )

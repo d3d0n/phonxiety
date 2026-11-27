@@ -27,6 +27,7 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.phonxiety.bridge.designsystem.Caption
 import com.phonxiety.bridge.designsystem.LocalPhonxietyType
 import com.phonxiety.bridge.designsystem.LocalStatusColors
 import java.text.NumberFormat
@@ -131,9 +132,8 @@ fun StatTile(
         if (mono) type.code(style, tabular = true) else style
     }
     Column(modifier = modifier) {
-        Text(
+        Caption(
             text = label,
-            style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Spacer(Modifier.height(2.dp))

@@ -16,6 +16,7 @@ import com.phonxiety.bridge.designsystem.component.StatTile
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -41,7 +42,7 @@ class PhonxietyTypeTest {
         val base = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.Red)
         val coded = PhonxietyType().code(base, tabular = true)
 
-        assertEquals(FontFamily.Monospace, coded.fontFamily)
+        assertEquals(JetBrainsMonoFamily, coded.fontFamily)
         assertEquals("tnum", coded.fontFeatureSettings)
         assertEquals(base.fontSize, coded.fontSize)
         assertEquals(base.fontWeight, coded.fontWeight)
@@ -53,8 +54,56 @@ class PhonxietyTypeTest {
         val base = TextStyle(fontSize = 13.sp)
         val coded = PhonxietyType().code(base)
 
-        assertEquals(FontFamily.Monospace, coded.fontFamily)
+        assertEquals(JetBrainsMonoFamily, coded.fontFamily)
         assertNull(coded.fontFeatureSettings)
+    }
+
+    @Test
+    fun headingsUseChakraPetchAndTextUsesJetBrainsMono() {
+        val type = PhonxietyTypography
+        listOf(
+            type.displayLarge,
+            type.displayMedium,
+            type.displaySmall,
+            type.headlineLarge,
+            type.headlineMedium,
+            type.headlineSmall,
+            type.titleLarge,
+            type.titleMedium,
+            type.titleSmall
+        ).forEach { style ->
+            assertEquals(BrandHeadingFamily, style.fontFamily)
+            assertEquals(FontWeight.SemiBold, style.fontWeight)
+        }
+        listOf(
+            type.bodyLarge,
+            type.bodyMedium,
+            type.bodySmall,
+            type.labelLarge,
+            type.labelMedium,
+            type.labelSmall
+        ).forEach { style ->
+            assertEquals(JetBrainsMonoFamily, style.fontFamily)
+        }
+        assertEquals(15.sp, type.bodyLarge.fontSize)
+        assertTrue(type.bodyLarge.lineHeight.value >= type.bodyLarge.fontSize.value * 1.6f)
+    }
+
+    @Test
+    fun theCaptionIsTwelveSpWithTrackingAndRendersUppercase() {
+        val caption = PhonxietyType().caption
+        assertEquals(JetBrainsMonoFamily, caption.fontFamily)
+        assertEquals(12.sp, caption.fontSize)
+        assertTrue(caption.letterSpacing.value >= 2f)
+    }
+
+    @Test
+    fun theProvidedTokenPointsCodeAtJetBrainsMono() {
+        composeRule.setContent {
+            PhonxietyTheme(darkTheme = true, dynamicColor = false) {
+                assertEquals(JetBrainsMonoFamily, LocalPhonxietyType.current.codeFamily)
+            }
+        }
     }
 
     @Test

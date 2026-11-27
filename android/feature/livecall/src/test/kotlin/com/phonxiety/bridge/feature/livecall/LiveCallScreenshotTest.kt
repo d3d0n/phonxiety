@@ -259,7 +259,7 @@ class LiveCallScreenshotTest {
         composeRule
             .onNodeWithText("Playback audio this phone discarded on the current audio stream")
             .assertDoesNotExist()
-        composeRule.onNodeWithText("Playback drops").assertExists()
+        composeRule.onNodeWithText("Playback drops", ignoreCase = true).assertExists()
     }
 
     @Test
@@ -480,10 +480,10 @@ class LiveCallScreenshotTest {
         setScreen(fontScale = 2f, width = 320.dp)
         composeRule.onNodeWithText("Let me check the…", substring = true).assertIsDisplayed()
         // Folded, the audio card is not composed at all.
-        composeRule.onNodeWithText("Playback drops").assertDoesNotExist()
+        composeRule.onNodeWithText("Playback drops", ignoreCase = true).assertDoesNotExist()
         composeRule.onNodeWithText("Audio and controls").assertIsDisplayed()
         openControls()
-        composeRule.onNodeWithText("Playback drops").assertExists()
+        composeRule.onNodeWithText("Playback drops", ignoreCase = true).assertExists()
         composeRule.onNodeWithText("Audio and controls").assertIsDisplayed()
     }
 

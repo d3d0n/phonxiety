@@ -3,7 +3,6 @@
     <!-- The dashboard: link, call, audio, phone, permissions and pairing. Every count is a
          plural, every unit is joined by a no-break space through the designsystem formatters. -->
 
-    <string name="dashboard_title" translatable="false">phonxiety</string>
     <string name="dashboard_subtitle">Bridge control</string>
 
     <string name="dashboard_status_not_paired">Not paired</string>

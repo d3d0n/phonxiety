@@ -497,7 +497,7 @@ class CallDetailScreenshotTest {
         val width = with(composeRule.density) { seek.size.width.toDp() }
         // Beside a 200 % time readout the bar used to shrink to its thumb.
         assertTrue("the seek bar is $width wide on a 320 dp screen", width >= 160.dp)
-        composeRule.onNodeWithText("00:12").assertIsDisplayed()
+        composeRule.onNodeWithText("00:12").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("03:00").assertIsDisplayed()
     }
 

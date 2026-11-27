@@ -17,6 +17,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.phonxiety.bridge.designsystem.Caption
 import com.phonxiety.bridge.designsystem.LocalPhonxietyType
 import com.phonxiety.bridge.designsystem.LocalStatusColors
 import kotlin.math.roundToInt
@@ -46,7 +47,7 @@ fun LevelMeter(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(text = label, style = MaterialTheme.typography.labelMedium)
+            Caption(text = label)
             Text(
                 // A missing measurement is "—": a unit would claim a number that is not there.
                 text = levelDbfs?.let { formatDbfs(it) } ?: "—",

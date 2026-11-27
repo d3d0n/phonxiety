@@ -250,7 +250,7 @@ class UpdatesScreenBehaviourTest {
             "This app update is step 1. Step 2 installs the module from it, then the phone reboots."
         ).performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("Install module 0.4.0").performScrollTo().assertIsNotEnabled()
-        composeRule.onNodeWithText("Install the app update first.").assertIsDisplayed()
+        composeRule.onNodeWithText("Install the app update first.").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("Install module 0.4.0").performClick()
 
         assertEquals(0, moduleInstalls)

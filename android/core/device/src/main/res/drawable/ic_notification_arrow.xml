@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The brand arrow, monochrome: the notification small icon and the quick-settings tiles. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M3.09,20.91 L20.57,3.43"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="4.11"
+        android:strokeLineCap="butt" />
+    <path
+        android:pathData="M7.89,3.43 H20.57 V16.11"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="4.11"
+        android:strokeLineCap="butt"
+        android:strokeLineJoin="miter" />
+</vector>
