@@ -32,8 +32,15 @@ internal class AppInfoRefresh(
     private val callOwned: () -> Boolean,
     private val linkUp: () -> Boolean,
     private val token: () -> String?,
+    /** The pairing generation this engine serves; an answer that outlives it is never applied. */
+    private val pairingEpoch: () -> Long,
     private val scope: CoroutineScope,
-    private val exchange: suspend (DeviceApiRequest) -> DeviceApiResult,
+    /**
+     * One request.  [onEnqueued] runs once the frame was handed to the
+     * transport — before the answer is awaited — so an admission held for the
+     * enqueue is released there and never across the wait.
+     */
+    private val exchange: suspend (DeviceApiRequest, onEnqueued: () -> Unit) -> DeviceApiResult,
     private val apply: (DaemonInfo) -> Unit,
     private val nextId: () -> String = { UUID.randomUUID().toString() }
 ) {
@@ -54,8 +61,12 @@ internal class AppInfoRefresh(
         pending.set(false)
     }
 
-    /** The link went down before an admitted request ran: the next connection asks again. */
+    /**
+     * The link went down: the next connection asks again, and an answer still in
+     * flight for the old connection can no longer match [linkEpoch].
+     */
     fun linkDown() {
+        linkEpoch.incrementAndGet()
         pending.set(false)
     }
 
@@ -82,26 +93,40 @@ internal class AppInfoRefresh(
             pending.set(false)
             return
         }
-        // The idle door is taken only for the decision; the request itself is a
-        // small control exchange and must not hold call reservation for its duration.
-        val action = admission.tryBeginIdleLinkAction(callOwned) ?: return
-        try {
-            if (!pending.compareAndSet(true, false)) return
-            scope.launch { perform(current, appToken) }
-        } finally {
-            action.close()
-        }
+        if (!pending.compareAndSet(true, false)) return
+        // The coroutine takes the idle door itself, on its executing path: only
+        // there can the door be held through the enqueue that follows it.
+        scope.launch { perform(current, appToken) }
     }
 
     private suspend fun perform(epoch: Long, appToken: String) {
+        val pairing = pairingEpoch()
         val request = DeviceApiRequest(id = nextId(), method = "GET", path = INFO_PATH, appToken = appToken)
+        // The door is taken here, on the path that enqueues, and revalidated:
+        // a call reserved between scheduling and this point refuses the request
+        // instead of being overlapped by it.
+        val action = admission.tryBeginIdleLinkAction(callOwned)
+        if (action == null) {
+            pending.set(true)
+            return
+        }
+        var released = false
+        val release = {
+            if (!released) {
+                released = true
+                action.close()
+            }
+        }
         val result = try {
-            exchange(request)
+            if (!linkUp()) return
+            exchange(request) { release() }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             BridgeLog.w(TAG) { "info refresh failed: ${e.javaClass.simpleName}" }
             return
+        } finally {
+            release()
         }
         // One attempt per connection whatever the answer: a refusal is retried
         // by the daemon's next app access, not by asking again on this link.
@@ -116,8 +141,11 @@ internal class AppInfoRefresh(
             BridgeLog.w(TAG) { "info refresh returned no usable document: ${e.javaClass.simpleName}" }
             null
         } ?: return
-        // The link may have reconnected while the answer was in flight.
+        // Both effects are pairing- and connection-checked before either runs:
+        // an answer to the previous daemon never publishes capabilities or
+        // stores addresses under the pairing that replaced it.
         if (linkEpoch.get() != epoch) return
+        if (pairingEpoch() != pairing) return
         apply(info)
         if (CandidateMerge.store(store, info.connection, identity()) == null) {
             BridgeLog.w(TAG, "info answered for another pairing; its addresses were not stored")

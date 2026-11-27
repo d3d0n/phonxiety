@@ -22,6 +22,8 @@ import com.phonxiety.bridge.model.PairingGate
 import com.phonxiety.bridge.model.SettingsSnapshot
 import com.phonxiety.bridge.model.SettingsUpdate
 import com.phonxiety.bridge.net.CandidateMerge
+import com.phonxiety.bridge.net.CandidateStore
+import com.phonxiety.bridge.net.StoredCandidate
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -77,6 +79,18 @@ class SettingsViewModelTest {
     }
 
     private fun viewModel(): SettingsViewModel = SettingsViewModel(api, bridge, prefs, context)
+
+    /**
+     * Stores a pairing as the pair transaction and the service's startup do:
+     * the write, the expectation and the store binding belong together.
+     */
+    private fun pair(config: BridgeConfig): String {
+        val stored = BridgeConfigLoader.write(context, config)
+        val identity = CandidateMerge.identity(stored)
+        PairingGate.expect(identity)
+        CandidateStore.of(context).rebind(identity, emptyList())
+        return identity
+    }
 
     private fun snapshot(values: DaemonSettingsValues): SettingsSnapshot = SettingsSnapshot(
         schema = 1,
@@ -197,8 +211,7 @@ class SettingsViewModelTest {
         }
         api.settingsHandler = { ApiOutcome.Ok(200, snapshot(DaemonSettingsValues(irohRelays = listOf("https://daemon.example")))) }
         // A pairing is stored, as it is whenever the service is up and answers.
-        val stored = BridgeConfigLoader.write(context, BridgeConfig.Iroh("ticket", "device-token", certSha256 = pin))
-        PairingGate.expect(CandidateMerge.identity(stored))
+        pair(BridgeConfig.Iroh("ticket", "device-token", certSha256 = pin))
         val vm = viewModel()
         withTimeout(5_000) { vm.state.first { it.connection.candidates.size == 2 } }
 
@@ -215,6 +228,34 @@ class SettingsViewModelTest {
         assertEquals(listOf("https://daemon.example"), prefs.settings.value.daemonRelayUrls)
         assertEquals(1, vm.state.value.connection.tailnetCount)
         assertEquals(1, vm.state.value.connection.lanCount)
+    }
+
+    @Test
+    fun `a refresh never rebinds the store away from a newer pairing`() = runBlocking<Unit> {
+        val pinA = "a".repeat(64)
+        val pinB = "b".repeat(64)
+        api.infoHandler = {
+            ApiOutcome.Ok(
+                200,
+                DaemonInfo(connection = ConnectionInfo(certificate = pinA, lan = listOf("wss://192.0.2.10:18763/device")))
+            )
+        }
+        // The stored pairing is A, but the store already belongs to a newer B
+        // that learned its own fallback address.
+        pair(BridgeConfig.Iroh("ticket", "device-token", certSha256 = pinA))
+        val store = CandidateStore.of(context)
+        val learnedByB = StoredCandidate("wss://192.0.2.20:18763/device", pinB)
+        store.rebind("cert:$pinB", listOf(learnedByB))
+
+        val vm = viewModel()
+        withTimeout(5_000) { vm.state.first { !it.connection.refreshing && it.connection.candidates.isNotEmpty() } }
+        vm.refreshCandidates()
+        withTimeout(5_000) { vm.state.first { !it.connection.refreshing && it.connection.candidates.isNotEmpty() } }
+
+        // A refresh merges under its own pairing; it never rebinds, so B's
+        // identity and learned address survive A's answer.
+        assertEquals("cert:$pinB", store.pairingIdentity())
+        assertEquals(listOf(learnedByB.url), store.load().map { it.url })
     }
 
     @Test

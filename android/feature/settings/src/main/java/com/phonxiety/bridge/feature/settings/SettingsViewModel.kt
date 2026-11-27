@@ -278,18 +278,13 @@ class SettingsViewModel @Inject constructor(
             when (val outcome = api.info()) {
                 is ApiOutcome.Ok -> {
                     // The answer belongs to the pairing the gateway served; a
-                    // rebind while it was in flight leaves it unapplied, and the
-                    // store is bound to that pairing rather than to whatever file
-                    // happens to be on disk by now.
+                    // re-pair while it was in flight leaves it unapplied.  This
+                    // path only merges: binding belongs to pairing and startup
+                    // transactions, so a refresh can never discard a newer
+                    // pairing's addresses or restore an older identity.
                     val identity = PairingGate.expectedIdentity()?.takeIf { PairingGate.epoch() == epoch }
-                    // A binding that cannot be written leaves no learned address
-                    // usable; a first binding replaces whatever an older pairing left.
-                    val bound = identity?.let(candidateStore::bind)
-                    val stored = if (identity == null || bound == null) {
-                        null
-                    } else {
-                        CandidateMerge.store(candidateStore, outcome.value.connection, identity)
-                            ?: bound.candidates
+                    val stored = identity?.let {
+                        CandidateMerge.store(candidateStore, outcome.value.connection, it)
                     }
                     _state.update {
                         it.copy(

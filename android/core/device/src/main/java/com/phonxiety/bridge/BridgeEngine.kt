@@ -29,7 +29,6 @@ import com.phonxiety.bridge.model.Capabilities
 import com.phonxiety.bridge.model.ControlEnvelope
 import com.phonxiety.bridge.model.CrashDiagnostics
 import com.phonxiety.bridge.model.DeviceActiveCall
-import com.phonxiety.bridge.model.DeviceApiError
 import com.phonxiety.bridge.model.DeviceApiRequest
 import com.phonxiety.bridge.model.DeviceApiResult
 import com.phonxiety.bridge.model.DeviceCommand
@@ -42,24 +41,30 @@ import com.phonxiety.bridge.model.EngineDiagnostics
 import com.phonxiety.bridge.model.LinkDiagnostics
 import com.phonxiety.bridge.model.LinkError
 import com.phonxiety.bridge.model.LinkKind
+import com.phonxiety.bridge.model.PairingGate
+import com.phonxiety.bridge.net.ApiExchange
+import com.phonxiety.bridge.net.ApiRequestTable
 import com.phonxiety.bridge.net.CandidateLinkFactory
 import com.phonxiety.bridge.net.CandidateMerge
 import com.phonxiety.bridge.net.CandidateStore
 import com.phonxiety.bridge.net.ConnectionMode
 import com.phonxiety.bridge.net.DeviceLink
 import com.phonxiety.bridge.net.ExecutorLinkScheduler
+import com.phonxiety.bridge.net.InboundRouter
 import com.phonxiety.bridge.net.IrohSupport
+import com.phonxiety.bridge.net.LinkReadiness
 import com.phonxiety.bridge.net.LinkSelector
 import com.phonxiety.bridge.net.LinkSupervisor
 import com.phonxiety.bridge.net.RelayModeSetting
 import com.phonxiety.bridge.net.RelayOptions
+import com.phonxiety.bridge.net.RequestFailure
+import com.phonxiety.bridge.net.StoredCandidate
 import com.phonxiety.bridge.net.Tailnet
 import com.phonxiety.bridge.net.WebSocketCandidateProbe
 import java.io.File
 import java.io.OutputStream
 import java.security.MessageDigest
 import java.util.Locale
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
@@ -67,7 +72,6 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.cancellation.CancellationException
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -78,7 +82,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
@@ -104,10 +107,12 @@ import okio.ByteString.Companion.encodeUtf8
  */
 internal class BridgeEngine(
     context: Context,
-    private val config: BridgeConfig
+    private val config: BridgeConfig,
+    /** The pairing's other addresses, read together with the config that built this engine. */
+    private val pairingCandidates: List<StoredCandidate> = emptyList()
 ) : AppGateway {
     companion object {
-        private const val TAG = "PhonxietyBridge"
+        private const val TAG = "Bridge:engine"
         private const val THREAD_NAME = "phonxiety-scheduler"
         private const val PENDING_DIAL_TIMEOUT_MS = 120_000L
         private const val MAX_RECENT_CALLS = 32
@@ -256,8 +261,9 @@ internal class BridgeEngine(
         callOwned = { ownsCall() },
         linkUp = { links.isUp() && helloDelivered },
         token = { appToken },
+        pairingEpoch = { PairingGate.epoch() },
         scope = engineScope,
-        exchange = { exchange(it) },
+        exchange = { request, onEnqueued -> exchange(request, APP_REQUEST_TIMEOUT_MS, onEnqueued) },
         apply = { info ->
             val current = stateStore.state.value.capabilities
             stateStore.capabilities(
@@ -284,7 +290,26 @@ internal class BridgeEngine(
     private val recent = LinkedHashMap<String, RecentCall>()
     private val pendingAudioClose = ConcurrentLinkedQueue<PhoneAudio>()
     private val orphanCancels = ArrayList<OrphanCancel>()
-    private val apiPending = ConcurrentHashMap<String, CompletableDeferred<DeviceApiResult>>()
+    private val requestTable = ApiRequestTable()
+    private val requests = ApiExchange(
+        table = requestTable,
+        readiness = LinkReadiness(),
+        pairingEpoch = { PairingGate.epoch() },
+        send = { wire -> links.sendText(wire) }
+    )
+
+    /**
+     * The inbound gate: an `api_result` completes its pending request before
+     * anything else looks at the frame; an unknown id is logged and dropped.
+     */
+    private val inbound = InboundRouter(
+        requests = requestTable,
+        dispatch = { type, text -> dispatch(type, text) },
+        log = { message -> BridgeLog.w(TAG) { message } }
+    )
+
+    /** Bumped on every connection open and every loss; `app_access` is tagged with it. */
+    private val linkGeneration = AtomicLong(0L)
 
     /** Format the daemon asks for on the next call unless `start_audio` overrides it. */
     @Volatile private var preferredCodec = PhoneCodec.AUTO
@@ -356,7 +381,7 @@ internal class BridgeEngine(
                 // addresses that file carries enter through the same binding the
                 // QR path uses, and a failed binding leaves none usable.
                 safe {
-                    val bound = candidateStore.rebind(pairingIdentity, BridgeConfigLoader.candidates(appContext, config))
+                    val bound = candidateStore.rebind(pairingIdentity, pairingCandidates)
                     if (bound == null) BridgeLog.w(TAG, "could not bind learned addresses to this pairing")
                 }
                 safe { adoptExistingCalls() }
@@ -410,7 +435,7 @@ internal class BridgeEngine(
                 ?.unregisterNetworkCallback(networkCallback)
         }
         links.cancel()
-        failPendingApi("link_down", "the bridge is shutting down")
+        requests.stop(closeFailure())
         scheduler.shutdownNow()
         abortOwnedOnShutdown()
         commandExecutor.shutdownNow()
@@ -443,7 +468,7 @@ internal class BridgeEngine(
         try {
             block()
         } catch (t: Throwable) {
-            BridgeLog.e(TAG, "background task failed: ${t.javaClass.simpleName}")
+            BridgeLog.e(TAG) { "background task failed: ${t.javaClass.simpleName}" }
         }
     }
 
@@ -585,7 +610,9 @@ internal class BridgeEngine(
                     is BridgeConfig.Iroh -> IrohSupport.endpointId(config.ticket)
                 }
             )
+            linkGeneration.incrementAndGet()
             appInfo.linkOpened()
+            requests.transportOpened()
             // Nothing else may reach this link before its hello: the daemon
             // reads the first control frame as the handshake.
             val hello = sendHello()
@@ -604,11 +631,12 @@ internal class BridgeEngine(
         override fun onLinkDown(reason: String) {
             lastRouteKey = null
             helloDelivered = false
+            linkGeneration.incrementAndGet()
             appInfo.linkDown()
+            requests.linkDown()
             capabilityWatch.helloGone()
             applyWifiLock()
             stateStore.linkDown(LinkError(code = reason, message = linkMessage(reason), atEpochMs = System.currentTimeMillis()))
-            failPendingApi("link_down", "the device link went down")
             abortOwnedForLinkLoss()
         }
     }
@@ -632,7 +660,12 @@ internal class BridgeEngine(
             BridgeLog.w(TAG, "ignoring oversized control message")
             return
         }
-        when (ControlEnvelope.type(text)) {
+        inbound.route(text)
+    }
+
+    /** Everything the router dispatches after it has completed a pending request for the frame. */
+    private fun dispatch(type: String, text: String) {
+        when (type) {
             "command" -> {
                 val id = ControlEnvelope.id(text)
                 if (id.isNullOrEmpty()) return
@@ -643,14 +676,12 @@ internal class BridgeEngine(
                 }
             }
 
-            "api_result" -> {
-                val result = runCatching { ControlEnvelope.decodeApiResult(text) }.getOrNull() ?: return
-                apiPending.remove(result.id)?.complete(result)
-            }
-
             "app_access" -> {
                 val token = ControlEnvelope.appAccessToken(text) ?: return
-                engineScope.launch { acceptAppToken(token) }
+                // The delivery belongs to the connection it arrived on: a
+                // reconnect while the token is persisted must not let the old
+                // connection admit the new connection's info request.
+                engineScope.launch { acceptAppToken(token, linkGeneration.get()) }
             }
 
             else -> Unit
@@ -691,6 +722,7 @@ internal class BridgeEngine(
         val sent = links.sendHello(DeviceProtocol.encode(hello))
         helloDelivered = sent
         if (sent) {
+            requests.helloQueued()
             capabilityWatch.helloSent(capabilities)
             applyWifiLock()
         }
@@ -850,7 +882,7 @@ internal class BridgeEngine(
         } catch (e: CommandException) {
             replyError(id, e.code)
         } catch (e: Exception) {
-            BridgeLog.e(TAG, "command failed: ${e.javaClass.simpleName}")
+            BridgeLog.e(TAG) { "command failed: ${e.javaClass.simpleName}" }
             replyError(id, "internal_error")
         }
     }
@@ -1110,7 +1142,7 @@ internal class BridgeEngine(
             throw CommandException("call_permission_denied")
         } catch (e: Exception) {
             clearFailedDial(callId)
-            BridgeLog.e(TAG, "placeCall failed: ${e.javaClass.simpleName}")
+            BridgeLog.e(TAG) { "placeCall failed: ${e.javaClass.simpleName}" }
             throw CommandException("dial_failed")
         }
 
@@ -1164,7 +1196,7 @@ internal class BridgeEngine(
                     try {
                         ledger.cancel(current.callId)
                     } catch (e: CallLedgerException) {
-                        BridgeLog.e(TAG, "cancellation not durable: ${e.message}")
+                        BridgeLog.e(TAG) { "cancellation not durable: ${e.message}" }
                     }
                 }
                 current.cancelled = true
@@ -1312,7 +1344,7 @@ internal class BridgeEngine(
             throw CommandException(e.code)
         } catch (e: Exception) {
             audio.close()
-            BridgeLog.e(TAG, "audio start failed: ${e.javaClass.simpleName}")
+            BridgeLog.e(TAG) { "audio start failed: ${e.javaClass.simpleName}" }
             throw CommandException("audio_start_failed")
         }
 
@@ -1672,7 +1704,7 @@ internal class BridgeEngine(
             call.registerCallback(callback, callbackHandler)
             registered = true
         } catch (e: Exception) {
-            BridgeLog.e(TAG, "call callback registration failed: ${e.javaClass.simpleName}")
+            BridgeLog.e(TAG) { "call callback registration failed: ${e.javaClass.simpleName}" }
         }
         reportState(target, mapState(stateOf(call)), disconnectCause(call))
         if (cancelledDial) {
@@ -1770,7 +1802,7 @@ internal class BridgeEngine(
             try {
                 ledger.finish(current.callId, current.destination, "ended")
             } catch (e: CallLedgerException) {
-                BridgeLog.e(TAG, "terminal state not durable: ${e.message}")
+                BridgeLog.e(TAG) { "terminal state not durable: ${e.message}" }
             }
         }
         val target = finished ?: return
@@ -1897,7 +1929,7 @@ internal class BridgeEngine(
                     ledger.cancel(current.callId)
                 }
             } catch (e: CallLedgerException) {
-                BridgeLog.e(TAG, "link-loss cancellation not durable: ${e.message}")
+                BridgeLog.e(TAG) { "link-loss cancellation not durable: ${e.message}" }
             }
             current.cancelled = true
             current.generation.set(Long.MAX_VALUE)
@@ -1938,7 +1970,7 @@ internal class BridgeEngine(
                     ttlMs = ORPHAN_CANCEL_TTL_MS
                 )
             } catch (e: CallLedgerException) {
-                BridgeLog.e(TAG, "shutdown cancellation not durable: ${e.message}")
+                BridgeLog.e(TAG) { "shutdown cancellation not durable: ${e.message}" }
             }
             current.cancelled = true
             current.generation.set(Long.MAX_VALUE)
@@ -1979,7 +2011,7 @@ internal class BridgeEngine(
             try {
                 ledger.finish(current.callId, current.destination, "ended")
             } catch (e: CallLedgerException) {
-                BridgeLog.e(TAG, "pending expiry not durable: ${e.message}")
+                BridgeLog.e(TAG) { "pending expiry not durable: ${e.message}" }
             }
             expired = current
         }
@@ -2026,7 +2058,7 @@ internal class BridgeEngine(
                     ttlMs = ORPHAN_CANCEL_TTL_MS
                 )
             } catch (e: CallLedgerException) {
-                BridgeLog.e(TAG, "recovered cancellation not durable: ${e.message}")
+                BridgeLog.e(TAG) { "recovered cancellation not durable: ${e.message}" }
             }
             val synthetic = OwnedCall(
                 callId = pending.callId,
@@ -2047,7 +2079,7 @@ internal class BridgeEngine(
             try {
                 ledger.finish(pending.callId, pending.destination, "ended")
             } catch (e: CallLedgerException) {
-                BridgeLog.e(TAG, "recovered terminal state not durable: ${e.message}")
+                BridgeLog.e(TAG) { "recovered terminal state not durable: ${e.message}" }
             }
             return
         }
@@ -2108,7 +2140,7 @@ internal class BridgeEngine(
         try {
             PhoneAudio.restoreAbandonedMute(appContext)
         } catch (e: Exception) {
-            BridgeLog.e(TAG, "microphone restore failed: ${e.javaClass.simpleName}")
+            BridgeLog.e(TAG) { "microphone restore failed: ${e.javaClass.simpleName}" }
         }
     }
 
@@ -2117,7 +2149,7 @@ internal class BridgeEngine(
         try {
             PhoneAudio.restoreAbandonedMute(appContext, callId)
         } catch (e: Exception) {
-            BridgeLog.e(TAG, "microphone restore failed: ${e.javaClass.simpleName}")
+            BridgeLog.e(TAG) { "microphone restore failed: ${e.javaClass.simpleName}" }
         }
     }
 
@@ -2127,43 +2159,31 @@ internal class BridgeEngine(
 
     override val supportsAttachments: Boolean get() = links.supportsAttachments()
 
-    override suspend fun exchange(request: DeviceApiRequest): DeviceApiResult {
-        if (!links.isUp()) {
-            return DeviceApiResult(
-                id = request.id,
-                status = 503,
-                error = DeviceApiError("link_down", "the device link is down")
-            )
-        }
+    override suspend fun exchange(request: DeviceApiRequest): DeviceApiResult = exchange(request, APP_REQUEST_TIMEOUT_MS)
+
+    /**
+     * The same exchange with the caller's bound.  [deadlineMs] covers the wait
+     * for a usable link and the answer together; [onEnqueued] runs the moment
+     * the frame is handed to the transport, before the answer is awaited.
+     */
+    internal suspend fun exchange(
+        request: DeviceApiRequest,
+        deadlineMs: Long,
+        onEnqueued: () -> Unit = {}
+    ): DeviceApiResult {
         val wire = json.encodeToString(DeviceApiRequest.serializer(), request)
-        val deferred = CompletableDeferred<DeviceApiResult>()
-        apiPending[request.id] = deferred
-        try {
-            if (!links.sendText(wire)) {
-                return DeviceApiResult(
-                    id = request.id,
-                    status = 503,
-                    error = DeviceApiError("link_down", "the device link refused the message")
-                )
-            }
-            return withTimeout(APP_REQUEST_TIMEOUT_MS) { deferred.await() }
-        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-            return DeviceApiResult(
-                id = request.id,
-                status = 504,
-                error = DeviceApiError("timeout", "the daemon did not answer in time")
-            )
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            return DeviceApiResult(
-                id = request.id,
-                status = 500,
-                error = DeviceApiError("transport_error", e.javaClass.simpleName)
-            )
-        } finally {
-            apiPending.remove(request.id)
-        }
+        return requests.exchange(request.id, wire, deadlineMs, onEnqueued)
+    }
+
+    /**
+     * The failure a teardown answers its pending requests with: a pairing that
+     * moved away from this engine is named as such, so a request waiting on it
+     * is never retried through the daemon that replaced it.
+     */
+    private fun closeFailure(): RequestFailure = if (PairingGate.expectedIdentity() != pairingIdentity) {
+        RequestFailure.PairingChanged
+    } else {
+        RequestFailure.ShuttingDown
     }
 
     override suspend fun receiveAttachment(header: AttachmentHeader, sink: OutputStream): AttachmentOutcome {
@@ -2174,20 +2194,17 @@ internal class BridgeEngine(
         return AttachmentReceiver(channel, sink).receive()
     }
 
-    private fun failPendingApi(code: String, message: String) {
-        for ((id, deferred) in apiPending) {
-            deferred.complete(DeviceApiResult(id = id, status = 503, error = DeviceApiError(code, message)))
-        }
-        apiPending.clear()
-    }
-
     /**
      * Stores the token the daemon handed over the authenticated link, then asks
      * for info once on this connection.  A token that did not change still asks:
      * the answer carries the capability and address set this connection has not
      * read yet.
      */
-    private suspend fun acceptAppToken(token: String) {
+    private suspend fun acceptAppToken(token: String, generation: Long) {
+        if (generation != linkGeneration.get()) {
+            BridgeLog.w(TAG, "dropped an app token from a replaced connection")
+            return
+        }
         if (token != appToken) {
             val stored = withContext(Dispatchers.IO) {
                 runCatching { storeAppToken(token) }.getOrDefault(false)
@@ -2199,6 +2216,8 @@ internal class BridgeEngine(
             appToken = token
             BridgeLog.i(TAG, "app API access granted by the daemon")
         }
+        // The connection may have been replaced while the token was persisted.
+        if (generation != linkGeneration.get()) return
         appInfo.delivered()
     }
 
@@ -2327,7 +2346,7 @@ internal class BridgeEngine(
                 try {
                     ledger.markState(call.callId, state)
                 } catch (e: CallLedgerException) {
-                    BridgeLog.e(TAG, "call state not durable: ${e.message}")
+                    BridgeLog.e(TAG) { "call state not durable: ${e.message}" }
                 }
             }
             if (plan.recordCauseKey) call.reportedCauseKey = causeKey
@@ -2383,7 +2402,7 @@ internal class BridgeEngine(
             try {
                 ledger.consumeOrphan(orphan.callId, orphan.dialStartedWall)
             } catch (e: CallLedgerException) {
-                BridgeLog.e(TAG, "orphan tombstone not cleared: ${e.message}")
+                BridgeLog.e(TAG) { "orphan tombstone not cleared: ${e.message}" }
             }
             return orphan
         }
@@ -2410,7 +2429,7 @@ internal class BridgeEngine(
                 try {
                     ledger.consumeOrphan(orphan.callId, orphan.dialStartedWall)
                 } catch (e: CallLedgerException) {
-                    BridgeLog.e(TAG, "orphan tombstone not cleared: ${e.message}")
+                    BridgeLog.e(TAG) { "orphan tombstone not cleared: ${e.message}" }
                 }
                 return orphan
             }
@@ -2433,7 +2452,7 @@ internal class BridgeEngine(
                 try {
                     ledger.finish(callId, current.destination, "failed")
                 } catch (e: CallLedgerException) {
-                    BridgeLog.e(TAG, "dial failure not durable: ${e.message}")
+                    BridgeLog.e(TAG) { "dial failure not durable: ${e.message}" }
                 }
                 cleared = true
             }
@@ -2558,10 +2577,3 @@ internal class BridgeEngine(
 
     private class CommandException(val code: String) : Exception(code)
 }
-
-/**
- * What one call-state report does to the wire and to the store.  Kept apart from the engine so
- * the replay rules can be exercised without a phone: a repeated phase never goes on the wire
- * unasked, and it reaches the store as a replay, which never stamps a connect time from the
- * engine's own clock.
- */

@@ -37,6 +37,9 @@ object BridgeRuntime {
 
     @Volatile private var pairingKind: BridgeConfig.Kind? = null
 
+    /** Serializes pairing publication with the service's adoption of the same file. */
+    private val transaction = Any()
+
     /** Link kind of the stored pairing, or null while unpaired. */
     val pairing: BridgeConfig.Kind?
         get() = pairingKind
@@ -74,6 +77,17 @@ object BridgeRuntime {
         engine = null
         mutableState.value = BridgeState()
     }
+
+    /**
+     * Runs [block] while no other pairing publication or service adoption runs.
+     *
+     * The pairing file and the expectation of it must move together: a start
+     * that read the previous file must not re-expose the previous gateway after
+     * a re-pair published the new one.  Both sides enter this transaction, so a
+     * stale start either runs before the write (and is then replaced) or after
+     * it (and adopts the new pairing).
+     */
+    fun <T> pairingTransaction(block: () -> T): T = synchronized(transaction) { block() }
 
     /**
      * Points every app-API caller at [identity]: a different pairing closes the

@@ -16,6 +16,8 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -51,6 +53,8 @@ class AppInfoRefreshTest {
         var linkUp = true
         var token: String? = null
         var identity = "cert:${"a".repeat(64)}"
+        var pairingEpoch = 0L
+        var onEnqueue: (() -> Unit) -> Unit = { it() }
         var reply: suspend (DeviceApiRequest) -> DeviceApiResult = { request ->
             DeviceApiResult(request.id, 200, buildJsonObject { put("daemon_version", "0.4.0") })
         }
@@ -63,9 +67,11 @@ class AppInfoRefreshTest {
         callOwned = { harness.callOwned },
         linkUp = { harness.linkUp },
         token = { harness.token },
+        pairingEpoch = { harness.pairingEpoch },
         scope = this,
-        exchange = { request ->
+        exchange = { request, onEnqueued ->
             harness.requests += request
+            harness.onEnqueue(onEnqueued)
             harness.reply(request)
         },
         apply = { harness.applied += it },
@@ -165,13 +171,93 @@ class AppInfoRefreshTest {
         refresh.delivered()
         runCurrent()
 
-        // The store is rebound while the previous daemon's answer is in flight;
-        // this engine still belongs to the previous pairing.
+        // The pairing moves (the gate would advance its generation) and the store
+        // is rebound while the previous daemon's answer is in flight; this engine
+        // still belongs to the previous pairing.
         store.rebind("cert:$pinB", emptyList())
+        harness.pairingEpoch = 1L
         gate.complete(Unit)
         advanceUntilIdle()
 
         assertEquals("cert:$pinB", store.pairingIdentity())
         assertTrue(store.load().isEmpty())
+        assertTrue("capabilities from the previous pairing are not published", harness.applied.isEmpty())
+    }
+
+    @Test
+    fun aPairingThatMovesWhileTheAnswerIsInFlightAppliesNeitherEffect() = runTest {
+        val store = store()
+        store.rebind("cert:$pinA", emptyList())
+        val harness = Harness(store)
+        harness.identity = "cert:$pinA"
+        harness.token = "token-a"
+        val gate = CompletableDeferred<Unit>()
+        harness.reply = {
+            gate.await()
+            answer(ConnectionInfo(lan = listOf(lanA), certificate = pinA))
+        }
+        val refresh = refresh(harness)
+
+        refresh.linkOpened()
+        refresh.delivered()
+        runCurrent()
+
+        // The pairing generation moves before the answer is decoded; the engine
+        // itself is still the old one.
+        harness.pairingEpoch = 1L
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        assertTrue("no capability is published under the new pairing", harness.applied.isEmpty())
+        assertTrue("no address is stored under the new pairing", store.load().isEmpty())
+    }
+
+    @Test
+    fun theIdleDoorIsHeldThroughTheEnqueueAndNeverAcrossTheWait() = runTest {
+        val harness = Harness(store())
+        harness.token = "app-token"
+        val gate = CompletableDeferred<Unit>()
+        harness.reply = {
+            gate.await()
+            answer(null)
+        }
+        harness.onEnqueue = { enqueue ->
+            // While the frame is being handed over, a call cannot be reserved.
+            assertNull("the door is held for the enqueue", harness.admission.tryBeginIdleLinkAction { false })
+            enqueue()
+            // Released before the answer is awaited.
+            val after = harness.admission.tryBeginIdleLinkAction { false }
+            assertNotNull("the door is free while the answer is awaited", after)
+            after?.close()
+        }
+        val refresh = refresh(harness)
+
+        refresh.linkOpened()
+        refresh.delivered()
+        runCurrent()
+        assertEquals(1, harness.requests.size)
+
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(1, harness.applied.size)
+    }
+
+    @Test
+    fun aCallReservedBetweenSchedulingAndExecutionRefusesTheRequest() = runTest {
+        val harness = Harness(store())
+        harness.token = "app-token"
+        val refresh = refresh(harness)
+
+        refresh.linkOpened()
+        refresh.delivered()
+        // The coroutine has not run yet; a call is reserved first.
+        harness.callOwned = true
+        runCurrent()
+        assertTrue("no request starts under a reserved call", harness.requests.isEmpty())
+
+        harness.callOwned = false
+        refresh.tick()
+        runCurrent()
+        assertEquals(1, harness.requests.size)
     }
 }

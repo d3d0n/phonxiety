@@ -179,6 +179,15 @@ data class PairingAddresses(
 }
 
 /**
+ * One read of the pairing file: the config and the addresses it carries beside
+ * its transport, parsed from the same bytes and asking storage once.
+ */
+data class PairingRead(
+    val config: BridgeConfig,
+    val addresses: PairingAddresses
+)
+
+/**
  * Reads, writes and deletes the paired-daemon file in device-protected storage:
  *
  *   config.json
@@ -195,13 +204,55 @@ object BridgeConfigLoader {
     private const val FILE_NAME = "config.json"
     private const val MAX_BYTES = 64 * 1024L
 
-    /** Serializes the app's own writes, so a token update cannot tear a pairing change. */
-    private val writeLock = Any()
+    /**
+     * Serializes every read and write of the file, so a token update cannot tear a pairing change
+     * and a caller never observes the identity and the addresses of two different pairings: the
+     * host task writes the same file from outside the process, and only this monitor keeps the
+     * app's own reads consistent with its writes.
+     */
+    private val lock = Any()
 
     private fun configFile(context: Context): File = File(AppStorage.deviceProtected(context).filesDir, FILE_NAME)
 
-    fun load(context: Context): BridgeConfig {
+    /**
+     * The pairing and its other addresses from one read of the file: the identity and the
+     * addresses can never come from two different snapshots.
+     */
+    fun read(context: Context): PairingRead = synchronized(lock) {
         AppStorage.migrateFile(context, FILE_NAME)
+        val json = document(context)
+        PairingRead(
+            config = configOf(json),
+            addresses = addressesOf(json)
+        )
+    }
+
+    fun readOrNull(context: Context): PairingRead? = try {
+        read(context)
+    } catch (_: BridgeConfigException) {
+        null
+    }
+
+    fun load(context: Context): BridgeConfig = read(context).config
+
+    fun loadOrNull(context: Context): BridgeConfig? = readOrNull(context)?.config
+
+    /**
+     * The addresses the pairing file carries besides its transport.  The host
+     * pairing task writes them; the app's own QR path stores them in the
+     * candidate document instead, so an empty answer is normal.  Only `wss://`
+     * entries survive; the pin is applied by [candidates].
+     */
+    fun addresses(context: Context): PairingAddresses = synchronized(lock) {
+        AppStorage.migrateFile(context, FILE_NAME)
+        runCatching { addressesOf(document(context)) }.getOrDefault(PairingAddresses())
+    }
+
+    /**
+     * The addresses inside one read of the file, for a caller that must not mix them with an
+     * identity read at another moment.  An unreadable or invalid file has none.
+     */
+    private fun document(context: Context): JSONObject {
         val file = configFile(context)
         if (!file.isFile || file.length() <= 0L || file.length() > MAX_BYTES) {
             throw BridgeConfigException(BridgeConfigError.MISSING)
@@ -211,11 +262,14 @@ object BridgeConfigLoader {
         } catch (_: Exception) {
             throw BridgeConfigException(BridgeConfigError.UNREADABLE)
         }
-        val json = try {
+        return try {
             JSONObject(text)
         } catch (_: Exception) {
             throw BridgeConfigException(BridgeConfigError.INVALID_JSON)
         }
+    }
+
+    private fun configOf(json: JSONObject): BridgeConfig {
         val hasIroh = json.has("iroh") && !json.isNull("iroh")
         val hasUrl = json.has("url") && !json.isNull("url")
         if (hasIroh == hasUrl) throw BridgeConfigException(BridgeConfigError.KIND_INVALID)
@@ -238,40 +292,21 @@ object BridgeConfigLoader {
         )
     }
 
-    fun loadOrNull(context: Context): BridgeConfig? = try {
-        load(context)
-    } catch (_: BridgeConfigException) {
-        null
-    }
-
-    /**
-     * The addresses the pairing file carries besides its transport.  The host
-     * pairing task writes them; the app's own QR path stores them in the
-     * candidate document instead, so an empty answer is normal.  Only `wss://`
-     * entries survive; the pin is applied by [candidates].
-     */
-    fun addresses(context: Context): PairingAddresses {
-        AppStorage.migrateFile(context, FILE_NAME)
-        val file = configFile(context)
-        if (!file.isFile || file.length() <= 0L || file.length() > MAX_BYTES) return PairingAddresses()
-        val json = runCatching { JSONObject(file.readText(Charsets.UTF_8)) }.getOrNull()
-            ?: return PairingAddresses()
-        return PairingAddresses(
-            lan = addressArray(json, "lan"),
-            tailscale = addressArray(json, "tailscale")
-        )
-    }
+    private fun addressesOf(json: JSONObject): PairingAddresses = PairingAddresses(
+        lan = addressArray(json, "lan"),
+        tailscale = addressArray(json, "tailscale")
+    )
 
     /**
      * The host-written addresses as validated, pinned candidates — the same
      * form the QR path produces, so both enter the store through one binding.
      */
-    fun candidates(context: Context, config: BridgeConfig): List<StoredCandidate> {
+    fun candidates(config: BridgeConfig, addresses: PairingAddresses): List<StoredCandidate> {
         val pin = when (config) {
             is BridgeConfig.Address -> config.certSha256
             is BridgeConfig.Iroh -> config.certSha256
         }
-        return CandidateMerge.fromPairing(pin, addresses(context).all)
+        return CandidateMerge.fromPairing(pin, addresses.all)
     }
 
     private fun addressArray(json: JSONObject, name: String): List<String> {
@@ -284,15 +319,18 @@ object BridgeConfigLoader {
     /**
      * Validates and stores [config] atomically in device-protected storage.
      *
-     * [addresses] are the pairing's other addresses; a writer that reloads a
-     * host-written pairing and only changes a token hands them back so its own
-     * write does not drop what the host put there.
+     * [addresses] are the pairing's other addresses.  The default is null, which
+     * writes none: a new pairing (the QR path) must never inherit the addresses
+     * of the daemon it replaced.  A writer that reloads a host-written pairing
+     * and only changes a token hands the current addresses back explicitly
+     * (see [updateAppToken]), so its own write does not drop what the host put
+     * there.
      */
     fun write(
         context: Context,
         config: BridgeConfig,
         addresses: PairingAddresses? = null
-    ): BridgeConfig = synchronized(writeLock) {
+    ): BridgeConfig = synchronized(lock) {
         val stored = when (config) {
             is BridgeConfig.Address ->
                 BridgeConfig.validateAddress(config.url, config.token, config.certSha256, config.appToken)
@@ -338,7 +376,7 @@ object BridgeConfigLoader {
      * under one lock, so a pairing change cannot land between them and leave
      * one daemon's app token in the other daemon's file.
      */
-    fun updateAppToken(context: Context, pairingIdentity: String, token: String): Boolean = synchronized(writeLock) {
+    fun updateAppToken(context: Context, pairingIdentity: String, token: String): Boolean = synchronized(lock) {
         val current = loadOrNull(context) ?: return false
         if (CandidateMerge.identity(current) != pairingIdentity) return false
         val updated = when (current) {
@@ -354,25 +392,25 @@ object BridgeConfigLoader {
      * undo its own [write] keeps this and hands it back to [restore]: the pairing store is also
      * written from outside the app, so only the bytes put it back the way it was.
      */
-    fun snapshot(context: Context): ByteArray? {
+    fun snapshot(context: Context): ByteArray? = synchronized(lock) {
         if (loadOrNull(context) == null) return null
-        return runCatching { configFile(context).readBytes() }.getOrNull()
+        runCatching { configFile(context).readBytes() }.getOrNull()
     }
 
     /**
      * Puts [snapshot] back byte for byte, or removes the file when there was none. A failed restore
      * removes the file instead: no config is better than the rejected one.
      */
-    fun restore(context: Context, snapshot: ByteArray?): Boolean {
+    fun restore(context: Context, snapshot: ByteArray?): Boolean = synchronized(lock) {
         if (snapshot == null) return delete(context)
-        return runCatching {
+        runCatching {
             AppStorage.writeAtomically(configFile(context), snapshot)
             true
         }.getOrElse { delete(context) }
     }
 
     /** Removes the paired-daemon file; returns true when no config remains. */
-    fun delete(context: Context): Boolean {
+    fun delete(context: Context): Boolean = synchronized(lock) {
         AppStorage.migrateFile(context, FILE_NAME)
         val file = configFile(context)
         runCatching { File(file.parentFile, "$FILE_NAME.tmp").delete() }
@@ -381,7 +419,7 @@ object BridgeConfigLoader {
         // A locked user may still hold the pre-0.3.0 credential-protected copy.
         val legacy = File(context.applicationContext.filesDir, FILE_NAME)
         if (legacy.exists() && !legacy.delete()) removed = false
-        return removed
+        removed
     }
 }
 

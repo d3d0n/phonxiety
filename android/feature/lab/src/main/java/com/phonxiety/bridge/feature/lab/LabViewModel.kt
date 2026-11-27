@@ -287,24 +287,29 @@ class LabViewModel @Inject constructor(
         // before any probe: the pinned handshake would otherwise carry the new
         // pairing's device token to the previous daemon.
         val epoch = PairingGate.epoch()
+        val expected = PairingGate.expectedIdentity()
         val info = (api.info() as? ApiOutcome.Ok)?.value
         val urls = info?.connection?.lan.orEmpty()
         val pin = info?.connection?.certificate
         val stored = BridgeConfigLoader.loadOrNull(context)
-        // Without a live gateway the stored credential is usable only while the
-        // gate still expects that very pairing.
-        val expected = PairingGate.expectedIdentity()
-        val token = PairingGate.gateway()?.appToken
-            ?: stored?.takeIf { expected == CandidateMerge.identity(it) }?.token
+        // The pinned TLS handshake authenticates with the DEVICE credential the
+        // daemon issued, never the app-API token: only the stored pairing carries
+        // it, and only while the gate still expects that very pairing.
+        val token = stored
+            ?.takeIf { expected != null && CandidateMerge.identity(it) == expected }
+            ?.token
         val stale = PairingGate.epoch() != epoch
         val probes = if (!stale && urls.isNotEmpty() && token != null) {
             withContext(Dispatchers.IO) { runCatching { lanPathCheck.probe(urls, pin, token) }.getOrNull() }
         } else {
             null
         }
+        // The pairing may have moved while the handshake ran: the result then
+        // belongs to the previous daemon and replaces nothing.
+        val stillCurrent = PairingGate.epoch() == epoch && PairingGate.expectedIdentity() == expected
         val answered = probes?.firstOrNull { it.reachable }
         val updated = when {
-            stale -> notChecked(lan, R.string.lab_probe_note_stale)
+            stale || !stillCurrent -> notChecked(lan, R.string.lab_probe_note_stale)
 
             info == null -> notChecked(lan, R.string.lab_probe_note_no_info)
 

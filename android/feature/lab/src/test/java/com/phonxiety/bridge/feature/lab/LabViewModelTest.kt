@@ -12,12 +12,17 @@ import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.BridgeStateRepository
 import com.phonxiety.bridge.data.LiveCallFront
 import com.phonxiety.bridge.designsystem.UiText
+import com.phonxiety.bridge.model.AppGateway
+import com.phonxiety.bridge.model.AttachmentHeader
+import com.phonxiety.bridge.model.AttachmentOutcome
 import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.model.CallPhase
 import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.CallState
 import com.phonxiety.bridge.model.ConnectionInfo
 import com.phonxiety.bridge.model.DaemonInfo
+import com.phonxiety.bridge.model.DeviceApiRequest
+import com.phonxiety.bridge.model.DeviceApiResult
 import com.phonxiety.bridge.model.LinkTests
 import com.phonxiety.bridge.model.LoopbackResult
 import com.phonxiety.bridge.model.PairingGate
@@ -30,6 +35,7 @@ import com.phonxiety.bridge.model.VoiceControls
 import com.phonxiety.bridge.net.CandidateMerge
 import com.phonxiety.bridge.net.LanPathProbe
 import java.io.File
+import java.io.OutputStream
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -48,6 +54,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.buildJsonObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -98,6 +105,7 @@ class LabViewModelTest {
         // No read, collector or retry outlives the test that started it.
         viewModels.forEach { it.viewModelScope.cancel() }
         viewModels.clear()
+        PairingGate.resetForTest()
         Dispatchers.resetMain()
     }
 
@@ -847,6 +855,66 @@ class LabViewModelTest {
     }
 
     @Test
+    fun `the lan probe authenticates with the device credential of the bound pairing`() = runTest(testDispatcher) {
+        val url = "wss://192.0.2.10:18763/device"
+        val pin = "cc".repeat(32)
+        api.probeHandler = {
+            ApiOutcome.Ok(
+                200,
+                ProbeResult(
+                    candidates = listOf(ProbeCandidate("lan", available = true, reachable = false, reason = "no_listener_answer")),
+                    checkedAt = "2026-11-26T10:00:00+00:00"
+                )
+            )
+        }
+        api.infoHandler = { ApiOutcome.Ok(200, DaemonInfo(connection = ConnectionInfo(lan = listOf(url), certificate = pin))) }
+        pair(BridgeConfig.Address(url, "dev-token", pin))
+        // The running gateway carries an app-API token that the daemon does not
+        // accept on the pinned device handshake.
+        val identity = PairingGate.expectedIdentity()!!
+        PairingGate.install(FakeLabGateway("app-token"), identity)
+        val vm = viewModel()
+        vm.toggleProbeCandidate("iroh")
+        vm.toggleProbeCandidate("tailscale")
+        vm.runProbe()
+        vm.awaitIoState { it.probe.rows.isNotEmpty() }
+
+        assertEquals("dev-token", lanCheck.calls.single().third)
+    }
+
+    @Test
+    fun `a re-pair while the handshake is running discards its result`() = runTest(testDispatcher) {
+        val url = "wss://192.0.2.10:18763/device"
+        val pin = "cc".repeat(32)
+        api.probeHandler = {
+            ApiOutcome.Ok(
+                200,
+                ProbeResult(
+                    candidates = listOf(ProbeCandidate("lan", available = true, reachable = true, rttMs = 4.0)),
+                    checkedAt = "2026-11-26T10:00:00+00:00"
+                )
+            )
+        }
+        api.infoHandler = { ApiOutcome.Ok(200, DaemonInfo(connection = ConnectionInfo(lan = listOf(url), certificate = pin))) }
+        pair(BridgeConfig.Address(url, "dev-token", pin))
+        lanCheck.results = { urls ->
+            // The pairing moves while the pinned handshake is in flight.
+            PairingGate.expect("cert:another-daemon")
+            urls.map { LanPathProbe(it, reachable = true, rttMs = 9) }
+        }
+        val vm = viewModel()
+        vm.toggleProbeCandidate("iroh")
+        vm.toggleProbeCandidate("tailscale")
+        vm.runProbe()
+        vm.awaitIoState { it.probe.rows.isNotEmpty() }
+
+        assertEquals(1, lanCheck.calls.size)
+        val row = vm.state.value.probe.rows.single()
+        assertEquals(ProbeVerdict.NOT_CHECKED, row.verdict)
+        assertEquals(UiText.Res(R.string.lab_probe_note_stale), row.note)
+    }
+
+    @Test
     fun `a phone that cannot reach the listener says so while the daemon still answers`() = runTest(testDispatcher) {
         val url = "wss://192.0.2.10:18763/device"
         val pin = "cc".repeat(32)
@@ -1074,4 +1142,15 @@ class GatedPhonePreferences(initial: PhoneSettings = PhoneSettings()) : FakePhon
         written += next.testNumber
         return next
     }
+}
+
+/** A live app-API gateway with its own app token, for the credential-separation tests. */
+class FakeLabGateway(private val token: String) : AppGateway {
+    override val appToken: String get() = token
+
+    override val supportsAttachments: Boolean get() = false
+
+    override suspend fun exchange(request: DeviceApiRequest): DeviceApiResult = DeviceApiResult(request.id, 200, buildJsonObject { })
+
+    override suspend fun receiveAttachment(header: AttachmentHeader, sink: OutputStream): AttachmentOutcome = AttachmentOutcome.Unsupported
 }

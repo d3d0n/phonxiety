@@ -105,6 +105,22 @@ uv run --project "$ROOT" phonxiety pair --json ${MODE[@]+"${MODE[@]}"} > "$TMP/c
     || die "could not build the phone configuration"
 [ -s "$TMP/config.json" ] || die "the phone configuration is empty"
 
+# The file is replaced while the service is down: a start that read the previous
+# file must not adopt it after the new one is in place.  Only then is the file
+# written, atomically (temporary file, then rename), and the service started again.
+note "Stopping the bridge service before the config is replaced..."
+"${ADB_CMD[@]}" shell am stopservice --user 0 -n "$PACKAGE/.BridgeService" \
+    >/dev/null 2>&1 || true
+i=0
+while [ "$i" -lt 20 ]; do
+    if ! "${ADB_CMD[@]}" shell dumpsys activity services "$PACKAGE" 2>/dev/null \
+        | grep -q "BridgeService"; then
+        break
+    fi
+    sleep 0.25
+    i=$((i+1))
+done
+
 HASH="$(shasum -a 256 "$TMP/config.json" | awk '{print $1}')"
 [ -n "$HASH" ] || die "could not hash the phone configuration"
 
@@ -118,16 +134,17 @@ HASH="$(shasum -a 256 "$TMP/config.json" | awk '{print $1}')"
         'DIR="$DATA/files"' \
         '[ -d "$DATA" ] || { echo "app data directory missing" >&2; exit 1; }' \
         'mkdir -p "$DIR"' \
-        "cat > \"\$DIR/config.json\" <<'PX_CONFIG_EOF'"
+        "cat > \"\$DIR/config.json.tmp\" <<'PX_CONFIG_EOF'"
     cat "$TMP/config.json"
     printf '%s\n' \
         'PX_CONFIG_EOF' \
         'UID_=$(stat -c %u "$DATA")' \
         'GID_=$(stat -c %g "$DATA")' \
-        'chown "$UID_:$GID_" "$DIR" "$DIR/config.json"' \
+        'chown "$UID_:$GID_" "$DIR" "$DIR/config.json.tmp"' \
         'chmod 700 "$DIR"' \
-        'chmod 600 "$DIR/config.json"' \
+        'chmod 600 "$DIR/config.json.tmp"' \
         'restorecon -R "$DIR" 2>/dev/null || true' \
+        'mv -f "$DIR/config.json.tmp" "$DIR/config.json"' \
         'sha256sum "$DIR/config.json"'
 } > "$TMP/setup.sh"
 
@@ -137,19 +154,7 @@ fi
 REMOTE_HASH="$(printf '%s\n' "$REMOTE_OUT" | tr -d '\r' | awk 'NF {print $1; exit}')"
 [ "$REMOTE_HASH" = "$HASH" ] || die "phone configuration hash mismatch"
 
-note "Restarting the bridge service..."
-"${ADB_CMD[@]}" shell am stopservice --user 0 -n "$PACKAGE/.BridgeService" \
-    >/dev/null 2>&1 || true
-i=0
-while [ "$i" -lt 20 ]; do
-    if ! "${ADB_CMD[@]}" shell dumpsys activity services "$PACKAGE" 2>/dev/null \
-        | grep -q "BridgeService"; then
-        break
-    fi
-    sleep 0.25
-    i=$((i+1))
-done
-
+note "Starting the bridge service..."
 "${ADB_CMD[@]}" shell am start-foreground-service --user 0 \
     -n "$PACKAGE/.BridgeService" >/dev/null || die "am start-foreground-service failed"
 

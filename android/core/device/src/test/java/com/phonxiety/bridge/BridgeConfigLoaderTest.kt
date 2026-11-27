@@ -60,11 +60,11 @@ class BridgeConfigLoaderTest {
 
         assertTrue(BridgeConfigLoader.updateAppToken(context, "cert:$pinA", "app-token-a"))
 
-        val stored = BridgeConfigLoader.load(context) as BridgeConfig.Iroh
-        assertEquals("app-token-a", stored.appToken)
+        val stored = BridgeConfigLoader.read(context)
+        assertEquals("app-token-a", (stored.config as BridgeConfig.Iroh).appToken)
         assertEquals(
             listOf("wss://192.168.1.10:18763/device", "wss://100.64.0.2:18763/device"),
-            BridgeConfigLoader.candidates(context, stored).map { it.url }
+            BridgeConfigLoader.candidates(stored.config, stored.addresses).map { it.url }
         )
     }
 }

@@ -90,47 +90,53 @@ class DevicePairingRepository internal constructor(
 
     override suspend fun pair(link: String): PairResult = withContext(Dispatchers.IO) {
         mutex.withLock {
-            when (val parsed = PairingLink.parse(link)) {
-                is PairingResult.Invalid -> PairResult.Invalid(parsed.error.code)
+            // The write, the expectation of it and the service start are one
+            // pairing transaction: a concurrent start can neither adopt the
+            // previous config after this write nor re-expose the previous
+            // gateway once the new identity is published.
+            BridgeRuntime.pairingTransaction {
+                when (val parsed = PairingLink.parse(link)) {
+                    is PairingResult.Invalid -> PairResult.Invalid(parsed.error.code)
 
-                is PairingResult.Valid -> {
-                    // The write is atomic, so a failing write leaves the old config alone. Everything
-                    // after it can still fail (starting the service throws SecurityException when the
-                    // app may not, for one), and a rejected attempt must not leave a readable pairing
-                    // behind: the next refresh would publish it and the wizard would promote a pairing
-                    // the person was told was rejected. So the previous config is kept and put back
-                    // byte for byte, or removed when there was none.
-                    val previous = BridgeConfigLoader.snapshot(context)
-                    try {
-                        val stored = BridgeConfigLoader.write(context, parsed.config)
-                        val identity = CandidateMerge.identity(stored)
-                        // The stored config has moved; the previous daemon's gateway
-                        // stops answering in the same step, so no request can carry
-                        // this pairing's credentials through it while the service
-                        // is still being rebuilt.
-                        BridgeRuntime.expectPairing(identity)
-                        // The QR's other addresses belong to this pairing only: a
-                        // different daemon's stored addresses are replaced together
-                        // with the identity in one write.
-                        val bound = CandidateStore.of(context).rebind(identity, parsed.candidates)
-                        if (bound == null) {
-                            BridgeLog.w(TAG, "could not store this pairing's addresses")
-                        }
+                    is PairingResult.Valid -> {
+                        // The write is atomic, so a failing write leaves the old config alone. Everything
+                        // after it can still fail (starting the service throws SecurityException when the
+                        // app may not, for one), and a rejected attempt must not leave a readable pairing
+                        // behind: the next refresh would publish it and the wizard would promote a pairing
+                        // the person was told was rejected. So the previous config is kept and put back
+                        // byte for byte, or removed when there was none.
+                        val previous = BridgeConfigLoader.snapshot(context)
                         try {
-                            BridgeRuntime.rememberPairing(stored.kind)
-                            startService(context)
-                        } catch (error: Exception) {
-                            rollBackPairing(previous)
+                            val stored = BridgeConfigLoader.write(context, parsed.config)
+                            val identity = CandidateMerge.identity(stored)
+                            // The stored config has moved; the previous daemon's gateway
+                            // stops answering in the same step, so no request can carry
+                            // this pairing's credentials through it while the service
+                            // is still being rebuilt.
+                            BridgeRuntime.expectPairing(identity)
+                            // The QR's other addresses belong to this pairing only: a
+                            // different daemon's stored addresses are replaced together
+                            // with the identity in one write.
+                            val bound = CandidateStore.of(context).rebind(identity, parsed.candidates)
+                            if (bound == null) {
+                                BridgeLog.w(TAG, "could not store this pairing's addresses")
+                            }
+                            try {
+                                BridgeRuntime.rememberPairing(stored.kind)
+                                startService(context)
+                            } catch (error: Exception) {
+                                rollBackPairing(previous)
+                                throw error
+                            }
+                            state.value = true
+                            PairResult.Paired
+                        } catch (error: CancellationException) {
                             throw error
+                        } catch (error: BridgeConfigException) {
+                            PairResult.Invalid(error.code)
+                        } catch (error: Exception) {
+                            PairResult.Invalid("pairing_store_failed")
                         }
-                        state.value = true
-                        PairResult.Paired
-                    } catch (error: CancellationException) {
-                        throw error
-                    } catch (error: BridgeConfigException) {
-                        PairResult.Invalid(error.code)
-                    } catch (error: Exception) {
-                        PairResult.Invalid("pairing_store_failed")
                     }
                 }
             }
@@ -159,10 +165,12 @@ class DevicePairingRepository internal constructor(
 
     override suspend fun unpair() = withContext(Dispatchers.IO) {
         mutex.withLock {
-            BridgeRuntime.expectPairing(null)
-            BridgeConfigLoader.delete(context)
-            BridgeRuntime.forgetPairing()
-            BridgeService.stop(context)
+            BridgeRuntime.pairingTransaction {
+                BridgeRuntime.expectPairing(null)
+                BridgeConfigLoader.delete(context)
+                BridgeRuntime.forgetPairing()
+                BridgeService.stop(context)
+            }
             state.value = false
         }
     }

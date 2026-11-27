@@ -86,52 +86,61 @@ class BridgeService : Service() {
             stopSelf(startId)
             return Service.START_NOT_STICKY
         }
-
-        val config = try {
-            BridgeConfigLoader.load(this)
-        } catch (e: BridgeConfigException) {
-            BridgeLog.w(TAG, "bridge config unavailable: ${e.code}")
-            BridgeRuntime.forgetPairing()
-            tearDownForeground()
-            stopSelf(startId)
-            return Service.START_NOT_STICKY
-        } catch (e: Exception) {
-            BridgeLog.w(TAG, "bridge config unreadable: ${e.javaClass.simpleName}")
-            BridgeRuntime.forgetPairing()
+        // Reading the file, publishing its pairing and adopting its engine is one
+        // transaction: a re-pair (or a host-written file) cannot land between the
+        // read and the adoption and leave an older pairing exposed.
+        val adoption = EngineAdoption(
+            read = { readPairing() },
+            runningIdentity = { engine?.pairingIdentity },
+            expect = { identity -> BridgeRuntime.expectPairing(identity) },
+            forget = { BridgeRuntime.forgetPairing() },
+            replace = { replaceRunningEngine() },
+            install = { pairing, identity -> installEngine(pairing, identity) }
+        )
+        if (!adoption.adopt()) {
             tearDownForeground()
             stopSelf(startId)
             return Service.START_NOT_STICKY
         }
+        return Service.START_STICKY
+    }
 
-        val identity = CandidateMerge.identity(config)
-        // Close the previous pairing's gateway before anything else: from this
-        // line on, a request either gets the engine built below or none at all.
-        BridgeRuntime.expectPairing(identity)
+    private fun readPairing(): PairingRead? = try {
+        BridgeConfigLoader.read(this)
+    } catch (e: BridgeConfigException) {
+        BridgeLog.w(TAG, "bridge config unavailable: ${e.code}")
+        null
+    } catch (e: Exception) {
+        BridgeLog.w(TAG, "bridge config unreadable: ${e.javaClass.simpleName}")
+        null
+    }
 
-        val current = engine
-        if (!mustBuildEngine(current?.pairingIdentity, identity)) return Service.START_STICKY
-        if (current != null) {
-            // Re-pairing replaced the stored config: the engine still holds the
-            // previous daemon's token and link, so it is torn down before the
-            // new one is built rather than left to serve a single request.
-            BridgeLog.i(TAG, "pairing changed: replacing the live link")
-            BridgeRuntime.detach(current)
-            card?.cancel()
-            card = null
-            engine = null
-            current.close()
-        }
+    /** Closes the engine built for the pairing being replaced, before the new one exists. */
+    private fun replaceRunningEngine() {
+        val current = engine ?: return
+        BridgeLog.i(TAG, "pairing changed: replacing the live link")
+        BridgeRuntime.detach(current)
+        card?.cancel()
+        card = null
+        engine = null
+        current.close()
+    }
 
-        BridgeRuntime.rememberPairing(config.kind)
-        // The card follows the state, which carries the path, the latency and the call.
-        val created = BridgeEngine(applicationContext, config)
+    private fun installEngine(pairing: PairingRead, identity: String) {
+        BridgeRuntime.rememberPairing(pairing.config.kind)
+        // The addresses come from the same read as the identity: another file
+        // snapshot can never supply the candidates this engine starts with.
+        val created = BridgeEngine(
+            applicationContext,
+            pairing.config,
+            BridgeConfigLoader.candidates(pairing.config, pairing.addresses)
+        )
         engine = created
         BridgeRuntime.attach(created, identity)
         card = slot.follow(created.state.map(BridgeNotice::of), scope) { notice ->
             Notifications.bridge(this, notice)
         }
         created.start()
-        return Service.START_STICKY
     }
 
     override fun onDestroy() {
@@ -154,5 +163,38 @@ class BridgeService : Service() {
         foregroundReady = false
         slot.close()
         stopForeground(Service.STOP_FOREGROUND_REMOVE)
+    }
+}
+
+/**
+ * Adopts the stored pairing once, inside [BridgeRuntime.pairingTransaction].
+ *
+ * The read belongs to the transaction: a start that could not read yet is
+ * serialized behind a re-pair instead of publishing what it would have read
+ * before it.  An unreadable store forgets the pairing; a different identity
+ * replaces the running engine before the new one is installed.
+ */
+internal class EngineAdoption(
+    private val read: () -> PairingRead?,
+    private val runningIdentity: () -> String?,
+    private val expect: (String) -> Unit,
+    private val forget: () -> Unit,
+    private val replace: () -> Unit,
+    private val install: (PairingRead, String) -> Unit
+) {
+    /** True when an engine is running for the stored pairing; false when none is. */
+    fun adopt(): Boolean = BridgeRuntime.pairingTransaction {
+        val pairing = read()
+        if (pairing == null) {
+            forget()
+            return@pairingTransaction false
+        }
+        val identity = CandidateMerge.identity(pairing.config)
+        // From this line on, a request either gets the engine built below or none.
+        expect(identity)
+        if (!mustBuildEngine(runningIdentity(), identity)) return@pairingTransaction true
+        replace()
+        install(pairing, identity)
+        true
     }
 }

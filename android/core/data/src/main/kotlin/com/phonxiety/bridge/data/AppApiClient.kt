@@ -16,7 +16,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -46,10 +45,12 @@ class LinkAppApi @Inject constructor(
 }
 
 /**
- * The request/response envelope: one id per request, one 30 s deadline, the
- * gateway's own app token, and the daemon's `{code, message}` mapped into
- * [ApiResult.Failure].  Bulk data uses the attachment stream when the live
- * transport offers one and paged base64 otherwise.
+ * The request/response envelope: one id per request, the gateway's own app
+ * token, and the daemon's `{code, message}` mapped into [ApiResult.Failure].
+ * The engine owns the deadline (including a wait for the link); a typed timeout
+ * it answers with is mapped here, and a caller's cancellation propagates.
+ * Bulk data uses the attachment stream when the live transport offers one and
+ * paged base64 otherwise.
  *
  * The credential is read from the gateway that carries the request, never
  * from storage on its own: a pairing change replaces the gateway, so the new
@@ -57,7 +58,6 @@ class LinkAppApi @Inject constructor(
  */
 internal class AppApiEnvelope(
     private val gateways: AppGatewaySource,
-    private val timeoutMs: Long = 30_000L,
     private val pageBytes: Int = 192 * 1024,
     private val nextId: () -> String = { UUID.randomUUID().toString() }
 ) {
@@ -93,13 +93,19 @@ internal class AppApiEnvelope(
             appToken = token
         )
         val result = try {
-            withTimeout(timeoutMs) { gateway.exchange(request) }
+            // The engine owns the deadline; this only waits for its typed answer.
+            gateway.exchange(request)
         } catch (e: TimeoutCancellationException) {
             return ApiResult.Failure(504, "timeout", "the daemon did not answer in time")
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             return ApiResult.Failure(500, "transport_error", e.javaClass.simpleName)
+        }
+        // An answer that arrived after the pairing moved belongs to the previous
+        // daemon: the caller must not take it for the one it is paired with now.
+        if (gateways.gateway() !== gateway) {
+            return ApiResult.Failure(503, "pairing_changed", "the pairing changed")
         }
         return map(result)
     }
@@ -120,11 +126,15 @@ internal class AppApiEnvelope(
                 path = path,
                 query = query
             )
-            when (
-                val outcome = runCatching { gateway.receiveAttachment(header, sink) }.getOrElse {
-                    return ApiResult.Failure(500, "transport_error", it.javaClass.simpleName)
-                }
-            ) {
+            val streamed = runCatching { gateway.receiveAttachment(header, sink) }.getOrElse {
+                return ApiResult.Failure(500, "transport_error", it.javaClass.simpleName)
+            }
+            // A download finished under a pairing that has since been replaced is
+            // as stale as the pages of a paged one.
+            if (gateways.gateway() !== gateway) {
+                return ApiResult.Failure(503, "pairing_changed", "the pairing changed")
+            }
+            when (val outcome = streamed) {
                 is AttachmentOutcome.Complete -> return ApiResult.Success(
                     200,
                     buildJsonObject {

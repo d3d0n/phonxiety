@@ -128,15 +128,15 @@ class CandidateBindingTest {
                 .toString()
         )
         try {
-            val loaded = BridgeConfigLoader.load(context)
+            val loaded = BridgeConfigLoader.read(context)
             val store = CandidateStore(storeFile())
             val bound = store.rebind(
-                CandidateMerge.identity(loaded),
-                BridgeConfigLoader.candidates(context, loaded)
+                CandidateMerge.identity(loaded.config),
+                BridgeConfigLoader.candidates(loaded.config, loaded.addresses)
             )
 
             assertTrue(bound != null)
-            val seen = probed(loaded, store, "token-b")
+            val seen = probed(loaded.config, store, "token-b")
             assertTrue(seen.contains(lanB to "token-b"))
             // Nothing from an earlier pairing is in the file or the store.
             assertEquals("cert:$pinB", store.pairingIdentity())

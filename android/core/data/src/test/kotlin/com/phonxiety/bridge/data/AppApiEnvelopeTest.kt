@@ -11,8 +11,10 @@ import com.phonxiety.bridge.model.PairingGate
 import java.io.ByteArrayOutputStream
 import java.io.OutputStream
 import java.util.Base64
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
@@ -81,15 +83,53 @@ class AppApiEnvelopeTest {
     }
 
     @Test
-    fun aRequestThatNeverAnswersTimesOut() = runTest {
+    fun theEnginesTypedTimeoutIsMappedToAFailure() = runTest {
         val gateway = FakeGateway()
-        gateway.hang = true
-        val envelope = AppApiEnvelope(source(gateway), timeoutMs = 50)
+        gateway.reply = DeviceApiResult(
+            id = "x",
+            status = 504,
+            error = DeviceApiError("timeout", "the daemon did not answer in time")
+        )
+        val envelope = AppApiEnvelope(source(gateway))
 
         val failure = envelope.request("GET", "/app/v1/info") as ApiResult.Failure
 
         assertEquals(504, failure.status)
         assertEquals("timeout", failure.code)
+    }
+
+    @Test
+    fun aCallersCancellationIsNeverTurnedIntoAFailure() = runTest {
+        val gateway = FakeGateway()
+        gateway.hang = true
+        val envelope = AppApiEnvelope(source(gateway))
+
+        // The envelope has no timeout of its own: the caller's cancellation
+        // propagates instead of being reported as a daemon answer.
+        val cancelled = runCatching {
+            withTimeout(50) { envelope.request("GET", "/app/v1/info") }
+        }.exceptionOrNull()
+
+        assertTrue(cancelled is TimeoutCancellationException)
+    }
+
+    @Test
+    fun anAnswerThatOutlivesItsPairingIsRefused() = runTest {
+        PairingGate.resetForTest()
+        try {
+            val old = FakeGateway().apply { appToken = "token-a" }
+            old.afterAnswer = { PairingGate.expect("cert:b") }
+            PairingGate.expect("cert:a")
+            PairingGate.install(old, "cert:a")
+            val envelope = AppApiEnvelope(AppGatewaySource { PairingGate.gateway() })
+
+            val failure = envelope.request("GET", "/app/v1/info") as ApiResult.Failure
+
+            assertEquals(503, failure.status)
+            assertEquals("pairing_changed", failure.code)
+        } finally {
+            PairingGate.resetForTest()
+        }
     }
 
     @Test
@@ -184,13 +224,17 @@ class AppApiEnvelopeTest {
     }
 
     @Test
-    fun aRePairDuringAPagedDownloadNeverPutsTheNewTokenOnTheOldLink() = runTest {
+    fun aRePairDuringTheFirstPageStopsTheDownloadAndNeverTouchesTheNewGateway() = runTest {
         PairingGate.resetForTest()
         try {
+            val rebuilt = FakeGateway().apply { appToken = "token-b" }
             val old = PageGateway(byteArrayOf(9, 8, 7, 6, 5, 4)) { page ->
-                // The new pairing is stored after the first page; the download in
-                // flight must keep the credential it started with.
-                if (page == 2) PairingGate.expect("cert:b")
+                // The pairing moves while the very first page is being answered,
+                // and the new gateway is installed before the next lookup.
+                if (page == 1) {
+                    PairingGate.expect("cert:b")
+                    PairingGate.install(rebuilt, "cert:b")
+                }
             }
             old.appToken = "token-a"
             PairingGate.expect("cert:a")
@@ -200,9 +244,14 @@ class AppApiEnvelopeTest {
 
             val result = envelope.download("/app/v1/calls/c1/audio", emptyMap(), sink)
 
-            assertTrue(result is ApiResult.Success)
-            assertArrayEquals(byteArrayOf(9, 8, 7, 6, 5, 4), sink.toByteArray())
-            assertEquals(listOf("token-a", "token-a"), old.tokens)
+            val failure = result as ApiResult.Failure
+            assertEquals("pairing_changed", failure.code)
+            // The one page the old link answered carried the old credential; the
+            // new daemon was never asked to finish the old download and the page
+            // never reached the sink.
+            assertEquals(listOf("token-a"), old.tokens)
+            assertTrue(rebuilt.last == null)
+            assertEquals(0, sink.size())
         } finally {
             PairingGate.resetForTest()
         }
@@ -216,6 +265,7 @@ class AppApiEnvelopeTest {
         var reply = DeviceApiResult(id = "x", status = 200, result = buildJsonObject { })
         var last: DeviceApiRequest? = null
         var hang = false
+        var afterAnswer: () -> Unit = {}
         var attachment: AttachmentOutcome = AttachmentOutcome.Unsupported
         var attachmentHeader: AttachmentHeader? = null
         var attachmentBytes: ByteArray? = null
@@ -223,6 +273,7 @@ class AppApiEnvelopeTest {
         override suspend fun exchange(request: DeviceApiRequest): DeviceApiResult {
             last = request
             if (hang) awaitCancellation()
+            afterAnswer()
             return reply
         }
 
