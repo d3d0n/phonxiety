@@ -2,6 +2,7 @@ package com.phonxiety.bridge.feature.doctor
 
 import android.app.ApplicationExitInfo
 import androidx.annotation.StringRes
+import androidx.compose.runtime.Immutable
 import com.phonxiety.bridge.CrashReports
 import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.root.Overlay
@@ -245,6 +246,7 @@ data class DoctorChangeEntry(
 )
 
 /** Everything the Doctor screen renders. */
+@Immutable
 data class DoctorUiState(
     val checking: Boolean = true,
     val rows: List<DoctorRow> = emptyList(),

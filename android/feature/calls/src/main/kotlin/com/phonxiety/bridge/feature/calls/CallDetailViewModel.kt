@@ -1,6 +1,7 @@
 package com.phonxiety.bridge.feature.calls
 
 import android.content.Context
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.phonxiety.bridge.data.DeleteOutcome
@@ -25,6 +26,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
 /** The brief a finished call can be repeated with: exactly the fields the composer takes. */
+@Immutable
 data class CallBrief(
     val destination: String,
     val goal: String,
@@ -33,6 +35,7 @@ data class CallBrief(
     val resultFields: List<String> = emptyList()
 )
 
+@Immutable
 data class CallAudioUiState(
     val downloading: Boolean = false,
     val filePath: String? = null,
@@ -43,6 +46,7 @@ data class CallAudioUiState(
     val error: CallsFailure? = null
 )
 
+@Immutable
 data class CallDetailUiState(
     val callId: String = "",
     val snapshot: CallSnapshot? = null,

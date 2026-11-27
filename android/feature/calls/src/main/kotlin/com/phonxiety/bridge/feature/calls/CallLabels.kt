@@ -2,6 +2,7 @@ package com.phonxiety.bridge.feature.calls
 
 import androidx.annotation.StringRes
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.ui.res.stringResource
 import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.FailureKind
@@ -10,6 +11,7 @@ import com.phonxiety.bridge.model.FailureKind
  * A failure as the screen shows it: the sentence a person reads, and the daemon's code kept apart
  * so it can sit behind "Show details" in monospace instead of inside the sentence.
  */
+@Immutable
 data class CallsFailure(val message: UiText, val code: String?, val kind: FailureKind) {
     companion object {
         fun of(status: Int, code: String?, message: String): CallsFailure = CallsFailure(

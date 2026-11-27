@@ -1,5 +1,6 @@
 package com.phonxiety.bridge.feature.calls
 
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.phonxiety.bridge.data.calls.CallFilter
@@ -17,6 +18,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /** One screenful of history: the daemon's page, the cache behind it, and what the refresh said. */
+@Immutable
 data class CallsUiState(
     val calls: List<CallSummary> = emptyList(),
     val filter: CallFilter = CallFilter(),

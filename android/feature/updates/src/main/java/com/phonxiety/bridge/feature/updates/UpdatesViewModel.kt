@@ -1,5 +1,6 @@
 package com.phonxiety.bridge.feature.updates
 
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.phonxiety.bridge.data.BridgeStateRepository
@@ -28,6 +29,7 @@ import kotlinx.coroutines.launch
  * Everything the Updates screen renders: one check, the two actions, and the rollback offer with
  * any rollback a previous boot left behind.
  */
+@Immutable
 data class UpdatesUiState(
     val loading: Boolean = false,
     val check: UpdateCheck? = null,

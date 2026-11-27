@@ -1,11 +1,13 @@
 package com.phonxiety.bridge.feature.lab
 
+import androidx.compose.runtime.Immutable
 import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.FailureKind
 import com.phonxiety.bridge.model.LinkTestResult
 import kotlinx.serialization.json.JsonObject
 
 /** A failure from the daemon: the sentence a person reads, and the code support needs. */
+@Immutable
 data class LabFailure(val message: UiText, val code: String? = null, val kind: FailureKind = FailureKind.DAEMON) {
     companion object {
         fun of(status: Int, code: String?, message: String): LabFailure = LabFailure(
@@ -17,6 +19,7 @@ data class LabFailure(val message: UiText, val code: String? = null, val kind: F
 }
 
 /** Everything the test lab renders; the screen is a pure function of this. */
+@Immutable
 data class LabUiState(
     val link: LinkTestUi = LinkTestUi(),
     val probe: ProbeUi = ProbeUi(),
@@ -154,6 +157,7 @@ data class TestCallUi(
  * What the finished test call left behind: the daemon's own record, refetched until its summary is
  * ready. [waiting] is false once the refetch is over, whether the summary arrived or not.
  */
+@Immutable
 data class TestCallResultUi(
     val callId: String,
     val outcome: String? = null,
@@ -195,6 +199,7 @@ data class CodecTrialRun(
 /** Which diagnostics operation failed: a reload retries the read, a retry re-exports. */
 enum class DiagnosticsOp { LOAD, EXPORT }
 
+@Immutable
 data class DiagnosticsUi(
     val loading: Boolean = false,
     val payload: String? = null,
@@ -205,6 +210,7 @@ data class DiagnosticsUi(
     val errorOp: DiagnosticsOp? = null
 )
 
+@Immutable
 data class LogUi(
     val lines: List<String> = emptyList(),
     val filter: String = "",
@@ -213,6 +219,7 @@ data class LogUi(
 )
 
 /** A finished cache file waiting for the screen to hand it to the system share sheet. */
+@Immutable
 data class ShareRequest(val uri: android.net.Uri, val mimeType: String, val title: UiText)
 
 /**

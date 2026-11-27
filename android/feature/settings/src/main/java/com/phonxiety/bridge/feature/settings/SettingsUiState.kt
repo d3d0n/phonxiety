@@ -1,5 +1,6 @@
 package com.phonxiety.bridge.feature.settings
 
+import androidx.compose.runtime.Immutable
 import com.phonxiety.bridge.PhoneSettings
 import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.model.FailureKind
@@ -155,6 +156,7 @@ data class ConnectionUi(
     val lanCount: Int get() = candidates.size - tailnetCount
 }
 
+@Immutable
 data class SettingsUiState(
     val daemon: DaemonSettingsUi = DaemonSettingsUi(),
     val phone: PhoneSettings = PhoneSettings(),

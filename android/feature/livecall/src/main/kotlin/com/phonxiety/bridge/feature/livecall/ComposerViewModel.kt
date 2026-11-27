@@ -1,5 +1,6 @@
 package com.phonxiety.bridge.feature.livecall
 
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.phonxiety.bridge.data.ApiOutcome
@@ -33,6 +34,7 @@ internal const val COMPOSER_GOAL_LIMIT = 8_000
  * app knows, or the daemon's own sentence when it is not; [detail] keeps the verbatim diagnostic
  * for the details disclosure, where a code belongs.
  */
+@Immutable
 data class ComposerIssue(
     val location: String,
     val headline: UiText,
