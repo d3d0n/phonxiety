@@ -343,7 +343,9 @@ internal class CommandService(
      * tombstone for a dial Telecom has not surfaced yet, disconnects just that
      * Telecom call, and never reaches an unrelated incoming or held call.
      * Returns false, queuing nothing, when [callId] names neither the owned nor
-     * the pending call.
+     * the pending call.  The queued end checks again, under the lock that
+     * plans it, that its call is still the owned one: a hang-up queued just
+     * before that call ended does nothing to the call that follows it.
      */
     fun endOwnedLocally(callId: String?): Boolean {
         val target = synchronized(session.lock) {
@@ -352,7 +354,7 @@ internal class CommandService(
         return try {
             executor.execute {
                 try {
-                    endCall(target)
+                    endCall(target, localOnly = true)
                 } catch (e: Exception) {
                     BridgeLog.e(TAG) { "local hang-up failed: ${e.javaClass.simpleName}" }
                 }
@@ -365,7 +367,7 @@ internal class CommandService(
 
     private fun handleHangup(id: String, command: DeviceCommand.Hangup) {
         val callId = command.callId.ifEmpty { throw CommandException("call_id_required") }
-        when (val result = endCall(callId)) {
+        when (val result = endCall(callId, localOnly = false)) {
             is HangupResult.Ended -> replyOk(
                 id,
                 buildJsonObject {
@@ -375,13 +377,25 @@ internal class CommandService(
             )
 
             is HangupResult.Refused -> replyError(id, result.error)
+
+            // Only a local end can be obsolete; a daemon hang-up always gets its answer above.
+            HangupResult.Obsolete -> Unit
         }
     }
 
-    /** The one hang-up core; the daemon's reply and the local end differ only in what reads it. */
-    private fun endCall(callId: String): HangupResult {
+    /**
+     * The one hang-up core; the daemon's reply and the local end differ only in
+     * what reads it.  A [localOnly] end proceeds only while its call is still
+     * the owned one, checked in the same critical section as the plan, and
+     * otherwise changes nothing: no terminal state replayed into the store, no
+     * tombstone, no disconnect.
+     */
+    private fun endCall(callId: String, localOnly: Boolean): HangupResult {
         val plan = try {
-            synchronized(session.lock) { session.planHangupLocked(callId) }
+            synchronized(session.lock) {
+                if (localOnly && session.owned?.callId != callId) return HangupResult.Obsolete
+                session.planHangupLocked(callId)
+            }
         } catch (e: CallSession.DialRefused) {
             return HangupResult.Refused(callId, e.code)
         }
@@ -409,6 +423,10 @@ internal class CommandService(
                         session.recent[callId]?.state ?: "ended"
                     }
                 }
+                if (terminal != null && localOnly) {
+                    // The call ended under this local end; Telecom's own callbacks report it.
+                    return HangupResult.Obsolete
+                }
                 return if (terminal != null) {
                     store.callPhase(callPhaseOf(terminal))
                     HangupResult.Ended(callId, terminal)
@@ -424,10 +442,11 @@ internal class CommandService(
         return HangupResult.Ended(callId, "ending")
     }
 
-    /** What [endCall] resolved to: a state the daemon replies with, or its error code. */
+    /** What [endCall] resolved to: a state the daemon replies with, its error code, or nothing to do. */
     private sealed interface HangupResult {
         class Ended(val callId: String, val state: String) : HangupResult
         class Refused(val callId: String, val error: String) : HangupResult
+        data object Obsolete : HangupResult
     }
 
     private fun handleStartAudio(id: String, command: DeviceCommand.StartAudio) {

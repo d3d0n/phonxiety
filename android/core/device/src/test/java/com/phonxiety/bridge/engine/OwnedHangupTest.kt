@@ -4,11 +4,13 @@ import android.content.Context
 import android.telecom.Call
 import com.phonxiety.bridge.EngineStateStore
 import com.phonxiety.bridge.audio.AudioStatsPublisher
+import com.phonxiety.bridge.model.CallPhase
 import com.phonxiety.bridge.model.DeviceCommand
 import com.phonxiety.bridge.model.DeviceOutbound
 import com.phonxiety.bridge.model.DeviceProtocol
 import com.phonxiety.bridge.telecom.TelecomObserver
 import java.lang.reflect.Proxy
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -252,6 +254,43 @@ class OwnedHangupTest {
         assertEquals("the previous call id disconnected the successor", 0, successor.disconnects.get())
         assertNotNull("the previous call id dropped the successor", synchronized(harness.session.lock) { harness.session.owned })
         assertTrue("a previous call id wrote a tombstone", harness.calls.orphanCalls.isEmpty())
+    }
+
+    /**
+     * A local end queued while A is owned, but run only after A has finished
+     * and B has started, changes nothing: B stays connected and owned, the
+     * store still shows B active, and no tombstone is written for A.  A gate
+     * task ahead of it on the real command executor holds it in the queue.
+     */
+    @Test(timeout = 10_000)
+    fun aLocalEndQueuedBeforeATurnoverLeavesTheSuccessorAlone() {
+        val harness = Harness()
+        harness.attach(TelecomCall().call)
+        val gate = CountDownLatch(1)
+        harness.executor.execute { gate.await() }
+        try {
+            assertTrue("A was not queued for the local end", harness.service.endOwnedLocally(CALL_ID))
+
+            // While the end waits in the queue, A finishes and B starts and answers.
+            synchronized(harness.session.lock) {
+                harness.session.owned = null
+                harness.session.rememberLocked(CALL_ID, DESTINATION, "ended")
+            }
+            harness.beginDial("call-2", "+998907654321")
+            val successor = TelecomCall()
+            harness.attach(successor.call)
+            harness.store.callStarted("call-2", "+99890•••4321", 2_000L)
+            harness.store.callPhase(CallPhase.ACTIVE)
+            gate.countDown()
+            harness.drainCommands()
+
+            assertEquals("the queued end disconnected the successor", 0, successor.disconnects.get())
+            assertEquals("call-2", synchronized(harness.session.lock) { harness.session.owned?.callId })
+            assertEquals("the queued end marked the successor ended", CallPhase.ACTIVE, harness.store.state.value.call?.phase)
+            assertTrue("the queued end wrote a tombstone", harness.calls.orphanCalls.isEmpty())
+        } finally {
+            gate.countDown()
+        }
     }
 
     @Test
