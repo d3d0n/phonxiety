@@ -120,8 +120,7 @@ internal object AccessibilityGate {
     private fun SemanticsNodeInteraction.composeHeight(flagged: ViewHierarchyElement, root: View): Int? {
         if (flagged.origin != ViewHierarchyElementOrigin.COMPOSE) return null
         val text = flagged.text?.toString()?.takeIf { it.isNotEmpty() } ?: return null
-        val location = IntArray(2)
-        root.getLocationOnScreen(location)
+        val location = windowOriginOnScreen(root)
         var height: Int? = null
         val pending = ArrayDeque<SemanticsNode>()
         pending.add(
@@ -145,6 +144,18 @@ internal object AccessibilityGate {
         abs(top.roundToInt() + location[1] - sampled.top) <= 1 &&
         abs(right.roundToInt() + location[0] - sampled.right) <= 1 &&
         abs(bottom.roundToInt() + location[1] - sampled.bottom) <= 1
+
+    /**
+     * Where the host's window starts on the screen. A node's window bounds already include the
+     * host's own place inside its window, so only the window's screen position is added to them.
+     */
+    private fun windowOriginOnScreen(host: View): IntArray {
+        val onScreen = IntArray(2)
+        host.getLocationOnScreen(onScreen)
+        val inWindow = IntArray(2)
+        host.getLocationInWindow(inWindow)
+        return intArrayOf(onScreen[0] - inWindow[0], onScreen[1] - inWindow[1])
+    }
 
     /**
      * The window the framework samples, drawn where it sits on the screen so that pixel lookups

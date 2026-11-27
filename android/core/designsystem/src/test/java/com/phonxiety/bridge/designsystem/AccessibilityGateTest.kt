@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.view.accessibility.AccessibilityManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -22,6 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onRoot
@@ -156,6 +158,32 @@ class AccessibilityGateTest {
         assertTrue(
             "the framework reported the Compose sliver before the rule dropped it",
             washedSliver.accessibilityResults().any { result -> result.isContrastOf("Line 6") }
+        )
+
+        composeRule.onRoot().assertAccessible()
+    }
+
+    @Test
+    fun aSliverInAHostSetDownInsideItsWindowIsStillSuppressed() {
+        showComposeLines(
+            lines = 6,
+            lineHeight = 60.dp,
+            lastLineHeight = 100.dp,
+            shade = READABLE,
+            edgeShade = LOW_CONTRAST,
+            wash = true
+        )
+        val host = (composeRule.onRoot().fetchSemanticsNode().root as ViewRootForTest).view
+        composeRule.runOnUiThread {
+            val offset = (HOST_OFFSET_DP * host.resources.displayMetrics.density).toInt()
+            (host.parent as ViewGroup).setPadding(0, offset, 0, 0)
+        }
+        composeRule.waitForIdle()
+        val inWindow = IntArray(2).also(host::getLocationInWindow)
+        assertTrue("the host sits below the top of its window", inWindow[1] > 0)
+        assertTrue(
+            "the framework reported the sliver before the rule dropped it",
+            composeRule.onRoot().accessibilityResults().any { result -> result.isContrastOf("Line 5") }
         )
 
         composeRule.onRoot().assertAccessible()
@@ -386,5 +414,8 @@ class AccessibilityGateTest {
         val LOW_CONTRAST = Color(0xFF9E9E9E)
         val READABLE_TEXT = 0xFF212121.toInt()
         val LOW_CONTRAST_TEXT = 0xFF9E9E9E.toInt()
+
+        /** 60 dp down: the last 100 dp line keeps 40 dp on screen, the sliver the other test uses. */
+        const val HOST_OFFSET_DP = 60
     }
 }
