@@ -337,7 +337,7 @@ internal class CommandService(
 
     private fun handleHangup(id: String, command: DeviceCommand.Hangup) {
         val callId = command.callId.ifEmpty { throw CommandException("call_id_required") }
-        val plan = session.planHangupLocked(callId)
+        val plan = synchronized(session.lock) { session.planHangupLocked(callId) }
 
         val terminalState = plan.terminalState
         if (terminalState != null) {
