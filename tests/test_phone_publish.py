@@ -18,10 +18,8 @@ def run_publish(root: Path, heading: str | None, *args: str) -> subprocess.Compl
     magisk.mkdir(parents=True)
     (magisk / "module.prop").write_text("id=phonxiety_bridge\nversion=9.9.9\nversionCode=99\n")
     (root / "android" / "app" / "build" / "outputs" / "apk" / "release").mkdir(parents=True)
-    dist = root / "dist"
-    dist.mkdir()
     if heading is not None:
-        (dist / "CHANGELOG.md").write_text(f"{heading}\n\n- A change.\n")
+        (root / "android" / "CHANGELOG.md").write_text(f"{heading}\n\n- A change.\n")
     env = {
         "PATH": os.environ["PATH"],
         "HOME": str(root),
@@ -43,15 +41,15 @@ def test_notes_that_do_not_name_the_version_are_refused(tmp_path: Path, heading:
     result = run_publish(tmp_path, heading)
 
     assert result.returncode != 0
-    assert f"dist/CHANGELOG.md starts with '{heading}'" in result.stderr
-    assert not (tmp_path / "dist" / "update.json").exists()
+    assert f"android/CHANGELOG.md starts with '{heading}'" in result.stderr
+    assert not (tmp_path / "dist").exists()
 
 
 def test_missing_notes_are_refused(tmp_path: Path) -> None:
     result = run_publish(tmp_path, None)
 
     assert result.returncode != 0
-    assert "missing dist/CHANGELOG.md" in result.stderr
+    assert "missing android/CHANGELOG.md" in result.stderr
 
 
 def test_notes_that_name_the_version_reach_the_next_check(tmp_path: Path) -> None:

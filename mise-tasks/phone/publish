@@ -6,6 +6,7 @@
 #   phonxiety-bridge-<version>.apk   the signed release APK
 #   phonxiety-bridge-<version>.zip   the module zip, with updateJson pointing at update.json
 #   update.json                      one document for the app, the root manager and the daemon
+#   CHANGELOG.md                     the release notes the root manager shows, from android/CHANGELOG.md
 #
 # Does not upload anything. --serve copies the APK and the module zip into <state dir>/updates/, then
 # writes <state dir>/updates/manifest.json (the file behind GET /app/v1/update/manifest) with
@@ -47,7 +48,7 @@ Checks before writing anything: dist/phonxiety-bridge-<module.prop version>.zip 
 one published (an older zip is never used), the module.prop inside that zip and the APK embedded in
 it match the APK being published, the module and APK versions agree, minSdk is read from the APK,
 and the SHA-256 values and the APK's signing certificate are computed from the bytes that are
-published. With the default changelog, dist/CHANGELOG.md must start with
+published. With the default changelog, android/CHANGELOG.md must start with
 "# Phonxiety bridge <module.prop version>": notes still headed "# Unreleased" are never published.
 EOF
 }
@@ -87,13 +88,16 @@ MODULE_VERSION_CODE="$(awk -F= '/^versionCode=/{print $2; exit}' "$MAGISK/module
 [ -n "$MODULE_VERSION" ] || die "module.prop has no version"
 [ -n "$MODULE_VERSION_CODE" ] || die "module.prop has no versionCode"
 
-# The managers show the release's CHANGELOG.md, uploaded from dist/. Between releases it is headed
-# "# Unreleased"; publishing then would show users a draft, or the previous release's notes.
+# The managers show the release's CHANGELOG.md, copied into dist/ from the tracked android/CHANGELOG.md.
+# Between releases that file is headed "# Unreleased"; publishing then would show users a draft, or
+# the previous release's notes.
+NOTES=""
 if [ "$CHANGELOG" = "$URL_BASE/CHANGELOG.md" ]; then
-    [ -f "$DIST/CHANGELOG.md" ] || die "missing dist/CHANGELOG.md, the notes the root manager shows"
-    CHANGELOG_HEADING="$(head -n 1 "$DIST/CHANGELOG.md")"
-    [ "$CHANGELOG_HEADING" = "# Phonxiety bridge $MODULE_VERSION" ] \
-        || die "dist/CHANGELOG.md starts with '$CHANGELOG_HEADING'; head it '# Phonxiety bridge $MODULE_VERSION' to publish $MODULE_VERSION"
+    NOTES="$ANDROID/CHANGELOG.md"
+    [ -f "$NOTES" ] || die "missing android/CHANGELOG.md, the notes the root manager shows"
+    NOTES_HEADING="$(head -n 1 "$NOTES")"
+    [ "$NOTES_HEADING" = "# Phonxiety bridge $MODULE_VERSION" ] \
+        || die "android/CHANGELOG.md starts with '$NOTES_HEADING'; head it '# Phonxiety bridge $MODULE_VERSION' to publish $MODULE_VERSION"
 fi
 
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/phonxiety-publish.XXXXXX")"
@@ -357,4 +361,10 @@ PY
     note "Daemon:   $SERVED_OUT (GET /app/v1/update/manifest)"
     note "Served:   $SERVE_DIR/$APK_NAME"
     note "          $SERVE_DIR/$ZIP_NAME"
+fi
+
+# The notes go last, so a run that fails anywhere above leaves the previous dist/CHANGELOG.md.
+if [ -n "$NOTES" ]; then
+    cp "$NOTES" "$DIST/CHANGELOG.md"
+    note "Notes:    $DIST/CHANGELOG.md"
 fi
