@@ -44,6 +44,7 @@ and run cellular calls through this phone.
 ## Reliability
 
 - **During a reconnect**, a request waits for the link within its deadline instead of failing at once.
+- A read that meets a brief daemon or network hiccup is tried again, at most twice and within the same 30-second limit, so a passing glitch no longer shows an error. Changes are never repeated, and a retry never reaches a computer paired after the read began.
 - A link whose control messages back up is replaced instead of silently dropping them.
 - When the link to the computer drops, the dashboard and the Doctor say why in a plain sentence, next to the reason's code.
 
