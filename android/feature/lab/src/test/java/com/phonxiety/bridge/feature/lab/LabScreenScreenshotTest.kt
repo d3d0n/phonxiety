@@ -3,6 +3,7 @@ package com.phonxiety.bridge.feature.lab
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
@@ -35,6 +36,7 @@ import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.designsystem.testing.Screenshot
 import com.phonxiety.bridge.designsystem.testing.assertAccessible
 import com.phonxiety.bridge.designsystem.testing.pinAnimationFrame
+import com.phonxiety.bridge.feature.lab.cards.FrameTapCard
 import java.util.Locale
 import java.util.TimeZone
 import org.junit.After
@@ -584,6 +586,28 @@ class LabScreenScreenshotTest {
         composeRule.onNodeWithText("link_down", substring = true).assertDoesNotExist()
     }
 
+    @Test
+    @Category(Screenshot::class)
+    fun theMessageRecordCard() {
+        composeRule.setContent {
+            PhonxietyTheme(dynamicColor = false) {
+                Box(
+                    modifier = Modifier
+                        .testTag(FRAME_CARD_TAG)
+                        .width(411.dp)
+                        .background(MaterialTheme.colorScheme.background)
+                        .padding(vertical = 12.dp)
+                ) {
+                    FrameTapCard(frameTap = true, callbacks = LabCallbacks())
+                }
+            }
+        }
+        composeRule.waitForIdle()
+        composeRule.pinAnimationFrame()
+        composeRule.onNodeWithTag(FRAME_CARD_TAG).captureRoboImage("src/test/screenshots/lab_frame_tap_411_light.png")
+        composeRule.onNodeWithTag(FRAME_CARD_TAG).assertAccessible()
+    }
+
     private fun hasStateDescription(value: String) = SemanticsMatcher.expectValue(
         SemanticsProperties.StateDescription,
         value
@@ -591,6 +615,7 @@ class LabScreenScreenshotTest {
 
     private companion object {
         const val SCREEN_TAG = "lab_capture"
+        const val FRAME_CARD_TAG = "frame_tap_card"
 
         /** Noon on the samples' day, in the zone every capture renders in. */
         val FIXED_NOW_MILLIS: Long = java.time.LocalDateTime.parse("2026-11-26T12:00:00")

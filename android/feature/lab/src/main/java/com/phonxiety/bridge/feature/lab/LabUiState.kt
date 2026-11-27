@@ -24,6 +24,8 @@ data class LabUiState(
     val callId: String? = null,
     val loopbackSupported: Boolean? = null,
     val toneSupported: Boolean? = null,
+    /** The transport records message sizes and kinds to its bounded dump; off by default. */
+    val frameTap: Boolean = false,
     val message: UiText? = null,
     val share: ShareRequest? = null
 ) {

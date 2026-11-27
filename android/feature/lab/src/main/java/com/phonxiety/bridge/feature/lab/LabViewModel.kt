@@ -104,6 +104,11 @@ class LabViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            // The transport reads the same preference; the switch shows what is stored, not what
+            // this screen last tapped.
+            phonePreferences.settings.collect { stored -> _state.update { it.copy(frameTap = stored.frameTap) } }
+        }
+        viewModelScope.launch {
             bridgeState.state.collect { bridge -> applyBridgeState(bridge) }
         }
         viewModelScope.launch {
@@ -703,6 +708,17 @@ class LabViewModel @Inject constructor(
             }
             _state.update { it.copy(message = UiText.Res(R.string.lab_trial_kept)) }
         }
+    }
+
+    /**
+     * Turns the transport's message record on or off. The switch moves at once and the stored
+     * preference is the source of truth: the transport applies it to links that are already
+     * running.
+     */
+    fun setFrameTap(enabled: Boolean) {
+        if (_state.value.frameTap == enabled) return
+        _state.update { it.copy(frameTap = enabled) }
+        viewModelScope.launch { phonePreferences.update { it.copy(frameTap = enabled) } }
     }
 
     // -- diagnostics ----------------------------------------------------

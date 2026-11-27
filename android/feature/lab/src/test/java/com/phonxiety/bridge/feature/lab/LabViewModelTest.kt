@@ -789,6 +789,25 @@ class LabViewModelTest {
     }
 
     @Test
+    fun `the message record follows the stored preference and the switch writes it`() = runTest(testDispatcher) {
+        prefs = FakePhonePreferences(PhoneSettings(frameTap = true))
+        val vm = viewModel()
+        advanceUntilIdle()
+        // The switch shows what is stored, not a default this screen invented.
+        assertTrue(vm.state.value.frameTap)
+
+        vm.setFrameTap(false)
+        advanceUntilIdle()
+        assertFalse(prefs.settings.value.frameTap)
+        assertFalse(vm.state.value.frameTap)
+
+        vm.setFrameTap(true)
+        advanceUntilIdle()
+        assertTrue(prefs.settings.value.frameTap)
+        assertTrue(vm.state.value.frameTap)
+    }
+
+    @Test
     fun `probe results replace the rows without losing the selection`() = runTest(testDispatcher) {
         api.probeHandler = { candidates ->
             ApiOutcome.Ok(

@@ -10,9 +10,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotDisplayed
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.hasImeAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -42,7 +44,11 @@ class LabScreenBehaviourTest {
     @get:Rule
     val composeRule = createComposeRule()
 
-    private fun setScreen(registry: ScrollToTopRegistry? = null) {
+    private fun setScreen(
+        registry: ScrollToTopRegistry? = null,
+        state: LabUiState = previewLabState(),
+        callbacks: LabCallbacks = LabCallbacks()
+    ) {
         composeRule.setContent {
             CompositionLocalProvider(
                 LocalScrollToTop provides registry,
@@ -56,11 +62,27 @@ class LabScreenBehaviourTest {
                             .fillMaxSize()
                             .background(MaterialTheme.colorScheme.background)
                     ) {
-                        LabScreen(state = previewLabState())
+                        LabScreen(state = state, callbacks = callbacks)
                     }
                 }
             }
         }
+    }
+
+    @Test
+    fun theMessageRecordSwitchShowsTheStoredValueAndReportsATap() {
+        val changes = mutableListOf<Boolean>()
+        setScreen(
+            state = previewLabState().copy(frameTap = true),
+            callbacks = LabCallbacks(onFrameTap = { changes += it })
+        )
+
+        composeRule.onNodeWithText("Record message sizes")
+            .performScrollTo()
+            .assertIsOn()
+            .performClick()
+
+        assertEquals(listOf(false), changes)
     }
 
     @Test

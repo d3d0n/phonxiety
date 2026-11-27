@@ -188,4 +188,10 @@
     <string name="lab_level_info">Info</string>
     <string name="lab_level_warn">Warning</string>
     <string name="lab_level_error">Error</string>
+
+    <!-- Frame record -->
+    <string name="lab_frame_tap_title">Message sizes</string>
+    <string name="lab_frame_tap_subtitle">Records the size and kind of every message the bridge sends and receives. Message contents are never written.</string>
+    <string name="lab_frame_tap_toggle">Record message sizes</string>
+    <string name="lab_frame_tap_detail">Off by default. A change applies to links that are already running.</string>
 </resources>

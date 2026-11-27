@@ -38,6 +38,7 @@ import com.phonxiety.bridge.designsystem.formatPhoneNumber
 import com.phonxiety.bridge.feature.lab.cards.AudioCard
 import com.phonxiety.bridge.feature.lab.cards.CodecTrialCard
 import com.phonxiety.bridge.feature.lab.cards.DiagnosticsCard
+import com.phonxiety.bridge.feature.lab.cards.FrameTapCard
 import com.phonxiety.bridge.feature.lab.cards.LinkTestCard
 import com.phonxiety.bridge.feature.lab.cards.LogCard
 import com.phonxiety.bridge.feature.lab.cards.ProbeCard
@@ -74,7 +75,8 @@ data class LabCallbacks(
     val onLogFilter: (String) -> Unit = {},
     val onLogLevel: (String) -> Unit = {},
     val onCopyLogs: () -> Unit = {},
-    val onExportLogs: () -> Unit = {}
+    val onExportLogs: () -> Unit = {},
+    val onFrameTap: (Boolean) -> Unit = {}
 )
 
 /** The frozen key the navigation host re-taps to bring this section's first item back. */
@@ -154,7 +156,8 @@ fun LabRoute(
                 copyToClipboard(context, "Phonxiety log", viewModel.logText())
                 scope.launch { snackbar.showSnackbar(resources.getString(R.string.lab_log_copied)) }
             },
-            onExportLogs = viewModel::exportLogs
+            onExportLogs = viewModel::exportLogs,
+            onFrameTap = viewModel::setFrameTap
         ),
         modifier = modifier
     )
@@ -196,6 +199,7 @@ fun LabScreen(
             CodecTrialCard(state.trial, callbacks)
             DiagnosticsCard(state.diagnostics, callbacks)
             LogCard(state.logs, callbacks)
+            FrameTapCard(state.frameTap, callbacks)
         }
     }
     if (state.testCall.confirming) {
