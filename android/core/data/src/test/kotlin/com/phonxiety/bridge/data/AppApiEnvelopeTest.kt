@@ -22,6 +22,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -99,17 +100,19 @@ class AppApiEnvelopeTest {
     }
 
     @Test
-    fun aCallersCancellationIsNeverTurnedIntoAFailure() = runTest {
+    fun aCallersTimeoutCancellationPropagatesInsteadOfBecomingAnAnswer() = runTest {
         val gateway = FakeGateway()
         gateway.hang = true
         val envelope = AppApiEnvelope(source(gateway))
 
-        // The envelope has no timeout of its own: the caller's cancellation
-        // propagates instead of being reported as a daemon answer.
+        // The envelope has no timeout of its own. The block records whether the envelope ever
+        // returned: a swallowed cancellation would answer here, a propagated one cannot.
+        var returned: ApiResult? = null
         val cancelled = runCatching {
-            withTimeout(50) { envelope.request("GET", "/app/v1/info") }
+            withTimeout(50) { returned = envelope.request("GET", "/app/v1/info") }
         }.exceptionOrNull()
 
+        assertNull("the envelope must not answer the caller's cancellation", returned)
         assertTrue(cancelled is TimeoutCancellationException)
     }
 

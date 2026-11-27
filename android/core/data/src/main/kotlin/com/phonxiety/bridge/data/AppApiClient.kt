@@ -14,7 +14,6 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -133,10 +132,9 @@ internal class AppApiEnvelope(
             appToken = token
         )
         val result = try {
-            // The engine owns the deadline; this only waits for its typed answer.
+            // The engine owns the deadline; a caller's cancellation — a timeout included — is the
+            // caller's, never a daemon answer, so it propagates.
             gateway.exchange(request)
-        } catch (e: TimeoutCancellationException) {
-            return ApiResult.Failure(504, "timeout", "the daemon did not answer in time")
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
