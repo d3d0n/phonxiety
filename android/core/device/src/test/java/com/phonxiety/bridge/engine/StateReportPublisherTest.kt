@@ -15,9 +15,9 @@ import org.junit.Test
  * The terminal `ended` report through the production publisher.
  *
  * A frame the transport refused is retained and re-sent once right after the
- * next accepted hello; an accepted one is never repeated.  Non-terminal states
- * are recorded as reported only when the transport took them, and a slower
- * earlier send never overwrites a newer recorded one.
+ * next accepted hello; an accepted one is never repeated.  A plan records its
+ * state and cause under the session lock when it is planned, before the send,
+ * so a slower earlier frame never overwrites a newer recorded one.
  */
 class StateReportPublisherTest {
     private class Wire {
@@ -34,7 +34,8 @@ class StateReportPublisherTest {
         }
     }
 
-    private fun session() = CallSession(FakeCallStore(), "com.phonxiety.bridge", clock = { 1_000L })
+    private fun session(store: FakeCallStore = FakeCallStore()) =
+        CallSession(store, "com.phonxiety.bridge", clock = { 1_000L })
 
     private fun call(id: String = "call-1") = CallSession.OwnedCall(
         callId = id,
@@ -44,6 +45,7 @@ class StateReportPublisherTest {
     )
 
     private val cause = DisconnectCause(code = 2, label = "NORMAL", reason = "normal")
+    private val otherCause = DisconnectCause(code = 3, label = "BUSY", reason = "busy")
 
     @Test
     fun aRefusedEndedReportIsResentOnceAfterTheNextAcceptedHello() {
@@ -55,7 +57,7 @@ class StateReportPublisherTest {
         assertTrue(wire.accepted.isEmpty())
 
         wire.accept = true
-        publisher.reportPendingAfterHello()
+        publisher.replayRetained()
 
         assertEquals(1, wire.accepted.size)
         val resent = wire.accepted.single()
@@ -64,87 +66,98 @@ class StateReportPublisherTest {
         assertEquals("call-1", resent.callId)
 
         // The slot is cleared only by the accepted send: nothing is repeated.
-        publisher.reportPendingAfterHello()
+        publisher.replayRetained()
         assertEquals(1, wire.accepted.size)
     }
 
     @Test
-    fun anAcceptedEndedReportIsNeverSentAgain() {
+    fun anAcceptedEndedReportIsNeverReplayed() {
         val wire = Wire()
         val publisher = StateReportPublisher(session(), FakeCallStore(), EngineStateStore(), wire::send)
 
         publisher.report(call(), "ended", cause)
         assertEquals(1, wire.accepted.size)
 
-        publisher.reportPendingAfterHello()
+        publisher.replayRetained()
 
         assertEquals(1, wire.accepted.size)
     }
 
     @Test
-    fun aRefusedNonTerminalStateIsNotRecordedAndIsSentAgainOnceAccepted() {
+    fun aNullCauseIsRetainedAndReplayed() {
         val wire = Wire().apply { accept = false }
+        val publisher = StateReportPublisher(session(), FakeCallStore(), EngineStateStore(), wire::send)
+
+        publisher.report(call(), "ended", null)
+        wire.accept = true
+        publisher.replayRetained()
+
+        val resent = wire.accepted.single()
+        assertEquals("ended", resent.state)
+        assertNull(resent.disconnectCause)
+        publisher.replayRetained()
+        assertEquals(1, wire.accepted.size)
+    }
+
+    /**
+     * The pre-carve dedupe: the state-change `ended` sends once, and the later
+     * `finishOwned` of the same call with the same cause stays quiet.
+     */
+    @Test
+    fun aStateChangeEndedAndFinishOwnedWithTheSameCauseSendOnce() {
+        val wire = Wire()
         val publisher = StateReportPublisher(session(), FakeCallStore(), EngineStateStore(), wire::send)
         val active = call()
 
-        publisher.report(active, "dialing", null)
-        assertEquals(1, wire.attempts.size)
-        assertNull(active.reportedState)
-
-        wire.accept = true
-        publisher.report(active, "dialing", null)
-
-        assertEquals(2, wire.attempts.size)
-        assertEquals(1, wire.accepted.size)
-        assertEquals("dialing", active.reportedState)
-    }
-
-    /**
-     * The P2-1 interleaving: the state-change `ended` is refused and retained,
-     * the next hello's replay is accepted, and only then `finishOwned` reports
-     * the very same `ended`.  The accepted replay marks the report delivered,
-     * so the later caller must stay quiet.
-     */
-    @Test
-    fun anAcceptedReplayBeforeFinishOwnedSendsOneEnded() {
-        val wire = Wire()
-        val store = FakeCallStore()
-        val session = CallSession(store, "com.phonxiety.bridge", clock = { 1_000L })
-        val publisher = StateReportPublisher(session, store, EngineStateStore(), wire::send)
-        session.beginDial(
-            callId = "call-1",
-            destination = "+998901234567",
-            phoneAccount = null,
-            unrelatedCall = { false },
-            linkUp = { true },
-            running = { true }
-        )
-        val active = session.owned!!
         publisher.report(active, "active", null)
-        wire.accept = false
-
         publisher.report(active, "ended", cause)
-        assertTrue(wire.accepted.none { it.state == "ended" })
-
-        // The retained terminal goes out right after the next accepted hello...
-        wire.accept = true
-        publisher.reportPendingAfterHello()
-        // ...and the publisher, not the later caller, owns the accepted report.
         publisher.report(active, "ended", cause)
 
         assertEquals(1, wire.accepted.count { it.state == "ended" })
+        assertEquals(1, wire.attempts.count { it.state == "ended" })
         assertEquals("ended", active.reportedState)
-        assertEquals("ended", store.snapshot.pending?.state)
     }
 
     /**
-     * The P2-2 interleaving: a slow `dialing` frame returns after `active` was
-     * recorded.  It must neither move the call back nor overwrite the ledger.
+     * A terminal report that gains a different disconnect cause is sent again,
+     * and the retained slot carries that newest cause to the next hello.
+     */
+    @Test
+    fun aChangedCauseIsSentAgainAndTheNewestCauseIsReplayed() {
+        val wire = Wire()
+        val publisher = StateReportPublisher(session(), FakeCallStore(), EngineStateStore(), wire::send)
+        val active = call()
+
+        publisher.report(active, "active", null)
+        publisher.report(active, "ended", cause)
+        assertEquals(listOf(cause), wire.accepted.filter { it.state == "ended" }.map { it.disconnectCause })
+
+        // The late cause arrives on a link that refuses it: retained for the next hello.
+        wire.accept = false
+        publisher.report(active, "ended", otherCause)
+        assertTrue(wire.accepted.count { it.state == "ended" } == 1)
+
+        wire.accept = true
+        publisher.replayRetained()
+
+        assertEquals(
+            listOf(cause, otherCause),
+            wire.accepted.filter { it.state == "ended" }.map { it.disconnectCause }
+        )
+        // The newest cause is recorded, so a third identical report stays quiet.
+        publisher.report(active, "ended", otherCause)
+        assertEquals(2, wire.accepted.count { it.state == "ended" })
+    }
+
+    /**
+     * The plan records its state before the frame leaves, so the recording of
+     * an earlier `dialing` is already visible while its send is still blocked
+     * and a slower send cannot undo the newer `active`.
      */
     @Test
     fun aSlowerDialingSendCannotOverwriteTheRecordedActive() {
         val store = FakeCallStore()
-        val session = CallSession(store, "com.phonxiety.bridge", clock = { 1_000L })
+        val session = session(store)
         session.beginDial(
             callId = "call-1",
             destination = "+998901234567",
@@ -155,25 +168,34 @@ class StateReportPublisherTest {
         )
         val owned = session.owned!!
         val dialingInFlight = CountDownLatch(1)
-        val activeRecorded = CountDownLatch(1)
+        val releaseDialing = CountDownLatch(1)
+        val dialingReturned = CountDownLatch(1)
         val publisher = StateReportPublisher(session, store, EngineStateStore()) { message ->
             if (message is DeviceOutbound.CallState && message.state == "dialing") {
                 // Hold the earlier frame until the newer state has been recorded.
                 dialingInFlight.countDown()
-                activeRecorded.await(5, TimeUnit.SECONDS)
+                releaseDialing.await(5, TimeUnit.SECONDS)
             }
             true
         }
 
-        val dialing = Thread { publisher.report(owned, "dialing", null) }
+        val dialing = Thread {
+            publisher.report(owned, "dialing", null)
+            dialingReturned.countDown()
+        }
         dialing.start()
         assertTrue(dialingInFlight.await(5, TimeUnit.SECONDS))
+
+        // The plan was recorded under the lock, before the blocked send.
+        assertEquals("dialing", owned.reportedState)
+        assertEquals("dialing", store.snapshot.pending?.state)
 
         publisher.report(owned, "active", null)
         assertEquals("active", owned.reportedState)
         assertEquals("active", store.snapshot.pending?.state)
 
-        activeRecorded.countDown()
+        releaseDialing.countDown()
+        assertTrue(dialingReturned.await(5, TimeUnit.SECONDS))
         dialing.join(5_000)
 
         assertEquals("active", owned.reportedState)

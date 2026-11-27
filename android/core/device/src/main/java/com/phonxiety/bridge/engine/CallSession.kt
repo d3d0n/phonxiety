@@ -335,13 +335,6 @@ internal class CallSession(
         var reportedCauseKey: String? = null
 
         /**
-         * The newest state-report plan for this call, bumped under [CallSession.lock].
-         * A send records its state only while it still owns the newest revision, so a
-         * slower earlier frame can never overwrite a newer recorded one.
-         */
-        var reportRevision: Long = 0L
-
-        /**
          * Takes the audio out of this call.  The caller resets exactly
          * [AttachedAudio.stream] and nothing else, so a cleanup that runs after
          * a successor attached cannot clear the successor's numbers.

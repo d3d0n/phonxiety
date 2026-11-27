@@ -19,14 +19,13 @@ import com.phonxiety.bridge.net.LinkReadiness
 import com.phonxiety.bridge.net.LinkScheduler
 import com.phonxiety.bridge.net.LinkSupervisor
 import com.phonxiety.bridge.net.LinkTask
-import java.util.concurrent.CountDownLatch
+import com.phonxiety.bridge.net.RequestFailure
 import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.launch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -42,7 +41,9 @@ import org.robolectric.annotation.Config
  *
  * The accepted hello must carry the retained `ended` first and only then
  * release the waiting app request; the wire order proves the replay sits
- * between the hello and the request.
+ * between the hello and the request.  Everything runs on one thread: the
+ * waiting request is started under [Dispatchers.Unconfined] and resumes inline
+ * in `helloQueued`, so the recorded frames need no polling.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -150,6 +151,7 @@ class HelloReplayTest {
                 context = context,
                 session = session,
                 store = store,
+                publisher = publisher,
                 wire = wire,
                 links = { supervisor },
                 settings = settings,
@@ -166,8 +168,7 @@ class HelloReplayTest {
                 unrelatedCall = { false },
                 onCommand = { _, _ -> },
                 onAppAccess = { _, _ -> },
-                onLinkDown = {},
-                onHelloAccepted = { publisher.reportPendingAfterHello() }
+                onLinkDown = {}
             )
             supervisor = LinkSupervisor(factory, events, scheduler) { 0L }
         }
@@ -185,74 +186,55 @@ class HelloReplayTest {
         }
     }
 
+    private fun kindOf(wire: String, ended: String): String = when {
+        wire.startsWith("""{"type":"hello"""") -> "hello"
+        wire == ended -> "ended"
+        else -> "request"
+    }
+
     @Test
-    fun aRetainedEndedFollowsTheHelloAndPrecedesTheWaitingRequest() {
+    fun aRefusedEndedFollowsTheHelloAndPrecedesTheWaitingRequest() {
         val harness = Harness(RuntimeEnvironment.getApplication())
         val call = harness.ownedCall()
 
         harness.supervisor.start()
-        val first = harness.factory.last()
-        first.open()
+        harness.factory.last().open()
         assertTrue(harness.supervisor.isUp())
-        first.down("closed")
+        harness.factory.last().down("closed")
 
         // The link that would carry the ending cannot: the frame is retained.
         harness.publisher.report(call, "ended", cause)
 
-        // An app request is already waiting for the next handshake.
-        val answered = CountDownLatch(1)
-        val request = Thread {
-            runBlocking {
-                harness.requests.exchange("req-1", """{"type":"api","id":"req-1"}""", 2_000)
-            }
-            answered.countDown()
+        // An app request is already waiting for the next handshake.  Unconfined
+        // starts it in place and it suspends on the readiness gate.
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val request = scope.launch(Dispatchers.Unconfined) {
+            harness.requests.exchange("req-1", """{"type":"api","id":"req-1"}""", 60_000)
         }
-        request.start()
-        val postDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-        while (harness.table.size() == 0 && System.nanoTime() < postDeadline) Thread.sleep(1)
         assertEquals(1, harness.table.size())
 
         harness.scheduler.runDue()
         val second = harness.factory.last()
         second.open()
 
-        // The hello releases the waiting request on its own thread; the replay is already queued.
-        val sentDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-        while (second.sentText.size < 3 && System.nanoTime() < sentDeadline) Thread.sleep(1)
-
+        // The hello releases the waiting request inline on this thread; the replay
+        // already ran between the two.
         val ended = DeviceProtocol.encode(DeviceOutbound.CallState("call-1", "ended", cause))
-        val kinds = second.sentText.toList().map { wire ->
-            when {
-                wire.startsWith("""{"type":"hello"""") -> "hello"
-                wire == ended -> "ended"
-                else -> "request"
-            }
-        }
-        assertEquals(listOf("hello", "ended", "request"), kinds)
+        assertEquals(
+            listOf("hello", "ended", "request"),
+            second.sentText.toList().map { kindOf(it, ended) }
+        )
         assertEquals(1, second.sentText.count { it == ended })
 
-        answered.await(5, TimeUnit.SECONDS)
-        request.join(5_000)
-    }
+        harness.requests.stop(RequestFailure.ShuttingDown)
+        assertTrue(request.isCompleted)
 
-    @Test
-    fun aDeliveredTerminalReportIsNotReplayedOnTheNextLink() {
-        val harness = Harness(RuntimeEnvironment.getApplication())
-        val call = harness.ownedCall()
-
-        harness.supervisor.start()
-        harness.factory.last().open()
-        harness.factory.last().down("closed")
-        harness.publisher.report(call, "ended", cause)
-
+        // A later reconnect has nothing retained: the accepted frame was cleared.
+        second.down("closed")
         harness.scheduler.runDue()
-        harness.factory.last().open()
-        val ended = DeviceProtocol.encode(DeviceOutbound.CallState("call-1", "ended", cause))
-        assertEquals(1, harness.factory.last().sentText.count { it == ended })
-
-        harness.factory.last().down("closed")
-        harness.scheduler.runDue()
-        harness.factory.last().open()
-        assertEquals(0, harness.factory.last().sentText.count { it == ended })
+        val third = harness.factory.last()
+        third.open()
+        assertEquals(0, third.sentText.count { it == ended })
+        assertEquals(listOf("hello"), third.sentText.toList().map { kindOf(it, ended) })
     }
 }

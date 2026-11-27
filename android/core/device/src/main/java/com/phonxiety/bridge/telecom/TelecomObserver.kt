@@ -161,7 +161,6 @@ internal class TelecomObserver(
         if (!isRunning()) return
         var detached: com.phonxiety.bridge.AttachedAudio? = null
         var toneOwner: CallSession.OwnedCall? = null
-        var target: CallSession.OwnedCall? = null
         var mapped = "dialing"
         var finish = false
         var cause: DisconnectCause? = null
@@ -177,11 +176,11 @@ internal class TelecomObserver(
                 current.epoch = -1
                 toneOwner = current
             }
-            target = current
+            // Inside the monitor, as before the split: the plan and its record are one
+            // critical section with Telecom's state, and the frame follows it here.
+            report.report(current, mapped, cause)
             finish = mapped == "ended"
         }
-        // Outside the lock: the publisher plans under it but never holds it across the send.
-        target?.let { report.report(it, mapped, cause) }
         releaseDetachedAudio(store, detached) { audio.closeAsync(it) }
         toneOwner?.let { cancelTone(it) }
         if (finish) finishOwned(call, cause)
@@ -191,7 +190,6 @@ internal class TelecomObserver(
         if (!isRunning()) return
         var detached: com.phonxiety.bridge.AttachedAudio? = null
         var toneOwner: CallSession.OwnedCall? = null
-        var target: CallSession.OwnedCall? = null
         var mapped = "dialing"
         var finish = false
         var cause: DisconnectCause? = null
@@ -207,11 +205,11 @@ internal class TelecomObserver(
                 current.epoch = -1
                 toneOwner = current
             }
-            target = current
+            // Inside the monitor, as before the split: the plan and its record are one
+            // critical section with Telecom's state, and the frame follows it here.
+            report.report(current, mapped, cause)
             finish = mapped == "ended"
         }
-        // Outside the lock: the publisher plans under it but never holds it across the send.
-        target?.let { report.report(it, mapped, cause) }
         releaseDetachedAudio(store, detached) { audio.closeAsync(it) }
         toneOwner?.let { cancelTone(it) }
         if (finish) finishOwned(call, cause)

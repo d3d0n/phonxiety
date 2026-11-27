@@ -277,6 +277,7 @@ internal class BridgeEngine(
         context = appContext,
         session = session,
         store = stateStore,
+        publisher = report,
         wire = ::send,
         links = { links },
         settings = settings,
@@ -295,8 +296,7 @@ internal class BridgeEngine(
         onAppAccess = { token, generation ->
             engineScope.launch { acceptAppToken(token, generation) }
         },
-        onLinkDown = { observer.abortOwnedForLinkLoss() },
-        onHelloAccepted = { report.reportPendingAfterHello() }
+        onLinkDown = { observer.abortOwnedForLinkLoss() }
     )
 
     private val capabilityRefresh = CapabilityRefresh(

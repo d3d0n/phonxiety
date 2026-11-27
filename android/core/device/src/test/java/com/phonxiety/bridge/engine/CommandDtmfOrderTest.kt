@@ -30,6 +30,8 @@ import org.robolectric.shadow.api.Shadow
  * A DTMF command queued behind `cancel_actions` for the generation it
  * cancelled is refused before it can start the tone runner, and the command
  * executor answers in dispatch order exactly as the pre-split engine did.
+ * The test waits on latches from the fake tone player and the response sink;
+ * it never polls or sleeps.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -37,8 +39,17 @@ class CommandDtmfOrderTest {
     private val played: MutableList<Char> = Collections.synchronizedList(mutableListOf())
     private val stopped: MutableList<Unit> = Collections.synchronizedList(mutableListOf())
     private val responses: MutableList<DeviceOutbound.Response> = Collections.synchronizedList(mutableListOf())
+    private val responsesArrived = CountDownLatch(3)
+    private val firstTone = CountDownLatch(1)
+    private val interruptResponsesArrived = CountDownLatch(2)
 
     private fun encode(command: DeviceCommand): String = DeviceProtocol.encodeCommand(command)
+
+    private fun playedDigits(): List<Char> = synchronized(played) { played.toList() }
+
+    private fun stoppedCount(): Int = synchronized(stopped) { stopped.size }
+
+    private fun responseSnapshot(): List<DeviceOutbound.Response> = synchronized(responses) { responses.toList() }
 
     /**
      * A [Call] object whose DTMF calls land in [played] and [stopped]: the
@@ -54,7 +65,11 @@ class CommandDtmfOrderTest {
         val iface = constructor.parameterTypes[0]
         val proxy = Proxy.newProxyInstance(iface.classLoader, arrayOf(iface)) { _, method, args ->
             when (method.name) {
-                "playDtmfTone" -> played += args!![1] as Char
+                "playDtmfTone" -> {
+                    played += args!![1] as Char
+                    firstTone.countDown()
+                }
+
                 "stopDtmfTone" -> stopped += Unit
             }
             null
@@ -66,7 +81,7 @@ class CommandDtmfOrderTest {
         return call
     }
 
-    private fun service(call: Call): CommandService {
+    private fun service(call: Call, onResponse: (DeviceOutbound.Response) -> Unit = {}): CommandService {
         val context: Context = RuntimeEnvironment.getApplication()
         val calls = FakeCallStore()
         val session = CallSession(calls, "com.phonxiety.bridge", clock = { 1_000L })
@@ -87,7 +102,10 @@ class CommandDtmfOrderTest {
             Thread(runnable, "commands").apply { isDaemon = true }
         }
         val wire = { message: DeviceOutbound ->
-            if (message is DeviceOutbound.Response) responses += message
+            if (message is DeviceOutbound.Response) {
+                responses += message
+                onResponse(message)
+            }
             true
         }
         val audio = AudioStatsPublisher(context, session, store, wire, executor, { true }, { _ -> false })
@@ -116,15 +134,13 @@ class CommandDtmfOrderTest {
         )
     }
 
-    private fun await(condition: () -> Boolean) {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-        while (!condition() && System.nanoTime() < deadline) Thread.sleep(1)
-        assertTrue("the command did not answer in time", condition())
+    private fun await(latch: CountDownLatch) {
+        assertTrue("the command did not answer in time", latch.await(5, TimeUnit.SECONDS))
     }
 
     @Test
     fun digitsQueuedBehindACancelAreNotPlayedAndTheReplyOrderHolds() {
-        val service = service(shadowCall())
+        val service = service(shadowCall()) { responsesArrived.countDown() }
 
         service.dispatch(
             "dtmf-1",
@@ -158,28 +174,29 @@ class CommandDtmfOrderTest {
             )
         )
 
-        await { responses.count { it.id == "dtmf-1" || it.id == "cancel" || it.id == "dtmf-2" } == 3 }
+        await(responsesArrived)
+        val answered = responseSnapshot()
 
-        assertTrue("digits queued behind the cancel must not play", played.none { it in "345" })
-        val cancel = responses.first { it.id == "cancel" }
+        assertTrue("digits queued behind the cancel must not play", playedDigits().none { it in "345" })
+        val cancel = answered.first { it.id == "cancel" }
         assertTrue(cancel.ok)
-        val stale = responses.first { it.id == "dtmf-2" }
+        val stale = answered.first { it.id == "dtmf-2" }
         assertFalse(stale.ok)
         assertEquals("stale_generation", stale.error)
         // The interrupted runner answers `cancelled`, exactly as before the split.
-        val interrupted = responses.first { it.id == "dtmf-1" }
+        val interrupted = answered.first { it.id == "dtmf-1" }
         assertFalse(interrupted.ok)
         assertEquals("cancelled", interrupted.error)
         // The command executor answered the cancel before the command behind it.
         assertEquals(
             listOf("cancel", "dtmf-2"),
-            responses.filter { it.id == "cancel" || it.id == "dtmf-2" }.map { it.id }
+            answered.filter { it.id == "cancel" || it.id == "dtmf-2" }.map { it.id }
         )
     }
 
     @Test
     fun aCancelInterruptsTheToneInFlightAndStopsIt() {
-        val service = service(shadowCall())
+        val service = service(shadowCall()) { interruptResponsesArrived.countDown() }
         service.dispatch(
             "dtmf-1",
             encode(
@@ -193,21 +210,18 @@ class CommandDtmfOrderTest {
                 )
             )
         )
-        val firstDigit = CountDownLatch(1)
-        val waiter = Thread {
-            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
-            while (played.isEmpty() && System.nanoTime() < deadline) Thread.sleep(1)
-            firstDigit.countDown()
-        }
-        waiter.start()
-        assertTrue(firstDigit.await(5, TimeUnit.SECONDS))
+        // The fake tone player says the first digit is on the line: cancel now.
+        await(firstTone)
         service.dispatch(
             "cancel",
             encode(DeviceCommand.CancelActions(id = "cancel", callId = "call-1", actionGeneration = 2))
         )
-        await { responses.any { it.id == "dtmf-1" } }
+        await(interruptResponsesArrived)
+        val answered = responseSnapshot()
 
-        assertEquals(listOf('1'), played.toList())
-        assertTrue("the tone must be stopped when it is cut", stopped.isNotEmpty())
+        assertEquals(listOf('1'), playedDigits())
+        assertTrue("the tone must be stopped when it is cut", stoppedCount() > 0)
+        assertEquals("cancelled", answered.first { it.id == "dtmf-1" }.error)
+        assertTrue(answered.first { it.id == "cancel" }.ok)
     }
 }

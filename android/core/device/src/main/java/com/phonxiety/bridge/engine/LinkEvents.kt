@@ -35,6 +35,7 @@ internal class LinkEvents(
     private val context: Context,
     private val session: CallSession,
     private val store: EngineStateStore,
+    private val publisher: StateReportPublisher,
     private val wire: (DeviceOutbound) -> Boolean,
     private val links: () -> LinkSupervisor,
     private val settings: SettingsSync,
@@ -51,8 +52,7 @@ internal class LinkEvents(
     private val unrelatedCall: () -> Boolean,
     private val onCommand: (String, String) -> Unit,
     private val onAppAccess: (String, Long) -> Unit,
-    private val onLinkDown: () -> Unit,
-    private val onHelloAccepted: () -> Unit
+    private val onLinkDown: () -> Unit
 ) : LinkSupervisor.Callbacks {
     companion object {
         private const val TAG = "Bridge:engine"
@@ -181,9 +181,9 @@ internal class LinkEvents(
         val sent = links().sendHello(DeviceProtocol.encode(helloMessage))
         hello.delivered = sent
         if (sent) {
-            // A terminal report the previous link refused goes out first, before the
-            // hello releases the app requests that were waiting for a usable link.
-            onHelloAccepted()
+            // A terminal report the previous link refused goes out first, on this thread,
+            // before the hello releases the app requests that were waiting for a usable link.
+            publisher.replayRetained()
             requests.helloQueued()
             capabilityWatch.helloSent(capabilities)
             settings.applyWifiLock()
