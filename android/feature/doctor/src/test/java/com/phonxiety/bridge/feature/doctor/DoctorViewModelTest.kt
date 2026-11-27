@@ -151,6 +151,37 @@ class DoctorViewModelTest {
         collector.cancel()
     }
 
+    /**
+     * A9, single consumption: the confirm takes the pending question out of the state before it
+     * launches anything, so the button can be tapped again while the repair runs and still one
+     * repair happens; a confirm with no question runs nothing at all.
+     */
+    @Test
+    fun aConfirmedFixRunsOnceHoweverManyTapsItGets() = runTest(dispatcher) {
+        val source = FakeDoctorSource(TestData.snapshot(module = ModuleState.Absent))
+        val viewModel = viewModel(
+            source = source,
+            daemon = FakeDaemonApi().apply { doctorOutcome = ApiOutcome.Ok(200, TestData.report()) }
+        )
+        advanceUntilIdle()
+
+        viewModel.confirmFix()
+        advanceUntilIdle()
+        assertEquals("no question, no repair", 0, source.reinstalls)
+
+        viewModel.requestFix(DoctorEvaluator.ID_MODULE_PRESENT)
+        advanceUntilIdle()
+        assertNotNull(viewModel.state.value.pending)
+
+        viewModel.confirmFix()
+        viewModel.confirmFix()
+        advanceUntilIdle()
+
+        assertEquals("the double tap ran one repair", 1, source.reinstalls)
+        assertEquals(1, source.reboots)
+        assertNull(viewModel.state.value.pending)
+    }
+
     @Test
     fun notificationsAskForThePermissionOrForTheSettingsScreen() = runTest(dispatcher) {
         val permissionEffects = mutableListOf<DoctorEffect>()

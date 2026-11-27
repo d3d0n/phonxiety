@@ -212,6 +212,37 @@ class LabViewModelTest {
         assertEquals("+12025550123", prefs.settings.value.testNumber)
     }
 
+    /**
+     * A9, single consumption: the open question is the permission to dial. A confirm with none open
+     * places nothing, and however many taps the button gets while a placement runs, one call goes
+     * out — the question is taken out of the state in the same swap that marks the placement.
+     */
+    @Test
+    fun `a test call is placed once and a stale confirm places nothing`() = runTest(testDispatcher) {
+        var placed = 0
+        api.testCallHandler = {
+            placed += 1
+            ApiOutcome.Ok(200, com.phonxiety.bridge.model.CallSnapshot(callId = "test-call-$placed", profile = "test"))
+        }
+        val vm = viewModel()
+        vm.setTestNumber("+1 (202) 555-0123")
+        withTimeout(5_000) { vm.state.first { it.testCall.number == "+12025550123" } }
+
+        vm.confirmTestCall()
+        runCurrent()
+        assertEquals("no question, no call", 0, placed)
+
+        vm.requestTestCall()
+        vm.confirmTestCall()
+        vm.confirmTestCall()
+        withTimeout(5_000) { vm.state.first { it.testCall.callId != null } }
+        assertEquals("the double tap placed one call", 1, placed)
+
+        vm.confirmTestCall()
+        runCurrent()
+        assertEquals("a later tap is not a question", 1, placed)
+    }
+
     @Test
     fun `a slow store never replays an older number over a newer keystroke`() = runTest(testDispatcher) {
         // Every write is held until the test releases it, so an older value can land at an exact

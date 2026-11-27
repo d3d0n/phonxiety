@@ -144,10 +144,22 @@ constructor(
         }
     }
 
+    /**
+     * Runs the question's fix exactly once. The pending question is taken out of the state in the
+     * same atomic swap that reads it, so a second tap — a double tap, or one landing while the
+     * first already started — finds nothing to confirm and runs nothing.
+     */
     fun confirmFix() {
-        val pending = _state.value.pending ?: return
-        _state.update { it.copy(pending = null) }
+        val pending = takePending() ?: return
         run(pending.checkTitle, pending.subject, pending.plan)
+    }
+
+    private fun takePending(): FixRequest? {
+        while (true) {
+            val current = _state.value
+            val pending = current.pending ?: return null
+            if (_state.compareAndSet(current, current.copy(pending = null))) return pending
+        }
     }
 
     fun dismissConfirm() {

@@ -454,19 +454,17 @@ class LabViewModel @Inject constructor(
         it.copy(testCall = it.testCall.copy(toneSeconds = seconds.coerceIn(1, 10)))
     }
 
-    fun confirmTestCall() {
-        val request = _state.value.testCall
-        if (request.placing) return
-        val payload = _state.value.toRequest()
-        // This placement owns the record from here: the previous call's read stops and may not
-        // publish, and its id is gone with it.
-        placement++
-        resultJob?.cancel()
-        resultJob = null
-        resultCallId = null
-        _state.update {
-            it.copy(
-                testCall = it.testCall.copy(
+    /**
+     * Takes the open question and marks the placement in one swap. Returns false when no question
+     * is open or a placement is already running: the caller then does nothing.
+     */
+    private fun beginPlacement(): Boolean {
+        while (true) {
+            val current = _state.value
+            val call = current.testCall
+            if (!call.confirming || call.placing) return false
+            val next = current.copy(
+                testCall = call.copy(
                     confirming = false,
                     placing = true,
                     error = null,
@@ -474,7 +472,24 @@ class LabViewModel @Inject constructor(
                     callId = null
                 )
             )
+            if (_state.compareAndSet(current, next)) return true
         }
+    }
+
+    /**
+     * Places the test call the dialog asked about, once. The pending question and the "placing"
+     * guard move in one atomic swap, so a double tap places one call, and a tap with no question
+     * open places none.
+     */
+    fun confirmTestCall() {
+        if (!beginPlacement()) return
+        val payload = _state.value.toRequest()
+        // This placement owns the record from here: the previous call's read stops and may not
+        // publish, and its id is gone with it.
+        placement++
+        resultJob?.cancel()
+        resultJob = null
+        resultCallId = null
         // From this moment Telecom's in-call screen may cover the lab, and only this phone's own
         // placement may pull it back over that screen.
         LiveCallFront.expectPlacement()

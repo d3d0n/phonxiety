@@ -6,11 +6,8 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.provider.Settings
-import android.text.format.DateFormat
-import android.text.format.DateUtils
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -18,22 +15,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -42,42 +28,30 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
-import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.heading
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.phonxiety.bridge.designsystem.LocalStatusColors
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
 import com.phonxiety.bridge.designsystem.asString
-import com.phonxiety.bridge.designsystem.component.EmptyState
-import com.phonxiety.bridge.designsystem.component.ErrorCard
-import com.phonxiety.bridge.designsystem.component.LoadingState
-import com.phonxiety.bridge.designsystem.component.STACK_AT_FONT_SCALE
 import com.phonxiety.bridge.designsystem.component.ScreenScaffold
-import com.phonxiety.bridge.designsystem.component.SectionCard
-import com.phonxiety.bridge.designsystem.component.StatusPill
-import com.phonxiety.bridge.designsystem.component.StatusTone
-import java.util.Date
+import com.phonxiety.bridge.feature.doctor.cards.ChangeLogCard
+import com.phonxiety.bridge.feature.doctor.cards.CheckGroups
+import com.phonxiety.bridge.feature.doctor.cards.DaemonFixesCard
+import com.phonxiety.bridge.feature.doctor.cards.GuidedRecoveryCard
+import com.phonxiety.bridge.feature.doctor.cards.RebootNotice
+import com.phonxiety.bridge.feature.doctor.cards.RecoveryContent
+import com.phonxiety.bridge.feature.doctor.cards.SelectedRowCard
+import com.phonxiety.bridge.feature.doctor.cards.SummaryCard
 import kotlinx.coroutines.launch
 
 /** What the screen reports back; every callback has a no-op default so previews and tests stay short. */
@@ -250,526 +224,6 @@ fun DoctorScreen(
 }
 
 @Composable
-private fun SummaryCard(state: DoctorUiState, callbacks: DoctorCallbacks) {
-    SectionCard(
-        title = stringResource(R.string.doctor_card_summary),
-        subtitle = summarySubtitle(state),
-        status = { OverallPill(state) }
-    ) {
-        when {
-            state.checking -> LoadingState(stringResource(R.string.doctor_summary_reading))
-
-            state.readError != null -> ErrorCard(
-                title = stringResource(R.string.doctor_read_error_title),
-                message = stringResource(R.string.doctor_read_error_message),
-                output = requireNotNull(state.readError).asString(),
-                actionLabel = stringResource(R.string.doctor_action_run_checks),
-                onAction = callbacks.onRefresh
-            )
-
-            else -> {
-                Text(
-                    text = summaryLine(state),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    TextButton(onClick = callbacks.onRefresh, enabled = state.running == null) {
-                        Text(stringResource(R.string.doctor_action_run_checks))
-                    }
-                    if (state.running != null) {
-                        Text(
-                            text = stringResource(
-                                R.string.doctor_running,
-                                stringResource(state.running.labelRes)
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun CheckGroups(state: DoctorUiState, callbacks: DoctorCallbacks) {
-    DoctorGroup.entries.forEach { group ->
-        val rows = state.rowsOf(group)
-        if (rows.isEmpty()) return@forEach
-        SectionCard(title = stringResource(group.titleRes)) {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                rows.forEach { row -> CheckRow(row, state, callbacks) }
-            }
-        }
-    }
-}
-
-@Composable
-private fun CheckRow(row: DoctorRow, state: DoctorUiState, callbacks: DoctorCallbacks) {
-    val selected = state.selected == row.id
-    val risk = row.plan?.let { DoctorPolicy.effectiveRisk(it, state.callActive) }
-    val stacked = LocalDensity.current.fontScale >= STACK_AT_FONT_SCALE
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .selectable(
-                selected = selected,
-                role = Role.Button,
-                onClick = { callbacks.onSelect(row.id) }
-            )
-            .padding(vertical = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = row.title.asString(),
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                modifier = Modifier.weight(1f)
-            )
-            // Beside a 200 % title the badge leaves so little width that the title breaks
-            // mid-word ("reachab|le"), so at that scale the badge drops under the title instead.
-            if (!stacked) {
-                SeverityBadge(row.severity)
-                RowChevron()
-            }
-        }
-        if (stacked) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                SeverityBadge(row.severity)
-                RowChevron()
-            }
-        }
-        SummaryText(row)
-        RowDetails(row)
-        if (row.needsFix && !selected) {
-            RowActionButtons(row, risk, state, callbacks)
-        }
-    }
-}
-
-/** The row opens its detail card; the chevron says so, and carries no text of its own. */
-@Composable
-private fun RowChevron() {
-    Icon(
-        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-        contentDescription = null,
-        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier
-            .padding(start = 4.dp)
-            .size(20.dp)
-    )
-}
-
-/** A row's actions carry the check name, so two identical labels never read the same. */
-@Composable
-private fun RowActionButtons(
-    row: DoctorRow,
-    risk: FixClass?,
-    state: DoctorUiState,
-    callbacks: DoctorCallbacks
-) {
-    val checkName = row.title.asString()
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        if (row.plan != null && risk != null) {
-            val label = stringResource(row.plan.fix.labelRes)
-            TextButton(
-                onClick = { callbacks.onFix(row.id) },
-                enabled = state.running == null && risk != FixClass.NEVER,
-                modifier = Modifier.semantics { contentDescription = "$label: $checkName" }
-            ) {
-                Text(label)
-            }
-            if (risk == FixClass.NEVER) {
-                Text(
-                    text = stringResource(R.string.doctor_blocked_in_call),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-        val recovery = DoctorPolicy.recoveryFor(row.kind)
-        if (recovery != null) {
-            val label = stringResource(R.string.doctor_open_recovery)
-            TextButton(
-                onClick = { callbacks.onOpenRecovery(recovery) },
-                modifier = Modifier.semantics { contentDescription = "$label: $checkName" }
-            ) {
-                Text(label)
-            }
-        }
-    }
-}
-
-/** The one plain line a row reads: authored words, never a raw daemon value. */
-@Composable
-private fun SummaryText(row: DoctorRow) {
-    if (row.summary.isEmpty() && row.summaryAtEpochMs == null) return
-    val parts = ArrayList<String>(row.summary.size + 1)
-    for (part in row.summary) parts += part.asString()
-    val moment = row.summaryAtEpochMs?.let { formatMoment(it) }
-    if (moment != null) parts += moment
-    Text(
-        text = parts.joinToString(" · "),
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-}
-
-/**
- * The daemon's own evidence, one line per record, in monospace and selectable, closed until asked
- * for: a raw code or path never sits in the reading flow.
- */
-@Composable
-private fun RowDetails(row: DoctorRow) {
-    if (row.details.isEmpty()) return
-    var shown by rememberSaveable(row.id) { mutableStateOf(false) }
-    val label = stringResource(if (shown) R.string.doctor_details_hide else R.string.doctor_details_show)
-    // Twenty rows can offer Details: each one says which check it belongs to.
-    val checkName = row.title.asString()
-    TextButton(onClick = { shown = !shown }, modifier = Modifier.semantics { contentDescription = "$label: $checkName" }) {
-        Text(label)
-    }
-    if (shown) {
-        val lines = ArrayList<String>(row.details.size)
-        for (part in row.details) lines += part.asString()
-        SelectionContainer {
-            Text(
-                text = lines.joinToString("\n"),
-                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
-
-/** A moment in the phone's own locale and zone, never the daemon's ISO stamp. */
-@Composable
-private fun formatMoment(epochMs: Long): String = DateUtils.formatDateTime(
-    LocalContext.current,
-    epochMs,
-    DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_TIME or DateUtils.FORMAT_ABBREV_MONTH
-)
-
-@Composable
-private fun SelectedRowCard(state: DoctorUiState, callbacks: DoctorCallbacks) {
-    val row = state.row(state.selected)
-    if (row == null) {
-        SectionCard(title = stringResource(R.string.doctor_card_summary)) {
-            EmptyState(
-                title = stringResource(R.string.doctor_select_check_title),
-                message = stringResource(R.string.doctor_select_check_message)
-            )
-        }
-        return
-    }
-    val risk = row.plan?.let { DoctorPolicy.effectiveRisk(it, state.callActive) }
-    val checkName = row.title.asString()
-    SectionCard(
-        title = checkName,
-        status = { SeverityBadge(row.severity) }
-    ) {
-        SummaryText(row)
-        RowDetails(row)
-        val plan = row.plan
-        if (plan != null) {
-            Text(text = plan.effect.asString(), style = MaterialTheme.typography.bodyMedium)
-            if (plan.needsReboot) {
-                RebootNotice()
-            }
-            Text(
-                text = stringResource(R.string.doctor_rollback_label),
-                style = MaterialTheme.typography.titleSmall,
-                modifier = Modifier.semantics { heading() }
-            )
-            Text(
-                text = plan.rollback.asString(),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            val label = stringResource(plan.fix.labelRes)
-            TextButton(
-                onClick = { callbacks.onFix(row.id) },
-                enabled = state.running == null && risk != FixClass.NEVER,
-                modifier = Modifier.semantics { contentDescription = "$label: $checkName" }
-            ) {
-                Text(label)
-            }
-            if (risk == FixClass.NEVER) {
-                Text(
-                    text = stringResource(R.string.doctor_blocked_in_call),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-        DoctorPolicy.recoveryFor(row.kind)?.let { recovery ->
-            val label = stringResource(R.string.doctor_open_recovery)
-            TextButton(
-                onClick = { callbacks.onOpenRecovery(recovery) },
-                modifier = Modifier.semantics { contentDescription = "$label: $checkName" }
-            ) {
-                Text(label)
-            }
-        }
-    }
-}
-
-@Composable
-private fun RebootNotice() {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Icon(
-            imageVector = Icons.Filled.Refresh,
-            contentDescription = null,
-            tint = LocalStatusColors.current.warning.content,
-            modifier = Modifier.size(20.dp)
-        )
-        Text(
-            text = stringResource(R.string.doctor_reboot_notice),
-            style = MaterialTheme.typography.bodyMedium
-        )
-    }
-}
-
-@Composable
-private fun DaemonFixesCard(state: DoctorUiState, callbacks: DoctorCallbacks) {
-    SectionCard(
-        title = stringResource(R.string.doctor_card_daemon_fixes),
-        subtitle = stringResource(R.string.doctor_daemon_fixes_subtitle)
-    ) {
-        when {
-            state.checking -> LoadingState(stringResource(R.string.doctor_loading_report))
-
-            state.daemonFixes.isEmpty() -> Text(
-                text = stringResource(R.string.doctor_daemon_fixes_none),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            else -> state.daemonFixes.forEach { offer ->
-                val risk = DoctorPolicy.effectiveRisk(offer.plan, state.callActive)
-                Column(
-                    modifier = Modifier.padding(vertical = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = offer.description?.replaceFirstChar { it.uppercase() } ?: offer.fix,
-                            style = MaterialTheme.typography.titleSmall,
-                            modifier = Modifier.weight(1f)
-                        )
-                        ClassPill(risk)
-                    }
-                    Text(
-                        text = offer.fix,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    val runLabel = stringResource(R.string.doctor_fix_run)
-                    TextButton(
-                        onClick = { callbacks.onDaemonFix(offer.fix) },
-                        enabled = state.running == null && risk != FixClass.NEVER,
-                        modifier = Modifier.semantics {
-                            contentDescription = "$runLabel: ${offer.description ?: offer.fix}"
-                        }
-                    ) {
-                        Text(runLabel)
-                    }
-                    if (risk == FixClass.NEVER) {
-                        Text(
-                            text = stringResource(R.string.doctor_blocked_in_call),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ChangeLogCard(state: DoctorUiState) {
-    SectionCard(
-        title = stringResource(R.string.doctor_card_changes),
-        subtitle = stringResource(R.string.doctor_changes_subtitle)
-    ) {
-        when {
-            state.checking -> LoadingState(stringResource(R.string.doctor_loading_report))
-
-            state.changeLog.isEmpty() -> Text(
-                text = stringResource(R.string.doctor_changes_none),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            else -> {
-                val context = LocalContext.current
-                val time = remember(context) { DateFormat.getTimeFormat(context) }
-                state.changeLog.takeLast(CHANGE_LOG_ROWS).reversed().forEach { entry ->
-                    SelectionContainer {
-                        Text(
-                            text = stringResource(
-                                R.string.doctor_change_line,
-                                time.format(Date(entry.atEpochMs)),
-                                entry.text()
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun DoctorChangeEntry.text(): String = when (event) {
-    null -> legacyText.orEmpty()
-
-    DoctorLogEvent.BRIDGE_RESTARTED -> stringResource(R.string.doctor_log_bridge_restarted)
-
-    DoctorLogEvent.PERMISSION_ASKED -> stringResource(R.string.doctor_log_permission_asked, *args.toTypedArray())
-
-    DoctorLogEvent.NOTIFICATIONS_ASKED -> stringResource(R.string.doctor_log_notifications_asked)
-
-    DoctorLogEvent.BACKGROUND_ASKED -> stringResource(R.string.doctor_log_background_asked)
-
-    DoctorLogEvent.MODULE_ENABLED -> stringResource(R.string.doctor_log_module_enabled)
-
-    DoctorLogEvent.MODULE_ENABLED_OUTPUT ->
-        stringResource(R.string.doctor_log_module_enabled_output, *args.toTypedArray())
-
-    DoctorLogEvent.MODULE_REINSTALLED -> stringResource(R.string.doctor_log_module_reinstalled)
-
-    DoctorLogEvent.MODULE_REINSTALLED_OUTPUT ->
-        stringResource(R.string.doctor_log_module_reinstalled_output, *args.toTypedArray())
-
-    DoctorLogEvent.REBOOT_REQUESTED -> stringResource(R.string.doctor_log_reboot_requested)
-
-    DoctorLogEvent.REBOOTED -> stringResource(R.string.doctor_log_rebooted)
-
-    DoctorLogEvent.FIX_FAILED -> if (args.firstOrNull().isNullOrBlank()) {
-        stringResource(R.string.doctor_log_fix_failed_no_output)
-    } else {
-        stringResource(R.string.doctor_log_fix_failed, args.first())
-    }
-
-    // A reboot request can fail before the phone prints anything: say that in words rather than
-    // rendering a sentence with a hole in it.
-    DoctorLogEvent.REBOOT_FAILED -> if (args.firstOrNull().isNullOrBlank()) {
-        stringResource(R.string.doctor_log_reboot_failed_no_output)
-    } else {
-        stringResource(R.string.doctor_log_reboot_failed, args.first())
-    }
-
-    DoctorLogEvent.PAIRING_RECOVERY_OPENED -> stringResource(R.string.doctor_log_pairing_opened)
-
-    DoctorLogEvent.DAEMON_FIX_APPLIED -> stringResource(R.string.doctor_log_daemon_fix, *args.toTypedArray())
-
-    DoctorLogEvent.DAEMON_FIX_APPLIED_MORE ->
-        stringResource(R.string.doctor_log_daemon_fix_more, *args.toTypedArray())
-}
-
-@Composable
-private fun GuidedRecoveryCard(state: DoctorUiState, callbacks: DoctorCallbacks) {
-    val provider = state.provider
-    SectionCard(
-        title = stringResource(R.string.doctor_card_recovery),
-        subtitle = if (provider == null) {
-            stringResource(R.string.doctor_recovery_subtitle_unknown)
-        } else {
-            stringResource(R.string.doctor_recovery_subtitle, provider.doctorTitle())
-        }
-    ) {
-        RecoveryId.entries.forEach { id ->
-            val page = remember(id, provider) { RecoveryBook.page(id, provider) }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 48.dp)
-                    .clickable(role = Role.Button) { callbacks.onOpenRecovery(id) },
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = page.title.asString(),
-                    style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.weight(1f)
-                )
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun RecoveryContent(page: RecoveryPage, onCopy: (String) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        SectionCard(title = stringResource(R.string.doctor_recovery_what_happened)) {
-            Text(
-                text = page.happened.asString(),
-                style = MaterialTheme.typography.bodyMedium
-            )
-        }
-        SectionCard(title = stringResource(R.string.doctor_recovery_on_phone)) {
-            page.onPhone.forEachIndexed { index, step ->
-                StepLine(index = index + 1, step = step, onCopy = onCopy)
-            }
-        }
-        SectionCard(title = stringResource(R.string.doctor_recovery_from_computer)) {
-            page.fromComputer.forEachIndexed { index, step ->
-                StepLine(index = index + 1, step = step, onCopy = onCopy)
-            }
-        }
-    }
-}
-
-@Composable
-private fun StepLine(index: Int, step: RecoveryStep, onCopy: (String) -> Unit) {
-    Column(
-        modifier = Modifier.padding(vertical = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        Text(
-            text = "$index. ${step.text.asString()}",
-            style = MaterialTheme.typography.bodyMedium
-        )
-        step.command?.let { command ->
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                SelectionContainer(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = command,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace
-                    )
-                }
-                val copyLabel = stringResource(R.string.doctor_recovery_copy)
-                TextButton(
-                    onClick = { onCopy(command) },
-                    modifier = Modifier.semantics { contentDescription = "$copyLabel: $command" }
-                ) {
-                    Text(copyLabel)
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun ConfirmFixDialog(request: FixRequest, onConfirm: () -> Unit, onDismiss: () -> Unit) {
     val label = stringResource(request.plan.fix.labelRes)
     val action = if (request.plan.needsReboot) {
@@ -817,129 +271,6 @@ private fun ConfirmFixDialog(request: FixRequest, onConfirm: () -> Unit, onDismi
     )
 }
 
-/** A passing row shows a check, not a pill: twenty identical "OK" pills bury the one failure. */
-@Composable
-private fun SeverityBadge(severity: DoctorSeverity) {
-    when (severity) {
-        DoctorSeverity.OK -> Icon(
-            imageVector = Icons.Filled.Check,
-            contentDescription = null,
-            tint = LocalStatusColors.current.positiveIndicator,
-            modifier = Modifier.size(20.dp)
-        )
-
-        DoctorSeverity.WARN -> StatusPill(
-            label = stringResource(R.string.doctor_severity_warning),
-            tone = StatusTone.WARNING
-        )
-
-        DoctorSeverity.FAIL -> StatusPill(
-            label = stringResource(R.string.doctor_severity_failed),
-            tone = StatusTone.NEGATIVE
-        )
-
-        DoctorSeverity.UNKNOWN -> StatusPill(
-            label = stringResource(R.string.doctor_severity_unknown),
-            tone = StatusTone.NEUTRAL
-        )
-    }
-}
-
-@Composable
-private fun OverallPill(state: DoctorUiState) {
-    when {
-        state.checking -> StatusPill(
-            label = stringResource(R.string.doctor_status_reading),
-            tone = StatusTone.NEUTRAL,
-            pulse = true
-        )
-
-        state.readError != null -> StatusPill(
-            label = stringResource(R.string.doctor_status_read_failed),
-            tone = StatusTone.NEGATIVE
-        )
-
-        state.rows.isEmpty() || state.overall == DoctorSeverity.UNKNOWN -> StatusPill(
-            label = stringResource(R.string.doctor_status_inconclusive),
-            tone = StatusTone.NEUTRAL
-        )
-
-        state.overall == DoctorSeverity.OK -> StatusPill(
-            label = stringResource(R.string.doctor_status_all_pass),
-            tone = StatusTone.POSITIVE
-        )
-
-        else -> StatusPill(
-            label = pluralStringResource(
-                R.plurals.doctor_status_needs_fix,
-                state.failing.size,
-                state.failing.size
-            ),
-            tone = if (state.overall == DoctorSeverity.FAIL) StatusTone.NEGATIVE else StatusTone.WARNING
-        )
-    }
-}
-
-@Composable
-private fun ClassPill(risk: FixClass) {
-    val (label, tone) = when (risk) {
-        FixClass.AUTOMATIC -> R.string.doctor_risk_automatic to StatusTone.NEUTRAL
-
-        // Asking first is how a careful fix behaves, not a warning: the tone says so.
-        FixClass.CONFIRM -> R.string.doctor_risk_confirm to StatusTone.NEUTRAL
-
-        FixClass.NEVER -> R.string.doctor_risk_never to StatusTone.NEGATIVE
-    }
-    StatusPill(label = stringResource(label), tone = tone)
-}
-
-@Composable
-private fun summarySubtitle(state: DoctorUiState): String = when {
-    state.checking -> stringResource(R.string.doctor_status_reading)
-
-    state.readError != null -> stringResource(R.string.doctor_status_read_failed)
-
-    state.rows.isEmpty() -> stringResource(R.string.doctor_status_not_checked)
-
-    state.failing.isEmpty() -> pluralStringResource(
-        R.plurals.doctor_summary_all_pass,
-        state.rows.size,
-        state.rows.size
-    )
-
-    else -> pluralStringResource(
-        R.plurals.doctor_summary_passed,
-        state.passed,
-        state.passed,
-        state.rows.size
-    )
-}
-
-@Composable
-private fun summaryLine(state: DoctorUiState): String = when {
-    state.failing.isEmpty() && state.overall == DoctorSeverity.OK ->
-        stringResource(R.string.doctor_summary_line_all_pass)
-
-    state.overall == DoctorSeverity.UNKNOWN -> stringResource(R.string.doctor_summary_line_unknown)
-
-    state.callActive -> stringResource(R.string.doctor_summary_line_call)
-
-    else -> pluralStringResource(
-        R.plurals.doctor_summary_line_needs_fix,
-        state.failing.size,
-        state.failing.size
-    )
-}
-
-private const val CHANGE_LOG_ROWS = 6
-
-private fun copyToClipboard(context: Context, text: String) {
-    val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
-    clipboard.setPrimaryClip(ClipData.newPlainText(context.getString(R.string.doctor_clipboard_label), text))
-}
-
-// The phone is a sideloaded priv-app, and the exemption is the documented fix for heartbeat misses
-// with the screen off; the dialog is the system's own, never a silent grant.
 @SuppressLint("BatteryLife")
 private fun batteryExemptionIntent(context: Context): Intent = Intent(
     Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
@@ -948,6 +279,11 @@ private fun batteryExemptionIntent(context: Context): Intent = Intent(
 
 private fun notificationSettingsIntent(context: Context): Intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
     .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+
+private fun copyToClipboard(context: Context, text: String) {
+    val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
+    clipboard.setPrimaryClip(ClipData.newPlainText(context.getString(R.string.doctor_clipboard_label), text))
+}
 
 @Preview(name = "Doctor – all green", widthDp = 411, heightDp = 2000)
 @Composable
