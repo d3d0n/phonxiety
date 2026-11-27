@@ -51,7 +51,7 @@ class LiveCallRecreationTest {
     }
 
     private val factory = viewModelFactory {
-        initializer { LiveCallViewModel(api, FakeBridgeState(), FakeCallEnd()) }
+        initializer { LiveCallViewModel(api, FakeBridgeState(), FakeCallScreenOpener()) }
     }
 
     @Test
@@ -78,6 +78,7 @@ class LiveCallRecreationTest {
                         onConfirmHangUp = viewModel::confirmHangUp,
                         onDismissHangUp = viewModel::dismissHangUp,
                         onReload = viewModel::reload,
+                        onOpenCallScreen = viewModel::openCallScreen,
                         onOpenDetail = {}
                     )
                 }

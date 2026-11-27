@@ -87,6 +87,7 @@ fun LiveCallRoute(
         onConfirmHangUp = viewModel::confirmHangUp,
         onDismissHangUp = viewModel::dismissHangUp,
         onReload = viewModel::reload,
+        onOpenCallScreen = viewModel::openCallScreen,
         onOpenDetail = onOpenDetail,
         nowEpochMs = now,
         modifier = modifier
@@ -112,6 +113,7 @@ fun LiveCallScreen(
     onConfirmHangUp: () -> Unit,
     onDismissHangUp: () -> Unit,
     onReload: () -> Unit,
+    onOpenCallScreen: () -> Unit,
     onOpenDetail: (String) -> Unit,
     modifier: Modifier = Modifier,
     nowEpochMs: Long = System.currentTimeMillis()
@@ -151,6 +153,7 @@ fun LiveCallScreen(
                     onConfirmHangUp = onConfirmHangUp,
                     onDismissHangUp = onDismissHangUp,
                     onReload = onReload,
+                    onOpenCallScreen = onOpenCallScreen,
                     onOpenDetail = onOpenDetail,
                     nowEpochMs = nowEpochMs
                 )
@@ -173,6 +176,7 @@ private fun LiveCallBody(
     onConfirmHangUp: () -> Unit,
     onDismissHangUp: () -> Unit,
     onReload: () -> Unit,
+    onOpenCallScreen: () -> Unit,
     onOpenDetail: (String) -> Unit,
     nowEpochMs: Long
 ) {
@@ -189,6 +193,7 @@ private fun LiveCallBody(
             onDtmf = onDtmf,
             onMark = onMark,
             onReload = onReload,
+            onOpenCallScreen = onOpenCallScreen,
             showError = showError,
             modifier = modifier
         )
@@ -237,6 +242,7 @@ private fun LiveCallBody(
                                 message = message,
                                 code = state.errorCode,
                                 onReload = onReload,
+                                onOpenCallScreen = if (state.callScreenAction) onOpenCallScreen else null,
                                 modifier = Modifier.padding(bottom = 8.dp)
                             )
                         }

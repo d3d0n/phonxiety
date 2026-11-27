@@ -75,6 +75,7 @@ class LiveCallTranscriptStabilityTest {
                         onConfirmHangUp = {},
                         onDismissHangUp = {},
                         onReload = {},
+                        onOpenCallScreen = {},
                         onOpenDetail = {},
                         nowEpochMs = NOW
                     )

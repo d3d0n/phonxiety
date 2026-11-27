@@ -127,6 +127,7 @@ class LiveCallScreenshotTest {
                             onConfirmHangUp = onConfirmHangUp,
                             onDismissHangUp = onDismissHangUp,
                             onReload = {},
+                            onOpenCallScreen = {},
                             onOpenDetail = {},
                             nowEpochMs = NOW
                         )
@@ -519,6 +520,7 @@ class LiveCallScreenshotTest {
                         },
                         onDismissHangUp = { state.value = state.value.copy(pendingHangUp = false) },
                         onReload = {},
+                        onOpenCallScreen = {},
                         onOpenDetail = {},
                         nowEpochMs = NOW
                     )
@@ -620,6 +622,7 @@ class LiveCallScreenshotTest {
                         },
                         onDismissHangUp = { state.value = state.value.copy(pendingHangUp = false) },
                         onReload = {},
+                        onOpenCallScreen = {},
                         onOpenDetail = {},
                         nowEpochMs = NOW
                     )

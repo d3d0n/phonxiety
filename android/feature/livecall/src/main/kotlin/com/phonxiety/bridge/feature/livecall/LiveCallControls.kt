@@ -111,6 +111,7 @@ internal fun ControlsColumn(
     onDtmf: (String) -> Unit,
     onMark: (String) -> Unit,
     onReload: () -> Unit,
+    onOpenCallScreen: () -> Unit,
     modifier: Modifier,
     showError: Boolean = true
 ) {
@@ -120,7 +121,12 @@ internal fun ControlsColumn(
     ) {
         if (showError) {
             state.error?.let { message ->
-                LiveCallError(message = message, code = state.errorCode, onReload = onReload)
+                LiveCallError(
+                    message = message,
+                    code = state.errorCode,
+                    onReload = onReload,
+                    onOpenCallScreen = if (state.callScreenAction) onOpenCallScreen else null
+                )
             }
         }
         LevelCard(state)
@@ -419,20 +425,27 @@ private fun DtmfCard(onDtmf: (String) -> Unit, enabled: Boolean) {
     }
 }
 
-/** The call's own failure, with the daemon's code behind Details and the one retry beside it. */
+/** The call's own failure, with the daemon's code behind Details and one action beside it. */
 @Composable
 internal fun LiveCallError(
     message: UiText,
     code: String?,
     onReload: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onOpenCallScreen: (() -> Unit)? = null
 ) {
+    // A failed hang-up leaves the call up: the card says so and leads to the platform's own
+    // in-call controls. Every other failure keeps the daemon-side retry.
     ErrorCard(
-        title = stringResource(R.string.live_call_action_failed_title),
+        title = stringResource(
+            if (onOpenCallScreen != null) R.string.live_call_hang_up_failed_title else R.string.live_call_action_failed_title
+        ),
         message = message.asString(),
         output = code,
-        actionLabel = stringResource(R.string.live_call_retry),
-        onAction = onReload,
+        actionLabel = stringResource(
+            if (onOpenCallScreen != null) R.string.live_call_open_call_screen else R.string.live_call_retry
+        ),
+        onAction = onOpenCallScreen ?: onReload,
         modifier = modifier
     )
 }

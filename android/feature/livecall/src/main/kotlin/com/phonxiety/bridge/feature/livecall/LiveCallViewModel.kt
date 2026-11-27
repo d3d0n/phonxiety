@@ -12,7 +12,6 @@ import com.phonxiety.bridge.model.CallEvent
 import com.phonxiety.bridge.model.CallMark
 import com.phonxiety.bridge.model.CallPhase
 import com.phonxiety.bridge.model.CallSnapshot
-import com.phonxiety.bridge.model.LiveCallHangUp
 import com.phonxiety.bridge.model.PartialTurn
 import com.phonxiety.bridge.model.TranscriptTurn
 import com.phonxiety.bridge.model.VoiceControls
@@ -118,6 +117,11 @@ data class LiveCallUiState(
      * memory, so it survives a configuration change; only the ViewModel clears or confirms it.
      */
     val pendingHangUp: Boolean = false,
+    /**
+     * A hang-up did not go through, so the error offers the phone's own call screen: the daemon
+     * could not end the call, but the platform still can. Hidden when the platform refuses.
+     */
+    val callScreenAction: Boolean = false,
     val error: UiText? = null,
     /** The daemon's code for [error], shown behind the details disclosure. */
     val errorCode: String? = null,
@@ -185,7 +189,7 @@ private val PHONE_PHASES_THAT_ADVANCE_PREPARING = setOf("dialing", "active")
 class LiveCallViewModel @Inject constructor(
     private val api: DaemonApi,
     private val bridgeState: BridgeStateRepository,
-    private val callEnd: LiveCallHangUp
+    private val callScreen: CallScreenOpener
 ) : ViewModel() {
     private val _state = MutableStateFlow(LiveCallUiState())
     val state: StateFlow<LiveCallUiState> = _state.asStateFlow()
@@ -220,14 +224,14 @@ class LiveCallViewModel @Inject constructor(
         val snapshot = _state.value
         val text = snapshot.instruction.trim()
         if (text.isEmpty() || snapshot.busy || snapshot.hangingUp) return
-        _state.update { it.copy(busy = true, error = null, errorCode = null) }
+        _state.update { it.copy(busy = true, error = null, errorCode = null, callScreenAction = false) }
         viewModelScope.launch {
             when (val outcome = api.instruction(snapshot.callId, text)) {
                 is ApiOutcome.Ok -> _state.update {
-                    it.copy(busy = false, instruction = "", error = null, errorCode = null)
+                    it.copy(busy = false, instruction = "", error = null, errorCode = null, callScreenAction = false)
                 }
 
-                is ApiOutcome.Failure -> _state.update { it.copy(busy = false, error = UiText.Literal(outcome.message), errorCode = outcome.code) }
+                is ApiOutcome.Failure -> _state.update { it.copy(busy = false, error = UiText.Literal(outcome.message), errorCode = outcome.code, callScreenAction = false) }
             }
         }
     }
@@ -235,15 +239,15 @@ class LiveCallViewModel @Inject constructor(
     fun togglePause() {
         val snapshot = _state.value
         if (snapshot.busy || snapshot.hangingUp) return
-        _state.update { it.copy(busy = true, error = null, errorCode = null) }
+        _state.update { it.copy(busy = true, error = null, errorCode = null, callScreenAction = false) }
         viewModelScope.launch {
             val outcome = if (snapshot.muted) api.resume(snapshot.callId) else api.pause(snapshot.callId)
             when (outcome) {
                 is ApiOutcome.Ok -> _state.update {
-                    it.copy(busy = false, muted = outcome.value.muted, error = null, errorCode = null)
+                    it.copy(busy = false, muted = outcome.value.muted, error = null, errorCode = null, callScreenAction = false)
                 }
 
-                is ApiOutcome.Failure -> _state.update { it.copy(busy = false, error = UiText.Literal(outcome.message), errorCode = outcome.code) }
+                is ApiOutcome.Failure -> _state.update { it.copy(busy = false, error = UiText.Literal(outcome.message), errorCode = outcome.code, callScreenAction = false) }
             }
         }
     }
@@ -251,7 +255,7 @@ class LiveCallViewModel @Inject constructor(
     fun summarizeNow() {
         val snapshot = _state.value
         if (snapshot.summarizing || snapshot.hangingUp) return
-        _state.update { it.copy(summarizing = true, error = null, errorCode = null) }
+        _state.update { it.copy(summarizing = true, error = null, errorCode = null, callScreenAction = false) }
         viewModelScope.launch {
             when (val outcome = api.summarize(snapshot.callId)) {
                 is ApiOutcome.Ok -> _state.update {
@@ -262,7 +266,7 @@ class LiveCallViewModel @Inject constructor(
                     )
                 }
 
-                is ApiOutcome.Failure -> _state.update { it.copy(summarizing = false, error = UiText.Literal(outcome.message), errorCode = outcome.code) }
+                is ApiOutcome.Failure -> _state.update { it.copy(summarizing = false, error = UiText.Literal(outcome.message), errorCode = outcome.code, callScreenAction = false) }
             }
         }
     }
@@ -270,11 +274,11 @@ class LiveCallViewModel @Inject constructor(
     fun sendDtmf(digits: String) {
         val snapshot = _state.value
         if (digits.isBlank() || snapshot.busy || snapshot.hangingUp) return
-        _state.update { it.copy(busy = true, error = null, errorCode = null) }
+        _state.update { it.copy(busy = true, error = null, errorCode = null, callScreenAction = false) }
         viewModelScope.launch {
             when (val outcome = api.dtmf(snapshot.callId, digits)) {
                 is ApiOutcome.Ok -> _state.update { it.copy(busy = false) }
-                is ApiOutcome.Failure -> _state.update { it.copy(busy = false, error = UiText.Literal(outcome.message), errorCode = outcome.code) }
+                is ApiOutcome.Failure -> _state.update { it.copy(busy = false, error = UiText.Literal(outcome.message), errorCode = outcome.code, callScreenAction = false) }
             }
         }
     }
@@ -282,19 +286,19 @@ class LiveCallViewModel @Inject constructor(
     fun mark(kind: String, note: String? = null) {
         val snapshot = _state.value
         if (snapshot.busy || snapshot.hangingUp) return
-        _state.update { it.copy(busy = true, error = null, errorCode = null) }
+        _state.update { it.copy(busy = true, error = null, errorCode = null, callScreenAction = false) }
         viewModelScope.launch {
             when (val outcome = api.addMark(snapshot.callId, kind, note)) {
                 is ApiOutcome.Ok -> _state.update { it.copy(busy = false, marks = outcome.value.marks) }
-                is ApiOutcome.Failure -> _state.update { it.copy(busy = false, error = UiText.Literal(outcome.message), errorCode = outcome.code) }
+                is ApiOutcome.Failure -> _state.update { it.copy(busy = false, error = UiText.Literal(outcome.message), errorCode = outcome.code, callScreenAction = false) }
             }
         }
     }
 
     /**
-     * Asks for the confirmation a hang-up needs. Ending the call does not depend on `/info`: the
-     * hang-up is offered for as long as the call is live, and [confirmHangUp] uses the end-of-call
-     * path whenever the voice backend has not vouched for its own `hangup`.
+     * Asks for the confirmation a hang-up needs. The hang-up is offered for as long as the call is
+     * live, whatever `/info` says about the voice backend's own `hangup`: the daemon owns its
+     * call's state and cancels a dial that has not reached Telecom yet.
      */
     fun requestHangUp() {
         val snapshot = _state.value
@@ -320,38 +324,55 @@ class LiveCallViewModel @Inject constructor(
     }
 
     /**
-     * Ends the call. When the daemon confirmed its own `hangup` for this call, that endpoint gets
-     * the request and its snapshot is applied. Otherwise — the answer is unknown or the voice
-     * backend refuses the control — the end follows the same path as the notification and the
-     * tile: a bounded daemon attempt, then the Telecom call this device supervises, so a live call
-     * is always endable.
+     * Ends the call through the daemon endpoint, which owns the call's state and cancels a dial
+     * that has not reached Telecom yet. It runs whatever `/info` reported about the voice
+     * backend's own `hangup`. A failure releases the ending latch and offers the phone's call
+     * screen, so the user can retry here or end the call from the platform.
      */
     fun hangUp() {
         val snapshot = _state.value
         if (snapshot.busy || snapshot.hangingUp || snapshot.ended) return
-        _state.update { it.copy(busy = true, hangingUp = true, pendingHangUp = false, error = null, errorCode = null) }
-        if (snapshot.controls.hangup.isEnabled) {
-            viewModelScope.launch {
-                when (val outcome = api.hangup(snapshot.callId)) {
-                    is ApiOutcome.Ok -> {
-                        // The answer may already be terminal; if it is only "ending", the events loop
-                        // keeps the screen in the ending state until the daemon says ended.
-                        applySnapshot(outcome.value)
-                        _state.update { it.copy(busy = false) }
-                    }
+        _state.update {
+            it.copy(
+                busy = true,
+                hangingUp = true,
+                pendingHangUp = false,
+                callScreenAction = false,
+                error = null,
+                errorCode = null
+            )
+        }
+        viewModelScope.launch {
+            when (val outcome = api.hangup(snapshot.callId)) {
+                is ApiOutcome.Ok -> {
+                    // The answer may already be terminal; if it is only "ending", the events loop
+                    // keeps the screen in the ending state until the daemon says ended.
+                    applySnapshot(outcome.value)
+                    _state.update { it.copy(busy = false) }
+                }
 
-                    is ApiOutcome.Failure -> _state.update {
-                        it.copy(busy = false, hangingUp = false, error = UiText.Literal(outcome.message), errorCode = outcome.code)
-                    }
+                is ApiOutcome.Failure -> _state.update {
+                    it.copy(
+                        busy = false,
+                        hangingUp = false,
+                        error = UiText.Literal(outcome.message),
+                        errorCode = outcome.code,
+                        callScreenAction = true
+                    )
                 }
             }
-        } else {
-            viewModelScope.launch {
-                // The engine reports the end through the bridge state and the events loop, so the
-                // screen stays in the ending state until the daemon's terminal state arrives.
-                callEnd.hangUp()
-                _state.update { it.copy(busy = false) }
-            }
+        }
+    }
+
+    /**
+     * Brings up the system's own in-call screen, the way out when the daemon cannot end the call.
+     * The platform answers a missing permission with a [SecurityException]; the opener reports
+     * that as "not shown" and the action disappears rather than failing the same way twice.
+     */
+    fun openCallScreen() {
+        if (!_state.value.callScreenAction) return
+        if (!callScreen.show()) {
+            _state.update { it.copy(callScreenAction = false) }
         }
     }
 

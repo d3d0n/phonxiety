@@ -137,7 +137,7 @@ class LiveCallTruthTest {
     }
 
     @Test
-    fun theTimerStopsWhenTheCallEnded() {
+    fun theTimerStopsWhenTheCallHasEnded() {
         // The call ended at 1_764_000_052_000; a tick minutes later must not move the timer.
         assertEquals("00:47", formatTimer(ended, nowEpochMs = 1_764_000_200_000L))
     }

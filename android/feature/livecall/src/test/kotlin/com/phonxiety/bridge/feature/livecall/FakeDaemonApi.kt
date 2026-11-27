@@ -43,6 +43,7 @@ class FakeDaemonApi : DaemonApi {
     val instructionRequests = mutableListOf<String>()
     val dtmfRequests = mutableListOf<String>()
     val markRequests = mutableListOf<String>()
+    val hangupRequests = mutableListOf<String>()
     var infoCalls = 0
     var hangupCalls = 0
     var pauseCalls = 0
@@ -119,6 +120,7 @@ class FakeDaemonApi : DaemonApi {
     }
 
     override suspend fun hangup(callId: String): ApiOutcome<CallSnapshot> {
+        hangupRequests += callId
         hangupCalls++
         return hangup
     }

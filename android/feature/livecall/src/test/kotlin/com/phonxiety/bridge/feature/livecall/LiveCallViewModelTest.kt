@@ -11,7 +11,6 @@ import com.phonxiety.bridge.model.CallPhase
 import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.CallState
 import com.phonxiety.bridge.model.DaemonInfo
-import com.phonxiety.bridge.model.LiveCallHangUp
 import com.phonxiety.bridge.model.MarksResponse
 import com.phonxiety.bridge.model.SummaryResult
 import com.phonxiety.bridge.model.TranscriptTurn
@@ -261,13 +260,13 @@ class LiveCallViewModelTest {
     }
 
     @Test
-    fun anInfoFailureStillLeavesHangUpAvailableThroughTheEndCallPath() = runTest(dispatcher) {
+    fun anUnknownHangUpCapabilityStillHangsUpThroughTheDaemonOnceWithTheDisplayedCall() = runTest(dispatcher) {
         val api = FakeDaemonApi()
         api.info = ApiOutcome.Failure(503, "link_down", "the daemon is not reachable")
         api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "active"))
-        val end = FakeCallEnd()
+        api.hangup = ApiOutcome.Ok(200, snapshot(state = "ending"))
 
-        val viewModel = viewModel(api, end)
+        val viewModel = viewModel(api)
         viewModel.bind(CALL_ID)
         runCurrent()
         assertEquals(
@@ -279,12 +278,13 @@ class LiveCallViewModelTest {
         viewModel.requestHangUp()
         runCurrent()
         assertTrue("hang-up still asks first", viewModel.state.value.pendingHangUp)
+        assertEquals("nothing reached the daemon before the confirmation", 0, api.hangupCalls)
 
         viewModel.confirmHangUp()
         runCurrent()
         assertFalse("confirming closes the pending value", viewModel.state.value.pendingHangUp)
-        assertEquals("the end-of-call path runs once", 1, end.calls)
-        assertEquals("the unreported endpoint is not called", 0, api.hangupCalls)
+        assertEquals("the daemon endpoint is called exactly once", 1, api.hangupCalls)
+        assertEquals("with the call on screen", listOf(CALL_ID), api.hangupRequests)
         assertTrue(viewModel.state.value.hangingUp)
 
         api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(endedEvent(1))))
@@ -293,13 +293,54 @@ class LiveCallViewModelTest {
     }
 
     @Test
-    fun aRefusedHangUpAlsoUsesTheEndCallPath() = runTest(dispatcher) {
+    fun aFailedHangUpReleasesTheButtonAndOffersTheCallScreen() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        api.info = ApiOutcome.Ok(200, DaemonInfo(voiceControls = VoiceControls(hangup = true)))
+        api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "active"))
+        api.hangup = ApiOutcome.Failure(503, "link_down", "the daemon is not reachable")
+
+        val callScreen = FakeCallScreenOpener()
+        val viewModel = viewModel(api, callScreen)
+        viewModel.bind(CALL_ID)
+        runCurrent()
+
+        viewModel.requestHangUp()
+        runCurrent()
+        viewModel.confirmHangUp()
+        runCurrent()
+
+        val failed = viewModel.state.value
+        assertEquals(1, api.hangupCalls)
+        assertFalse("no permanent latch: the button is usable again", failed.hangingUp)
+        assertFalse("and nothing else is busy", failed.busy)
+        assertFalse("the call did not end", failed.ended)
+        assertNotNull("the failure is shown", failed.error)
+        assertEquals("link_down", failed.errorCode)
+        assertTrue("with the call-screen action", failed.callScreenAction)
+
+        viewModel.openCallScreen()
+        assertEquals("the seam is reached once", 1, callScreen.calls)
+        assertTrue("the action stays after the screen is shown", viewModel.state.value.callScreenAction)
+
+        // The next attempt is a fresh one, not blocked by the previous failure.
+        viewModel.requestHangUp()
+        runCurrent()
+        viewModel.confirmHangUp()
+        runCurrent()
+        assertEquals("a retry reaches the daemon again", 2, api.hangupCalls)
+
+        api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(endedEvent(1))))
+        advanceUntilIdle()
+    }
+
+    @Test
+    fun aRefusedHangUpCapabilityStillUsesTheDaemonEndpoint() = runTest(dispatcher) {
         val api = FakeDaemonApi()
         api.info = ApiOutcome.Ok(200, DaemonInfo(voiceControls = VoiceControls(hangup = false)))
         api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "active"))
-        val end = FakeCallEnd()
+        api.hangup = ApiOutcome.Ok(200, snapshot(state = "ending"))
 
-        val viewModel = viewModel(api, end)
+        val viewModel = viewModel(api)
         viewModel.bind(CALL_ID)
         runCurrent()
         assertEquals(ControlAvailability.DISABLED, viewModel.state.value.controls.hangup)
@@ -309,8 +350,35 @@ class LiveCallViewModelTest {
         viewModel.confirmHangUp()
         runCurrent()
 
-        assertEquals(1, end.calls)
-        assertEquals(0, api.hangupCalls)
+        assertEquals(1, api.hangupCalls)
+        assertEquals(listOf(CALL_ID), api.hangupRequests)
+        assertTrue(viewModel.state.value.hangingUp)
+        api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(endedEvent(1))))
+        advanceUntilIdle()
+    }
+
+    @Test
+    fun aRefusedCallScreenHidesItsAction() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        api.info = ApiOutcome.Ok(200, DaemonInfo(voiceControls = VoiceControls(hangup = true)))
+        api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "active"))
+        api.hangup = ApiOutcome.Failure(403, "forbidden", "the daemon refused")
+
+        val callScreen = FakeCallScreenOpener(shown = false)
+        val viewModel = viewModel(api, callScreen)
+        viewModel.bind(CALL_ID)
+        runCurrent()
+
+        viewModel.requestHangUp()
+        runCurrent()
+        viewModel.confirmHangUp()
+        runCurrent()
+        assertTrue(viewModel.state.value.callScreenAction)
+
+        viewModel.openCallScreen()
+        assertEquals(1, callScreen.calls)
+        assertFalse("the platform refused: the action disappears", viewModel.state.value.callScreenAction)
+
         api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(endedEvent(1))))
         advanceUntilIdle()
     }
@@ -435,7 +503,7 @@ class LiveCallViewModelTest {
         val api = FakeDaemonApi()
         api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = null))
         val bridge = FakeBridgeState()
-        val viewModel = LiveCallViewModel(api, bridge, FakeCallEnd())
+        val viewModel = LiveCallViewModel(api, bridge, FakeCallScreenOpener())
         viewModel.bind(CALL_ID)
         runCurrent()
 
@@ -504,7 +572,7 @@ class LiveCallViewModelTest {
         // The snapshot answers after Telecom already dialed, and still says "preparing".
         api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "preparing"))
         val bridge = FakeBridgeState()
-        val viewModel = LiveCallViewModel(api, bridge, FakeCallEnd())
+        val viewModel = LiveCallViewModel(api, bridge, FakeCallScreenOpener())
         viewModel.bind(CALL_ID)
         runCurrent()
         assertEquals("preparing", viewModel.state.value.state)
@@ -531,7 +599,7 @@ class LiveCallViewModelTest {
         api.info = ApiOutcome.Ok(200, DaemonInfo(voiceControls = VoiceControls(hangup = true)))
         api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "preparing"))
         val bridge = FakeBridgeState()
-        val viewModel = LiveCallViewModel(api, bridge, FakeCallEnd())
+        val viewModel = LiveCallViewModel(api, bridge, FakeCallScreenOpener())
         viewModel.bind(CALL_ID)
         runCurrent()
 
@@ -588,7 +656,7 @@ class LiveCallViewModelTest {
         val placedAt = (System.currentTimeMillis() - 600_000) / 1_000.0
         api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "preparing", createdAt = placedAt, connectedAt = null))
         val bridge = FakeBridgeState()
-        val viewModel = LiveCallViewModel(api, bridge, FakeCallEnd())
+        val viewModel = LiveCallViewModel(api, bridge, FakeCallScreenOpener())
         viewModel.bind(CALL_ID)
         runCurrent()
 
@@ -663,7 +731,7 @@ class LiveCallViewModelTest {
             BridgeState(call = CallState(CALL_ID, "+998 ·· 67", CallPhase.ACTIVE, connectedAtMs - 80_000, connectedAtMs))
         )
 
-        val viewModel = LiveCallViewModel(api, bridge, FakeCallEnd())
+        val viewModel = LiveCallViewModel(api, bridge, FakeCallScreenOpener())
         viewModel.bind(CALL_ID)
         runCurrent()
 
@@ -690,7 +758,7 @@ class LiveCallViewModelTest {
         val placedAt = (System.currentTimeMillis() - 600_000) / 1_000.0
         api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "active", createdAt = placedAt, connectedAt = null))
         val bridge = FakeBridgeState()
-        val viewModel = LiveCallViewModel(api, bridge, FakeCallEnd())
+        val viewModel = LiveCallViewModel(api, bridge, FakeCallScreenOpener())
         viewModel.bind(CALL_ID)
         runCurrent()
 
@@ -734,7 +802,7 @@ class LiveCallViewModelTest {
             snapshot(state = "active", createdAt = (System.currentTimeMillis() - 60_000) / 1_000.0, connectedAt = null)
         )
         val bridge = FakeBridgeState()
-        val viewModel = LiveCallViewModel(api, bridge, FakeCallEnd())
+        val viewModel = LiveCallViewModel(api, bridge, FakeCallScreenOpener())
         viewModel.bind(CALL_ID)
         runCurrent()
 
@@ -770,7 +838,7 @@ class LiveCallViewModelTest {
         val api = FakeDaemonApi()
         api.callSnapshot = ApiOutcome.Failure(404, "call_not_found", "no call")
         val bridge = FakeBridgeState()
-        val viewModel = LiveCallViewModel(api, bridge, FakeCallEnd())
+        val viewModel = LiveCallViewModel(api, bridge, FakeCallScreenOpener())
         viewModel.bind(CALL_ID)
         runCurrent()
 
@@ -797,20 +865,21 @@ class LiveCallViewModelTest {
 
     private fun viewModel(
         api: FakeDaemonApi,
-        callEnd: LiveCallHangUp = FakeCallEnd()
-    ): LiveCallViewModel = LiveCallViewModel(api, FakeBridgeState(), callEnd)
+        callScreen: CallScreenOpener = FakeCallScreenOpener()
+    ): LiveCallViewModel = LiveCallViewModel(api, FakeBridgeState(), callScreen)
 
     private companion object {
         const val CALL_ID = "call-2026-11-26"
     }
 }
 
-/** The end-of-call path the ViewModel reaches when the daemon has not vouched for a hang-up. */
-class FakeCallEnd : LiveCallHangUp {
+/** The platform's in-call screen, counted so a test can see every attempt to open it. */
+class FakeCallScreenOpener(private val shown: Boolean = true) : CallScreenOpener {
     var calls = 0
 
-    override suspend fun hangUp() {
+    override fun show(): Boolean {
         calls++
+        return shown
     }
 }
 
