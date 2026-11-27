@@ -18,6 +18,7 @@ set -euo pipefail
 
 ROOT="${MISE_PROJECT_ROOT:?run this task through mise: mise run phone:pair}"
 PACKAGE="com.phonxiety.bridge"
+REMOTE_CONFIG="/data/user_de/0/$PACKAGE/files/config.json"
 ADB="${ADB:-adb}"
 SERIAL=""
 MODE=()
@@ -42,6 +43,7 @@ EOF
 }
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
+die_unconfirmed() { printf 'error: %s\n' "$1" >&2; exit 2; }
 note() { printf '%s\n' "$1"; }
 
 cleanup() { if [ -n "$TMP" ]; then rm -rf "$TMP"; fi; }
@@ -136,38 +138,77 @@ restore_service() {
     fi
 }
 
-# "" while the query itself failed, otherwise the pids or empty.
+# "" when pidof documents that nothing matches, the pids otherwise, and "error" when
+# the query itself failed.  Only the documented no-match status (1) with no output may
+# read as "nothing matches"; any other status is a failed query, not an empty answer.
 running_pids() {
-    local out
+    local out status pids
     out="$("${ADB_CMD[@]}" shell "pidof $PACKAGE 2>/dev/null; echo PX_STATUS=\$?" 2>/dev/null)" || { printf 'error\n'; return 0; }
     case "$out" in
-        *PX_STATUS=*) ;;
+        *PX_STATUS=*) status="$(printf '%s' "${out##*PX_STATUS=}" | tr -d '\r\n')" ;;
         *) printf 'error\n'; return 0 ;;
     esac
-    printf '%s' "${out%PX_STATUS=*}" | tr -d '\r\n '
+    pids="$(printf '%s' "${out%PX_STATUS=*}" | tr -d '\r' | tr '\n' ' ')"
+    pids="${pids# }"
+    pids="${pids% }"
+    case "$status" in
+        0) [ -n "$pids" ] || { printf 'error\n'; return 0; } ;;
+        1) [ -z "$pids" ] || { printf 'error\n'; return 0; } ;;
+        *) printf 'error\n'; return 0 ;;
+    esac
+    case "$pids" in
+        *[!0-9[:space:]]*) printf 'error\n'; return 0 ;;
+    esac
+    printf '%s' "$pids"
 }
 
-# The whole app process, not only the service: a token write in the app process
-# could otherwise outlive the service and race the file swap.
-note "Stopping the app process before the config is replaced..."
-if ! "${ADB_CMD[@]}" shell am force-stop --user 0 "$PACKAGE" >/dev/null 2>&1; then
-    restore_service
-    die "could not force-stop the app; the config was not touched"
-fi
-i=0
-PIDS=""
-while [ "$i" -lt 20 ]; do
-    PIDS="$(running_pids)"
-    [ "$PIDS" = "error" ] && break
-    [ -z "$PIDS" ] && break
-    sleep 0.25
-    i=$((i+1))
-done
-if [ "$PIDS" = "error" ]; then
-    restore_service
-    die "could not confirm the app process stopped (adb query failed)"
-fi
-[ -z "$PIDS" ] || { restore_service; die "the app process is still running (pids: $PIDS)"; }
+# Prints the config file's hash, "absent" when there is no file, or nothing when the
+# query itself failed.  The status travels with the output so a failed query is never
+# read as an absent or unchanged file.
+phone_config_hash() {
+    local out status value
+    out="$("${ADB_CMD[@]}" shell "su -c 'if [ -e $REMOTE_CONFIG ]; then sha256sum $REMOTE_CONFIG; else echo PX_ABSENT; fi; echo PX_STATUS=\$?'" 2>/dev/null)" || return 1
+    case "$out" in
+        *PX_STATUS=*) status="$(printf '%s' "${out##*PX_STATUS=}" | tr -d '\r\n')" ;;
+        *) return 1 ;;
+    esac
+    [ "$status" = "0" ] || return 1
+    value="$(printf '%s' "${out%PX_STATUS=*}" | tr -d '\r' | awk 'NF {print $1; exit}')"
+    if [ "$value" = "PX_ABSENT" ]; then
+        printf 'absent\n'
+        return 0
+    fi
+    [ -n "$value" ] || return 1
+    printf '%s\n' "$value"
+}
+
+# Only positive evidence may restore the service.  REPLACED=1 means the new bytes are
+# there (the marker arrived or the file now holds the new hash), 0 means the old bytes
+# are still there, and 2 means the phone could not answer, which proves nothing.
+classify_replacement() {
+    local current
+    if [ "$1" -eq 1 ]; then
+        REPLACED=1
+        return 0
+    fi
+    if ! current="$(phone_config_hash)"; then
+        REPLACED=2
+        return 0
+    fi
+    if [ "$current" = "$HASH" ]; then
+        REPLACED=1
+    elif [ "$OLD_HASH" = "absent" ] && [ "$current" = "absent" ]; then
+        REPLACED=0
+    elif [ "$current" = "$OLD_HASH" ]; then
+        REPLACED=0
+    else
+        REPLACED=2
+    fi
+}
+
+# The previous configuration, read before anything is stopped: the failure path compares
+# it with what the phone holds afterwards, and only an unchanged file permits a restore.
+OLD_HASH="$(phone_config_hash)" || die "could not read the current phone configuration; the app was not touched"
 
 HASH="$(shasum -a 256 "$TMP/config.json" | awk '{print $1}')"
 [ -n "$HASH" ] || die "could not hash the phone configuration"
@@ -206,6 +247,7 @@ HASH="$(shasum -a 256 "$TMP/config.json" | awk '{print $1}')"
         'chcon "$LABEL" "$TMPFILE" || { echo "cannot label the temporary file" >&2; exit 1; }' \
         'TMP_LABEL=$(label_of "$TMPFILE")' \
         '[ "$TMP_LABEL" = "$LABEL" ] || { echo "temporary file label mismatch" >&2; exit 1; }' \
+        'echo PX_BEFORE_MV' \
         'mv -f "$TMPFILE" "$DIR/config.json"' \
         'TMPFILE=""' \
         'echo PX_REPLACED=1' \
@@ -214,40 +256,83 @@ HASH="$(shasum -a 256 "$TMP/config.json" | awk '{print $1}')"
         'sha256sum "$DIR/config.json"'
 } > "$TMP/setup.sh"
 
+# The whole app process, not only the service: a token write in the app process
+# could otherwise outlive the service and race the file swap.  The stop comes after
+# every local step that can fail, so nothing below can exit without a decision.
+note "Stopping the app process before the config is replaced..."
+if ! "${ADB_CMD[@]}" shell am force-stop --user 0 "$PACKAGE" >/dev/null 2>&1; then
+    restore_service
+    die "could not force-stop the app; the config was not touched"
+fi
+i=0
+PIDS=""
+while [ "$i" -lt 20 ]; do
+    PIDS="$(running_pids)"
+    [ "$PIDS" = "error" ] && break
+    [ -z "$PIDS" ] && break
+    sleep 0.25
+    i=$((i+1))
+done
+if [ "$PIDS" = "error" ]; then
+    restore_service
+    die "could not confirm the app process stopped (adb query failed)"
+fi
+[ -z "$PIDS" ] || { restore_service; die "the app process is still running (pids: $PIDS)"; }
+
 set +e
 REMOTE_OUT="$("${ADB_CMD[@]}" shell "su -c 'sh -s'" < "$TMP/setup.sh" 2>&1)"
 REMOTE_STATUS=$?
 set -e
-REPLACED=0
+MARKER=0
 if printf '%s\n' "$REMOTE_OUT" | grep -q 'PX_REPLACED=1'; then
-    REPLACED=1
+    MARKER=1
 fi
 
 if [ "$REMOTE_STATUS" -ne 0 ]; then
     # The root script's own words say why it refused (a label, a missing directory), and its
     # output never carries the credential.
     printf '%s\n' "$REMOTE_OUT" | tr -d '\r' | grep -v '^PX_' >&2 || true
-    if [ "$REPLACED" -eq 1 ]; then
-        die "the phone configuration may be replaced but could not be verified; not restarting the bridge"
+    if [ "$MARKER" -eq 1 ]; then
+        die_unconfirmed "the phone configuration may be replaced but could not be verified; not restarting the bridge"
     fi
-    restore_service
-    die "writing the phone configuration failed"
+    classify_replacement "$MARKER"
+    case "$REPLACED" in
+        0)
+            # The file still holds the old bytes: the rename provably did not happen.
+            restore_service
+            die "writing the phone configuration failed" ;;
+        1)
+            die_unconfirmed "the phone configuration was replaced before the run failed; not restarting the bridge" ;;
+        *)
+            die_unconfirmed "the phone configuration replacement outcome is unknown; the app stays stopped" ;;
+    esac
 fi
 
-REMOTE_HASH="$(printf '%s\n' "$REMOTE_OUT" | tr -d '\r' | awk 'NF && $0 !~ /^PX_/ {print $1; exit}')"
-if [ "$REMOTE_HASH" != "$HASH" ]; then
-    if [ "$REPLACED" -eq 1 ]; then
-        die "phone configuration hash mismatch after replacement; not restarting the bridge"
+REMOTE_HASH="$(printf '%s\n' "$REMOTE_OUT" | tr -d '\r' | awk 'NF && $0 !~ /^PX_/ {print $1; exit}' || true)"
+if [ "$MARKER" -eq 1 ] && [ "$REMOTE_HASH" = "$HASH" ]; then
+    : # the run's own marker and hash agree with the hash of the file that was sent
+else
+    if [ "$MARKER" -eq 1 ]; then
+        die_unconfirmed "phone configuration hash mismatch after replacement; not restarting the bridge"
     fi
-    restore_service
-    die "phone configuration hash mismatch"
+    classify_replacement "$MARKER"
+    case "$REPLACED" in
+        0)
+            restore_service
+            die "phone configuration hash mismatch" ;;
+        1)
+            die_unconfirmed "the phone configuration was replaced but the run did not confirm it; not restarting the bridge" ;;
+        *)
+            die_unconfirmed "the phone configuration replacement outcome is unknown; the app stays stopped" ;;
+    esac
 fi
 
 # An explicit service start clears the stopped state left by force-stop, so the
 # restart works without an activity.
 note "Starting the bridge service..."
 "${ADB_CMD[@]}" shell am start-foreground-service --user 0 \
-    -n "$PACKAGE/.BridgeService" >/dev/null || die "am start-foreground-service failed"
+    -n "$PACKAGE/.BridgeService" >/dev/null \
+    || die_unconfirmed "am start-foreground-service failed; the new configuration is in place but the app is stopped"
 
 i=0
 running=0
@@ -260,7 +345,7 @@ while [ "$i" -lt 40 ]; do
     sleep 0.25
     i=$((i+1))
 done
-[ "$running" -eq 1 ] || die "the bridge service did not stay running; inspect: adb logcat -d -s PhonxietyBridge"
+[ "$running" -eq 1 ] || die_unconfirmed "the bridge service did not stay running; inspect: adb logcat -d -s PhonxietyBridge"
 
 note "Phone paired. Waiting for it to reach the daemon..."
 i=0
