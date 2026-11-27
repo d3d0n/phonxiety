@@ -116,6 +116,7 @@ baselineProfile {
 
 dependencies {
     implementation(project(":core:model"))
+    implementation(project(":core:data"))
     implementation(project(":core:device"))
     // Root layer ships the module payload as library assets merged into :app.
     implementation(project(":core:root"))
@@ -138,6 +139,7 @@ dependencies {
     implementation(libs.androidx.compose.material3.adaptive.navigation.suite)
     implementation(libs.androidx.compose.material.icons.core)
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.core.splashscreen)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.navigation3)
     implementation(libs.androidx.navigation3.runtime)

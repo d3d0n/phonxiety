@@ -1,0 +1,65 @@
+package com.phonxiety.bridge
+
+import androidx.activity.ComponentActivity
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.test.core.app.ApplicationProvider
+import com.phonxiety.bridge.designsystem.RegisterScrollToTop
+import com.phonxiety.bridge.designsystem.ScrollToTopRegistry
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.Robolectric
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+
+/**
+ * The host's registry provision, which is the only way a section's root screen hands the suite its
+ * scroll-to-top action. The fake action stands in for a section root: a re-tap at the root reaches
+ * it, and a host that skipped the provision makes the registration throw instead of going quiet.
+ */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
+class HostScrollRegistryTest {
+    @get:Rule
+    val composeRule = createEmptyComposeRule()
+
+    @Test
+    fun aSectionRootsRegistrationIsReachedThroughTheHostsRegistry() {
+        val registry = ScrollToTopRegistry()
+        var calls = 0
+        compose {
+            HostScrollRegistry(registry) {
+                RegisterScrollToTop(Section.CALLS.scrollToTopKey) { calls++ }
+            }
+        }
+
+        composeRule.runOnIdle { registry.dispatch(Section.CALLS.scrollToTopKey) }
+
+        composeRule.runOnIdle { assertEquals(1, calls) }
+    }
+
+    @Test
+    fun aHostThatSkipsTheProvisionFailsAtTheRegistration() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val flags = context.applicationInfo.flags
+        context.applicationInfo.flags = flags or android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE
+        try {
+            assertThrows(IllegalStateException::class.java) {
+                compose { RegisterScrollToTop(Section.DASHBOARD.scrollToTopKey) {} }
+            }
+        } finally {
+            context.applicationInfo.flags = flags
+        }
+    }
+
+    /** Composes into a bare activity, which is all a phone with no manifest entry needs here. */
+    private fun compose(content: @Composable () -> Unit) {
+        val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup().get()
+        activity.setContentView(ComposeView(activity).apply { setContent(content) })
+        composeRule.waitForIdle()
+    }
+}

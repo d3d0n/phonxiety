@@ -3,7 +3,21 @@ package com.phonxiety.bridge
 import androidx.navigation3.runtime.NavKey
 import kotlinx.serialization.Serializable
 
-/** Dashboard: the live link, call, audio and device state. */
+/**
+ * The navigation invariant every key here obeys:
+ *
+ * - the four top-level keys — [DashboardKey], [CallsKey], [LabKey], [SettingsKey] — are the roots
+ *   of the section stacks ([Section]); each stack starts at its own root and never holds another
+ *   section's root;
+ * - every other key is pushed onto the stack of the section it was opened from, so back returns
+ *   to that stack and a tab switch keeps it;
+ * - [OnboardingKey], [LiveCallKey] and [ComposerKey] are full-screen flows and hide the
+ *   navigation suite; everything else keeps it visible;
+ * - a key restored by [androidx.navigation3.runtime.rememberNavBackStack] must be registered in
+ *   the host's saved-state configuration and keep its class name in the R8 rules.
+ *
+ * Dashboard: the live link, call, audio and device state.
+ */
 @Serializable
 data object DashboardKey : NavKey
 
@@ -21,7 +35,8 @@ data object SettingsKey : NavKey
 
 /**
  * The setup wizard. It carries the pairing link when the route was opened from a
- * `phonxiety://pair?...` intent, so the wizard can validate that exact payload.
+ * `phonxiety://pair?...` intent, so the wizard can validate that exact payload. It is the
+ * Dashboard section's setup flow: pairing and the setup reminder bring that tab forward.
  */
 @Serializable
 data class OnboardingKey(val pairLink: String? = null) : NavKey

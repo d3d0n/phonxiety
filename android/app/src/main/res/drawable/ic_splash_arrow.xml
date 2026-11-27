@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The brand arrow for the launch screen, in the kit's 140-unit box and Signal on Void. The
+     paths are the same two strokes the in-app mark draws, so the splash and the app show one
+     mark, not two drawings of it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="96dp"
+    android:height="96dp"
+    android:viewportWidth="140"
+    android:viewportHeight="140">
+    <path
+        android:pathData="M18,122 L120,20"
+        android:strokeColor="#FFFF4FD8"
+        android:strokeWidth="24"
+        android:strokeLineCap="butt" />
+    <path
+        android:pathData="M46,20 H120 V94"
+        android:strokeColor="#FFFF4FD8"
+        android:strokeWidth="24"
+        android:strokeLineCap="butt"
+        android:strokeLineJoin="miter" />
+</vector>

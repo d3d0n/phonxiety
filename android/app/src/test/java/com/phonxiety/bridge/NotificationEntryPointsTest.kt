@@ -5,8 +5,12 @@ import android.app.Notification
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.os.Looper
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
 import androidx.navigation3.runtime.NavKey
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
@@ -68,21 +72,34 @@ class NotificationEntryPointsTest {
 
     private fun onScreen(intent: Intent, block: (ActivityScenario<MainActivity>) -> Unit) {
         ActivityScenario.launch<MainActivity>(intent).use { launched ->
-            compose.waitForIdle()
+            settle()
             block(launched)
         }
     }
 
-    private fun assertScreen(key: NavKey) {
+    /** The start destination is resolved on the main dispatcher one turn after the launch. */
+    private fun settle() {
+        shadowOf(Looper.getMainLooper()).idle()
         compose.waitForIdle()
+    }
+
+    private fun assertScreen(key: NavKey) {
+        settle()
         compose.onNodeWithTag(destinationTag(key)).assertExists()
     }
+
+    private fun suiteItem(label: String) = compose.onNode(hasText(label) and hasClickAction())
 
     /** Delivers the card's tap to the activity the owner is already on, as the system would. */
     private fun deliverAsNewIntent(scenario: ActivityScenario<MainActivity>, card: Notification) {
         val started = startedBy(card)
-        scenario.onActivity { activity -> activity.receiveNewIntent(started) }
-        compose.waitForIdle()
+        deliverIntent(scenario, started)
+    }
+
+    /** Delivers any host intent to the activity already on screen. */
+    private fun deliverIntent(scenario: ActivityScenario<MainActivity>, intent: Intent) {
+        scenario.onActivity { activity -> activity.receiveNewIntent(intent) }
+        settle()
     }
 
     /** `Activity.onNewIntent` is protected; the test still runs the real override, not a copy. */
@@ -157,6 +174,68 @@ class NotificationEntryPointsTest {
             deliverAsNewIntent(scenario, setupCard())
 
             assertScreen(OnboardingKey())
+        }
+    }
+
+    @Test
+    fun aCallTapOpensOverTheSectionTheOwnerIsOnAndBackReturnsToIt() {
+        onScreen(startedBy(Notifications.bridge(context, BridgeNotice.Offline))) { scenario ->
+            assertScreen(DashboardKey)
+            suiteItem("Calls").performClick()
+            assertScreen(CallsKey)
+
+            deliverAsNewIntent(scenario, Notifications.call(context, call()))
+            assertScreen(LiveCallKey("call-7"))
+
+            scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+            assertScreen(CallsKey)
+        }
+    }
+
+    @Test
+    fun theDashboardTapResetsOnlyTheDashboardSection() {
+        onScreen(startedBy(Notifications.bridge(context, BridgeNotice.Offline))) { scenario ->
+            suiteItem("Calls").performClick()
+            assertScreen(CallsKey)
+
+            deliverAsNewIntent(scenario, Notifications.bridge(context, BridgeNotice.Offline))
+
+            assertScreen(DashboardKey)
+            suiteItem("Calls").performClick()
+            assertScreen(CallsKey)
+        }
+    }
+
+    @Test
+    fun theCallScreenSurvivesRecreation() {
+        onScreen(startedBy(Notifications.call(context, call()))) { scenario ->
+            assertScreen(LiveCallKey("call-7"))
+
+            scenario.recreate()
+
+            assertScreen(LiveCallKey("call-7"))
+        }
+    }
+
+    @Test
+    fun aSectionsDepthSurvivesRecreation() {
+        onScreen(startedBy(Notifications.bridge(context, BridgeNotice.Offline))) { scenario ->
+            suiteItem("Calls").performClick()
+            assertScreen(CallsKey)
+            val doctor = Intent().apply {
+                setClassName(context.packageName, Notifications.HOST_ACTIVITY)
+                putExtra(Notifications.EXTRA_ROUTE, Notifications.ROUTE_DOCTOR)
+            }
+            deliverIntent(scenario, doctor)
+            assertScreen(DoctorKey)
+            suiteItem("Home").performClick()
+            assertScreen(DashboardKey)
+
+            scenario.recreate()
+
+            assertScreen(DashboardKey)
+            suiteItem("Calls").performClick()
+            assertScreen(DoctorKey)
         }
     }
 

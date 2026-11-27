@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The launch theme: Void behind the brand arrow, then straight to the app's own palette.
+     It lives in :app because the splash library is an app dependency and the arrows it draws are
+     the brand kit's own paths, not a second drawing of the mark. -->
+<resources>
+    <style name="Theme.Phonxiety.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_void</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash_arrow</item>
+        <item name="windowSplashScreenAnimationDuration">220</item>
+        <item name="postSplashScreenTheme">@style/Theme.Phonxiety</item>
+    </style>
+</resources>

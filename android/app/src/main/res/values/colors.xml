@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Void, the brand's main dark background: the splash shows the mark on it in both schemes,
+         so the first frame is the same on a phone in light mode and one in dark mode. -->
+    <color name="splash_void">#0A0710</color>
+</resources>

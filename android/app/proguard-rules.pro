@@ -18,6 +18,24 @@
 
 -keepattributes *Annotation*, InnerClasses, Signature, EnclosingMethod
 
+# --- Kotlin null checks ------------------------------------------------------
+# Every Kotlin call site already enforces its declared nullability at compile time; the
+# `Intrinsics` helpers are the compiler's runtime belt-and-braces and only spend instructions and
+# dex bytes in a release build. Removing them keeps the behaviour Kotlin code relies on
+# (`throwUninitializedPropertyAccessException`, the `!!` operator and the range checks are *not*
+# listed and stay): what goes is the argument and expression guards a compiled call cannot fail
+# without a Java caller having lied about a type.
+-assumenosideeffects class kotlin.jvm.internal.Intrinsics {
+    public static void checkNotNullParameter(java.lang.Object, java.lang.String);
+    public static void checkParameterIsNotNull(java.lang.Object, java.lang.String);
+    public static void checkNotNullExpressionValue(java.lang.Object, java.lang.String);
+    public static void checkExpressionValueIsNotNull(java.lang.Object, java.lang.String);
+    public static void checkFieldIsNotNull(java.lang.Object, java.lang.String);
+    public static void checkFieldIsNotNull(java.lang.Object, java.lang.String, java.lang.String);
+    public static void checkReturnedValueIsNotNull(java.lang.Object, java.lang.String);
+    public static void checkReturnedValueIsNotNull(java.lang.Object, java.lang.String, java.lang.String);
+}
+
 # --- JNA ---------------------------------------------------------------------
 # A `Structure` subclass declares its layout as fields; renaming or removing one
 # moves the native offsets and the call silently reads the wrong memory.  A

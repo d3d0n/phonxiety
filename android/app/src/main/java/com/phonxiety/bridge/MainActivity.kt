@@ -9,17 +9,30 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
 import com.phonxiety.bridge.feature.livecall.CallFrontReturn
+import com.phonxiety.bridge.feature.onboarding.SetupPreferences
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 
 /**
- * The single activity. It owns no screen state: intents become [AppSignal]s, the Navigation 3 host
- * renders the back stack, and every piece of screen state lives in a ViewModel or in the wizard's
- * on-disk journal, so process death and configuration changes do not lose a setup step.
+ * The single activity, and the app's only edge-to-edge owner: it calls [enableEdgeToEdge] once and
+ * no screen touches the window's decor. It owns no screen state either: intents become
+ * [AppSignal]s, the Navigation 3 host renders the per-section back stacks, and every piece of
+ * screen state lives in a ViewModel or in the wizard's on-disk journal, so process death and
+ * configuration changes do not lose a setup step.
+ *
+ * Startup is the splash theme's job: the wizard's journal is read off-composition behind a splash
+ * that is held for at most [StartDestinationController.SPLASH_DEADLINE_MS], so the first frame
+ * never waits on a disk read and a slow device still renders.
  *
  * The returns over Telecom's in-call screen after a call placed here are [CallFrontReturn]; the
  * lifecycle simply forwards to it.
@@ -28,6 +41,10 @@ import dagger.hilt.android.AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     private var signal by mutableStateOf<AppSignal?>(null)
     private val handler = Handler(Looper.getMainLooper())
+    private val startDestination = StartDestinationController()
+
+    /** The link strip above the navigation suite, alive across tab switches and rotations. */
+    private val linkStatus: LinkStatusViewModel by viewModels()
 
     /** The screen request the last intent carried; the navigation host consumes it once. */
     internal val pendingSignal: AppSignal?
@@ -42,16 +59,41 @@ class MainActivity : ComponentActivity() {
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // The splash is installed before the window exists, so the switch from the starting theme
+        // to the app theme happens without a frame of the wrong background.
+        val splash = installSplashScreen()
         super.onCreate(savedInstanceState)
+        splash.setKeepOnScreenCondition { startDestination.keepsSplash() }
         enableEdgeToEdge()
         handleIntent(intent)
+        resolveStart()
         setContent {
             PhonxietyTheme {
-                PhonxietyNavigationHost(
-                    signal = signal,
-                    onSignalConsumed = { signal = null }
-                )
+                val start by startDestination.start.collectAsStateWithLifecycle()
+                val strip by linkStatus.state.collectAsStateWithLifecycle()
+                // Until the journal answers there is nothing to draw: the splash covers the gap
+                // and the deadline guarantees the answer arrives.
+                start?.let { destination ->
+                    PhonxietyNavigationHost(
+                        signal = signal,
+                        start = destination,
+                        strip = strip,
+                        onSignalConsumed = { signal = null }
+                    )
+                }
             }
+        }
+    }
+
+    /**
+     * Reads the wizard's journal once, outside composition. The yield lets the first frame go out
+     * under the splash before the read runs, and the controller bounds it: a read that misses the
+     * deadline renders the dashboard rather than holding the splash.
+     */
+    private fun resolveStart() {
+        lifecycleScope.launch {
+            yield()
+            startDestination.resolve { SetupPreferences(applicationContext).ready }
         }
     }
 

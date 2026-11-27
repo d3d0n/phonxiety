@@ -9,4 +9,9 @@
     <!-- The reminder posted after the reboot the wizard asked for -->
     <string name="notification_setup_title">Finish the module install</string>
     <string name="notification_setup_text">Open phonxiety to verify it.</string>
+
+    <!-- The link strip above the navigation suite: it reports, and only while it matters -->
+    <string name="link_strip_offline">No link to the computer</string>
+    <string name="link_strip_connecting">Reconnecting…</string>
+    <string name="link_strip_rtt">%1$d&#160;ms</string>
 </resources>
