@@ -6,6 +6,7 @@ import com.phonxiety.bridge.model.CallEventsPage
 import com.phonxiety.bridge.model.CallId
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CyclicBarrier
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -14,6 +15,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -441,18 +443,146 @@ class LiveCallFeedTest {
             val barrier = CyclicBarrier(3)
             repeat(2) {
                 scope.launch {
-                    barrier.await()
+                    barrier.await(5, TimeUnit.SECONDS)
                     feed.state(callId).collect()
                 }
             }
-            barrier.await()
+            barrier.await(5, TimeUnit.SECONDS)
             withTimeout(5_000) { firstRequest.await() }
+            withTimeout(5_000) {
+                while (feed.collectorsOf(callId) < 2) delay(1)
+            }
+            assertEquals("both collectors attached before the stream is judged", 2, feed.collectorsOf(callId))
             withTimeoutOrNull(1_000) { secondRequest.await() }
             assertFalse("a second loop also asked the daemon", secondRequest.isCompleted)
             assertEquals("one request stream serves both collectors", 1, requests.size)
         } finally {
             scope.cancel()
         }
+    }
+
+    /**
+     * A view can outlive the entry it was handed out with. Collecting through such a view resolves
+     * the entry the map holds now, starts one loop for it and shows fresh state; it never wakes the
+     * entry that was forgotten.
+     */
+    @Test
+    fun aViewFromBeforeEvictionResolvesTheFreshEntry() = runTest {
+        val daemon = ScriptedDaemon()
+        val (feed, scope) = feed(daemon)
+        val first = scope.launch { feed.state(callId).collect() }
+        runCurrent()
+        daemon.pages.send(ApiOutcome.Ok(200, page(4, listOf(transcriptEvent(4, 1)))))
+        runCurrent()
+        val stale = feed.state(callId)
+        first.cancel()
+        runCurrent()
+        val beforeRelease = daemon.requests.size
+
+        val reachAttach = CompletableDeferred<Unit>()
+        val releaseAttach = CompletableDeferred<Unit>()
+        feed.beforeAttach = {
+            reachAttach.complete(Unit)
+            releaseAttach.await()
+        }
+        val seen = mutableListOf<LiveCallFeedState>()
+        val staleCollector = scope.launch { stale.collect { seen += it } }
+        runCurrent()
+        withTimeout(1_000) { reachAttach.await() }
+
+        // The idle bound passes between the view being handed out and its collection attaching.
+        advanceTimeBy(ABANDONED_CALL_IDLE_MS + 1_000)
+        runCurrent()
+        assertFalse("the entry the view came from is forgotten", feed.isRetained(callId))
+
+        releaseAttach.complete(Unit)
+        runCurrent()
+
+        assertTrue("the collection holds the fresh entry", feed.isRetained(callId))
+        assertEquals("exactly one new loop serves the collection", beforeRelease + 1, daemon.requests.size)
+        assertEquals("the fresh stream resumes from the start, not the evicted cursor", 0L, seen.last().revision)
+        assertTrue("nothing of the evicted call came back", seen.last().events.isEmpty())
+        staleCollector.cancel()
+    }
+
+    /**
+     * A finished call still being read is not an eviction victim: with more finished calls than the
+     * cap, the one whose terminal page is accepted but not yet published keeps its entry, and its
+     * collectors see that page.
+     */
+    @Test
+    fun aCollectedCallWithAnUnpublishedTerminalPageIsNotEvicted() = runTest {
+        val daemon = ScriptedDaemon()
+        val (feed, scope) = feed(daemon)
+        val watchedId = CallId("call-watched")
+        val accepted = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var blocked = false
+        feed.afterAccept = {
+            if (!blocked) {
+                blocked = true
+                accepted.complete(Unit)
+                release.await()
+            }
+        }
+        val seen = mutableListOf<LiveCallFeedState>()
+        val watched = scope.launch { feed.state(watchedId).collect { seen += it } }
+        runCurrent()
+        daemon.pages.send(ApiOutcome.Ok(200, page(3, listOf(endedEvent(3)))))
+        runCurrent()
+        withTimeout(1_000) { accepted.await() }
+        assertFalse("the terminal page is accepted but not published yet", feed.state(watchedId).value.ended)
+        assertEquals("its collector is still attached", 1, feed.collectorsOf(watchedId))
+
+        val others = (1..REMEMBERED_TERMINAL_CALLS).map { CallId("call-fin-$it") }
+        val otherJobs = others.map { id -> scope.launch { feed.state(id).collect() } }
+        runCurrent()
+        others.forEach { daemon.pages.send(ApiOutcome.Ok(200, page(3, listOf(endedEvent(3))))) }
+        runCurrent()
+
+        assertEquals(
+            "more finished calls than the cap",
+            REMEMBERED_TERMINAL_CALLS + 1,
+            feed.retainedTerminalCalls()
+        )
+        assertTrue("a watched call is never a victim", feed.isRetained(watchedId))
+
+        release.complete(Unit)
+        runCurrent()
+        assertTrue("its collector sees the accepted terminal page", feed.state(watchedId).value.ended)
+        assertTrue("and the collected stream saw it too", seen.last().ended)
+
+        otherJobs.forEach { it.cancel() }
+        watched.cancel()
+    }
+
+    /**
+     * A surprise in the loop body, outside the request, is a failure like any other: it is surfaced,
+     * the cursor is kept and the loop retries instead of ending.
+     */
+    @Test
+    fun aFailureInTheLoopBodyIsSurfacedAndRetried() = runTest {
+        val daemon = ScriptedDaemon()
+        val (feed, scope) = feed(daemon)
+        var hookCalls = 0
+        feed.afterAccept = {
+            hookCalls++
+            if (hookCalls == 1) throw IllegalStateException("the page could not be published")
+        }
+        val job = scope.launch { feed.state(callId).collect() }
+        runCurrent()
+
+        daemon.pages.send(ApiOutcome.Ok(200, page(2, listOf(stateEvent(2, "active")))))
+        runCurrent()
+        assertTrue("the body failure is surfaced as a reconnect", feed.state(callId).value.reconnecting)
+
+        daemon.pages.send(ApiOutcome.Ok(200, page(3, listOf(endedEvent(3)))))
+        advanceTimeBy(1_000)
+        runCurrent()
+
+        assertEquals("the loop retried from the accepted cursor instead of exiting", listOf<Long?>(0L, 2L), daemon.requests)
+        assertTrue("and the call finished on the retry", feed.state(callId).value.ended)
+        job.cancel()
     }
 
     private fun page(revision: Long, events: List<CallEvent>, truncated: Boolean = false): CallEventsPage = CallEventsPage(

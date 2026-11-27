@@ -101,6 +101,12 @@ class LiveCallFeed constructor(
      */
     internal var afterAccept: suspend () -> Unit = {}
 
+    /**
+     * Awaited after a view is handed out and before its collection attaches. It exists so tests can
+     * forget the entry in that window; production leaves it empty.
+     */
+    internal var beforeAttach: suspend () -> Unit = {}
+
     private val lock = Any()
 
     /** Live calls and the recently finished ones, in creation order. */
@@ -110,8 +116,11 @@ class LiveCallFeed constructor(
 
     /** The accumulated stream of [callId], shared by every collector of that call. */
     fun state(callId: CallId): StateFlow<LiveCallFeedState> = synchronized(lock) {
-        feeds.getOrPut(callId.value) { CallFeed(callId) }.view
+        entryLocked(callId).view
     }
+
+    /** The current entry of [callId], created if the call is not held yet. Caller holds [lock]. */
+    private fun entryLocked(callId: CallId): CallFeed = feeds.getOrPut(callId.value) { CallFeed(callId) }
 
     /** How many calls still hold a cursor in memory. */
     internal fun retainedCalls(): Int = synchronized(lock) { feeds.size }
@@ -127,6 +136,11 @@ class LiveCallFeed constructor(
         feeds[callId.value]?.polling == true
     }
 
+    /** How many collectors are attached to [callId]'s current entry. */
+    internal fun collectorsOf(callId: CallId): Int = synchronized(lock) {
+        feeds[callId.value]?.collectors ?: 0
+    }
+
     private inner class CallFeed(private val callId: CallId) {
         private var accumulated = LiveCallFeedState(callId.value)
         private val published = MutableStateFlow(accumulated)
@@ -134,7 +148,7 @@ class LiveCallFeed constructor(
         /** Transcripts already accepted, so a page replayed with a new revision writes one turn. */
         private val appliedSequences = mutableSetOf<Long>()
 
-        private var collectors = 0
+        var collectors = 0
         private var generation = 0
         private var job: Job? = null
         private var idleJob: Job? = null
@@ -149,16 +163,26 @@ class LiveCallFeed constructor(
             override val replayCache: List<LiveCallFeedState> get() = published.replayCache
 
             override suspend fun collect(collector: FlowCollector<LiveCallFeedState>): Nothing {
-                attached()
+                // A view outlives the entry it was handed out with, so it never keeps that entry
+                // across collections. Resolving the current entry here, and counting the collector
+                // on it under the map lock, is what stops an evicted entry from being restarted
+                // through an old view: the collection always belongs to whatever the map holds now.
+                this@LiveCallFeed.beforeAttach()
+                val entry = synchronized(lock) {
+                    val current = this@LiveCallFeed.entryLocked(callId)
+                    current.attached()
+                    current
+                }
                 try {
-                    published.collect(collector)
+                    entry.published.collect(collector)
                 } finally {
-                    detached()
+                    synchronized(lock) { entry.detached() }
                 }
             }
         }
 
-        private fun attached() = synchronized(lock) {
+        /** Caller holds [lock]. */
+        private fun attached() {
             collectors++
             touches++
             touchedAt = touches
@@ -169,12 +193,16 @@ class LiveCallFeed constructor(
             if (collectors == 1 && !accumulated.ended && job == null) start()
         }
 
-        private fun detached() = synchronized(lock) {
+        /** Caller holds [lock]. */
+        private fun detached() {
             if (collectors > 0) collectors--
-            if (collectors > 0) return@synchronized
+            if (collectors > 0) return
             // The request belongs to the call, not the screen: nobody is left, so the loop stops
             // and the accumulated value and cursor stay for the next collector.
             stop()
+            // A page accepted but not yet published is still the collectors' final value; publish
+            // it here so a reader that stays behind never sees the accumulation fall behind it.
+            published.value = accumulated
             touches++
             touchedAt = touches
             // A finished call keeps its entry for a screen that comes back; the live ones only keep
@@ -220,26 +248,33 @@ class LiveCallFeed constructor(
                     BridgeLog.e(TAG, "call ${callId.value} events request failed", error)
                     null
                 }
-                if (outcome == null) {
-                    failures++
-                    if (!reconnecting(token)) return
-                    delay(backoffMs(failures))
-                    continue
-                }
-                when (outcome) {
-                    is ApiOutcome.Ok -> {
-                        failures = 0
+                val delivered = when (outcome) {
+                    null -> false
+
+                    is ApiOutcome.Ok -> try {
                         if (!accept(token, outcome.value)) return
                         afterAccept()
                         if (!publish(token)) return
                         if (accumulated.ended) synchronized(lock) { trimFinished() }
+                        true
+                    } catch (cancellation: CancellationException) {
+                        throw cancellation
+                    } catch (error: Throwable) {
+                        // A surprise while applying a delivered page is the same as a failed read:
+                        // surface it, keep the cursor and try again, so neither the page already
+                        // accepted nor the loop is lost to it.
+                        BridgeLog.e(TAG, "call ${callId.value} events page failed", error)
+                        false
                     }
 
-                    is ApiOutcome.Failure -> {
-                        failures++
-                        if (!reconnecting(token)) return
-                        delay(backoffMs(failures))
-                    }
+                    is ApiOutcome.Failure -> false
+                }
+                if (delivered) {
+                    failures = 0
+                } else {
+                    failures++
+                    if (!reconnecting(token)) return
+                    delay(backoffMs(failures))
                 }
             }
         }
@@ -294,15 +329,16 @@ class LiveCallFeed constructor(
         }
 
         /**
-         * Caps the finished entries kept for a return. The ones nobody watches go first, so a
-         * screen still on an old call is not cut off before an abandoned one.
+         * Caps the finished entries kept for a return. Only entries nobody watches are victims: a
+         * screen still reading a call is never cut off, even while its terminal page is still on
+         * its way out, so the cap is met once those collectors leave. Caller holds [lock].
          */
         private fun trimFinished() {
             val finished = feeds.values.filter { it.finished }
             if (finished.size <= REMEMBERED_TERMINAL_CALLS) return
             val over = finished.size - REMEMBERED_TERMINAL_CALLS
             val ordered = finished.sortedBy { it.touchedAt }
-            val victims = (ordered.filter { it.collectors == 0 } + ordered).distinct().take(over)
+            val victims = ordered.filter { it.collectors == 0 }.take(over)
             victims.forEach { it.evict() }
         }
 
