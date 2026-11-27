@@ -107,6 +107,105 @@ class UpdatesViewModelTest {
     }
 
     @Test
+    fun `a failed install retries through the confirmation and installs once`() = runTest(testDispatcher.scheduler) {
+        val service = FakeUpdatesService().apply {
+            result = UpdatesSamples.updateOffered()
+            appInstall.value = AppInstallState.Failed(InstallFailure.INSTALL_FAILED, "the installer refused")
+        }
+        val viewModel = UpdatesViewModel(service, bridge)
+        backgroundScope.launch { viewModel.state.collect {} }
+        advanceUntilIdle()
+
+        // The row's "Install again" asks again: a failure is terminal, not a running operation.
+        viewModel.installApp()
+        advanceUntilIdle()
+        assertEquals(UpdateTarget.APP, viewModel.state.value.updateConfirmation)
+        assertEquals("nothing installs before the confirmation", 0, service.appInstalls)
+
+        viewModel.confirmUpdate()
+        advanceUntilIdle()
+
+        assertEquals(1, service.appInstalls)
+        assertEquals(UpdatesSamples.manifest, service.installedManifest)
+        assertEquals(null, viewModel.state.value.updateConfirmation)
+    }
+
+    @Test
+    fun `a module install asks after the app update finished without a restart`() = runTest(testDispatcher.scheduler) {
+        val service = FakeUpdatesService().apply {
+            // The app row already reports the release it installed; the module row still offers.
+            result = UpdatesSamples.check(UpdatesSamples.installed(moduleVersionCode = 3, moduleVersion = "0.3.0"))
+            appInstall.value = AppInstallState.Installed("0.4.0")
+        }
+        val viewModel = UpdatesViewModel(service, bridge)
+        backgroundScope.launch { viewModel.state.collect {} }
+        advanceUntilIdle()
+        assertFalse(viewModel.state.value.check?.verdict?.module?.needsAppFirst ?: true)
+
+        // A finished install is terminal, so the next install is allowed to ask.
+        viewModel.installModule()
+        advanceUntilIdle()
+        assertEquals(UpdateTarget.MODULE, viewModel.state.value.updateConfirmation)
+
+        viewModel.confirmUpdate()
+        advanceUntilIdle()
+
+        assertEquals(1, service.moduleInstalls)
+        assertEquals(null, viewModel.state.value.updateConfirmation)
+    }
+
+    @Test
+    fun `a withdrawn offer never comes back without a new tap`() = runTest(testDispatcher.scheduler) {
+        val service = FakeUpdatesService().apply { result = UpdatesSamples.updateOffered() }
+        val viewModel = UpdatesViewModel(service, bridge)
+        backgroundScope.launch { viewModel.state.collect {} }
+        advanceUntilIdle()
+
+        viewModel.installApp()
+        advanceUntilIdle()
+        assertEquals(UpdateTarget.APP, viewModel.state.value.updateConfirmation)
+
+        // A re-read check withdraws the offer: the question is dropped, not merely hidden.
+        service.result = UpdatesSamples.check()
+        viewModel.refresh()
+        advanceUntilIdle()
+        assertEquals(null, viewModel.state.value.updateConfirmation)
+
+        // The row offers again; the old question must not return on its own.
+        service.result = UpdatesSamples.updateOffered()
+        viewModel.refresh()
+        advanceUntilIdle()
+        assertEquals(null, viewModel.state.value.updateConfirmation)
+        assertEquals(0, service.appInstalls)
+
+        // Only a new tap asks again.
+        viewModel.installApp()
+        advanceUntilIdle()
+        assertEquals(UpdateTarget.APP, viewModel.state.value.updateConfirmation)
+    }
+
+    @Test
+    fun `a confirm after the offer was withdrawn installs nothing`() = runTest(testDispatcher.scheduler) {
+        val service = FakeUpdatesService().apply { result = UpdatesSamples.updateOffered() }
+        val viewModel = UpdatesViewModel(service, bridge)
+        backgroundScope.launch { viewModel.state.collect {} }
+        advanceUntilIdle()
+
+        viewModel.installApp()
+        advanceUntilIdle()
+        service.result = UpdatesSamples.check()
+        viewModel.refresh()
+        advanceUntilIdle()
+
+        viewModel.confirmUpdate()
+        advanceUntilIdle()
+
+        assertEquals(0, service.appInstalls)
+        assertEquals(null, service.installedManifest)
+        assertEquals(null, viewModel.state.value.updateConfirmation)
+    }
+
+    @Test
     fun `a second confirm runs no second app install`() = runTest(testDispatcher.scheduler) {
         val service = FakeUpdatesService().apply { result = UpdatesSamples.updateOffered() }
         val viewModel = UpdatesViewModel(service, bridge)

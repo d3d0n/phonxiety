@@ -3,6 +3,7 @@ package com.phonxiety.bridge.feature.onboarding
 import android.text.format.Formatter
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -26,7 +27,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
@@ -39,6 +42,7 @@ import androidx.compose.ui.semantics.text
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.TextUnitType
 import androidx.compose.ui.unit.dp
 import com.phonxiety.bridge.designsystem.LocalPhonxietyType
 import com.phonxiety.bridge.designsystem.asString
@@ -59,6 +63,7 @@ import com.phonxiety.bridge.root.RuntimePermission
 import com.phonxiety.bridge.root.VerifyCheck
 import com.phonxiety.bridge.root.VerifyOutcome
 import com.phonxiety.bridge.root.WizardState
+import kotlin.math.roundToInt
 
 /** The state card: what the wizard is doing, and the one thing to read about it. */
 @Composable
@@ -300,41 +305,61 @@ private fun ReadyToInstallContent(state: WizardState.ReadyToInstall) {
 }
 
 /**
- * A long technical constant that may break only after its underscores. The zero-width spaces are a
- * display aid: they are invisible, shape nothing and add no width, but they give the line breaker a
- * place to break between words instead of mid-word at 320 dp with 200 % text.
+ * A long technical constant that may break only after its underscores. Nothing is inserted into
+ * the text: each `_`-terminated piece is its own text run inside a wrapping row, so the only break
+ * opportunity is a run boundary and the rendered characters are exactly the constant.
  *
- * The node's semantics are replaced with the exact constant, so a screen reader and any copy read
- * the identifier as it is; the layout result is republished so the node still answers text-navigation
- * requests. The holder is not state: assigning it during layout must not recompose.
+ * The node's semantics are replaced with that same constant, and the layout result published for
+ * it is the laid-out runs themselves. Their text therefore agrees with the node's text character
+ * for character, which keeps character bounds and text navigation on the same offsets.
  */
 @Composable
 private fun BreakableConstant(text: String, style: TextStyle, color: Color) {
-    val display = remember(text) { breakableConstant(text) }
-    val layout = remember(text) { arrayOfNulls<TextLayoutResult>(1) }
-    Text(
-        text = display,
-        style = style,
-        color = color,
-        onTextLayout = { result -> layout[0] = result },
+    val segments = remember(text) { constantSegments(text) }
+    val layout = remember(text) { arrayOfNulls<TextLayoutResult>(segments.size) }
+    // Each run draws its last glyph's trailing tracking, which a single run would not repeat at
+    // every piece: the pieces are reported narrower by exactly that tracking, so the runs sit
+    // where the one unwrapped line would have put them.
+    val trailing = with(LocalDensity.current) {
+        if (style.letterSpacing.type == TextUnitType.Sp) style.letterSpacing.toPx() else 0f
+    }
+    FlowRow(
         modifier = Modifier.clearAndSetSemantics {
             this.text = AnnotatedString(text)
             // Registered unconditionally: the semantics tree can be built before the first layout,
             // so the action reads the holder when it is invoked, not when it is registered.
             getTextLayoutResult { results ->
-                val result = layout[0] ?: return@getTextLayoutResult false
-                results.add(result)
+                val runs = layout.filterNotNull()
+                if (runs.isEmpty()) return@getTextLayoutResult false
+                results.addAll(runs)
                 true
             }
         }
-    )
+    ) {
+        segments.forEachIndexed { index, segment ->
+            Text(
+                text = segment,
+                style = style,
+                color = color,
+                onTextLayout = { result -> layout[index] = result },
+                modifier = Modifier.trimTrailingTracking(trailing)
+            )
+        }
+    }
+}
+
+/** Reports a text run narrower by its final glyph's tracking, which a single run would not repeat. */
+private fun Modifier.trimTrailingTracking(trailingPx: Float): Modifier = layout { measurable, constraints ->
+    val placeable = measurable.measure(constraints)
+    val width = (placeable.width - trailingPx).roundToInt().coerceAtLeast(0)
+    layout(width, placeable.height) { placeable.place(0, 0) }
 }
 
 /**
- * The constant with a break opportunity after every underscore. Stripping the zero-width spaces
- * gives the constant back, so the display string carries no text a person could copy.
+ * The constant cut after every underscore: joining the pieces back gives the constant itself, and
+ * every piece but the last ends on the underscore that alone allows a line break.
  */
-internal fun breakableConstant(constant: String): String = constant.replace("_", "_\u200B")
+internal fun constantSegments(constant: String): List<String> = constant.split(Regex("(?<=_)")).filter { it.isNotEmpty() }
 
 @Composable
 private fun MetamoduleProgress(phase: SetupInstallPhase?) {

@@ -357,17 +357,17 @@ class OnboardingBehaviorTest {
     }
 
     @Test
-    fun thePermissionConstantsAddOnlyInvisibleBreakOpportunities() {
-        val display = breakableConstant("CAPTURE_AUDIO_OUTPUT")
+    fun thePermissionConstantsSplitOnlyAfterTheirUnderscores() {
+        val segments = constantSegments("CAPTURE_AUDIO_OUTPUT")
 
-        assertEquals("CAPTURE_\u200BAUDIO_\u200BOUTPUT", display)
-        assertEquals("CAPTURE_AUDIO_OUTPUT", display.replace("\u200B", ""))
+        assertEquals(listOf("CAPTURE_", "AUDIO_", "OUTPUT"), segments)
+        assertEquals("no character is inserted or lost", "CAPTURE_AUDIO_OUTPUT", segments.joinToString(""))
     }
 
     /**
      * At 320 dp with 200 % text the longest constant needs three lines. A break inside a word is
-     * what the old screen did (`CAPTURE_AUDIO_OU` / `TPUT`); the underscore is the only boundary
-     * the display string offers, so every line but the last has to end on one.
+     * what the old screen did (`CAPTURE_AUDIO_OU` / `TPUT`); each `_`-terminated piece is its own
+     * text run, so the only boundary is an underscore.
      */
     @Test
     fun thePermissionConstantsBreakOnlyAfterTheirUnderscores() {
@@ -377,15 +377,22 @@ class OnboardingBehaviorTest {
         val node = composeRule.onNodeWithText(constant).performScrollTo().fetchSemanticsNode()
         val results = mutableListOf<TextLayoutResult>()
         node.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(results)
-        val layout = results.single()
 
-        assertTrue("the constant has to wrap at this size", layout.lineCount > 1)
-        for (line in 0 until layout.lineCount - 1) {
-            val text = layout.layoutInput.text.text.substring(layout.getLineStart(line), layout.getLineEnd(line))
-            assertTrue("line $line breaks mid-word: '$text'", text.trimEnd('\u200B').endsWith("_"))
+        val nodeText = node.config[SemanticsProperties.Text].joinToString("") { it.text }
+        assertEquals(constant, nodeText)
+        // The published layout is the rendered runs themselves: no display-only characters, so
+        // character bounds and text navigation stay on the node's own offsets.
+        assertEquals("the layout has to describe exactly the node's characters", nodeText, results.joinToString("") { it.layoutInput.text.text })
+
+        val lines = results.flatMap { result ->
+            (0 until result.lineCount).map { line ->
+                result.layoutInput.text.text.substring(result.getLineStart(line), result.getLineEnd(line))
+            }
         }
-        // The node still reads the exact constant, without the display-only characters.
-        assertEquals(constant, node.config[SemanticsProperties.Text].joinToString("") { it.text })
+        assertTrue("the constant has to wrap at this size", lines.size > 1)
+        lines.dropLast(1).forEach { line ->
+            assertTrue("line breaks mid-word: '$line'", line.trimEnd().endsWith("_"))
+        }
     }
 
     private fun contentContainer(): Rect = composeRule.onNodeWithTag(CONTENT_TAG).fetchSemanticsNode().boundsInRoot

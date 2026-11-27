@@ -58,6 +58,28 @@ data class UpdatesUiState(
     val callActive: Boolean = false
 )
 
+/**
+ * Whether [target] may still be asked about. The offer itself has to be the one that was tapped
+ * (a re-read check can withdraw it), and no install may be running: a download, a build or the
+ * platform's own dialog owns both rows until it reaches a terminal state (Failed, Installed, …).
+ * A terminal state is not a reason to refuse: it is exactly when the row's retry, or the next
+ * install, is allowed to ask.
+ */
+private fun offerEligible(
+    target: UpdateTarget,
+    check: UpdateCheck?,
+    app: AppInstallState,
+    module: ModuleInstallState
+): Boolean {
+    if (app.busy || module.busy) return false
+    val row = when (target) {
+        UpdateTarget.APP -> check?.verdict?.app
+        UpdateTarget.MODULE -> check?.verdict?.module
+        UpdateTarget.DAEMON -> null
+    } ?: return false
+    return row.status == UpdateStatus.UPDATE_AVAILABLE && !row.needsAppFirst
+}
+
 @HiltViewModel
 class UpdatesViewModel @Inject constructor(
     private val service: UpdatesService,
@@ -137,18 +159,7 @@ class UpdatesViewModel @Inject constructor(
             appInstall = current.appInstall.takeUnless { localState.appRollback } ?: AppInstallState.Idle,
             moduleInstall = current.moduleInstall,
             updateConfirmation = localState.pendingUpdate?.takeIf { target ->
-                // The offer must still be the one tapped: a re-read check can withdraw it, and an
-                // install that has started owns the row until it finishes or fails.
-                val row = when (target) {
-                    UpdateTarget.APP -> checked?.verdict?.app
-                    UpdateTarget.MODULE -> checked?.verdict?.module
-                    UpdateTarget.DAEMON -> null
-                }
-                row != null &&
-                    row.status == UpdateStatus.UPDATE_AVAILABLE &&
-                    !row.needsAppFirst &&
-                    current.appInstall is AppInstallState.Idle &&
-                    current.moduleInstall is ModuleInstallState.Idle
+                offerEligible(target, checked, current.appInstall, current.moduleInstall)
             },
             rollbackPlan = current.rollbackPlan,
             rollbackRecovery = current.rollbackRecovery,
@@ -179,6 +190,22 @@ class UpdatesViewModel @Inject constructor(
             service.appInstall.collect { install ->
                 if (install is AppInstallState.Installed) refresh()
             }
+        }
+        // A question whose offer was withdrawn, or whose install started elsewhere, is dropped
+        // rather than hidden: otherwise it would come back on its own when the row offers again,
+        // and a later confirm would spend it without a tap.
+        viewModelScope.launch {
+            combine(
+                pendingUpdate,
+                check,
+                service.appInstall,
+                service.moduleInstall
+            ) { target, checked, app, module ->
+                target to (target != null && offerEligible(target, checked, app, module))
+            }
+                .collect { (target, eligible) ->
+                    if (target != null && !eligible) pendingUpdate.compareAndSet(target, null)
+                }
         }
     }
 
@@ -222,6 +249,9 @@ class UpdatesViewModel @Inject constructor(
         if (callActive.value) return
         val checked = check.value ?: return
         val manifest = checked.manifest ?: return
+        // The offer can be withdrawn while the dialog is up (a re-read check) or its row taken
+        // by an install that started elsewhere; the consumed confirmation must not spend itself.
+        if (!offerEligible(target, checked, service.appInstall.value, service.moduleInstall.value)) return
         when (target) {
             UpdateTarget.APP -> {
                 appRollback.value = false
@@ -229,7 +259,6 @@ class UpdatesViewModel @Inject constructor(
             }
 
             UpdateTarget.MODULE -> {
-                if (checked.verdict?.module?.needsAppFirst == true) return
                 viewModelScope.launch { service.installModule(manifest) }
             }
 
