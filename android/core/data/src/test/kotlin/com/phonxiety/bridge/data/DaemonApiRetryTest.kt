@@ -13,6 +13,7 @@ import java.io.ByteArrayOutputStream
 import java.io.OutputStream
 import kotlin.random.Random
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
@@ -228,7 +229,7 @@ class DaemonApiRetryTest {
         var lookups = 0
         // The pairing moves right after the guard looked: the retry is already bound.
         val source = AppGatewaySource { if (++lookups <= 3) old else fresh }
-        val api = DefaultDaemonApi(LinkAppApi(source)).apply {
+        val api = DefaultDaemonApi(LinkAppApi(source, Dispatchers.IO)).apply {
             retryRandom = Random(1)
             retryClock = { currentTime }
         }
@@ -247,7 +248,7 @@ class DaemonApiRetryTest {
         var lookups = 0
         // The pairing has moved by the time the guard looks: it stops before any retry.
         val source = AppGatewaySource { if (++lookups <= 2) old else fresh }
-        val api = DefaultDaemonApi(LinkAppApi(source)).apply {
+        val api = DefaultDaemonApi(LinkAppApi(source, Dispatchers.IO)).apply {
             retryRandom = Random(1)
             retryClock = { currentTime }
         }
@@ -265,7 +266,7 @@ class DaemonApiRetryTest {
         val old = FakeGateway(status = 503)
         val fresh = FakeGateway(status = 200)
         var current = old
-        val api = DefaultDaemonApi(LinkAppApi(AppGatewaySource { current })).apply {
+        val api = DefaultDaemonApi(LinkAppApi(AppGatewaySource { current }, Dispatchers.IO)).apply {
             retryRandom = Random(1)
             retryClock = { currentTime }
         }
@@ -288,7 +289,7 @@ class DaemonApiRetryTest {
         var lookups = 0
         // No gateway when the read opens; another pairing's comes up right after.
         val source = AppGatewaySource { if (++lookups <= 1) null else later }
-        val api = DefaultDaemonApi(LinkAppApi(source)).apply {
+        val api = DefaultDaemonApi(LinkAppApi(source, Dispatchers.IO)).apply {
             retryRandom = Random(1)
             retryClock = { currentTime }
         }

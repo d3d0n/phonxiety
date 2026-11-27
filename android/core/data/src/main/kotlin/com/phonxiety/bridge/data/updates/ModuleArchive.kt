@@ -2,13 +2,14 @@ package com.phonxiety.bridge.data.updates
 
 import android.content.Context
 import android.content.pm.PackageManager
+import com.phonxiety.bridge.data.di.IoDispatcher
 import com.phonxiety.bridge.root.ModuleZipBuilder
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.security.MessageDigest
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
 
 /** The APK path the module's overlay mounts, taken from the module layout itself. */
@@ -45,11 +46,12 @@ fun interface ModuleArchiveBuilder {
 /** `ModuleZipBuilder` over the app's assets, writing into the cache before publication. */
 @Singleton
 class AndroidModuleArchiveBuilder @Inject constructor(
-    @ApplicationContext context: Context
+    @ApplicationContext context: Context,
+    @IoDispatcher private val io: CoroutineDispatcher
 ) : ModuleArchiveBuilder {
     private val appContext = context.applicationContext
 
-    override suspend fun build(apk: File, versionName: String, versionCode: Long): File = withContext(Dispatchers.IO) {
+    override suspend fun build(apk: File, versionName: String, versionCode: Long): File = withContext(io) {
         val output = File(appContext.cacheDir, "module-previous-build.zip")
         if (output.isFile && !output.delete()) {
             throw IllegalStateException("could not replace ${output.path}")
@@ -89,7 +91,8 @@ class ModuleArchiveCapture(
     private val mounted: MountedSystemApk,
     private val builder: ModuleArchiveBuilder,
     private val publisher: ModuleArchivePublisher,
-    private val workspace: File
+    private val workspace: File,
+    private val io: CoroutineDispatcher
 ) : PreviousModuleCapture {
     override suspend fun capture(): CaptureResult {
         val mountedApk = mounted.read()
@@ -125,7 +128,7 @@ class ModuleArchiveCapture(
         }
     }
 
-    private suspend fun sha256(file: File): String = withContext(Dispatchers.IO) {
+    private suspend fun sha256(file: File): String = withContext(io) {
         val digest = MessageDigest.getInstance("SHA-256")
         file.inputStream().use { input ->
             val buffer = ByteArray(DEFAULT_BUFFER_SIZE)

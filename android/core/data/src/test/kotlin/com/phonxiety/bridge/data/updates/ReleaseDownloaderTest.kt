@@ -4,6 +4,7 @@ import com.phonxiety.bridge.data.ApiResult
 import java.io.File
 import java.io.OutputStream
 import java.security.MessageDigest
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
@@ -25,7 +26,7 @@ class ReleaseDownloaderTest {
         val target = File(temporary.newFolder("updates"), "phonxiety-bridge.apk")
         val progress = mutableListOf<Float?>()
 
-        val downloaded = ReleaseDownloaderImpl(artifacts).download(ReleaseSource.Daemon("apk"), target) { progress += it }
+        val downloaded = ReleaseDownloaderImpl(artifacts, Dispatchers.IO).download(ReleaseSource.Daemon("apk"), target) { progress += it }
 
         assertEquals("apk", artifacts.name)
         assertEquals(payload.toList(), target.readBytes().toList())
@@ -43,7 +44,7 @@ class ReleaseDownloaderTest {
         val target = File(temporary.newFolder("updates"), "module.zip")
 
         val error = runCatching {
-            ReleaseDownloaderImpl(artifacts).download(ReleaseSource.Daemon("module"), target) {}
+            ReleaseDownloaderImpl(artifacts, Dispatchers.IO).download(ReleaseSource.Daemon("module"), target) {}
         }.exceptionOrNull()
 
         assertTrue(error is IllegalStateException)

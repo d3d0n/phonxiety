@@ -7,6 +7,10 @@ import android.content.Intent
 import com.phonxiety.bridge.BridgeConfig
 import com.phonxiety.bridge.BridgeConfigLoader
 import com.phonxiety.bridge.BridgeRuntime
+import com.phonxiety.bridge.model.BridgeState
+import com.phonxiety.bridge.model.DeviceState
+import com.phonxiety.bridge.model.LinkKind
+import com.phonxiety.bridge.model.LinkState
 import com.phonxiety.bridge.net.CandidateStore
 import java.io.File
 import java.util.concurrent.CountDownLatch
@@ -15,8 +19,12 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.currentTime
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -50,7 +58,7 @@ class DevicePairingRepositoryTest {
      * The repository over the real storage, counting how often it is read. A read counts only once
      * the file has been loaded, so a test that waits for a count never races the read it waits for.
      */
-    private fun countingRepository(reads: AtomicInteger) = DevicePairingRepository(context) {
+    private fun countingRepository(reads: AtomicInteger) = DevicePairingRepository(context, Dispatchers.IO) {
         val stored = BridgeConfigLoader.loadOrNull(context) != null
         reads.incrementAndGet()
         stored
@@ -96,6 +104,44 @@ class DevicePairingRepositoryTest {
         assertEquals(baseline + 1, reads.get())
     }
 
+    /**
+     * The watcher runs on the injected dispatcher and refreshes once per link change: an addition
+     * to the state that leaves the link alone is not a change, and nothing sleeps or polls.
+     */
+    @Test
+    fun theWatcherRefreshesOncePerLinkChangeOnTheInjectedDispatcher() = runTest {
+        val reads = AtomicInteger()
+        val links = MutableStateFlow(BridgeState())
+        DevicePairingRepository(
+            context = context,
+            io = StandardTestDispatcher(testScheduler),
+            links = links,
+            read = {
+                reads.incrementAndGet()
+                BridgeConfigLoader.loadOrNull(context) != null
+            }
+        )
+
+        // The subscription's first emission is the first observed link state.
+        runCurrent()
+        assertEquals("constructor read plus one observed link state", 2, reads.get())
+        assertEquals("the watcher never sleeps", 0L, currentTime)
+
+        // The call and the device are not the link: a change there is not a refresh.
+        links.value = links.value.copy(device = DeviceState(batteryPercent = 42))
+        runCurrent()
+        assertEquals("an unrelated state change is not a link change", 2, reads.get())
+
+        links.value = links.value.copy(link = LinkState.Connecting(LinkKind.WEBSOCKET))
+        runCurrent()
+        assertEquals(3, reads.get())
+
+        links.value = links.value.copy(link = LinkState.Offline)
+        runCurrent()
+        assertEquals(4, reads.get())
+        assertEquals("one read per link change and no timer", 0L, currentTime)
+    }
+
     @Test
     fun deletingTheConfigUnpairsAfterARefresh() = runBlocking {
         BridgeConfigLoader.write(context, storedConfig())
@@ -116,7 +162,7 @@ class DevicePairingRepositoryTest {
     fun aPairingLinkStoresTheAddressesItCarriedAndRePairingReplacesThem() = runTest {
         BridgeConfigLoader.delete(context)
         File(context.createDeviceProtectedStorageContext().filesDir, "link-candidates.json").delete()
-        val repository = DevicePairingRepository(context)
+        val repository = DevicePairingRepository(context, Dispatchers.IO)
         val pinA = "a".repeat(64)
         val pinB = "b".repeat(64)
 
@@ -152,7 +198,7 @@ class DevicePairingRepositoryTest {
     @Test
     fun aPairingLinkPairsImmediately() = runTest {
         BridgeConfigLoader.delete(context)
-        val repository = DevicePairingRepository(context)
+        val repository = DevicePairingRepository(context, Dispatchers.IO)
 
         val result = repository.pair(
             "phonxiety://pair?url=wss%3A%2F%2F192.168.1.10%3A18763%2Fdevice&token=device-token"
@@ -175,7 +221,7 @@ class DevicePairingRepositoryTest {
         val olderInside = CountDownLatch(1)
         val releaseOlder = CountDownLatch(1)
         val newerInside = CountDownLatch(1)
-        val repository = DevicePairingRepository(context) {
+        val repository = DevicePairingRepository(context, Dispatchers.IO) {
             val seen = stored.get()
             when (reads.incrementAndGet()) {
                 // The constructor read first; the second read is the first observed link state.
@@ -215,7 +261,7 @@ class DevicePairingRepositoryTest {
         val reads = AtomicInteger()
         val refreshInside = CountDownLatch(1)
         val releaseRefresh = CountDownLatch(1)
-        val repository = DevicePairingRepository(context) {
+        val repository = DevicePairingRepository(context, Dispatchers.IO) {
             val seen = BridgeConfigLoader.loadOrNull(context) != null
             if (reads.incrementAndGet() == 3) {
                 refreshInside.countDown()
@@ -296,6 +342,7 @@ class DevicePairingRepositoryTest {
         }
         val repository = DevicePairingRepository(
             context = refusing,
+            io = Dispatchers.IO,
             read = { BridgeConfigLoader.loadOrNull(context) != null }
         )
 
@@ -317,6 +364,7 @@ class DevicePairingRepositoryTest {
     /** A store whose write succeeds and whose service start throws, as a background start can. */
     private fun rejectingStartRepository() = DevicePairingRepository(
         context = context,
+        io = Dispatchers.IO,
         read = { BridgeConfigLoader.loadOrNull(context) != null },
         startService = { throw SecurityException("startForegroundService is not allowed") }
     )

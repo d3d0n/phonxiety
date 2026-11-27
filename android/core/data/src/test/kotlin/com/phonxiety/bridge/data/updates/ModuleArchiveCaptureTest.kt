@@ -5,6 +5,7 @@ import com.phonxiety.bridge.root.ModuleZipBuilder
 import java.io.File
 import java.security.MessageDigest
 import java.util.zip.ZipFile
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -152,7 +153,8 @@ class ModuleArchiveCaptureTest {
         mounted = { mounted },
         builder = builder,
         publisher = publisher,
-        workspace = File(temporary.root, "workspace")
+        workspace = File(temporary.root, "workspace"),
+        io = Dispatchers.IO
     )
 
     private fun sha256(text: String): String = sha256(text.toByteArray())

@@ -69,7 +69,7 @@ class PairingObservationTest {
         val appApi = FakeAppApi().apply {
             linkTest = ApiResult.Success(200, buildJsonObject { put("healthy", true) })
         }
-        val pairing = DevicePairingRepository(context)
+        val pairing = DevicePairingRepository(context, Dispatchers.IO)
         val link = connectingLink()
         val viewModel = OnboardingViewModel(context, pairing, appApi, backend, FakePermissions(), link)
 

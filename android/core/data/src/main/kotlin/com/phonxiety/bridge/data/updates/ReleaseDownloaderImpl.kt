@@ -1,13 +1,14 @@
 package com.phonxiety.bridge.data.updates
 
 import com.phonxiety.bridge.data.ApiResult
+import com.phonxiety.bridge.data.di.IoDispatcher
 import java.io.File
 import java.io.OutputStream
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -28,7 +29,8 @@ fun interface UpdateArtifactSource {
  */
 @Singleton
 class ReleaseDownloaderImpl @Inject constructor(
-    private val artifacts: UpdateArtifactSource
+    private val artifacts: UpdateArtifactSource,
+    @IoDispatcher private val io: CoroutineDispatcher
 ) : ReleaseDownloader {
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -40,7 +42,7 @@ class ReleaseDownloaderImpl @Inject constructor(
         is ReleaseSource.Daemon -> downloadFromDaemon(source.name, destination, onProgress)
     }
 
-    private suspend fun downloadHttps(url: String, destination: File, onProgress: (Float?) -> Unit): DownloadedFile = withContext(Dispatchers.IO) {
+    private suspend fun downloadHttps(url: String, destination: File, onProgress: (Float?) -> Unit): DownloadedFile = withContext(io) {
         ReleaseUrls.requireHttps(url, "the release URL")
         val request = Request.Builder().url(url).get().build()
         client.newCall(request).execute().use { response ->
@@ -73,7 +75,7 @@ class ReleaseDownloaderImpl @Inject constructor(
         }
     }
 
-    private suspend fun downloadFromDaemon(name: String, destination: File, onProgress: (Float?) -> Unit): DownloadedFile = withContext(Dispatchers.IO) {
+    private suspend fun downloadFromDaemon(name: String, destination: File, onProgress: (Float?) -> Unit): DownloadedFile = withContext(io) {
         destination.parentFile?.mkdirs()
         val digest = MessageDigest.getInstance("SHA-256")
         var total = 0L

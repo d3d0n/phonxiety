@@ -15,6 +15,7 @@ import com.phonxiety.bridge.model.CallsPage
 import com.phonxiety.bridge.model.TranscriptPage
 import com.phonxiety.bridge.model.TranscriptTurn
 import java.io.File
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -45,7 +46,7 @@ class CallsRepositoryTest {
         database = Room.inMemoryDatabaseBuilder(context, CallCacheDatabase::class.java)
             .allowMainThreadQueries()
             .build()
-        repository = DefaultCallsRepository(api, CallCache(database))
+        repository = DefaultCallsRepository(api, CallCache(database), Dispatchers.IO)
     }
 
     @After

@@ -1,5 +1,6 @@
 package com.phonxiety.bridge.data
 
+import com.phonxiety.bridge.data.di.IoDispatcher
 import com.phonxiety.bridge.model.AppGateway
 import com.phonxiety.bridge.model.AppGatewaySource
 import com.phonxiety.bridge.model.AttachmentHeader
@@ -13,7 +14,7 @@ import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -25,7 +26,8 @@ import kotlinx.serialization.json.put
 /** One app API call over the live device link. */
 @Singleton
 class LinkAppApi @Inject constructor(
-    gateways: AppGatewaySource
+    gateways: AppGatewaySource,
+    @IoDispatcher private val io: CoroutineDispatcher
 ) : AppApi {
     private val envelope = AppApiEnvelope(gateways = gateways)
 
@@ -42,7 +44,7 @@ class LinkAppApi @Inject constructor(
         path: String,
         query: Map<String, String>,
         sink: OutputStream
-    ): ApiResult = withContext(Dispatchers.IO) {
+    ): ApiResult = withContext(io) {
         envelope.download(path, query, sink)
     }
 }

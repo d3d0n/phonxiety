@@ -75,7 +75,7 @@ class PairingResumeTest {
         }
         val viewModel = OnboardingViewModel(
             context,
-            DevicePairingRepository(context),
+            DevicePairingRepository(context, Dispatchers.IO),
             appApi,
             backend,
             FakePermissions(),
@@ -120,7 +120,7 @@ class PairingResumeTest {
         val appApi = FakeAppApi().apply {
             linkTest = ApiResult.Success(200, buildJsonObject { put("healthy", true) })
         }
-        val repository = DevicePairingRepository(context)
+        val repository = DevicePairingRepository(context, Dispatchers.IO)
         val viewModel = OnboardingViewModel(
             context,
             repository,

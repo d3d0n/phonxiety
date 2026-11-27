@@ -8,6 +8,7 @@ import com.phonxiety.bridge.BridgeRuntime
 import com.phonxiety.bridge.BridgeService
 import com.phonxiety.bridge.PairingLink
 import com.phonxiety.bridge.PairingResult
+import com.phonxiety.bridge.data.di.IoDispatcher
 import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.net.CandidateMerge
 import com.phonxiety.bridge.net.CandidateStore
@@ -15,9 +16,11 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -47,21 +50,34 @@ class RuntimeBridgeStateRepository @Inject constructor() : BridgeStateRepository
  */
 private const val TAG = "PhonxietyBridge"
 
+/**
+ * A scope for work a repository owns, on its injected dispatcher and named so a stack trace says
+ * who started it: the shape the device layer's `bridgeScope` gives its own work.
+ */
+private fun repositoryScope(name: String, dispatcher: CoroutineDispatcher): CoroutineScope = CoroutineScope(SupervisorJob() + dispatcher + CoroutineName(name))
+
 @Singleton
 class DevicePairingRepository internal constructor(
     private val context: Context,
+    private val io: CoroutineDispatcher,
+    /** The link states the watcher follows; the runtime's live flow in the app. */
+    private val links: Flow<BridgeState> = BridgeRuntime.state,
     /** The service start that follows the write; it throws when refused, so the write is undone. */
     private val startService: (Context) -> Unit = { BridgeService.startOrThrow(it) },
     private val read: () -> Boolean
 ) : PairingRepository {
     @Inject
-    constructor(@ApplicationContext context: Context) : this(
+    constructor(
+        @ApplicationContext context: Context,
+        @IoDispatcher io: CoroutineDispatcher
+    ) : this(
         context,
+        io,
         read = { BridgeConfigLoader.loadOrNull(context) != null }
     )
 
     private val state = MutableStateFlow(read())
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope = repositoryScope("phonxiety-pairing", io)
 
     // One lock around every storage read-and-publish and every storage-and-cache mutation, so an
     // older refresh can never publish a value read before a newer refresh or pairing wrote its own.
@@ -76,7 +92,7 @@ class DevicePairingRepository internal constructor(
             // emission is the link state at subscription time: a config written between the
             // constructor's read and this subscription shows up here and only here, so it refreshes
             // the cache like every later change.
-            BridgeRuntime.state
+            links
                 .map { it.link }
                 .distinctUntilChanged()
                 .collect { refresh() }
@@ -84,11 +100,11 @@ class DevicePairingRepository internal constructor(
     }
 
     /** Re-reads the stored config on the IO dispatcher; the cached value moves only when it changed. */
-    suspend fun refresh() = withContext(Dispatchers.IO) {
+    suspend fun refresh() = withContext(io) {
         mutex.withLock { state.value = read() }
     }
 
-    override suspend fun pair(link: String): PairResult = withContext(Dispatchers.IO) {
+    override suspend fun pair(link: String): PairResult = withContext(io) {
         mutex.withLock {
             // The write, the expectation of it and the service start are one
             // pairing transaction: a concurrent start can neither adopt the
@@ -163,7 +179,7 @@ class DevicePairingRepository internal constructor(
         }
     }
 
-    override suspend fun unpair() = withContext(Dispatchers.IO) {
+    override suspend fun unpair() = withContext(io) {
         mutex.withLock {
             BridgeRuntime.pairingTransaction {
                 BridgeRuntime.expectPairing(null)

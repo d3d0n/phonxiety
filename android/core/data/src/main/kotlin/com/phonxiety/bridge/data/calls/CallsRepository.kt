@@ -6,6 +6,7 @@ import com.phonxiety.bridge.data.DaemonApi
 import com.phonxiety.bridge.data.DaemonJson
 import com.phonxiety.bridge.data.DeleteOutcome
 import com.phonxiety.bridge.data.MarkOutcome
+import com.phonxiety.bridge.data.di.IoDispatcher
 import com.phonxiety.bridge.model.CallId
 import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.CallSummary
@@ -16,7 +17,7 @@ import java.io.File
 import java.io.FileOutputStream
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
@@ -96,7 +97,8 @@ interface CallsRepository {
 @Singleton
 class DefaultCallsRepository @Inject constructor(
     private val api: DaemonApi,
-    private val cache: CallCache
+    private val cache: CallCache,
+    @IoDispatcher private val io: CoroutineDispatcher
 ) : CallsRepository {
     private val json: Json = DaemonJson
 
@@ -112,7 +114,7 @@ class DefaultCallsRepository @Inject constructor(
 
     override fun observeFarEnds(): Flow<List<String>> = cache.list.observeFarEnds()
 
-    override suspend fun page(filter: CallFilter, before: Double?, limit: Int): CallPageResult = withContext(Dispatchers.IO) {
+    override suspend fun page(filter: CallFilter, before: Double?, limit: Int): CallPageResult = withContext(io) {
         when (val outcome = api.calls(limit = limit, before = before, outcome = filter.outcome, farEnd = filter.farEnd)) {
             is ApiOutcome.Ok -> {
                 cacheSummaries(outcome.value.calls)
@@ -128,7 +130,7 @@ class DefaultCallsRepository @Inject constructor(
         }
     }
 
-    override suspend fun detail(callId: CallId, refresh: Boolean): CallDetailResult = withContext(Dispatchers.IO) {
+    override suspend fun detail(callId: CallId, refresh: Boolean): CallDetailResult = withContext(io) {
         if (!refresh) {
             val cached = cache.detail.get(callId.value)?.detailJson?.let(::decode)
             return@withContext CallDetailResult(cached, null, cached = true)
@@ -147,7 +149,7 @@ class DefaultCallsRepository @Inject constructor(
         }
     }
 
-    override suspend fun transcript(callId: CallId, cursor: Long?, limit: Int): TranscriptResult = withContext(Dispatchers.IO) {
+    override suspend fun transcript(callId: CallId, cursor: Long?, limit: Int): TranscriptResult = withContext(io) {
         when (val outcome = api.transcript(callId, cursor, limit)) {
             is ApiOutcome.Ok -> {
                 val page = outcome.value
@@ -179,7 +181,7 @@ class DefaultCallsRepository @Inject constructor(
         }
     }
 
-    override suspend fun addMark(callId: CallId, mark: String, note: String?): MarkOutcome = withContext(Dispatchers.IO) {
+    override suspend fun addMark(callId: CallId, mark: String, note: String?): MarkOutcome = withContext(io) {
         val outcome = api.addMark(callId, mark, note)
         if (outcome is MarkOutcome.Marked) {
             val existing = cache.list.get(callId.value)
@@ -190,7 +192,7 @@ class DefaultCallsRepository @Inject constructor(
         outcome
     }
 
-    override suspend fun delete(callId: CallId): DeleteOutcome = withContext(Dispatchers.IO) {
+    override suspend fun delete(callId: CallId): DeleteOutcome = withContext(io) {
         val outcome = api.deleteCall(callId)
         if (outcome is DeleteOutcome.Deleted) {
             // One delete; the detail row and every transcript turn go with it by cascade.
@@ -199,7 +201,7 @@ class DefaultCallsRepository @Inject constructor(
         outcome
     }
 
-    override suspend fun downloadAudio(callId: CallId, format: String, file: File): ApiResult = withContext(Dispatchers.IO) {
+    override suspend fun downloadAudio(callId: CallId, format: String, file: File): ApiResult = withContext(io) {
         file.parentFile?.mkdirs()
         val sink = runCatching { FileOutputStream(file) }.getOrElse {
             return@withContext ApiResult.Failure(500, "audio_file_unwritable", it.javaClass.simpleName)

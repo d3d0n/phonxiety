@@ -94,7 +94,7 @@ class CallsTranscriptCacheTest {
     fun aDeleteThatLandsDuringThePageLeavesNoOrphanTurnAndNoFailure() = runBlocking {
         cache.list.upsert(listOf(summary("call-1")))
         cache.detail.upsert(CallDetailEntity(callId = "call-1", detailJson = "{}", detailFetchedAt = 1L))
-        val repository = DefaultCallsRepository(TranscriptOnlyApi(turnPage("call-1", "Hello")), cache)
+        val repository = DefaultCallsRepository(TranscriptOnlyApi(turnPage("call-1", "Hello")), cache, Dispatchers.IO)
 
         // The page's transaction is held at its first statement. Everything the old code did before
         // the write is done by now, so the delete below lands exactly in the window it left open.

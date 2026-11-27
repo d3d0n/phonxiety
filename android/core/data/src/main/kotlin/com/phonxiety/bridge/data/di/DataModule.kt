@@ -54,6 +54,8 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import java.io.File
 import javax.inject.Singleton
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 
 /** Repository and API bindings every surface injects without a qualifier. */
 @Module
@@ -144,6 +146,11 @@ abstract class DataModule {
     abstract fun moduleUpdateSeam(impl: DefaultModuleUpdateSeam): ModuleUpdateSeam
 
     companion object {
+        /** The one dispatcher for the data layer's blocking work; tests replace it wholesale. */
+        @Provides
+        @IoDispatcher
+        fun ioDispatcher(): CoroutineDispatcher = Dispatchers.IO
+
         @Provides
         @Singleton
         fun callEventsSource(daemonApi: DaemonApi): CallEventsSource = CallEventsSource { callId, since, waitSeconds ->
@@ -169,12 +176,14 @@ abstract class DataModule {
             @ApplicationContext context: Context,
             mountedApk: MountedSystemApk,
             builder: ModuleArchiveBuilder,
-            store: RootRollbackStore
+            store: RootRollbackStore,
+            @IoDispatcher io: CoroutineDispatcher
         ): PreviousModuleCapture = ModuleArchiveCapture(
             mounted = mountedApk,
             builder = builder,
             publisher = store,
-            workspace = File(context.applicationContext.cacheDir, "rollback")
+            workspace = File(context.applicationContext.cacheDir, "rollback"),
+            io = io
         )
     }
 }

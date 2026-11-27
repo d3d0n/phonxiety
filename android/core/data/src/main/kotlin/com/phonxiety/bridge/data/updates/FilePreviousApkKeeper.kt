@@ -1,12 +1,13 @@
 package com.phonxiety.bridge.data.updates
 
 import android.content.Context
+import com.phonxiety.bridge.data.di.IoDispatcher
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.util.Properties
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
 
 /**
@@ -18,14 +19,15 @@ import kotlinx.coroutines.withContext
  */
 @Singleton
 class FilePreviousApkKeeper @Inject constructor(
-    @ApplicationContext context: Context
+    @ApplicationContext context: Context,
+    @IoDispatcher private val io: CoroutineDispatcher
 ) : PreviousApkKeeper {
     private val appContext = context.applicationContext
     private val directory = File(appContext.filesDir, DIRECTORY)
     private val apk = File(directory, APK_NAME)
     private val properties = File(directory, META_NAME)
 
-    override suspend fun keepCurrentApk(): File? = withContext(Dispatchers.IO) {
+    override suspend fun keepCurrentApk(): File? = withContext(io) {
         val source = File(appContext.applicationInfo.sourceDir)
         if (!source.isFile) return@withContext null
         val info = runCatching {
