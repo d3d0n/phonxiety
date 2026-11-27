@@ -99,7 +99,7 @@ class CallSessionTest {
         session.dial("call-1", "+998901234567")
 
         try {
-            session.planHangupLocked("call-1")
+            synchronized(session.lock) { session.planHangupLocked("call-1") }
             fail("a failed tombstone must refuse the hang-up")
         } catch (e: CallSession.DialRefused) {
             assertEquals("state_persist_failed", e.code)
@@ -119,7 +119,7 @@ class CallSessionTest {
         val session = session(store)
         session.dial("call-1", "+998901234567")
 
-        val plan = session.planHangupLocked("call-1")
+        val plan = synchronized(session.lock) { session.planHangupLocked("call-1") }
 
         assertEquals(listOf("call-1"), store.orphanCalls)
         assertNull(session.owned)
@@ -132,7 +132,7 @@ class CallSessionTest {
     fun aFinishedCallIdStillRefusesAConflictingDial() {
         val session = session()
         session.dial("call-1", "+998901234567")
-        session.planHangupLocked("call-1")
+        synchronized(session.lock) { session.planHangupLocked("call-1") }
 
         val repeated = session.dial("call-1", "+998901234567")
         assertTrue(repeated is CallSession.DialOutcome.Duplicate)
@@ -154,18 +154,18 @@ class CallSessionTest {
 
         // `cancel_actions` moves the generation under the same lock the DTMF
         // runner reads, so a waiting tone sees the cancellation on its next check.
-        val future = session.bumpGenerationLocked("call-1", 5)
+        val future = synchronized(session.lock) { session.bumpGenerationLocked("call-1", 5) }
         assertTrue(future === owned)
         assertEquals(5L, owned.generation.get())
 
         // A stale request never moves it back.
-        assertNull(session.bumpGenerationLocked("call-1", 4))
+        assertNull(synchronized(session.lock) { session.bumpGenerationLocked("call-1", 4) })
         assertEquals(5L, owned.generation.get())
 
         // A hang-up ends the whole action generation, so even the newest plan is stale.
-        session.planHangupLocked("call-1")
+        synchronized(session.lock) { session.planHangupLocked("call-1") }
         assertEquals(Long.MAX_VALUE, owned.generation.get())
-        assertNull(session.bumpGenerationLocked("call-1", 6))
+        assertNull(synchronized(session.lock) { session.bumpGenerationLocked("call-1", 6) })
         assertNull(session.owned)
     }
 
