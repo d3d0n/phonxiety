@@ -530,8 +530,6 @@ class AppApi:
                 "marks": True,
                 "hangup": True,
                 "test_call": True,
-                # The daemon starts and stops Lab test-call probes itself when asked.
-                "test_call_probes": True,
                 "loopback": self._supports("loopback_start"),
                 "tone": self._supports("tone_start"),
             },

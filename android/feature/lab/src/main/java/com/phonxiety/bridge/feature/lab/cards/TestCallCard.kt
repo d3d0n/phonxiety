@@ -75,7 +75,7 @@ internal fun TestCallCard(state: LabUiState, callbacks: LabCallbacks) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        // Each toggle needs its own phone capability as well as the daemon's orchestration:
+        // Each toggle needs its own phone capability:
         // asking for one the phone does not have rejects the whole placement with 409.
         val loopbackAvailable = state.testCallLoopbackAvailable
         val toneAvailable = state.testCallToneAvailable

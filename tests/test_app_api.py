@@ -206,7 +206,7 @@ class InfoTests(_ApiCase):
         self.assertTrue(body["voice_controls"]["instruction"])
         self.assertTrue(body["voice_controls"]["pause"])
         self.assertFalse(body["voice_controls"]["loopback"])
-        self.assertTrue(body["voice_controls"]["test_call_probes"])
+        self.assertNotIn("test_call_probes", body["voice_controls"])
         self.assertEqual(body["phone"]["device"], None)
 
     async def test_info_reports_the_other_addresses_with_the_pin(self) -> None:

@@ -2,14 +2,12 @@ package com.phonxiety.bridge.model
 
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Test-only shapes the current daemon cannot produce: an unknown future field and an
- * older daemon document.  Everything the daemon emits today is decoded and checked by
+ * Test-only shapes the current daemon cannot produce: an unknown future field.  Everything
+ * the daemon emits today is decoded and checked by
  * [com.phonxiety.bridge.data.DaemonContractTest] against the shared `contracts/app-api`
  * files, so no fixture here duplicates an exchange.
  */
@@ -25,14 +23,6 @@ class ApiModelsTest {
         )
         assertEquals("0.4.0", info.daemonVersion)
         assertEquals(1, info.appApi)
-    }
-
-    @Test
-    fun aDaemonThatPredatesTheTestCallProbesSaysNothing() {
-        // Older daemons omit the probe flag; the app must read false, not fail.
-        val older = json.decodeFromString(DaemonInfo.serializer(), """{"voice_controls":{"test_call":true}}""")
-        assertTrue(older.voiceControls.testCall)
-        assertFalse(older.voiceControls.testCallProbes)
     }
 
     @Test

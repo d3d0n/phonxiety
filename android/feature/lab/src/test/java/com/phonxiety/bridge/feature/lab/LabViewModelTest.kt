@@ -568,20 +568,17 @@ class LabViewModelTest {
     }
 
     @Test
-    fun `the probes travel only when the daemon advertises them`() = runTest(testDispatcher) {
+    fun `the probes travel when this phone has them`() = runTest(testDispatcher) {
         var placed: TestCallRequest? = null
         api.testCallHandler = { request ->
             placed = request
             ApiOutcome.Ok(200, CallSnapshot(callId = "call-8", profile = "test"))
         }
         api.infoHandler = {
-            ApiOutcome.Ok(
-                200,
-                DaemonInfo(voiceControls = VoiceControls(testCallProbes = true, loopback = true, tone = true))
-            )
+            ApiOutcome.Ok(200, DaemonInfo(voiceControls = VoiceControls(loopback = true, tone = true)))
         }
         val vm = viewModel()
-        withTimeout(5_000) { vm.state.first { it.testCall.probesAvailable } }
+        withTimeout(5_000) { vm.state.first { it.loopbackSupported == true && it.toneSupported == true } }
         vm.setTestNumber("+12025550123")
         withTimeout(5_000) { vm.state.first { it.testCall.number == "+12025550123" } }
         vm.setTestCallLoopback(true)
@@ -599,26 +596,29 @@ class LabViewModelTest {
     }
 
     @Test
-    fun `a daemon without the probes gets the request it already understands`() = runTest(testDispatcher) {
+    fun `a test call carries its probes without any daemon advertisement`() = runTest(testDispatcher) {
         var placed: TestCallRequest? = null
         api.testCallHandler = { request ->
             placed = request
             ApiOutcome.Ok(200, CallSnapshot(callId = "call-9", profile = "test"))
         }
-        api.infoHandler = { ApiOutcome.Ok(200, DaemonInfo(voiceControls = VoiceControls(testCallProbes = false))) }
+        // The daemon's info says nothing about probes: only this phone's capabilities decide.
+        api.infoHandler = {
+            ApiOutcome.Ok(200, DaemonInfo(voiceControls = VoiceControls(loopback = true, tone = true)))
+        }
         val vm = viewModel()
-        withTimeout(5_000) { vm.state.first { it.testCall.probesSupported != null } }
-        assertFalse(vm.state.value.testCall.probesAvailable)
+        withTimeout(5_000) { vm.state.first { it.loopbackSupported == true && it.toneSupported == true } }
+        assertTrue(vm.state.value.testCallLoopbackAvailable)
+        assertTrue(vm.state.value.testCallToneAvailable)
         vm.setTestNumber("+12025550123")
         withTimeout(5_000) { vm.state.first { it.testCall.number == "+12025550123" } }
-        // The toggles are not shown, but a state that still carries them must not add the keys.
         vm.setTestCallLoopback(true)
         vm.setTestCallTone(true)
         vm.requestTestCall()
         vm.confirmTestCall()
         withTimeout(5_000) { vm.state.first { it.testCall.callId != null } }
-        assertNull(placed?.loopback)
-        assertNull(placed?.tone)
+        assertEquals(true, placed?.loopback)
+        assertEquals(TestCallTone(hz = 1_000, dbfs = -20.0, seconds = 5), placed?.tone)
     }
 
     @Test
@@ -750,11 +750,11 @@ class LabViewModelTest {
         api.infoHandler = {
             ApiOutcome.Ok(
                 200,
-                DaemonInfo(voiceControls = VoiceControls(testCallProbes = true, loopback = true, tone = false))
+                DaemonInfo(voiceControls = VoiceControls(loopback = true, tone = false))
             )
         }
         val vm = viewModel()
-        withTimeout(5_000) { vm.state.first { it.testCall.probesSupported == true } }
+        withTimeout(5_000) { vm.state.first { it.loopbackSupported == true } }
         assertTrue(vm.state.value.testCallLoopbackAvailable)
         assertFalse(vm.state.value.testCallToneAvailable)
         vm.setTestNumber("+12025550123")
@@ -778,11 +778,11 @@ class LabViewModelTest {
         api.infoHandler = {
             ApiOutcome.Ok(
                 200,
-                DaemonInfo(voiceControls = VoiceControls(testCallProbes = true, loopback = false, tone = true))
+                DaemonInfo(voiceControls = VoiceControls(loopback = false, tone = true))
             )
         }
         val vm = viewModel()
-        withTimeout(5_000) { vm.state.first { it.testCall.probesSupported == true } }
+        withTimeout(5_000) { vm.state.first { it.toneSupported == true } }
         assertFalse(vm.state.value.testCallLoopbackAvailable)
         assertTrue(vm.state.value.testCallToneAvailable)
         vm.setTestNumber("+12025550123")
@@ -807,10 +807,10 @@ class LabViewModelTest {
             ApiOutcome.Ok(200, CallSnapshot(callId = callId.value, state = "ended", resultStatus = "ready", summary = "done"))
         }
         api.infoHandler = {
-            ApiOutcome.Ok(200, DaemonInfo(voiceControls = VoiceControls(testCallProbes = true, tone = true)))
+            ApiOutcome.Ok(200, DaemonInfo(voiceControls = VoiceControls(tone = true)))
         }
         val vm = viewModel()
-        withTimeout(5_000) { vm.state.first { it.testCall.probesSupported == true } }
+        withTimeout(5_000) { vm.state.first { it.toneSupported == true } }
         vm.setTestNumber("+12025550123")
         withTimeout(5_000) { vm.state.first { it.testCall.number == "+12025550123" } }
         vm.setTestCallTone(true)

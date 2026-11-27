@@ -20,7 +20,6 @@
         "marks": true,
         "hangup": true,
         "test_call": true,
-        "test_call_probes": true,
         "loopback": false,
         "tone": false
       },

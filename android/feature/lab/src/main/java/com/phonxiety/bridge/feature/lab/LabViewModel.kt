@@ -138,8 +138,7 @@ class LabViewModel @Inject constructor(
                 is ApiOutcome.Ok -> _state.update {
                     it.copy(
                         loopbackSupported = outcome.value.voiceControls.loopback,
-                        toneSupported = outcome.value.voiceControls.tone,
-                        testCall = it.testCall.copy(probesSupported = outcome.value.voiceControls.testCallProbes)
+                        toneSupported = outcome.value.voiceControls.tone
                     )
                 }
 
@@ -591,9 +590,8 @@ class LabViewModel @Inject constructor(
     }
 
     /**
-     * The probes travel only when the daemon advertises them and this phone has the one asked for:
-     * an older daemon would read the extra keys as a validation error, and a phone without the
-     * capability answers the whole placement with 409. The tone takes the frequency and level the
+     * The probes travel only when this phone has the one asked for (a phone without the
+     * capability answers the whole placement with 409). The tone takes the frequency and level the
      * lab's audio card shows, and the length chosen on the test-call card.
      */
     private fun LabUiState.toRequest(): TestCallRequest = TestCallRequest(

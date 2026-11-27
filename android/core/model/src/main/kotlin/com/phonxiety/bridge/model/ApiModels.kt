@@ -52,8 +52,6 @@ data class VoiceControls(
     val marks: Boolean = false,
     val hangup: Boolean = false,
     @SerialName("test_call") val testCall: Boolean = false,
-    /** The daemon starts and stops a test call's loopback and tone itself when asked. */
-    @SerialName("test_call_probes") val testCallProbes: Boolean = false,
     val loopback: Boolean = false,
     val tone: Boolean = false
 )
@@ -292,11 +290,9 @@ data class PlaceCallRequest(
 )
 
 /**
- * A test call, with the audio probes the daemon may start on its own once the line is up.
+ * A test call, with the audio probes the daemon starts and stops itself once the line is up.
  *
- * [loopback] and [tone] stay null when the caller does not ask for them, so a request without
- * probes is byte-for-byte the one every daemon already understands: a daemon that predates the
- * probes sees no new keys at all, and one that has them is told exactly what to start.
+ * [loopback] and [tone] stay null when the caller does not ask for them.
  */
 @Serializable
 data class TestCallRequest(

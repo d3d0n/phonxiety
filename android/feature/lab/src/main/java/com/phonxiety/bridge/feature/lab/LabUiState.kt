@@ -48,13 +48,13 @@ data class LabUiState(
         }
 
     /**
-     * The automatic loopback is offered only when the daemon starts it and this phone has it:
-     * asking for a probe the phone does not support rejects the whole placement with 409.
+     * The automatic loopback is offered only when this phone has it: asking for a probe the
+     * phone does not support rejects the whole placement with 409.
      */
-    val testCallLoopbackAvailable: Boolean get() = testCall.probesAvailable && loopbackSupported == true
+    val testCallLoopbackAvailable: Boolean get() = loopbackSupported == true
 
-    /** The automatic tone, under the same two conditions as [testCallLoopbackAvailable]. */
-    val testCallToneAvailable: Boolean get() = testCall.probesAvailable && toneSupported == true
+    /** The automatic tone, under the same phone condition as [testCallLoopbackAvailable]. */
+    val testCallToneAvailable: Boolean get() = toneSupported == true
 
     /** The loopback this placement will actually ask for. */
     val testCallLoopback: Boolean get() = testCallLoopbackAvailable && testCall.loopback
@@ -142,17 +142,12 @@ data class TestCallUi(
     val placing: Boolean = false,
     val callId: String? = null,
     val error: LabFailure? = null,
-    /** `voice_controls.test_call_probes`; null while the daemon's info has not answered yet. */
-    val probesSupported: Boolean? = null,
     val loopback: Boolean = false,
     val tone: Boolean = false,
     val toneSeconds: Int = 5,
     val result: TestCallResultUi? = null
 ) {
     val numberReady: Boolean get() = number.filter { it.isDigit() }.length >= 3
-
-    /** The toggles appear only when the daemon says it starts and stops the probes itself. */
-    val probesAvailable: Boolean get() = probesSupported == true
 }
 
 /**

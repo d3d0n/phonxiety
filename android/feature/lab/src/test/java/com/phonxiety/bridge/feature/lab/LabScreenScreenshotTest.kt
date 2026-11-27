@@ -242,7 +242,6 @@ class LabScreenScreenshotTest {
         val base = previewLabState()
         return base.copy(
             testCall = base.testCall.copy(
-                probesSupported = true,
                 loopback = true,
                 tone = true,
                 toneSeconds = 5,
@@ -316,10 +315,11 @@ class LabScreenScreenshotTest {
     }
 
     @Test
-    fun anOlderDaemonGetsNoProbeToggles() {
-        setScreen(previewLabState().copy(testCall = previewLabState().testCall.copy(probesSupported = false)))
-        composeRule.onNodeWithText("Loop the far end back").assertDoesNotExist()
-        composeRule.onNodeWithText("Play a tone").assertDoesNotExist()
+    fun theProbeTogglesDoNotWaitForADaemonAdvertisement() {
+        // No advertisement of any kind: both toggles follow this phone's own capabilities.
+        setScreen(previewLabState())
+        composeRule.onNodeWithText("Loop the far end back").performScrollTo().assertExists()
+        composeRule.onNodeWithText("Play a tone").assertExists()
     }
 
     @Test
@@ -328,8 +328,7 @@ class LabScreenScreenshotTest {
         setScreen(
             base.copy(
                 loopbackSupported = false,
-                toneSupported = true,
-                testCall = base.testCall.copy(probesSupported = true)
+                toneSupported = true
             )
         )
         composeRule.onNodeWithText("Loop the far end back").assertDoesNotExist()
@@ -342,8 +341,7 @@ class LabScreenScreenshotTest {
         setScreen(
             base.copy(
                 loopbackSupported = true,
-                toneSupported = false,
-                testCall = base.testCall.copy(probesSupported = true)
+                toneSupported = false
             )
         )
         composeRule.onNodeWithText("Loop the far end back").performScrollTo().assertExists()
@@ -366,7 +364,7 @@ class LabScreenScreenshotTest {
                 link = base.link,
                 loopbackSupported = true,
                 toneSupported = true,
-                testCall = base.testCall.copy(probesSupported = true, tone = true)
+                testCall = base.testCall.copy(tone = true)
             )
         )
     }
@@ -378,7 +376,7 @@ class LabScreenScreenshotTest {
             LabUiState(
                 loopbackSupported = true,
                 toneSupported = true,
-                testCall = base.testCall.copy(probesSupported = true, tone = true)
+                testCall = base.testCall.copy(tone = true)
             )
         )
         composeRule.onNodeWithContentDescription("Tone frequency").performScrollTo().assertExists()
@@ -392,7 +390,7 @@ class LabScreenScreenshotTest {
     fun theToneSecondsControlFollowsTheToneToggle() {
         val base = previewLabState()
         val state = mutableStateOf(
-            base.copy(testCall = base.testCall.copy(probesSupported = true, tone = false))
+            base.copy(testCall = base.testCall.copy(tone = false))
         )
         val callbacks = LabCallbacks(
             onTestTone = { on -> state.value = state.value.copy(testCall = state.value.testCall.copy(tone = on)) },
