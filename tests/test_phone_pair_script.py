@@ -5,7 +5,9 @@ directory that is the only place either tool may be resolved from, so a mistake 
 fails the test instead of reaching a device.  The fake ``adb`` records every call and the exact
 remote script it receives, and answers from a tiny state file, so the script's own sequencing —
 preflight root, read the old configuration, force-stop the whole app, confirm it is gone,
-replace the file, verify the hash, restart — is what each test observes.
+replace the file, verify the hash, restart — is what each test observes.  The generated root
+script is also run on its own against a sandbox directory, with stand-ins for the phone's
+root-only tools, so its abort path is exercised and not only its text.
 
 The harness is deliberately fail-closed:
 
@@ -75,6 +77,9 @@ CONTROL_VARIABLES = frozenset(
         "FAKE_SERVICE_START_FAILS",
         "FAKE_SERVICE_NOT_STAYING",
         "FAKE_SIGNAL_DURING_WRITE",
+        "FAKE_SIGNAL_DURING_STOP",
+        "FAKE_SIGNAL_DURING_CLASSIFICATION",
+        "FAKE_PREFLIGHT_QUERY_ERROR",
         "PAIR_SERVICE_POLL_TRIES",
         "PAIR_LINK_POLL_TRIES",
     }
@@ -123,6 +128,8 @@ command = " ".join(args[1:])
 if command.startswith("pm path"):
     print("package:/data/app/base/base.apk")
 elif command.startswith("dumpsys package"):
+    if flag("FAKE_PREFLIGHT_QUERY_ERROR"):
+        sys.exit(255)
     for perm in (
         "CAPTURE_AUDIO_OUTPUT",
         "MODIFY_PHONE_STATE",
@@ -147,6 +154,10 @@ elif command.startswith("am force-stop"):
         state["process"] = False
         state["service"] = False
         save()
+    if flag("FAKE_SIGNAL_DURING_STOP"):
+        # Ctrl-C lands while the stop is in flight, before the root writer is sent.
+        os.killpg(os.getpgid(0), 15)
+        sys.exit(1)
 elif command.startswith("pidof"):
     if flag("FAKE_PIDOF_ERROR"):
         sys.exit(1)
@@ -174,6 +185,11 @@ elif "PX_ABSENT" in command:
     if flag("FAKE_HASH_QUERY_ERROR"):
         sys.exit(1)
     if flag("FAKE_HASH_QUERY_ERROR_AFTER_WRITE") and state.get("write_attempted"):
+        sys.exit(1)
+    if flag("FAKE_SIGNAL_DURING_CLASSIFICATION") and state.get("write_attempted"):
+        # Every read after the write is interrupted, so a second interrupt arrives while the
+        # first one's classification is still reading the phone.
+        os.killpg(os.getpgid(0), 15)
         sys.exit(1)
     current = config_hash()
     if current == "absent":
@@ -264,6 +280,37 @@ elif "status" in args:
             sys.exit(1)
         print("connected")
 """.format(python=sys.executable, config=CONFIG_TEXT)
+
+# Stand-ins for the phone's tools that need root or SELinux, so the generated root script
+# itself runs against a sandbox directory.  Everything else is the host's own shell tools.
+SANDBOX_TOOLS = {
+    "ls": """#!{python}
+import os, sys
+path = sys.argv[-1]
+if "-Zd" not in sys.argv[1:-1] or not os.path.exists(path):
+    sys.exit(1)
+print("u:object_r:app_data_file:s0:c512,c768 " + path)
+""",
+    "stat": """#!{python}
+print("10123")
+""",
+    "chown": """#!{python}
+""",
+    "chcon": """#!{python}
+""",
+    "sha256sum": """#!{python}
+import hashlib, sys
+path = sys.argv[-1]
+with open(path, "rb") as handle:
+    print(hashlib.sha256(handle.read()).hexdigest() + "  " + path)
+""",
+}
+
+# A staging write that fails, as a full disk makes it.
+FAILING_CAT = """#!{python}
+import sys
+sys.exit(1)
+"""
 
 
 class Fakes:
@@ -696,6 +743,91 @@ class HostPairScriptTests(unittest.TestCase):
 
         self.assertEqual(3, result.returncode)
         self.assertIn("status could not be printed", result.stderr)
+
+    def run_root_script_in_sandbox(self, failing_cat: bool) -> tuple[subprocess.CompletedProcess[str], Path]:
+        """Runs the root script the host sent against a sandbox data directory."""
+        result = self.run_script(FAKE_PAIR_RESULT="ok")
+        self.assertEqual(0, result.returncode, result.stderr)
+        script = self.fakes.remote_scripts()[0]
+        sandbox = Path(self.temporary.name) / "sandbox"
+        data = sandbox / "data"
+        tools = sandbox / "bin"
+        data.mkdir(parents=True)
+        tools.mkdir()
+        sources = dict(SANDBOX_TOOLS)
+        if failing_cat:
+            sources["cat"] = FAILING_CAT
+        for name, source in sources.items():
+            tool = tools / name
+            tool.write_text(source.format(python=sys.executable))
+            tool.chmod(0o755)
+        original = 'DATA="/data/user_de/0/$APP"'
+        self.assertEqual(1, script.count(original), "the root script must name its data directory once")
+        script = script.replace(original, f'DATA="{data}"')
+        path = os.pathsep.join([str(tools), "/usr/bin", "/bin"])
+        for tool_name in ("adb", "uv"):
+            if shutil.which(tool_name, path=path) is not None:
+                self.fail(f"the sandbox PATH reaches a real {tool_name}; refusing to run")
+        completed = subprocess.run(
+            ["sh", "-s"],
+            input=script,
+            env={"PATH": path, "LANG": "C"},
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        return completed, data / "files"
+
+    def test_the_root_script_replaces_the_file_when_every_step_succeeds(self) -> None:
+        # The sandbox's own check: with working tools the script stages, labels, renames and
+        # hashes, so the failure case below fails for the reason it names.
+        completed, files = self.run_root_script_in_sandbox(failing_cat=False)
+
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        lines = completed.stdout.splitlines()
+        self.assertIn("PX_REPLACED=1", lines)
+        self.assertNotIn("PX_ABORTED_BEFORE_MV", lines)
+        self.assertEqual(CONFIG_HASH, hashlib.sha256((files / "config.json").read_bytes()).hexdigest())
+
+    def test_a_failed_staging_write_reports_its_abort(self) -> None:
+        completed, files = self.run_root_script_in_sandbox(failing_cat=True)
+
+        self.assertNotEqual(0, completed.returncode)
+        self.assertIn("PX_ABORTED_BEFORE_MV", completed.stdout.splitlines(), completed.stderr)
+        self.assertFalse((files / "config.json").exists(), "nothing may be renamed into place")
+        self.assertEqual(
+            [],
+            [entry.name for entry in files.iterdir() if entry.name.startswith(".config.json.")],
+            "the staged file is removed",
+        )
+
+    def test_an_interrupt_while_the_app_is_stopping_restores_it_and_sends_nothing(self) -> None:
+        result = self.run_script(new_session=True, FAKE_SIGNAL_DURING_STOP="1")
+
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertIn("interrupted while the app was being stopped", result.stderr)
+        self.assert_restored()
+        self.assertEqual([], self.fakes.remote_scripts(), "the root writer must never be sent")
+
+    def test_a_second_interrupt_cannot_cut_the_classification_short(self) -> None:
+        self.fakes.set_state(config="old")
+        result = self.run_script(
+            new_session=True,
+            FAKE_PAIR_RESULT="fail_before",
+            FAKE_SIGNAL_DURING_CLASSIFICATION="1",
+        )
+
+        self.assertEqual(2, result.returncode, result.stderr)
+        self.assertIn("root writer may still complete", result.stderr)
+        self.assert_not_started()
+
+    def test_a_failing_preparation_query_exits_one_without_touching_the_app(self) -> None:
+        result = self.run_script(FAKE_PREFLIGHT_QUERY_ERROR="1")
+
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertIn("a preparation step failed", result.stderr)
+        self.assertFalse(any("am force-stop" in call for call in self.fakes.calls()), "nothing may be stopped")
 
 
 if __name__ == "__main__":

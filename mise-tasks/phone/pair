@@ -25,8 +25,8 @@
 #
 # Exit codes:
 #   0  the configuration was replaced, verified and the service is up;
-#   1  nothing changed: refused before the app was stopped, or the old
-#      configuration was restored on positive evidence;
+#   1  nothing changed: refused or interrupted before the root writer was sent (a stopped
+#      service is restored), or the old configuration was restored on positive evidence;
 #   2  unknown or replaced but unverified: the app stays stopped;
 #   3  the configuration was replaced and verified but the service or the
 #      link to the daemon did not come up.
@@ -75,6 +75,14 @@ interrupt_before_stop() {
     exit 1
 }
 trap interrupt_before_stop INT TERM HUP
+
+# Before the stop nothing has changed either: a step that fails without its own message
+# still ends the run with 1, never with whatever status the failing tool returned.
+preparation_failed() {
+    printf 'error: a preparation step failed (status %s); the app was not touched\n' "$1" >&2
+    exit 1
+}
+trap 'preparation_failed $?' ERR
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -256,19 +264,19 @@ restore_after_abort() {
         '    mkdir -p "$DIR" || abort "cannot create the app files directory"' \
         '    DIR_CREATED=1' \
         'fi' \
-        'DATA_LABEL=$(label_of "$DATA")' \
+        'DATA_LABEL=$(label_of "$DATA") || abort "cannot read the app-data label"' \
         '[ -n "$DATA_LABEL" ] || abort "cannot read the app-data label"' \
         'if [ "$DIR_CREATED" -eq 1 ]; then' \
         '    chcon "$DATA_LABEL" "$DIR" || abort "cannot label the app files directory"' \
-        '    DIR_LABEL=$(label_of "$DIR")' \
+        '    DIR_LABEL=$(label_of "$DIR") || abort "cannot read the app files directory label"' \
         '    [ "$DIR_LABEL" = "$DATA_LABEL" ] || abort "app files directory label mismatch"' \
         'fi' \
-        'LABEL=$(label_of "$DIR/config.json")' \
-        '[ -n "$LABEL" ] || LABEL=$(label_of "$DIR")' \
+        'LABEL=$(label_of "$DIR/config.json") || abort "cannot read the configuration label"' \
+        '[ -n "$LABEL" ] || LABEL=$(label_of "$DIR") || abort "cannot read the app files directory label"' \
         '[ -n "$LABEL" ] || abort "cannot read the app-data label"' \
         'TMPFILE="$DIR/.config.json.$$.new"' \
         '[ ! -e "$TMPFILE" ] || abort "temporary file already exists"' \
-        "cat > \"\$TMPFILE\" <<'PX_CONFIG_EOF'"
+        "cat > \"\$TMPFILE\" <<'PX_CONFIG_EOF' || abort \"cannot write the temporary file\""
     cat "$TMP/config.json"
     printf '%s\n' \
         'PX_CONFIG_EOF' \
@@ -278,7 +286,7 @@ restore_after_abort() {
         'chmod 700 "$DIR" || abort "cannot set the app files directory mode"' \
         'chmod 600 "$TMPFILE" || abort "cannot set the temporary file mode"' \
         'chcon "$LABEL" "$TMPFILE" || abort "cannot label the temporary file"' \
-        'TMP_LABEL=$(label_of "$TMPFILE")' \
+        'TMP_LABEL=$(label_of "$TMPFILE") || abort "cannot read the temporary file label"' \
         '[ "$TMP_LABEL" = "$LABEL" ] || abort "temporary file label mismatch"' \
         'mv -f "$TMPFILE" "$DIR/config.json" || abort "cannot replace the configuration file"' \
         'TMPFILE=""' \
@@ -287,6 +295,38 @@ restore_after_abort() {
         '[ "$FINAL_LABEL" = "$LABEL" ] || { echo "final file label mismatch" >&2; exit 1; }' \
         'sha256sum "$DIR/config.json"'
 } > "$TMP/setup.sh"
+
+# From here the app may be stopped: errexit is off, every step is checked, and a signal
+# is classified like any other failure instead of escaping the decision.  The handler is
+# armed before the stop is requested and knows whether the root writer has been sent:
+# until it has, the configuration is provably untouched and the service is restored.
+trap - ERR
+set +e
+ABORTED=0
+REPLACED_MARK=0
+REPLACEMENT_VERIFIED=0
+WRITER_SENT=0
+
+# A second interrupt while this decides is ignored: the classification is the answer.
+# Before the writer is sent nothing can have changed; after it, a restore needs the
+# positive evidence already in hand, and success is never reported.
+interrupt_after_stop() {
+    trap '' INT TERM HUP
+    if [ "$WRITER_SENT" -eq 0 ]; then
+        printf 'error: interrupted while the app was being stopped; the configuration was not touched\n' >&2
+        restore_service
+        exit 1
+    fi
+    printf 'error: interrupted after the app was stopped\n' >&2
+    if [ "$REPLACEMENT_VERIFIED" -eq 1 ]; then
+        die_service "the new configuration is in place but the restart was interrupted"
+    fi
+    if [ "$ABORTED" -eq 1 ]; then
+        restore_after_abort
+    fi
+    die_unknown "the phone configuration replacement outcome is unknown; a root writer may still complete it; the app stays stopped"
+}
+trap interrupt_after_stop INT TERM HUP
 
 # The whole app process, not only the service: a token write in the app process
 # could otherwise outlive the service and race the file swap.  The stop comes after
@@ -311,29 +351,7 @@ if [ "$PIDS" = "error" ]; then
 fi
 [ -z "$PIDS" ] || { restore_service; die "the app process is still running (pids: $PIDS)"; }
 
-
-# From here the app may be stopped: errexit is off, every step is checked, and a signal
-# is classified like any other failure instead of escaping the decision.
-set +e
-ABORTED=0
-REPLACED_MARK=0
-REPLACEMENT_VERIFIED=0
-
-# An interrupt after the stop may not restore unless the positive evidence is already in
-# hand, and may not report success either.
-interrupt_after_stop() {
-    trap - INT TERM HUP
-    printf 'error: interrupted after the app was stopped\n' >&2
-    if [ "$REPLACEMENT_VERIFIED" -eq 1 ]; then
-        die_service "the new configuration is in place but the restart was interrupted"
-    fi
-    if [ "$ABORTED" -eq 1 ]; then
-        restore_after_abort
-    fi
-    die_unknown "the phone configuration replacement outcome is unknown; a root writer may still complete it; the app stays stopped"
-}
-trap interrupt_after_stop INT TERM HUP
-
+WRITER_SENT=1
 REMOTE_OUT="$("${ADB_CMD[@]}" shell "su -c 'sh -s'" < "$TMP/setup.sh" 2>&1)"
 REMOTE_STATUS=$?
 
