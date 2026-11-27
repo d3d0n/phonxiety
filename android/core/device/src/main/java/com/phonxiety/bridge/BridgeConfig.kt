@@ -211,6 +211,12 @@ object BridgeConfigLoader {
      */
     private val lock = Any()
 
+    /**
+     * A test seam that runs between the one parse and the write, as a host rewrite of the file
+     * would.  The update must write the identity, the token and the addresses of its own parse.
+     */
+    internal var afterReadForTest: (() -> Unit)? = null
+
     private fun configFile(context: Context): File = File(AppStorage.deviceProtected(context).filesDir, FILE_NAME)
 
     /**
@@ -371,16 +377,24 @@ object BridgeConfigLoader {
      * Stores [token] only while the pairing file still belongs to
      * [pairingIdentity].  The read, the identity check and the write happen
      * under one lock, so a pairing change cannot land between them and leave
-     * one daemon's app token in the other daemon's file.
+     * one daemon's app token in the other daemon's file.  The config and the
+     * addresses that are written back come from the same parse, so an external
+     * rewrite between two reads can never mix one pairing's identity with
+     * another's addresses.
      */
     fun updateAppToken(context: Context, pairingIdentity: String, token: String): Boolean = synchronized(lock) {
-        val current = loadOrNull(context) ?: return false
-        if (CandidateMerge.identity(current) != pairingIdentity) return false
-        val updated = when (current) {
-            is BridgeConfig.Address -> current.copy(appToken = token)
-            is BridgeConfig.Iroh -> current.copy(appToken = token)
+        val current = try {
+            read(context)
+        } catch (_: BridgeConfigException) {
+            return false
         }
-        write(context, updated, addresses(context))
+        afterReadForTest?.invoke()
+        if (CandidateMerge.identity(current.config) != pairingIdentity) return false
+        val updated = when (val config = current.config) {
+            is BridgeConfig.Address -> config.copy(appToken = token)
+            is BridgeConfig.Iroh -> config.copy(appToken = token)
+        }
+        write(context, updated, current.addresses)
         true
     }
 
