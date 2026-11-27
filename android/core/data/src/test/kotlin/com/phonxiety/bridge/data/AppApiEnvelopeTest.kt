@@ -13,6 +13,13 @@ import java.io.OutputStream
 import java.util.Base64
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.currentTime
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
@@ -77,7 +84,7 @@ class AppApiEnvelopeTest {
 
     @Test
     fun aPairingWithoutAnAppTokenCannotCallTheApi() = runTest {
-        val envelope = AppApiEnvelope(source(FakeGateway().apply { appToken = null }))
+        val envelope = AppApiEnvelope(source(FakeGateway().apply { setToken(null) }))
         val failure = envelope.request("GET", "/app/v1/info") as ApiResult.Failure
         assertEquals(401, failure.status)
         assertEquals("app_token_missing", failure.code)
@@ -120,7 +127,7 @@ class AppApiEnvelopeTest {
     fun anAnswerThatOutlivesItsPairingIsRefused() = runTest {
         PairingGate.resetForTest()
         try {
-            val old = FakeGateway().apply { appToken = "token-a" }
+            val old = FakeGateway().apply { setToken("token-a") }
             old.afterAnswer = { PairingGate.expect("cert:b") }
             PairingGate.expect("cert:a")
             PairingGate.install(old, "cert:a")
@@ -182,7 +189,7 @@ class AppApiEnvelopeTest {
     fun aRePairClosesTheOldGatewayBeforeAnyRequestCarriesTheNewCredentials() = runTest {
         PairingGate.resetForTest()
         try {
-            val old = FakeGateway().apply { appToken = "token-a" }
+            val old = FakeGateway().apply { setToken("token-a") }
             val envelope = AppApiEnvelope(AppGatewaySource { PairingGate.gateway() })
             PairingGate.expect("cert:a")
             PairingGate.install(old, "cert:a")
@@ -197,7 +204,7 @@ class AppApiEnvelopeTest {
             assertEquals("token-a", old.last!!.appToken)
 
             // The rebuilt engine serves the new pairing, and only it.
-            val rebuilt = FakeGateway().apply { appToken = "token-b" }
+            val rebuilt = FakeGateway().apply { setToken("token-b") }
             PairingGate.install(rebuilt, "cert:b")
             assertTrue(envelope.request("GET", "/app/v1/info") is ApiResult.Success)
             assertEquals("token-b", rebuilt.last!!.appToken)
@@ -230,7 +237,7 @@ class AppApiEnvelopeTest {
     fun aRePairDuringTheFirstPageStopsTheDownloadAndNeverTouchesTheNewGateway() = runTest {
         PairingGate.resetForTest()
         try {
-            val rebuilt = FakeGateway().apply { appToken = "token-b" }
+            val rebuilt = FakeGateway().apply { setToken("token-b") }
             val old = PageGateway(byteArrayOf(9, 8, 7, 6, 5, 4)) { page ->
                 // The pairing moves while the very first page is being answered,
                 // and the new gateway is installed before the next lookup.
@@ -239,7 +246,7 @@ class AppApiEnvelopeTest {
                     PairingGate.install(rebuilt, "cert:b")
                 }
             }
-            old.appToken = "token-a"
+            old.setToken("token-a")
             PairingGate.expect("cert:a")
             PairingGate.install(old, "cert:a")
             val envelope = AppApiEnvelope(AppGatewaySource { PairingGate.gateway() })
@@ -260,10 +267,116 @@ class AppApiEnvelopeTest {
         }
     }
 
+    // -- app-token rotation ----------------------------------------------
+
+    @Test
+    fun aRotationDuringTheRequestRetriesOnceWithTheNewToken() = runTest {
+        val gateway = TokenGateway("token-a")
+        gateway.onSend = { if (it == 1) gateway.rotate("token-b") }
+        val envelope = AppApiEnvelope(source(gateway))
+
+        // A write too: the daemon rejects at its auth check before the handler runs,
+        // so the one retry cannot apply the write twice.
+        val result = envelope.request("PUT", "/app/v1/calls", body = buildJsonObject { })
+
+        assertTrue("the retried write succeeded", result is ApiResult.Success)
+        assertEquals("the one retry carried the rotated token", listOf("token-a", "token-b"), gateway.sent)
+    }
+
+    @Test
+    fun noRotatedTokenWithinTheBoundKeepsTheOriginal401() = runTest {
+        val gateway = TokenGateway("token-a", refuseAnyToken = true)
+        val envelope = AppApiEnvelope(source(gateway))
+
+        val result = envelope.request("GET", "/app/v1/info") as ApiResult.Failure
+
+        assertEquals(401, result.status)
+        assertEquals("unauthorized", result.code)
+        assertEquals("only the one refused attempt was sent", listOf("token-a"), gateway.sent)
+        assertEquals("the wait is bounded at five seconds", 5_000L, currentTime)
+    }
+
+    @Test
+    fun a401OnTheRetryIsFinal() = runTest {
+        val gateway = TokenGateway("token-a", refuseAnyToken = true)
+        gateway.onSend = { if (it == 1) gateway.rotate("token-b") }
+        val envelope = AppApiEnvelope(source(gateway))
+
+        val result = envelope.request("GET", "/app/v1/info") as ApiResult.Failure
+
+        assertEquals(401, result.status)
+        assertEquals("exactly one retry, never a third attempt", listOf("token-a", "token-b"), gateway.sent)
+        assertEquals("the retry is not followed by another wait", 0L, currentTime)
+    }
+
+    /**
+     * One budget for the whole authenticated write: a late refusal leaves only what is left, and
+     * the retry is sent with that, never with a fresh deadline of its own.
+     */
+    @Test
+    fun aLateRefusalNeverBuysTheWriteASecondFullBudget() = runTest {
+        val gateway = TokenGateway("token-a", firstAnswerDelayMs = 28_000)
+        gateway.onSend = { if (it == 1) gateway.rotate("token-b") }
+        val envelope = AppApiEnvelope(source(gateway), clock = { testScheduler.currentTime })
+
+        val result = envelope.request("POST", "/app/v1/calls", body = buildJsonObject { })
+
+        assertTrue("the retried write succeeded", result is ApiResult.Success)
+        assertEquals("the retry carried the rotated token", listOf("token-a", "token-b"), gateway.sent)
+        assertEquals("the first attempt got the whole budget", listOf(30_000L, 2_000L), gateway.deadlines)
+        assertTrue("one operation never outran its one budget", currentTime <= 30_000L)
+    }
+
+    /**
+     * The wait is capped by what is left of the budget, so a token that never arrives cannot keep
+     * a write open for another five seconds: the original refusal answers at the deadline.
+     */
+    @Test
+    fun aTokenThatNeverArrivesAnswersTheOriginal401AtTheDeadline() = runTest {
+        val gateway = TokenGateway("token-a", refuseAnyToken = true, firstAnswerDelayMs = 29_500)
+        val envelope = AppApiEnvelope(source(gateway), clock = { testScheduler.currentTime })
+
+        val result = envelope.request("POST", "/app/v1/calls", body = buildJsonObject { }) as ApiResult.Failure
+
+        assertEquals(401, result.status)
+        assertEquals("no token, no retry", listOf("token-a"), gateway.sent)
+        assertEquals("answered at the one deadline, not five seconds later", 30_000L, currentTime)
+    }
+
+    @Test
+    fun aGatewayThatChangedDuringTheWaitIsNotRetried() = runTest {
+        val gateway = TokenGateway("token-a", refuseAnyToken = true)
+        var current: AppGateway? = gateway
+        val envelope = AppApiEnvelope(AppGatewaySource { current })
+        var result: ApiResult? = null
+
+        val job = launch { result = envelope.request("GET", "/app/v1/info") }
+        runCurrent()
+        assertEquals(listOf("token-a"), gateway.sent)
+
+        // The pairing is rebuilt while the request waits for a token: only the
+        // original answer may reach the caller, and the new gateway is never asked.
+        val rebuilt = TokenGateway("token-b")
+        current = rebuilt
+        gateway.rotate("token-b")
+        runCurrent()
+        job.join()
+
+        assertEquals(401, (result as ApiResult.Failure).status)
+        assertEquals(listOf("token-a"), gateway.sent)
+        assertTrue("the replaced gateway was never asked", rebuilt.sent.isEmpty())
+    }
+
     private fun source(gateway: AppGateway?) = AppGatewaySource { gateway }
 
     private class FakeGateway : AppGateway {
-        override var appToken: String? = "app-token"
+        private val tokenState = MutableStateFlow<String?>("app-token")
+        override val appToken: StateFlow<String?> = tokenState.asStateFlow()
+
+        fun setToken(value: String?) {
+            tokenState.value = value
+        }
+
         override var supportsAttachments: Boolean = false
         var reply = DeviceApiResult(id = "x", status = 200, result = buildJsonObject { })
         var last: DeviceApiRequest? = null
@@ -273,7 +386,7 @@ class AppApiEnvelopeTest {
         var attachmentHeader: AttachmentHeader? = null
         var attachmentBytes: ByteArray? = null
 
-        override suspend fun exchange(request: DeviceApiRequest): DeviceApiResult {
+        override suspend fun exchange(request: DeviceApiRequest, deadlineMs: Long): DeviceApiResult {
             last = request
             if (hang) awaitCancellation()
             afterAnswer()
@@ -287,18 +400,66 @@ class AppApiEnvelopeTest {
         }
     }
 
+    /**
+     * A gateway that accepts exactly the token it currently holds. [onSend] runs after the request
+     * was built with its token and before the answer, so a test can rotate the credential while a
+     * request is in flight. [firstAnswerDelayMs] holds the first answer back, as a slow daemon does.
+     * Every send records the deadline it was given, so a test can see what is left of the budget.
+     */
+    private class TokenGateway(
+        initial: String,
+        private val refuseAnyToken: Boolean = false,
+        private val firstAnswerDelayMs: Long = 0
+    ) : AppGateway {
+        private val tokenState = MutableStateFlow<String?>(initial)
+        override val appToken: StateFlow<String?> = tokenState.asStateFlow()
+        override val supportsAttachments: Boolean = false
+        val sent = mutableListOf<String?>()
+        val deadlines = mutableListOf<Long>()
+        var onSend: (Int) -> Unit = {}
+
+        fun rotate(token: String) {
+            tokenState.value = token
+        }
+
+        override suspend fun exchange(request: DeviceApiRequest, deadlineMs: Long): DeviceApiResult {
+            sent += request.appToken
+            deadlines += deadlineMs
+            if (sent.size == 1 && firstAnswerDelayMs > 0) delay(firstAnswerDelayMs)
+            onSend(sent.size)
+            val accepted = !refuseAnyToken && request.appToken == tokenState.value
+            return if (accepted) {
+                DeviceApiResult(request.id, 200, result = buildJsonObject { put("ok", true) })
+            } else {
+                DeviceApiResult(
+                    request.id,
+                    401,
+                    error = DeviceApiError("unauthorized", "the app token is missing or no longer valid")
+                )
+            }
+        }
+
+        override suspend fun receiveAttachment(header: AttachmentHeader, sink: OutputStream): AttachmentOutcome = AttachmentOutcome.Unsupported
+    }
+
     /** Answers a paged download with the base64 pages the daemon returns on WebSocket. */
     private class PageGateway(
         private val payload: ByteArray,
         private val stopAfterFirstPage: Boolean = false,
         private val onPage: (Int) -> Unit = {}
     ) : AppGateway {
-        override var appToken: String? = "app-token"
+        private val tokenState = MutableStateFlow<String?>("app-token")
+        override val appToken: StateFlow<String?> = tokenState.asStateFlow()
+
+        fun setToken(value: String?) {
+            tokenState.value = value
+        }
+
         override val supportsAttachments: Boolean = false
         val offsets = mutableListOf<String>()
         val tokens = mutableListOf<String>()
 
-        override suspend fun exchange(request: DeviceApiRequest): DeviceApiResult {
+        override suspend fun exchange(request: DeviceApiRequest, deadlineMs: Long): DeviceApiResult {
             val offset = request.query["offset"] ?: "0"
             onPage(offsets.size + 1)
             offsets += offset

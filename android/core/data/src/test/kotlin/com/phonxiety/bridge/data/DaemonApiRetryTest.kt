@@ -16,6 +16,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -420,11 +422,11 @@ class DaemonApiRetryTest {
         private val code: String = "link_down",
         private val message: String = "not yet"
     ) : AppGateway {
-        override val appToken: String = "token"
+        override val appToken: StateFlow<String?> = MutableStateFlow<String?>("token")
         override val supportsAttachments: Boolean = false
         val requests = mutableListOf<DeviceApiRequest>()
 
-        override suspend fun exchange(request: DeviceApiRequest): DeviceApiResult {
+        override suspend fun exchange(request: DeviceApiRequest, deadlineMs: Long): DeviceApiResult {
             requests += request
             return if (status in 200..299) {
                 DeviceApiResult(request.id, status, result = buildJsonObject { put("ok", true) })

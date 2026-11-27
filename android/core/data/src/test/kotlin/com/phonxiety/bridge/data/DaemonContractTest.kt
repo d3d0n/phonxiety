@@ -44,6 +44,8 @@ import com.phonxiety.bridge.model.ValidationResult
 import java.io.ByteArrayOutputStream
 import java.io.OutputStream
 import java.util.Base64
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.SerialKind
@@ -369,10 +371,10 @@ class DaemonContractTest {
         private val total: Long = page.getValue("total").jsonPrimitive.content.toLong()
         val requests = mutableListOf<DeviceApiRequest>()
 
-        override val appToken: String = APP_TOKEN
+        override val appToken: StateFlow<String?> = MutableStateFlow<String?>(APP_TOKEN)
         override val supportsAttachments: Boolean = false
 
-        override suspend fun exchange(request: DeviceApiRequest): DeviceApiResult {
+        override suspend fun exchange(request: DeviceApiRequest, deadlineMs: Long): DeviceApiResult {
             requests += request
             val offset = request.query["offset"]?.toLong() ?: 0L
             val limit = request.query["limit"]?.toInt() ?: data.size

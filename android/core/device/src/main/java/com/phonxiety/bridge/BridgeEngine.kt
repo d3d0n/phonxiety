@@ -54,7 +54,9 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -124,10 +126,12 @@ internal class BridgeEngine(
     }.asCoroutineDispatcher()
     private val engineScope = bridgeScope("phonxiety-engine", engineDispatcher)
 
-    /** The app API credential; the daemon re-sends it on every connect, so it can change at runtime. */
-    @Volatile
-    override var appToken: String? = config.appToken
-        private set
+    /**
+     * The app API credential; the daemon re-sends it on every connect, so it can change at runtime.
+     */
+    private val mutableAppToken = MutableStateFlow(config.appToken)
+
+    override val appToken: StateFlow<String?> = mutableAppToken.asStateFlow()
 
     /** The pairing this engine was built for; a service start compares it before reusing the engine. */
     internal val pairingIdentity: String = CandidateMerge.identity(config)
@@ -256,10 +260,10 @@ internal class BridgeEngine(
         admission = session.admission,
         callOwned = { session.ownsCall() },
         linkUp = { links.isUp() && hello.delivered },
-        token = { appToken },
+        token = { appToken.value },
         pairingEpoch = { PairingGate.epoch() },
         scope = engineScope,
-        exchange = { request, onEnqueued -> exchange(request, APP_REQUEST_TIMEOUT_MS, onEnqueued) },
+        exchange = { request, onEnqueued -> exchangeBounded(request, APP_REQUEST_TIMEOUT_MS, onEnqueued) },
         apply = { info ->
             val current = stateStore.state.value.capabilities
             stateStore.capabilities(
@@ -290,7 +294,7 @@ internal class BridgeEngine(
         deviceBootId = deviceBootId,
         config = config,
         audioSettings = audioSettings,
-        appTokenPresent = { appToken != null },
+        appTokenPresent = { appToken.value != null },
         unrelatedCall = { observer.hasUnrelatedLiveCall() },
         onCommand = { id, text -> commands.dispatch(id, text) },
         onAppAccess = { token, generation ->
@@ -525,14 +529,14 @@ internal class BridgeEngine(
 
     override val supportsAttachments: Boolean get() = links.supportsAttachments()
 
-    override suspend fun exchange(request: DeviceApiRequest): DeviceApiResult = exchange(request, APP_REQUEST_TIMEOUT_MS)
+    override suspend fun exchange(request: DeviceApiRequest, deadlineMs: Long): DeviceApiResult = exchangeBounded(request, deadlineMs)
 
     /**
      * The same exchange with the caller's bound.  [deadlineMs] covers the wait
      * for a usable link and the answer together; [onEnqueued] runs the moment
      * the frame is handed to the transport, before the answer is awaited.
      */
-    internal suspend fun exchange(
+    internal suspend fun exchangeBounded(
         request: DeviceApiRequest,
         deadlineMs: Long,
         onEnqueued: () -> Unit = {}
@@ -571,7 +575,7 @@ internal class BridgeEngine(
             BridgeLog.w(TAG, "dropped an app token from a replaced connection")
             return
         }
-        if (token != appToken) {
+        if (token != appToken.value) {
             val stored = withContext(Dispatchers.IO) {
                 runCatching { storeAppToken(token) }.getOrDefault(false)
             }
@@ -579,7 +583,7 @@ internal class BridgeEngine(
                 BridgeLog.w(TAG, "could not store the app token from the daemon")
                 return
             }
-            appToken = token
+            mutableAppToken.value = token
             BridgeLog.i(TAG, "app API access granted by the daemon")
         }
         // The connection may have been replaced while the token was persisted.

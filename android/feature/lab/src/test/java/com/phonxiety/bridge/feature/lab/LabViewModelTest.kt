@@ -1587,11 +1587,11 @@ class HeldReadFrameTapPreferences(initial: PhoneSettings) : PhonePreferences {
 
 /** A live app-API gateway with its own app token, for the credential-separation tests. */
 class FakeLabGateway(private val token: String) : AppGateway {
-    override val appToken: String get() = token
+    override val appToken: StateFlow<String?> = MutableStateFlow<String?>(token)
 
     override val supportsAttachments: Boolean get() = false
 
-    override suspend fun exchange(request: DeviceApiRequest): DeviceApiResult = DeviceApiResult(request.id, 200, buildJsonObject { })
+    override suspend fun exchange(request: DeviceApiRequest, deadlineMs: Long): DeviceApiResult = DeviceApiResult(request.id, 200, buildJsonObject { })
 
     override suspend fun receiveAttachment(header: AttachmentHeader, sink: OutputStream): AttachmentOutcome = AttachmentOutcome.Unsupported
 }

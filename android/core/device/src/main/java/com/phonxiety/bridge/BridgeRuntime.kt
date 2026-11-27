@@ -5,7 +5,10 @@ import com.phonxiety.bridge.model.AppGateway
 import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.model.PairingGate
 import com.phonxiety.bridge.telecom.BridgeInCallService
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -35,6 +38,32 @@ object BridgeRuntime {
         private set
 
     @Volatile var inCallService: BridgeInCallService? = null
+
+    /**
+     * The app-API credential of the engine installed now, null while none is. One stable flow:
+     * [attach] follows the new engine's own flow and [detach] drops it, so a caller holding this
+     * flow never keeps reading a retired engine's token.
+     */
+    private val mutableAppToken = MutableStateFlow<String?>(null)
+
+    val appToken: StateFlow<String?> = mutableAppToken.asStateFlow()
+
+    private val tokenScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+    private var tokenJob: Job? = null
+
+    /**
+     * Follows [source] for the installed engine. Unconfined is enough: mirroring one state flow
+     * needs no thread of its own, and each emission lands before the next call returns.
+     */
+    internal fun followAppToken(source: StateFlow<String?>?) {
+        tokenJob?.cancel()
+        tokenJob = null
+        mutableAppToken.value = source?.value
+        if (source == null) return
+        tokenJob = tokenScope.launch {
+            source.collect { mutableAppToken.value = it }
+        }
+    }
 
     @Volatile private var pairingKind: BridgeConfig.Kind? = null
 
@@ -70,6 +99,7 @@ object BridgeRuntime {
         stateJob?.cancel()
         engine = current
         PairingGate.install(current, identity)
+        followAppToken(current.appToken)
         stateJob = scope.launch {
             current.state.collect { mutableState.value = it }
         }
@@ -79,6 +109,7 @@ object BridgeRuntime {
     internal fun detach(current: BridgeEngine) {
         PairingGate.uninstall(current)
         if (engine !== current) return
+        followAppToken(null)
         stateJob?.cancel()
         stateJob = null
         engine = null
