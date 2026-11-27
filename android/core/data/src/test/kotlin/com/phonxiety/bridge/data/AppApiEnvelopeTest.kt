@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -347,12 +348,18 @@ class AppApiEnvelopeTest {
     fun aGatewayThatChangedDuringTheWaitIsNotRetried() = runTest {
         val gateway = TokenGateway("token-a", refuseAnyToken = true)
         var current: AppGateway? = gateway
-        val envelope = AppApiEnvelope(AppGatewaySource { current })
+        val envelope = AppApiEnvelope(AppGatewaySource { current }, clock = { testScheduler.currentTime })
         var result: ApiResult? = null
 
         val job = launch { result = envelope.request("GET", "/app/v1/info") }
         runCurrent()
         assertEquals(listOf("token-a"), gateway.sent)
+
+        // The wait is real: three seconds in, the refusal is not the answer yet.
+        advanceTimeBy(3_000)
+        runCurrent()
+        assertNull("the request is still waiting for a rotated token", result)
+        assertEquals("no retry while the wait runs", listOf("token-a"), gateway.sent)
 
         // The pairing is rebuilt while the request waits for a token: only the
         // original answer may reach the caller, and the new gateway is never asked.
@@ -363,6 +370,7 @@ class AppApiEnvelopeTest {
         job.join()
 
         assertEquals(401, (result as ApiResult.Failure).status)
+        assertEquals("the wake-up after the change answers at once, not at the five-second bound", 3_000L, currentTime)
         assertEquals(listOf("token-a"), gateway.sent)
         assertTrue("the replaced gateway was never asked", rebuilt.sent.isEmpty())
     }
