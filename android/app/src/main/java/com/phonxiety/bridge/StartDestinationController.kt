@@ -42,22 +42,27 @@ internal class StartDestinationController(
      * the caller's dispatcher, so a blocking read cannot hold the timer. Whichever answers first
      * publishes the start exactly once; a late answer after the deadline finds the slot taken and
      * changes nothing.
+     *
+     * The reader is cancelled however this call ends — at the deadline, or because the caller
+     * itself was cancelled (an activity destroyed mid-read) — and never joined, so a read that has
+     * not started yet never starts after its caller is gone.
      */
     suspend fun resolve(read: () -> Boolean) {
         val reader = readers.async { read() }
-        val ready = withTimeoutOrNull(deadlineMs) {
-            try {
-                reader.await()
-            } catch (cancel: CancellationException) {
-                throw cancel
-            } catch (failure: Exception) {
-                null
+        try {
+            val ready = withTimeoutOrNull(deadlineMs) {
+                try {
+                    reader.await()
+                } catch (cancel: CancellationException) {
+                    throw cancel
+                } catch (failure: Exception) {
+                    null
+                }
             }
+            resolved.compareAndSet(null, if (ready == false) OnboardingKey() else DashboardKey)
+        } finally {
+            if (!reader.isCompleted) reader.cancel()
         }
-        // A read still blocked past the deadline is abandoned: cancelling is all that is left, and
-        // the host never waits for it.
-        if (!reader.isCompleted) reader.cancel()
-        resolved.compareAndSet(null, if (ready == false) OnboardingKey() else DashboardKey)
     }
 
     companion object {

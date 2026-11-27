@@ -6,6 +6,8 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -116,5 +118,28 @@ class StartDestinationTest {
         advanceUntilIdle()
 
         assertEquals("a late answer flipped the start", DashboardKey, controller.start.value)
+    }
+
+    @Test
+    fun aCallerCancelledBeforeTheReadStartsNeverRunsTheRead() = runTest {
+        // The read worker has its own scheduler, so the read is queued but has not started when
+        // the caller is cancelled — the state an activity destroyed during the splash leaves.
+        val readScheduler = TestCoroutineScheduler()
+        val controller = StartDestinationController(readDispatcher = StandardTestDispatcher(readScheduler))
+        var readCalls = 0
+
+        val caller = launch {
+            controller.resolve {
+                readCalls++
+                true
+            }
+        }
+        runCurrent()
+        caller.cancel()
+        caller.join()
+        readScheduler.advanceUntilIdle()
+
+        assertEquals("a read outlived its cancelled caller", 0, readCalls)
+        assertEquals(null, controller.start.value)
     }
 }
