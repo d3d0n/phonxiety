@@ -179,6 +179,64 @@ class LabViewModelTest {
     }
 
     @Test
+    fun `a failed loopback is retried as the same loopback and never as a tone`() = runTest(testDispatcher) {
+        val requested = mutableListOf<Boolean>()
+        var tones = 0
+        api.loopbackHandler = { enabled, _ ->
+            requested += enabled
+            if (requested.size == 1) {
+                ApiOutcome.Failure(503, "link_down", "the daemon is unreachable")
+            } else {
+                ApiOutcome.Ok(200, LoopbackResult(enabled = enabled, result = null))
+            }
+        }
+        api.toneHandler = { _, _, _, _ ->
+            tones += 1
+            ApiOutcome.Ok(200, ToneResult(started = true))
+        }
+        val vm = viewModel()
+        bridge.flow.value = BridgeState(call = CallState("call-1", "+1•••23", CallPhase.ACTIVE, 0L))
+        withTimeout(5_000) { vm.state.first { it.callPhase == "active" } }
+
+        vm.setLoopback(true)
+        withTimeout(5_000) { vm.state.first { it.audio.error != null } }
+        assertEquals(listOf(true), requested)
+        assertEquals(AudioOp.LOOPBACK, vm.state.value.audio.failedOp)
+
+        vm.retryAudio()
+        withTimeout(5_000) { vm.state.first { it.audio.loopbackOn } }
+
+        assertEquals(listOf(true, true), requested)
+        assertEquals("a failed loopback is not a tone", 0, tones)
+    }
+
+    @Test
+    fun `a failed bundle export is retried as an export and not a read`() = runTest(testDispatcher) {
+        var exports = 0
+        var reads = 0
+        api.diagnosticsHandler = {
+            reads += 1
+            ApiOutcome.Ok(200, kotlinx.serialization.json.Json.parseToJsonElement("{}") as kotlinx.serialization.json.JsonObject)
+        }
+        api.bundleHandler = {
+            exports += 1
+            ApiOutcome.Failure(503, "link_down", "the daemon is unreachable")
+        }
+        val vm = viewModel()
+
+        vm.exportBundle()
+        withTimeout(5_000) { vm.state.first { it.diagnostics.error != null } }
+        assertEquals(DiagnosticsOp.EXPORT, vm.state.value.diagnostics.errorOp)
+        assertEquals(1, exports)
+
+        vm.retryDiagnostics()
+        advanceUntilIdle()
+
+        assertEquals(2, exports)
+        assertEquals("a failed export is not a read", 0, reads)
+    }
+
+    @Test
     fun `after the call ends the audio card asks for a call again`() = runTest(testDispatcher) {
         val vm = viewModel()
         bridge.flow.value = BridgeState(call = CallState("call-1", "+1•••23", CallPhase.ACTIVE, 0L))

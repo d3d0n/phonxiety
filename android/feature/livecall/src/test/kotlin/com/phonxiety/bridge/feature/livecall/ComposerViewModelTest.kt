@@ -257,6 +257,34 @@ class ComposerViewModelTest {
     }
 
     @Test
+    fun retryingAFailedPlacementAfterAnEditReviewsTheEditedBriefAndPlacesNothing() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        api.info = ApiOutcome.Ok(200, DaemonInfo())
+        api.validation = ApiOutcome.Ok(200, ValidationResult(valid = true))
+        api.place = ApiOutcome.Failure(503, "link_down", "the daemon is unreachable")
+
+        val viewModel = ComposerViewModel(api)
+        advanceUntilIdle()
+        viewModel.onDestinationChange("+998901234567")
+        viewModel.onGoalChange("Book a table for two on Thursday")
+        advanceUntilIdle()
+        viewModel.confirm()
+        advanceUntilIdle()
+        assertNotNull(viewModel.state.value.placeError)
+        assertEquals(1, api.placedRequests.size)
+
+        // The card's Retry is review(): the edit is validated again and shown by the sheet.
+        viewModel.onGoalChange("Book a table for two at eight instead")
+        advanceUntilIdle()
+        viewModel.review()
+
+        assertTrue(viewModel.state.value.confirming)
+        assertNull(viewModel.state.value.placeError)
+        assertEquals("the edited goal is what was validated", "Book a table for two at eight instead", api.validateRequests.last().goal)
+        assertEquals("nothing was placed by the retry", 1, api.placedRequests.size)
+    }
+
+    @Test
     fun aFailedPlacementLeavesNoReturnToken() = runTest(dispatcher) {
         val api = FakeDaemonApi()
         api.info = ApiOutcome.Ok(200, DaemonInfo())

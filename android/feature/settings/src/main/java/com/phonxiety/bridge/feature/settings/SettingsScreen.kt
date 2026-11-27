@@ -485,19 +485,26 @@ private fun DaemonCard(daemon: DaemonSettingsUi, callbacks: SettingsCallbacks) {
         }
     ) {
         daemon.error?.let {
-            // A refused save keeps the edits; reloading would replace them, so only a failed read
-            // asks for a reload.
+            // A refused save keeps the edits; reloading would replace them, so the action repeats
+            // the save. Only a failed read asks for a reload, which is the read that failed.
+            val saveFailed = daemon.errorOnSave
             ErrorCard(
                 title = stringResource(
-                    if (daemon.errorOnSave) R.string.settings_daemon_save_error_title else R.string.settings_daemon_error_title
+                    if (saveFailed) R.string.settings_daemon_save_error_title else R.string.settings_daemon_error_title
                 ),
                 message = stringResource(
-                    if (daemon.errorOnSave) R.string.settings_daemon_save_error_message else R.string.settings_daemon_error_message
+                    if (saveFailed) R.string.settings_daemon_save_error_message else R.string.settings_daemon_error_message
                 ),
                 kind = daemon.errorKind,
                 output = it.asString(),
-                onRetry = callbacks.onRefreshDaemon,
-                onOpenDoctor = callbacks.onOpenDoctor
+                actionLabel = stringResource(
+                    if (saveFailed) {
+                        com.phonxiety.bridge.designsystem.R.string.designsystem_action_retry
+                    } else {
+                        R.string.settings_daemon_reload
+                    }
+                ),
+                onAction = if (saveFailed) callbacks.onSaveDaemon else callbacks.onRefreshDaemon
             )
         }
         if (daemon.changesApplied.isNotEmpty()) {

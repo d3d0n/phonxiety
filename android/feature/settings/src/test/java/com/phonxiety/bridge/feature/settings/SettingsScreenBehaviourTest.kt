@@ -13,6 +13,7 @@ import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -26,6 +27,8 @@ import com.phonxiety.bridge.PhoneCodec
 import com.phonxiety.bridge.designsystem.LocalScrollToTop
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
 import com.phonxiety.bridge.designsystem.ScrollToTopRegistry
+import com.phonxiety.bridge.designsystem.UiText
+import com.phonxiety.bridge.model.FailureKind
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -181,6 +184,81 @@ class SettingsScreenBehaviourTest {
         }
         composeRule.waitForIdle()
         last.assertIsNotFocused()
+    }
+
+    @Test
+    fun retryingAFailedSaveSavesTheKeptEditsInsteadOfReloading() {
+        var saves = 0
+        var reloads = 0
+        val edited = state().let {
+            it.copy(
+                daemon = it.daemon.copy(
+                    form = it.daemon.form.copy(ringTimeout = "47"),
+                    error = UiText.Literal("the daemon is unreachable"),
+                    errorKind = FailureKind.TRANSPORT,
+                    errorOnSave = true
+                )
+            )
+        }
+        composeRule.setContent {
+            PhonxietyTheme(dynamicColor = false) {
+                Surface(color = MaterialTheme.colorScheme.background) {
+                    SettingsScreen(
+                        state = edited,
+                        callbacks = SettingsCallbacks(
+                            onSaveDaemon = { saves++ },
+                            onRefreshDaemon = { reloads++ }
+                        )
+                    )
+                }
+            }
+        }
+
+        composeRule.onNodeWithText("Retry").performScrollTo().assertIsDisplayed().performClick()
+
+        assertEquals("a failed save is retried as a save", 1, saves)
+        assertEquals("a failed save does not throw the edits away", 0, reloads)
+        composeRule.onNodeWithText("47").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun retryingAFailedReadReloadsTheDaemonValues() {
+        var saves = 0
+        var reloads = 0
+        val unread = state().let {
+            it.copy(
+                daemon = it.daemon.copy(
+                    error = UiText.Literal("the daemon is unreachable"),
+                    errorKind = FailureKind.TRANSPORT,
+                    errorOnSave = false
+                )
+            )
+        }
+        composeRule.setContent {
+            PhonxietyTheme(dynamicColor = false) {
+                Surface(color = MaterialTheme.colorScheme.background) {
+                    SettingsScreen(
+                        state = unread,
+                        callbacks = SettingsCallbacks(
+                            onSaveDaemon = { saves++ },
+                            onRefreshDaemon = { reloads++ }
+                        )
+                    )
+                }
+            }
+        }
+
+        composeRule
+            .onNode(
+                hasText("Reload from the daemon") and
+                    hasAnyAncestor(SemanticsMatcher.keyIsDefined(SemanticsProperties.Error))
+            )
+            .performScrollTo()
+            .assertIsDisplayed()
+            .performClick()
+
+        assertEquals(1, reloads)
+        assertEquals(0, saves)
     }
 
     private fun field(label: String) = composeRule.onNode(hasSetTextAction() and hasText(label))

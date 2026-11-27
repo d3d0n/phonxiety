@@ -13,6 +13,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import com.phonxiety.bridge.data.updates.RollbackBlocker
 import com.phonxiety.bridge.data.updates.RollbackPlan
+import com.phonxiety.bridge.data.updates.UpdateCheck
+import com.phonxiety.bridge.data.updates.UpdateCheckError
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
 import java.util.Locale
 import org.junit.After
@@ -173,6 +175,51 @@ class UpdatesScreenBehaviourTest {
 
         assertEquals(0, confirmations)
         assertEquals(1, dismissals)
+    }
+
+    @Test
+    fun aMissingManifestOffersCheckAgainRatherThanTheDoctor() {
+        val refreshes = mutableListOf<Unit>()
+        render(
+            UpdatesUiState(check = UpdateCheck(error = UpdateCheckError.NO_MANIFEST, checkedAtEpochMs = 0L)),
+            Callbacks(refresh = { refreshes += Unit })
+        )
+
+        composeRule.onNodeWithText("Check again").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Open Doctor").assertDoesNotExist()
+        composeRule.onNodeWithText("Check again").performClick()
+
+        assertEquals(1, refreshes.size)
+    }
+
+    @Test
+    fun aManifestInvalidatedByTheDaemonOffersCheckAgainRatherThanTheDoctor() {
+        var refreshes = 0
+        render(
+            UpdatesUiState(check = UpdateCheck(error = UpdateCheckError.MANIFEST_INVALID, checkedAtEpochMs = 0L)),
+            Callbacks(refresh = { refreshes++ })
+        )
+
+        composeRule.onNodeWithText("Check again").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Open Doctor").assertDoesNotExist()
+        composeRule.onNodeWithText("Check again").performClick()
+
+        assertEquals(1, refreshes)
+    }
+
+    @Test
+    fun anUnknownChannelOffersCheckAgainThatRechecks() {
+        var refreshes = 0
+        render(
+            UpdatesUiState(check = UpdateCheck(error = UpdateCheckError.UNKNOWN_CHANNEL, checkedAtEpochMs = 0L)),
+            Callbacks(refresh = { refreshes++ })
+        )
+
+        composeRule.onNodeWithText("Check again").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Open Doctor").assertDoesNotExist()
+        composeRule.onNodeWithText("Check again").performClick()
+
+        assertEquals(1, refreshes)
     }
 
     @Test

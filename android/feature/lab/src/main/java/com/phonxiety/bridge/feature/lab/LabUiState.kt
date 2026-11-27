@@ -100,12 +100,19 @@ data class ProbeRowUi(
     val details: String? = null
 )
 
+/** The audio action whose failure is on screen; a retry repeats exactly that one. */
+enum class AudioOp { LOOPBACK, TONE }
+
 data class AudioUi(
     val loopbackOn: Boolean = false,
     val toneHz: Int = 1_000,
     val toneDbfs: Double = -20.0,
     val busy: Boolean = false,
     val error: LabFailure? = null,
+    /** The operation that failed, so Retry repeats it instead of always playing a tone. */
+    val failedOp: AudioOp? = null,
+    /** The loopback value a failed loopback asked for; Retry re-requests the same one. */
+    val failedLoopback: Boolean? = null,
     val note: UiText? = null
 )
 
@@ -171,12 +178,17 @@ data class CodecTrialRun(
     val result: LinkTestResult
 )
 
+/** Which diagnostics operation failed: a reload retries the read, a retry re-exports. */
+enum class DiagnosticsOp { LOAD, EXPORT }
+
 data class DiagnosticsUi(
     val loading: Boolean = false,
     val payload: String? = null,
     val exporting: Boolean = false,
     val bundleId: String? = null,
-    val error: LabFailure? = null
+    val error: LabFailure? = null,
+    /** The operation behind [error], so Retry repeats it rather than always reloading. */
+    val errorOp: DiagnosticsOp? = null
 )
 
 data class LogUi(

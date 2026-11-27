@@ -231,13 +231,19 @@ private fun CheckErrorCard(check: UpdateCheck, onRefresh: () -> Unit, onOpenDoct
         UpdateCheckError.UNKNOWN_CHANNEL -> FailureKind.REFUSED
         UpdateCheckError.NO_MANIFEST, UpdateCheckError.MANIFEST_INVALID, null -> FailureKind.DAEMON
     }
+    // The Doctor cannot publish or repair a manifest, so these errors keep the check's own
+    // recovery: asking the provider again. A transport failure keeps the kind's Retry, which is
+    // the same re-check under the label the kind gives it.
+    val recheck = check.error != UpdateCheckError.LINK_DOWN
     ErrorCard(
         title = title,
         message = message,
         kind = kind,
         output = if (command) stringResource(R.string.updates_command_publish) else check.detail,
         initiallyExpanded = command,
-        onRetry = onRefresh,
+        actionLabel = if (recheck) stringResource(R.string.updates_check_again) else null,
+        onAction = if (recheck) onRefresh else null,
+        onRetry = if (recheck) null else onRefresh,
         onOpenDoctor = onOpenDoctor
     )
 }

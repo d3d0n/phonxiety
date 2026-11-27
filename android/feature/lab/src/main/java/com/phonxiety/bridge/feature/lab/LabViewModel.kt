@@ -394,7 +394,7 @@ class LabViewModel @Inject constructor(
     fun setLoopback(enabled: Boolean) {
         val current = _state.value
         if (!current.audioEnabled || current.audio.busy) return
-        _state.update { it.copy(audio = it.audio.copy(busy = true, error = null)) }
+        _state.update { it.copy(audio = it.audio.copy(busy = true, error = null, failedOp = null, failedLoopback = null)) }
         viewModelScope.launch {
             when (val outcome = api.loopback(enabled, current.callId?.let(::CallId))) {
                 is ApiOutcome.Ok -> _state.update {
@@ -402,13 +402,23 @@ class LabViewModel @Inject constructor(
                         audio = it.audio.copy(
                             busy = false,
                             loopbackOn = outcome.value.enabled,
+                            error = null,
+                            failedOp = null,
+                            failedLoopback = null,
                             note = if (outcome.value.enabled) UiText.Res(R.string.lab_audio_on) else null
                         )
                     )
                 }
 
                 is ApiOutcome.Failure -> _state.update {
-                    it.copy(audio = it.audio.copy(busy = false, error = outcome.failure()))
+                    it.copy(
+                        audio = it.audio.copy(
+                            busy = false,
+                            error = outcome.failure(),
+                            failedOp = AudioOp.LOOPBACK,
+                            failedLoopback = enabled
+                        )
+                    )
                 }
             }
         }
@@ -421,22 +431,42 @@ class LabViewModel @Inject constructor(
     fun playTone() {
         val current = _state.value
         if (!current.audioEnabled || current.audio.busy) return
-        _state.update { it.copy(audio = it.audio.copy(busy = true, error = null)) }
+        _state.update { it.copy(audio = it.audio.copy(busy = true, error = null, failedOp = null, failedLoopback = null)) }
         viewModelScope.launch {
             when (val outcome = api.tone(current.audio.toneHz, current.audio.toneDbfs, TONE_SECONDS, current.callId?.let(::CallId))) {
                 is ApiOutcome.Ok -> _state.update {
                     it.copy(
                         audio = it.audio.copy(
                             busy = false,
+                            error = null,
+                            failedOp = null,
+                            failedLoopback = null,
                             note = UiText.Res(R.string.lab_audio_played, listOf(TONE_SECONDS.toInt()))
                         )
                     )
                 }
 
                 is ApiOutcome.Failure -> _state.update {
-                    it.copy(audio = it.audio.copy(busy = false, error = outcome.failure()))
+                    it.copy(
+                        audio = it.audio.copy(
+                            busy = false,
+                            error = outcome.failure(),
+                            failedOp = AudioOp.TONE,
+                            failedLoopback = null
+                        )
+                    )
                 }
             }
+        }
+    }
+
+    /** Repeats the audio operation whose failure is on screen: the same loopback, or a tone. */
+    fun retryAudio() {
+        val audio = _state.value.audio
+        when (audio.failedOp) {
+            AudioOp.LOOPBACK -> audio.failedLoopback?.let(::setLoopback)
+            AudioOp.TONE -> playTone()
+            null -> Unit
         }
     }
 
@@ -759,7 +789,7 @@ class LabViewModel @Inject constructor(
 
     fun loadDiagnostics() {
         if (_state.value.diagnostics.loading) return
-        _state.update { it.copy(diagnostics = it.diagnostics.copy(loading = true, error = null)) }
+        _state.update { it.copy(diagnostics = it.diagnostics.copy(loading = true, error = null, errorOp = null)) }
         viewModelScope.launch {
             when (val outcome = api.diagnostics()) {
                 is ApiOutcome.Ok -> _state.update {
@@ -767,7 +797,7 @@ class LabViewModel @Inject constructor(
                 }
 
                 is ApiOutcome.Failure -> _state.update {
-                    it.copy(diagnostics = it.diagnostics.copy(loading = false, error = outcome.failure()))
+                    it.copy(diagnostics = it.diagnostics.copy(loading = false, error = outcome.failure(), errorOp = DiagnosticsOp.LOAD))
                 }
             }
         }
@@ -776,11 +806,11 @@ class LabViewModel @Inject constructor(
     fun exportBundle() {
         val current = _state.value.diagnostics
         if (current.exporting) return
-        _state.update { it.copy(diagnostics = it.diagnostics.copy(exporting = true, error = null)) }
+        _state.update { it.copy(diagnostics = it.diagnostics.copy(exporting = true, error = null, errorOp = null)) }
         viewModelScope.launch {
             when (val created = api.createDiagnosticsBundle()) {
                 is ApiOutcome.Failure -> _state.update {
-                    it.copy(diagnostics = it.diagnostics.copy(exporting = false, error = created.failure()))
+                    it.copy(diagnostics = it.diagnostics.copy(exporting = false, error = created.failure(), errorOp = DiagnosticsOp.EXPORT))
                 }
 
                 is ApiOutcome.Ok -> {
@@ -813,7 +843,8 @@ class LabViewModel @Inject constructor(
                                 it.copy(
                                     diagnostics = it.diagnostics.copy(
                                         exporting = false,
-                                        error = LabFailure.of(downloaded.status, downloaded.code, downloaded.message)
+                                        error = LabFailure.of(downloaded.status, downloaded.code, downloaded.message),
+                                        errorOp = DiagnosticsOp.EXPORT
                                     )
                                 )
                             }
@@ -821,6 +852,14 @@ class LabViewModel @Inject constructor(
                     }
                 }
             }
+        }
+    }
+
+    /** Repeats the diagnostics operation whose failure is on screen. */
+    fun retryDiagnostics() {
+        when (_state.value.diagnostics.errorOp) {
+            DiagnosticsOp.EXPORT -> exportBundle()
+            DiagnosticsOp.LOAD, null -> loadDiagnostics()
         }
     }
 

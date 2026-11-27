@@ -55,8 +55,10 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -109,7 +111,60 @@ class DaemonContractTest {
                 is Outcome.Download -> assertDownload(exchange.file, contract, outcome, gateway!!)
 
                 is Outcome.Completed -> {
-                    assertEquals(exchange.file + ": status", contract.status, outcome.status)
+                    // A write's success arm and the fields the fixture carries are asserted too:
+                    // a status-and-shape check alone would let a wrong arm through.
+                    val body = contract.responseBody.jsonObject
+                    val status = when (val arm = outcome.arm) {
+                        is DeleteOutcome.Deleted -> arm.status
+
+                        is MarkOutcome.Marked -> {
+                            val marks = body.getValue("marks").jsonArray
+                            assertEquals(exchange.file + ": marks", marks.size, arm.marks.size)
+                            assertEquals(
+                                exchange.file + ": mark",
+                                marks.first().jsonObject.getValue("mark").jsonPrimitive.content,
+                                arm.marks.first().mark
+                            )
+                            arm.status
+                        }
+
+                        is HangUpOutcome.HungUp -> {
+                            assertEquals(
+                                exchange.file + ": call id",
+                                body.getValue("call_id").jsonPrimitive.content,
+                                arm.snapshot.callId
+                            )
+                            assertEquals(
+                                exchange.file + ": state",
+                                body.getValue("state").jsonPrimitive.content,
+                                arm.snapshot.state
+                            )
+                            arm.status
+                        }
+
+                        is PauseOutcome.Paused -> {
+                            assertEquals(
+                                exchange.file + ": muted",
+                                body.getValue("muted").jsonPrimitive.boolean,
+                                arm.result.muted
+                            )
+                            arm.status
+                        }
+
+                        is ResumeOutcome.Resumed -> {
+                            assertEquals(
+                                exchange.file + ": muted",
+                                body.getValue("muted").jsonPrimitive.boolean,
+                                arm.result.muted
+                            )
+                            arm.status
+                        }
+
+                        else -> throw AssertionError(
+                            exchange.file + ": not a success arm: " + arm::class.simpleName
+                        )
+                    }
+                    assertEquals(exchange.file + ": status", contract.status, status)
                     checker.check(checkNotNull(exchange.descriptor), contract.responseBody, exchange.file)
                 }
 
@@ -343,8 +398,8 @@ class DaemonContractTest {
 
         data class Download(val result: ApiResult, val sink: ByteArrayOutputStream) : Outcome
 
-        /** A write verb answered with its sealed outcome; only the status is shared with a typed read. */
-        data class Completed(val status: Int) : Outcome
+        /** A write verb answered with its sealed arm; the arm and its payload are asserted too. */
+        data class Completed(val arm: Any) : Outcome
     }
 
     private data class Exchange(
@@ -652,10 +707,10 @@ class DaemonContractTest {
                 Outcome.Typed(api.instruction(c.callId, c.requestBody!!.getValue("text").jsonPrimitive.content))
             },
             Exchange("call_pause_post.json", setOf("pause"), PauseResult.serializer().descriptor) { api, c ->
-                Outcome.Completed(api.pause(c.callId).status)
+                Outcome.Completed(api.pause(c.callId))
             },
             Exchange("call_resume_post.json", setOf("resume"), PauseResult.serializer().descriptor) { api, c ->
-                Outcome.Completed(api.resume(c.callId).status)
+                Outcome.Completed(api.resume(c.callId))
             },
             Exchange("call_summarize_post.json", setOf("summarize"), SummaryResult.serializer().descriptor) { api, c ->
                 Outcome.Typed(api.summarize(c.callId))
@@ -664,7 +719,7 @@ class DaemonContractTest {
                 Outcome.Typed(api.dtmf(c.callId, c.requestBody!!.getValue("digits").jsonPrimitive.content))
             },
             Exchange("call_hangup_post.json", setOf("hangup"), CallSnapshot.serializer().descriptor) { api, c ->
-                Outcome.Completed(api.hangup(c.callId).status)
+                Outcome.Completed(api.hangup(c.callId))
             },
             Exchange("call_marks_get.json", setOf("marks"), MarksResponse.serializer().descriptor) { api, c ->
                 Outcome.Typed(api.marks(c.callId))
@@ -676,11 +731,11 @@ class DaemonContractTest {
                         c.callId,
                         body.getValue("mark").jsonPrimitive.content,
                         body.textOrNull("note")
-                    ).status
+                    )
                 )
             },
             Exchange("call_delete.json", setOf("deleteCall"), DeleteCallResult.serializer().descriptor) { api, c ->
-                Outcome.Completed(api.deleteCall(c.callId).status)
+                Outcome.Completed(api.deleteCall(c.callId))
             },
             Exchange("call_audio_get.json", setOf("downloadAudio"), paged = true) { api, c ->
                 val sink = ByteArrayOutputStream()

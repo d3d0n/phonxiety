@@ -45,7 +45,7 @@ internal fun DiagnosticsCard(diagnostics: DiagnosticsUi, callbacks: LabCallbacks
                 message = failure.message.asString(),
                 kind = failure.kind,
                 output = failure.code,
-                onRetry = callbacks.onLoadDiagnostics,
+                onRetry = callbacks.onRetryDiagnostics,
                 onOpenDoctor = callbacks.onOpenDoctor
             )
         }

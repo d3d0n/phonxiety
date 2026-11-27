@@ -23,8 +23,10 @@ import androidx.compose.ui.unit.dp
 import com.phonxiety.bridge.designsystem.LocalScrollToTop
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
 import com.phonxiety.bridge.designsystem.ScrollToTopRegistry
+import com.phonxiety.bridge.designsystem.UiText
 import com.phonxiety.bridge.feature.lab.cards.LOG_FILTER_KEYBOARD
 import com.phonxiety.bridge.feature.lab.cards.TEST_NUMBER_KEYBOARD
+import com.phonxiety.bridge.model.FailureKind
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -121,6 +123,61 @@ class LabScreenBehaviourTest {
             .performScrollTo()
             .assert(hasImeAction(ImeAction.Done))
         assertEquals(ImeAction.Done, LOG_FILTER_KEYBOARD.imeAction)
+    }
+
+    @Test
+    fun theAudioCardsRetryRepeatsTheFailedOperation() {
+        var audioRetries = 0
+        var tones = 0
+        setScreen(
+            state = previewLabState().copy(
+                audio = AudioUi(
+                    error = LabFailure(
+                        message = UiText.Literal("the daemon is unreachable"),
+                        code = "link_down",
+                        kind = FailureKind.TRANSPORT
+                    ),
+                    failedOp = AudioOp.LOOPBACK,
+                    failedLoopback = true
+                )
+            ),
+            callbacks = LabCallbacks(onRetryAudio = { audioRetries++ }, onPlayTone = { tones++ })
+        )
+
+        composeRule.onNodeWithText("Retry").performScrollTo().assertIsDisplayed().performClick()
+
+        assertEquals("Retry repeats the loopback", 1, audioRetries)
+        assertEquals("Retry does not play a tone", 0, tones)
+    }
+
+    @Test
+    fun theDiagnosticsCardsRetryRepeatsTheFailedExport() {
+        var diagnosticsRetries = 0
+        var loads = 0
+        var exports = 0
+        setScreen(
+            state = previewLabState().copy(
+                diagnostics = DiagnosticsUi(
+                    error = LabFailure(
+                        message = UiText.Literal("the daemon is unreachable"),
+                        code = "link_down",
+                        kind = FailureKind.TRANSPORT
+                    ),
+                    errorOp = DiagnosticsOp.EXPORT
+                )
+            ),
+            callbacks = LabCallbacks(
+                onRetryDiagnostics = { diagnosticsRetries++ },
+                onLoadDiagnostics = { loads++ },
+                onExportBundle = { exports++ }
+            )
+        )
+
+        composeRule.onNodeWithText("Retry").performScrollTo().assertIsDisplayed().performClick()
+
+        assertEquals("Retry repeats the export", 1, diagnosticsRetries)
+        assertEquals(0, loads)
+        assertEquals(0, exports)
     }
 
     private companion object {

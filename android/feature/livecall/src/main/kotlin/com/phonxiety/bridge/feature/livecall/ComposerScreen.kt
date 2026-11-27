@@ -214,7 +214,10 @@ fun ComposerScreen(
                             message = message.asString(),
                             kind = state.placeErrorKind,
                             output = state.placeErrorDetail,
-                            onRetry = onConfirm,
+                            // The placement failed, so repeating it must go through the brief's
+                            // checks and the review again: the edited fields may be different and
+                            // confirm() would send fresh ids for whatever is on screen now.
+                            onRetry = onReview,
                             onOpenDoctor = onOpenDoctor
                         )
                     }
