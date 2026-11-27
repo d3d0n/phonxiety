@@ -255,6 +255,8 @@ internal class CandidateLinkFactory(
 
         override fun sendBinary(frame: ByteArray, length: Int) = delegate.sendBinary(frame, length)
 
+        override fun offerBinary(frame: ByteArray, length: Int): Boolean = delegate.offerBinary(frame, length)
+
         override fun cancel() = delegate.cancel()
 
         override fun route(): DeviceLink.Route? = delegate.route()?.also { noteRoute(candidate, it) }
@@ -273,6 +275,8 @@ internal class CandidateLinkFactory(
         override fun sendText(message: String): Boolean = false
 
         override fun sendBinary(frame: ByteArray, length: Int) = Unit
+
+        override fun offerBinary(frame: ByteArray, length: Int): Boolean = false
 
         override fun cancel() = Unit
 

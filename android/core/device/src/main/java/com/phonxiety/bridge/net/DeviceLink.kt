@@ -30,6 +30,17 @@ internal interface DeviceLink {
     /** Queues one binary frame of [length] bytes from [frame]. */
     fun sendBinary(frame: ByteArray, length: Int)
 
+    /**
+     * Queues one binary frame of [length] bytes from [frame] and reports whether
+     * the transport took it: false means the frame is lost, so live capture
+     * counts it as unsent instead of assuming delivery.  Default: accepted,
+     * which is all a transport without its own refusal can say.
+     */
+    fun offerBinary(frame: ByteArray, length: Int): Boolean {
+        sendBinary(frame, length)
+        return true
+    }
+
     /** Bytes accepted but not yet written to the peer. */
     val backlogBytes: Long
 

@@ -2,7 +2,6 @@ package com.phonxiety.bridge.net
 
 import android.annotation.SuppressLint
 import com.phonxiety.bridge.BridgeConfig
-import com.phonxiety.bridge.bridgeScope
 import java.security.MessageDigest
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
@@ -13,10 +12,6 @@ import javax.net.ssl.SSLSocketFactory
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 import kotlin.math.max
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
 import okhttp3.Call as HttpCall
 import okhttp3.Connection
 import okhttp3.EventListener
@@ -184,22 +179,27 @@ private class WebSocketLink(
 ) : DeviceLink {
     private val downOnce = AtomicBoolean(false)
     private val cancelled = AtomicBoolean(false)
-    private val scope = bridgeScope("phonxiety-websocket-link", Dispatchers.IO)
-    private val outbox = WebSocketOutbox()
-
-    /** Completed when the socket exists; the writer waits for it before its first send. */
-    private val opened = CompletableDeferred<WebSocket>()
 
     @Volatile private var socket: WebSocket? = null
 
-    override val backlogBytes: Long
-        get() = outbox.pendingBytes + (socket?.queueSize() ?: 0L)
+    /** The attempt's listener, kept so a refused send can report the socket dead. */
+    @Volatile private var listener: DeviceLink.Listener? = null
+
+    /**
+     * Frames go straight to OkHttp's queue.  On this socket the audio freeze
+     * overrides a queue of our own: nothing stands between capture and `send`,
+     * and the backlog is the socket's `queueSize` alone.
+     */
+    private val sender = SocketSender(socket = { socket }, tap = tap) { writeFailed() }
+
+    override val backlogBytes: Long get() = sender.backlogBytes
 
     // One pinned TCP stream to a known address: there is no relay hop to report, and no
     // transport-level round trip until the daemon's heartbeat answers.
     override fun route(): DeviceLink.Route = DeviceLink.Route(relay = false, rttMs = null)
 
     override fun start(listener: DeviceLink.Listener) {
+        this.listener = listener
         val request = try {
             Request.Builder()
                 .url(config.url)
@@ -212,7 +212,6 @@ private class WebSocketLink(
         val adapter = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 if (socket == null) socket = webSocket
-                opened.complete(webSocket)
                 if (cancelled.get()) {
                     runCatching { webSocket.close(1000, "cancelled") }
                     return
@@ -250,45 +249,36 @@ private class WebSocketLink(
             return
         }
         socket = created
-        opened.complete(created)
-        scope.launch {
-            outbox.drain(
-                send = { frame ->
-                    val webSocket = opened.await()
-                    when (frame) {
-                        is SocketFrame.Text -> webSocket.send(frame.text)
-                        is SocketFrame.Binary -> webSocket.send(frame.payload)
-                    }
-                },
-                onWriteFailed = { down(listener, "write_failed") }
-            )
-        }
         if (cancelled.get()) created.cancel()
     }
 
-    override fun sendText(message: String): Boolean = outbox.offerText(message)
+    override fun sendText(message: String): Boolean = sender.sendText(message)
 
     override fun sendBinary(frame: ByteArray, length: Int) {
+        offerBinary(frame, length)
+    }
+
+    override fun offerBinary(frame: ByteArray, length: Int): Boolean {
         val size = max(0, minOf(length, frame.size))
-        if (size == 0) return
-        // The caller checks the backlog; a frame the queue cannot take is
-        // dropped here and the single writer reports a dead socket.
-        outbox.offerBinary(frame.toByteString(0, size))
+        if (size == 0) return false
+        return sender.sendBinary(frame.toByteString(0, size))
     }
 
     override fun cancel() {
         if (!cancelled.compareAndSet(false, true)) return
         downOnce.set(true)
-        outbox.close()
         socket?.cancel()
         socket = null
-        scope.cancel()
+    }
+
+    /** A refused send means OkHttp's queue or the socket is gone: report the link down once. */
+    private fun writeFailed() {
+        val target = listener ?: return
+        down(target, "write_failed")
     }
 
     private fun down(listener: DeviceLink.Listener, reason: String) {
         if (!downOnce.compareAndSet(false, true)) return
-        outbox.close()
         listener.onLinkDown(reason)
-        scope.cancel()
     }
 }

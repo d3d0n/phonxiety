@@ -216,8 +216,7 @@ internal class LinkSupervisor(
         // Live capture: never let a stalled network turn into growing latency.
         // Control messages use sendText and are never dropped.
         if (target.backlogBytes > MAX_AUDIO_BACKLOG_BYTES) return false
-        target.sendBinary(frame, length)
-        true
+        target.offerBinary(frame, length)
     }
 
     /**
@@ -227,8 +226,9 @@ internal class LinkSupervisor(
      * same monitor every other send checks, so a producer can never enqueue
      * between them: whichever runs first wins, and the hello either goes out
      * first or not at all.  Both transports only enqueue in `sendText` (iroh's
-     * control queue, bounded at 128 frames and refusing when full, and
-     * OkHttp's send queue) — no I/O and no suspension under the lock.
+     * control queue, bounded at 128 frames and refusing when full, and the
+     * address socket's own send into OkHttp's bounded queue) — no I/O and no
+     * suspension under the lock.
      *
      * False while down or when a hello is already queued; the flag is set only
      * after the transport accepted the frame, so a refused hello leaves every
