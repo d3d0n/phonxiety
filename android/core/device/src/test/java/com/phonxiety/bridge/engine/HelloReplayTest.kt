@@ -8,6 +8,7 @@ import com.phonxiety.bridge.EngineStateStore
 import com.phonxiety.bridge.model.DeviceOutbound
 import com.phonxiety.bridge.model.DeviceProtocol
 import com.phonxiety.bridge.model.DisconnectCause
+import com.phonxiety.bridge.model.LinkDownReason
 import com.phonxiety.bridge.model.LinkKind
 import com.phonxiety.bridge.net.ApiExchange
 import com.phonxiety.bridge.net.ApiRequestTable
@@ -27,6 +28,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -102,7 +104,7 @@ class HelloReplayTest {
 
         fun open() = listener!!.onLinkOpened()
 
-        fun down(reason: String) = listener!!.onLinkDown(reason)
+        fun down(reason: LinkDownReason, detail: String? = null) = listener!!.onLinkDown(reason, detail)
     }
 
     private class Harness(context: Context) {
@@ -200,7 +202,7 @@ class HelloReplayTest {
         harness.supervisor.start()
         harness.factory.last().open()
         assertTrue(harness.supervisor.isUp())
-        harness.factory.last().down("closed")
+        harness.factory.last().down(LinkDownReason.CLOSED)
 
         // The link that would carry the ending cannot: the frame is retained.
         harness.publisher.report(call, "ended", cause)
@@ -230,11 +232,39 @@ class HelloReplayTest {
         assertTrue(request.isCompleted)
 
         // A later reconnect has nothing retained: the accepted frame was cleared.
-        second.down("closed")
+        second.down(LinkDownReason.CLOSED)
         harness.scheduler.runDue()
         val third = harness.factory.last()
         third.open()
         assertEquals(0, third.sentText.toList().count { it == ended })
         assertEquals(listOf("hello"), third.sentText.toList().map { kindOf(it, ended) })
+    }
+
+    /**
+     * The typed reason reaches the store through the real link wiring:
+     * `LinkError.code` keeps the spelling surfaces have always shown, the
+     * typed reason is the value itself, and a native close keeps its words.
+     */
+    @Test
+    fun theTypedReasonReachesTheStateStore() {
+        val harness = Harness(RuntimeEnvironment.getApplication())
+        harness.supervisor.start()
+        harness.factory.last().open()
+
+        harness.factory.last().down(LinkDownReason.NETWORK_LOST)
+        val known = harness.store.state.value.lastError!!
+        assertEquals("network_lost", known.code)
+        assertEquals(LinkDownReason.NETWORK_LOST, known.reason)
+        assertEquals("the network is gone", known.message)
+        assertNull(known.detail)
+
+        harness.scheduler.runDue()
+        harness.factory.last().open()
+        harness.factory.last().down(LinkDownReason.OTHER, "timed out by peer")
+        val native = harness.store.state.value.lastError!!
+        assertEquals("other", native.code)
+        assertEquals(LinkDownReason.OTHER, native.reason)
+        assertEquals("timed out by peer", native.detail)
+        assertEquals("timed out by peer", native.message)
     }
 }

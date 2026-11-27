@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import com.phonxiety.bridge.model.LinkDownReason
 import kotlin.coroutines.resume
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
@@ -66,7 +67,7 @@ internal fun unregisterNetwork(manager: ConnectivityManager, callback: Connectiv
  * another one, until the returned function unregisters the callback.  The
  * network current at registration does not count as a change.
  */
-internal fun watchNetwork(context: Context, onChange: (String) -> Unit): () -> Unit {
+internal fun watchNetwork(context: Context, onChange: (LinkDownReason) -> Unit): () -> Unit {
     val manager = context.getSystemService(ConnectivityManager::class.java) ?: return {}
     val callback = object : ConnectivityManager.NetworkCallback() {
         private var current: Network? = null
@@ -74,13 +75,13 @@ internal fun watchNetwork(context: Context, onChange: (String) -> Unit): () -> U
         override fun onAvailable(network: Network) {
             val previous = current
             current = network
-            if (previous != null && previous != network) onChange("network_changed")
+            if (previous != null && previous != network) onChange(LinkDownReason.NETWORK_CHANGED)
         }
 
         override fun onLost(network: Network) {
             if (network == current) {
                 current = null
-                onChange("network_lost")
+                onChange(LinkDownReason.NETWORK_LOST)
             }
         }
     }

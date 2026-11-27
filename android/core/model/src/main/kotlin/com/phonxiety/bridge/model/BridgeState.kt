@@ -1,6 +1,7 @@
 package com.phonxiety.bridge.model
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
 /**
  * Everything the UI, tiles and the widget show about the bridge, produced by the engine on
@@ -96,5 +97,67 @@ data class Capabilities(
     val daemonVersion: String? = null
 )
 
+/**
+ * Why one transport link went down, typed.
+ *
+ * [wire] is the exact string [LinkError.code] has always carried: surfaces,
+ * logs and the Doctor show it, so its spelling must never change.  Only a
+ * transport's own link-down belongs here; engine error codes such as
+ * `audio_error` stay plain [LinkError.code] values with no [LinkError.reason].
+ */
+enum class LinkDownReason(val wire: String) {
+    HOST_TIMEOUT("host_timeout"),
+    CONNECT_FAILED("connect_failed"),
+    CONNECT_TIMEOUT("connect_timeout"),
+    HELLO_FAILED("hello_failed"),
+    CLOSED("closed"),
+    CLOSING("closing"),
+    PROTOCOL("protocol"),
+    WRITE_FAILED("write_failed"),
+    RELAY_ONLY("relay_only"),
+    CONTROL_BACKLOG("control_backlog"),
+    NETWORK_CHANGED("network_changed"),
+    NETWORK_LOST("network_lost"),
+    CONNECTION_MODE_CHANGED("connection_mode_changed"),
+    CANDIDATE_BETTER("candidate_better"),
+    CAPABILITIES_CHANGED("capabilities_changed"),
+    INVALID_URL("invalid_url"),
+    FAILURE("failure"),
+    CREATION_FAILED("creation_failed"),
+    NO_CANDIDATE("no_candidate"),
+    IROH_UNAVAILABLE("iroh_unavailable"),
+
+    /** A native close this build cannot name; [LinkError.detail] keeps its text. */
+    OTHER("other");
+
+    companion object {
+        /**
+         * The typed reason for a transport's own close text.  Empty text is
+         * [CLOSED], the way the transports have always substituted it; a text
+         * that names one of the values above keeps it, and anything else is
+         * [OTHER] so the caller can keep the original text as detail.
+         */
+        fun fromNativeClose(text: String): LinkDownReason = if (text.isEmpty()) {
+            CLOSED
+        } else {
+            entries.firstOrNull { it != OTHER && it.wire == text } ?: OTHER
+        }
+    }
+}
+
+/**
+ * [code] is the string surfaces and the Doctor show; [message] is the one
+ * sentence a user reads; [reason] types the transport's own link-down and is
+ * null for an engine error code, and [detail] keeps the native close text
+ * behind [LinkDownReason.OTHER].  The two typed fields stay out of the
+ * serialized shape: the encoded error keeps exactly `code`, `message` and
+ * `atEpochMs`.
+ */
 @Serializable
-data class LinkError(val code: String, val message: String, val atEpochMs: Long)
+data class LinkError(
+    val code: String,
+    val message: String,
+    val atEpochMs: Long,
+    @Transient val reason: LinkDownReason? = null,
+    @Transient val detail: String? = null
+)

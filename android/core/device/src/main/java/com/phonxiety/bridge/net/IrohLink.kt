@@ -7,6 +7,7 @@ import com.phonxiety.bridge.BridgeLog
 import com.phonxiety.bridge.IdleLinkAction
 import com.phonxiety.bridge.bridgeScope
 import com.phonxiety.bridge.model.DeviceAuth
+import com.phonxiety.bridge.model.LinkDownReason
 import com.phonxiety.bridge.model.LinkKind
 import computer.iroh.Connection
 import computer.iroh.Endpoint
@@ -160,7 +161,7 @@ internal class IrohLink(
             val controlSend = control.send()
             val authPayload = authMessage()
             val auth = Framing.encode(Framing.KIND_TEXT, authPayload)
-                ?: return fail(listener, "connect_failed")
+                ?: return fail(listener, LinkDownReason.CONNECT_FAILED)
             controlSend.writeAll(auth)
             if (tap.enabled) tap.frame(FrameDirection.OUT, FrameStream.CONTROL, Framing.KIND_TEXT, authPayload.size)
             if (cancelled.get() || downOnce.get()) {
@@ -192,7 +193,7 @@ internal class IrohLink(
                     stream = FrameStream.CONTROL,
                     kind = Framing.KIND_TEXT,
                     write = { controlSend.writeAll(it) },
-                    onWriteFailed = { if (!cancelled.get()) fail(listener, "write_failed") }
+                    onWriteFailed = { if (!cancelled.get()) fail(listener, LinkDownReason.WRITE_FAILED) }
                 )
             }
             scope.launch {
@@ -200,12 +201,13 @@ internal class IrohLink(
                     stream = FrameStream.AUDIO,
                     kind = Framing.KIND_BINARY,
                     write = { audioSend.writeAll(it) },
-                    onWriteFailed = { if (!cancelled.get()) fail(listener, "write_failed") }
+                    onWriteFailed = { if (!cancelled.get()) fail(listener, LinkDownReason.WRITE_FAILED) }
                 )
             }
             scope.launch {
-                val reason = runCatching { link.closed() }.getOrDefault("closed")
-                fail(listener, reason.ifEmpty { "closed" })
+                val native = runCatching { link.closed() }.getOrDefault("closed")
+                val (reason, detail) = fromNativeClose(native)
+                fail(listener, reason, detail)
             }
             scope.launch { echoDatagrams(link, { cancelled.get() }, { downOnce.get() }) }
             // The relay-only watchdog: push updates from watchPaths plus the 1 s sample.
@@ -236,7 +238,7 @@ internal class IrohLink(
         } catch (t: Throwable) {
             if (!cancelled.get()) {
                 BridgeLog.w(TAG) { "iroh connect failed: ${t.javaClass.simpleName}" }
-                fail(listener, "connect_failed")
+                fail(listener, LinkDownReason.CONNECT_FAILED)
             }
         }
     }
@@ -285,29 +287,29 @@ internal class IrohLink(
      * keeps migrating the connection; inside the cooldown this link keeps
      * running rather than churning a third endpoint.
      */
-    private fun onNetworkChange(reason: String, listener: DeviceLink.Listener) {
+    private fun onNetworkChange(reason: LinkDownReason, listener: DeviceLink.Listener) {
         if (cancelled.get() || downOnce.get()) return
         val pathMonitor = watchers.monitor()
         pathMonitor?.noteNetworkChange()
         val action = beginIdleLinkAction() ?: run {
-            BridgeLog.i(TAG, "$reason: a call or another link action owns the link, keeping the iroh endpoint")
+            BridgeLog.i(TAG, "${reason.wire}: a call or another link action owns the link, keeping the iroh endpoint")
             return
         }
         when (pathMonitor?.admitNetworkRecycle() ?: IrohNetworkDecision.HELD) {
             IrohNetworkDecision.RECYCLE -> withAdmission(action) {
                 lifecycle.run(recycle = true) {
-                    BridgeLog.i(TAG, "$reason: recreating the iroh endpoint")
+                    BridgeLog.i(TAG, "${reason.wire}: recreating the iroh endpoint")
                     fail(listener, reason)
                 }
             }
 
             IrohNetworkDecision.DURING_CALL -> {
-                BridgeLog.i(TAG, "$reason during a call: keeping the iroh endpoint")
+                BridgeLog.i(TAG, "${reason.wire} during a call: keeping the iroh endpoint")
                 action.release()
             }
 
             IrohNetworkDecision.HELD -> {
-                BridgeLog.i(TAG, "$reason inside the escalation cooldown: keeping the iroh link")
+                BridgeLog.i(TAG, "${reason.wire} inside the escalation cooldown: keeping the iroh link")
                 action.release()
             }
         }
@@ -366,7 +368,7 @@ internal class IrohLink(
                         "relay only: reconnecting the iroh link"
                     }
                 )
-                fail(listener, "relay_only")
+                fail(listener, LinkDownReason.RELAY_ONLY)
             } == IrohActionOutcome.EXECUTED
         }
         return handled ?: false
@@ -398,18 +400,21 @@ internal class IrohLink(
      * dropped this link and the engine has seen it down — never before, and a
      * losing failure releases nothing.
      */
-    private fun fail(listener: DeviceLink.Listener, reason: String) {
+    private fun fail(listener: DeviceLink.Listener, reason: LinkDownReason, detail: String? = null) {
         if (cancelled.get()) return
         if (!downOnce.compareAndSet(false, true)) return
         lifecycle.close()
         try {
             releaseWatchers()
-            BridgeLog.w(TAG) { "iroh paths at link down ($reason): ${paths.describe()}" }
+            BridgeLog.w(TAG) { "iroh paths at link down (${reason.wire}${detail?.let { ": $it" }.orEmpty()}): ${paths.describe()}" }
             route = null
-            runCatching { connection?.close(0, reason.toByteArray(Charsets.UTF_8)) }
+            // The peer reads this close text: a typed reason keeps its wire
+            // spelling, and an unnamed native close is echoed back unchanged.
+            val closeText = detail ?: reason.wire
+            runCatching { connection?.close(0, closeText.toByteArray(Charsets.UTF_8)) }
             controlOutbound.close()
             audioOutbound.close()
-            listener.onLinkDown(reason)
+            listener.onLinkDown(reason, detail)
         } finally {
             admission.finish()
             scope.cancel()
@@ -443,4 +448,16 @@ internal class IrohLink(
             }
         }
     }
+}
+
+/**
+ * The typed link-down for a transport's own close text.  A text that spells a
+ * known reason keeps that reason and no detail; anything else is
+ * [LinkDownReason.OTHER] with the original text kept as its detail, so the
+ * words a peer sent survive into diagnostics.  Empty text is [LinkDownReason.CLOSED],
+ * the substitution the transports have always made.
+ */
+internal fun fromNativeClose(text: String): Pair<LinkDownReason, String?> {
+    val reason = LinkDownReason.fromNativeClose(text)
+    return reason to text.takeIf { reason == LinkDownReason.OTHER }
 }

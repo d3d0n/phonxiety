@@ -13,6 +13,7 @@ import com.phonxiety.bridge.model.ControlEnvelope
 import com.phonxiety.bridge.model.DeviceActiveCall
 import com.phonxiety.bridge.model.DeviceOutbound
 import com.phonxiety.bridge.model.DeviceProtocol
+import com.phonxiety.bridge.model.LinkDownReason
 import com.phonxiety.bridge.model.LinkError
 import com.phonxiety.bridge.net.ApiExchange
 import com.phonxiety.bridge.net.IrohSupport
@@ -92,7 +93,7 @@ internal class LinkEvents(
         onBinary(bytes)
     }
 
-    override fun onLinkDown(reason: String) {
+    override fun onLinkDown(reason: LinkDownReason, detail: String?) {
         hello.lastRouteKey = null
         hello.delivered = false
         linkGeneration.incrementAndGet()
@@ -100,22 +101,16 @@ internal class LinkEvents(
         requests.linkDown()
         capabilityWatch.helloGone()
         settings.applyWifiLock()
-        store.linkDown(LinkError(code = reason, message = linkMessage(reason), atEpochMs = System.currentTimeMillis()))
+        store.linkDown(
+            LinkError(
+                code = reason.wire,
+                message = linkMessage(reason, detail),
+                atEpochMs = System.currentTimeMillis(),
+                reason = reason,
+                detail = detail
+            )
+        )
         onLinkDown()
-    }
-
-    private fun linkMessage(reason: String): String = when (reason) {
-        "host_timeout" -> "the daemon stopped answering"
-        "connect_failed" -> "cannot reach the daemon"
-        "network_changed" -> "the network changed"
-        "network_lost" -> "the network is gone"
-        "connection_mode_changed" -> "the connection mode changed"
-        "candidate_better" -> "a better path was measured"
-        "capabilities_changed" -> "the phone's call permissions changed"
-        "closed", "closing" -> "the daemon closed the link"
-        "protocol" -> "the daemon spoke an unknown protocol"
-        "write_failed" -> "the link stopped accepting data"
-        else -> reason
     }
 
     private fun onText(text: String) {
@@ -230,4 +225,33 @@ internal class LinkEvents(
         hello.lastRouteKey = key
         store.route(RouteSnapshot(route.relay, route.rttMs))
     }
+}
+
+/**
+ * The one sentence a user reads for a transport link-down.  Exhaustive over
+ * [LinkDownReason] with no `else`, so a new reason cannot ship without its
+ * words.  [detail] is the native close text behind [LinkDownReason.OTHER] and
+ * is what the old free-string fallback showed.
+ */
+internal fun linkMessage(reason: LinkDownReason, detail: String?): String = when (reason) {
+    LinkDownReason.HOST_TIMEOUT -> "the daemon stopped answering"
+    LinkDownReason.CONNECT_FAILED -> "cannot reach the daemon"
+    LinkDownReason.CONNECT_TIMEOUT -> "the connection attempt timed out"
+    LinkDownReason.HELLO_FAILED -> "the link could not complete its handshake"
+    LinkDownReason.CLOSED, LinkDownReason.CLOSING -> "the daemon closed the link"
+    LinkDownReason.PROTOCOL -> "the daemon spoke an unknown protocol"
+    LinkDownReason.WRITE_FAILED -> "the link stopped accepting data"
+    LinkDownReason.RELAY_ONLY -> "no direct path is available, only a relay"
+    LinkDownReason.CONTROL_BACKLOG -> "the link stopped taking messages"
+    LinkDownReason.NETWORK_CHANGED -> "the network changed"
+    LinkDownReason.NETWORK_LOST -> "the network is gone"
+    LinkDownReason.CONNECTION_MODE_CHANGED -> "the connection mode changed"
+    LinkDownReason.CANDIDATE_BETTER -> "a better path was measured"
+    LinkDownReason.CAPABILITIES_CHANGED -> "the phone's call permissions changed"
+    LinkDownReason.INVALID_URL -> "the link address is not valid"
+    LinkDownReason.FAILURE -> "the link failed"
+    LinkDownReason.CREATION_FAILED -> "the link could not be created"
+    LinkDownReason.NO_CANDIDATE -> "no connection path is known"
+    LinkDownReason.IROH_UNAVAILABLE -> "this connection route is not available"
+    LinkDownReason.OTHER -> detail?.takeIf { it.isNotBlank() } ?: "the link closed for an unknown reason"
 }

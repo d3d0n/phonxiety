@@ -2,6 +2,7 @@ package com.phonxiety.bridge.net
 
 import com.phonxiety.bridge.model.AttachmentControl
 import com.phonxiety.bridge.model.ControlEnvelope
+import com.phonxiety.bridge.model.LinkDownReason
 import computer.iroh.Connection
 import computer.iroh.RecvStream
 import java.util.concurrent.atomic.AtomicBoolean
@@ -31,23 +32,23 @@ internal suspend fun readIrohFrames(
     stream: FrameStream,
     tap: FrameTapSink,
     listener: DeviceLink.Listener,
-    fail: (String) -> Unit
+    fail: (LinkDownReason) -> Unit
 ) {
     try {
         while (true) {
             val header = source.read(Framing.HEADER_BYTES)
             if (header.size != Framing.HEADER_BYTES) {
-                fail("closed")
+                fail(LinkDownReason.CLOSED)
                 return
             }
             val parsed = Framing.parse(header)
             if (parsed == null || parsed.kind != expectedKind) {
-                fail("protocol")
+                fail(LinkDownReason.PROTOCOL)
                 return
             }
             val payload = source.read(parsed.length)
             if (payload.size != parsed.length) {
-                fail("closed")
+                fail(LinkDownReason.CLOSED)
                 return
             }
             if (tap.enabled) tap.frame(FrameDirection.IN, stream, parsed.kind, parsed.length)
@@ -58,7 +59,7 @@ internal suspend fun readIrohFrames(
             }
         }
     } catch (t: Throwable) {
-        fail("closed")
+        fail(LinkDownReason.CLOSED)
     }
 }
 
@@ -67,12 +68,12 @@ internal suspend fun readIrohAudio(
     link: Connection,
     tap: FrameTapSink,
     listener: DeviceLink.Listener,
-    fail: (String) -> Unit
+    fail: (LinkDownReason) -> Unit
 ) {
     val incoming = try {
         link.acceptUni()
     } catch (t: Throwable) {
-        fail("closed")
+        fail(LinkDownReason.CLOSED)
         return
     }
     readIrohFrames(incoming.asFrameSource(), Framing.KIND_BINARY, FrameStream.AUDIO, tap, listener, fail)

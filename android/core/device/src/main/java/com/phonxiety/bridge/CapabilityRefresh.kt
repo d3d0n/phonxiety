@@ -1,5 +1,7 @@
 package com.phonxiety.bridge
 
+import com.phonxiety.bridge.model.LinkDownReason
+
 /**
  * Turns a stable capability change into one link refresh.
  *
@@ -16,7 +18,7 @@ internal class CapabilityRefresh(
     private val admission: CallAdmission,
     private val callOwned: () -> Boolean,
     private val sample: () -> PhoneCapabilities,
-    private val reconnect: (reason: String) -> Boolean
+    private val reconnect: (reason: LinkDownReason) -> Boolean
 ) {
     /**
      * One sample; true when the link was dropped so the next attempt sends a
@@ -35,6 +37,6 @@ internal class CapabilityRefresh(
 
     companion object {
         /** Link-down reason: only a fresh hello can tell the daemon otherwise. */
-        const val CAPABILITIES_CHANGED = "capabilities_changed"
+        val CAPABILITIES_CHANGED = LinkDownReason.CAPABILITIES_CHANGED
     }
 }

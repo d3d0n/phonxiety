@@ -1,5 +1,6 @@
 package com.phonxiety.bridge.net
 
+import com.phonxiety.bridge.model.LinkDownReason
 import java.io.File
 import java.nio.file.Files
 import kotlinx.coroutines.CoroutineScope
@@ -16,7 +17,7 @@ class IrohFrameReadTest {
     private class Listener : DeviceLink.Listener {
         val texts = mutableListOf<String>()
         val binaries = mutableListOf<ByteArray>()
-        val downs = mutableListOf<String>()
+        val downs = mutableListOf<LinkDownReason>()
 
         override fun onLinkOpened() = Unit
 
@@ -28,7 +29,7 @@ class IrohFrameReadTest {
             binaries += bytes.toByteArray()
         }
 
-        override fun onLinkDown(reason: String) {
+        override fun onLinkDown(reason: LinkDownReason, detail: String?) {
             downs += reason
         }
     }
@@ -49,7 +50,7 @@ class IrohFrameReadTest {
             fail = { text.downs += it }
         )
         assertEquals(listOf("""{"type":"command"}"""), text.texts)
-        assertEquals(listOf("closed"), text.downs)
+        assertEquals(listOf(LinkDownReason.CLOSED), text.downs)
 
         val audio = Listener()
         readIrohFrames(
@@ -75,7 +76,7 @@ class IrohFrameReadTest {
             listener = listener,
             fail = { listener.downs += it }
         )
-        assertEquals(listOf("protocol"), listener.downs)
+        assertEquals(listOf(LinkDownReason.PROTOCOL), listener.downs)
         assertEquals(emptyList<ByteArray>(), listener.binaries)
     }
 
@@ -90,7 +91,7 @@ class IrohFrameReadTest {
             listener = listener,
             fail = { listener.downs += it }
         )
-        assertEquals(listOf("closed"), listener.downs)
+        assertEquals(listOf(LinkDownReason.CLOSED), listener.downs)
     }
 
     @Test

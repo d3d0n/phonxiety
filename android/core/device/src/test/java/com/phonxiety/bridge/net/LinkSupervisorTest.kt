@@ -1,5 +1,6 @@
 package com.phonxiety.bridge.net
 
+import com.phonxiety.bridge.model.LinkDownReason
 import com.phonxiety.bridge.model.LinkKind
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.runBlocking
@@ -39,7 +40,7 @@ class LinkSupervisorTest {
 
         val delays = mutableListOf<Long>()
         repeat(5) {
-            factory.last().down("closed")
+            factory.last().down(LinkDownReason.CLOSED)
             delays += scheduler.scheduledDelays.last()
             scheduler.advance(scheduler.scheduledDelays.last())
         }
@@ -53,7 +54,7 @@ class LinkSupervisorTest {
         assertTrue(supervisor.isUp())
         assertEquals(1, calls.opened.size)
 
-        factory.last().down("closed")
+        factory.last().down(LinkDownReason.CLOSED)
         assertEquals(1_000L, scheduler.scheduledDelays.last())
     }
 
@@ -62,10 +63,10 @@ class LinkSupervisorTest {
         val supervisor = supervisor()
         supervisor.start()
         repeat(3) {
-            factory.last().down("connect_failed")
+            factory.last().down(LinkDownReason.CONNECT_FAILED)
             scheduler.advance(scheduler.scheduledDelays.last())
         }
-        factory.last().down("connect_failed") // now waiting 8 s
+        factory.last().down(LinkDownReason.CONNECT_FAILED) // now waiting 8 s
         assertEquals(8_000L, scheduler.scheduledDelays.last())
         val attempts = factory.created.size
 
@@ -74,7 +75,7 @@ class LinkSupervisorTest {
         scheduler.advance(8_000) // the cancelled wait must not start a second attempt
         assertEquals(attempts + 1, factory.created.size)
 
-        factory.last().down("connect_failed")
+        factory.last().down(LinkDownReason.CONNECT_FAILED)
         assertEquals(1_000L, scheduler.scheduledDelays.last())
     }
 
@@ -86,7 +87,7 @@ class LinkSupervisorTest {
         first.open()
         assertEquals(1, calls.opened.size)
 
-        first.down("closed")
+        first.down(LinkDownReason.CLOSED)
         scheduler.advance(1_000)
         val second = factory.last()
         assertTrue(second !== first)
@@ -97,11 +98,11 @@ class LinkSupervisorTest {
         // report the current link down.
         first.text("""{"type":"command"}""")
         first.binary(ByteArray(16).toByteString())
-        first.down("closed")
+        first.down(LinkDownReason.CLOSED)
 
         assertEquals(emptyList<String>(), calls.texts)
         assertEquals(0, calls.binaries.size)
-        assertEquals(listOf("closed"), calls.downs)
+        assertEquals(listOf(LinkDownReason.CLOSED), calls.downs)
         assertTrue(supervisor.isUp())
         assertEquals(1, scheduler.reconnectDelays.size)
 
@@ -126,12 +127,12 @@ class LinkSupervisorTest {
         // 10 s after that message is still within the deadline.
         clock.now = 15_000
         supervisor.tick()
-        assertEquals(emptyList<String>(), calls.downs)
+        assertEquals(emptyList<LinkDownReason>(), calls.downs)
         assertTrue(supervisor.isUp())
 
         clock.now = 15_001
         supervisor.tick()
-        assertEquals(listOf("host_timeout"), calls.downs)
+        assertEquals(listOf(LinkDownReason.HOST_TIMEOUT), calls.downs)
         assertFalse(supervisor.isUp())
         assertEquals(1, link.cancelling)
     }
@@ -157,7 +158,7 @@ class LinkSupervisorTest {
         assertFalse(supervisor.sendFrame(ByteArray(4), 4))
         assertEquals(listOf(4), link.sentFrameLengths)
 
-        link.down("closed")
+        link.down(LinkDownReason.CLOSED)
         assertFalse(supervisor.sendFrame(ByteArray(4), 4))
         assertFalse(supervisor.sendText("{}"))
         assertEquals(listOf(4), link.sentFrameLengths)
@@ -220,7 +221,7 @@ class LinkSupervisorTest {
         val failed = factory.last()
         failed.open()
 
-        assertEquals(listOf("hello_failed"), calls.downs)
+        assertEquals(listOf(LinkDownReason.HELLO_FAILED), calls.downs)
         assertFalse(supervisor.isUp())
         assertEquals(1, failed.cancelling)
         // Nothing slips into the gap a refused hello left behind.
@@ -235,7 +236,7 @@ class LinkSupervisorTest {
         factory.last().open()
         assertTrue(supervisor.sendText("{}"))
 
-        factory.last().down("closed")
+        factory.last().down(LinkDownReason.CLOSED)
         assertFalse(supervisor.sendText("{}"))
 
         scheduler.advance(LinkSupervisor.RECONNECT_BASE_MS)
@@ -255,7 +256,7 @@ class LinkSupervisorTest {
         val failed = factory.last()
         failed.open()
 
-        assertEquals(listOf("hello_failed"), calls.downs)
+        assertEquals(listOf(LinkDownReason.HELLO_FAILED), calls.downs)
         assertFalse(supervisor.isUp())
         assertEquals(1, failed.cancelling)
         assertEquals(listOf(1_000L), scheduler.reconnectDelays)
@@ -270,11 +271,11 @@ class LinkSupervisorTest {
         assertEquals(1, scheduler.pendingCount)
 
         scheduler.advance(LinkSupervisor.ATTEMPT_TIMEOUT_MS - 1)
-        assertEquals(emptyList<String>(), calls.downs)
+        assertEquals(emptyList<LinkDownReason>(), calls.downs)
         assertEquals(0, attempt.cancelling)
 
         scheduler.advance(1)
-        assertEquals(listOf("connect_timeout"), calls.downs)
+        assertEquals(listOf(LinkDownReason.CONNECT_TIMEOUT), calls.downs)
         assertEquals(1, attempt.cancelling)
         // Only the backoff is left: the deadline is gone with the attempt.
         assertEquals(listOf(LinkSupervisor.ATTEMPT_TIMEOUT_MS, 1_000L), scheduler.scheduledDelays)
@@ -288,7 +289,7 @@ class LinkSupervisorTest {
         assertTrue(supervisor.isUp())
         assertEquals(0, scheduler.pendingCount)
         scheduler.advance(LinkSupervisor.ATTEMPT_TIMEOUT_MS * 3)
-        assertEquals(listOf("connect_timeout"), calls.downs)
+        assertEquals(listOf(LinkDownReason.CONNECT_TIMEOUT), calls.downs)
         assertTrue(supervisor.isUp())
     }
 
@@ -300,7 +301,7 @@ class LinkSupervisorTest {
         supervisor.start()
 
         assertEquals(0, throwing.created.size)
-        assertEquals(emptyList<String>(), calls.downs)
+        assertEquals(emptyList<LinkDownReason>(), calls.downs)
         assertEquals(listOf(1_000L), scheduler.scheduledDelays)
 
         // The failure doubles the backoff like any other attempt.
@@ -316,7 +317,7 @@ class LinkSupervisorTest {
 
         // A throw after a working link is one more failed attempt.
         throwing.fail = true
-        throwing.last().down("closed")
+        throwing.last().down(LinkDownReason.CLOSED)
         assertEquals(1_000L, scheduler.scheduledDelays.last())
         scheduler.advance(1_000)
         assertEquals(1, throwing.created.size)
@@ -341,7 +342,7 @@ class LinkSupervisorTest {
 
         assertTrue(supervisor.isUp())
         assertEquals(listOf(Unit), calls.opened)
-        assertEquals(emptyList<String>(), calls.downs)
+        assertEquals(emptyList<LinkDownReason>(), calls.downs)
         assertEquals(0, attempt.cancelling)
         assertEquals(0, scheduler.pendingCount)
     }
@@ -353,7 +354,7 @@ class LinkSupervisorTest {
         val attempt = factory.last()
 
         scheduler.advance(LinkSupervisor.ATTEMPT_TIMEOUT_MS)
-        assertEquals(listOf("connect_timeout"), calls.downs)
+        assertEquals(listOf(LinkDownReason.CONNECT_TIMEOUT), calls.downs)
         assertEquals(1, attempt.cancelling)
         assertFalse(supervisor.isUp())
 
@@ -362,7 +363,7 @@ class LinkSupervisorTest {
         assertEquals(2, attempt.cancelling)
         assertEquals(0, calls.opened.size)
         assertFalse(supervisor.isUp())
-        assertEquals(listOf("connect_timeout"), calls.downs)
+        assertEquals(listOf(LinkDownReason.CONNECT_TIMEOUT), calls.downs)
 
         // The successor dials normally; the late open did not take its slot.
         scheduler.advance(1_000)
@@ -380,7 +381,7 @@ class LinkSupervisorTest {
         val failed = factory.last()
         failed.open()
 
-        assertEquals(listOf("hello_failed"), calls.downs)
+        assertEquals(listOf(LinkDownReason.HELLO_FAILED), calls.downs)
         assertFalse(supervisor.isUp())
         // The failed transport is cancelled, not left running beside the re-dial.
         assertEquals(1, failed.cancelling)
@@ -408,8 +409,8 @@ class LinkSupervisorTest {
         assertFalse(supervisor.isUp())
 
         // A late down after cancel reports nothing and schedules nothing.
-        link.down("closed")
-        assertEquals(emptyList<String>(), calls.downs)
+        link.down(LinkDownReason.CLOSED)
+        assertEquals(emptyList<LinkDownReason>(), calls.downs)
         assertEquals(0, scheduler.reconnectDelays.size)
         assertEquals(1, factory.created.size)
 
@@ -430,7 +431,7 @@ class LinkSupervisorTest {
         supervisor.cancel()
         assertEquals(0, scheduler.pendingCount)
         scheduler.advance(LinkSupervisor.ATTEMPT_TIMEOUT_MS * 2)
-        assertEquals(emptyList<String>(), calls.downs)
+        assertEquals(emptyList<LinkDownReason>(), calls.downs)
         assertEquals(1, factory.created.size)
     }
 
@@ -448,7 +449,7 @@ class LinkSupervisorTest {
         calls.helloQueued = false
         supervisor.start()
         factory.last().open()
-        assertEquals(listOf("hello_failed"), calls.downs)
+        assertEquals(listOf(LinkDownReason.HELLO_FAILED), calls.downs)
         scheduler.advance(scheduler.reconnectDelays.last())
 
         // ...and `connect_failed` can arrive after QUIC connected too.
@@ -456,7 +457,7 @@ class LinkSupervisorTest {
         repeat(2) {
             val link = factory.last()
             link.open()
-            link.down("connect_failed")
+            link.down(LinkDownReason.CONNECT_FAILED)
             scheduler.advance(scheduler.reconnectDelays.last())
         }
 
@@ -475,15 +476,15 @@ class LinkSupervisorTest {
         // an attempt that is no longer current and must change nothing.
         repeat(2) {
             val link = factory.last()
-            link.down("connect_failed")
-            link.down("closed")
+            link.down(LinkDownReason.CONNECT_FAILED)
+            link.down(LinkDownReason.CLOSED)
             scheduler.advance(scheduler.reconnectDelays.last())
         }
         assertEquals(2, factory.outcomes.count { it.first == AttemptOutcome.FAILED_BEFORE_OPEN })
         assertFalse(budget.pending())
 
         // The third real failure is the one that trips: duplicates never counted.
-        factory.last().down("connect_failed")
+        factory.last().down(LinkDownReason.CONNECT_FAILED)
         assertTrue(budget.pending())
         assertEquals(3, factory.outcomes.count { it.first == AttemptOutcome.FAILED_BEFORE_OPEN })
     }
@@ -514,21 +515,21 @@ class LinkSupervisorTest {
         // iroh, LAN, iroh, Tailscale, iroh: three iroh failures trip, the LAN
         // failures neither add to the streak nor reset it.  The kind is fixed
         // when the attempt is created, so it is set before the reconnect.
-        factory.last().down("connect_failed")
+        factory.last().down(LinkDownReason.CONNECT_FAILED)
         factory.kind = LinkKind.WEBSOCKET
         scheduler.advance(scheduler.reconnectDelays.last())
-        factory.last().down("connect_failed")
+        factory.last().down(LinkDownReason.CONNECT_FAILED)
         factory.kind = LinkKind.IROH
         scheduler.advance(scheduler.reconnectDelays.last())
-        factory.last().down("connect_failed")
+        factory.last().down(LinkDownReason.CONNECT_FAILED)
         factory.kind = LinkKind.TAILSCALE
         scheduler.advance(scheduler.reconnectDelays.last())
-        factory.last().down("connect_failed")
+        factory.last().down(LinkDownReason.CONNECT_FAILED)
         assertFalse(budget.pending())
 
         factory.kind = LinkKind.IROH
         scheduler.advance(scheduler.reconnectDelays.last())
-        factory.last().down("connect_failed")
+        factory.last().down(LinkDownReason.CONNECT_FAILED)
         assertTrue(budget.pending())
     }
 
@@ -604,11 +605,11 @@ class LinkSupervisorTest {
 
         factory.last().open()
         // The engine moves the live link to another candidate; the replacements fail before opening.
-        assertTrue(supervisor.reconnect("connection_mode"))
+        assertTrue(supervisor.reconnect(LinkDownReason.CONNECTION_MODE_CHANGED))
         scheduler.advance(scheduler.reconnectDelays.last())
-        factory.last().down("connect_failed")
+        factory.last().down(LinkDownReason.CONNECT_FAILED)
         scheduler.advance(scheduler.reconnectDelays.last())
-        factory.last().down("connect_failed")
+        factory.last().down(LinkDownReason.CONNECT_FAILED)
         scheduler.advance(scheduler.reconnectDelays.last())
         scheduler.advance(LinkSupervisor.ATTEMPT_TIMEOUT_MS)
 
@@ -688,7 +689,7 @@ class LinkSupervisorTest {
         val opened = mutableListOf<Unit>()
         val texts = mutableListOf<String>()
         val binaries = mutableListOf<ByteString>()
-        val downs = mutableListOf<String>()
+        val downs = mutableListOf<LinkDownReason>()
 
         /** The engine's supervisor; the test wires it before start(). */
         lateinit var supervisor: LinkSupervisor
@@ -716,7 +717,7 @@ class LinkSupervisorTest {
             binaries += bytes
         }
 
-        override fun onLinkDown(reason: String) {
+        override fun onLinkDown(reason: LinkDownReason, detail: String?) {
             downs += reason
         }
     }
@@ -855,6 +856,6 @@ class LinkSupervisorTest {
 
         fun binary(bytes: ByteString) = listener!!.onLinkBinary(bytes)
 
-        fun down(reason: String) = listener!!.onLinkDown(reason)
+        fun down(reason: LinkDownReason) = listener!!.onLinkDown(reason)
     }
 }

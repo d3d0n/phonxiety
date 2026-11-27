@@ -2,6 +2,7 @@ package com.phonxiety.bridge
 
 import com.phonxiety.bridge.model.DeviceOutbound
 import com.phonxiety.bridge.model.DeviceProtocol
+import com.phonxiety.bridge.model.LinkDownReason
 import com.phonxiety.bridge.net.DeviceLink
 import com.phonxiety.bridge.net.DeviceLinkFactory
 import com.phonxiety.bridge.net.LinkScheduler
@@ -31,7 +32,7 @@ class CapabilityWatchTest {
     private val factory = TestFactory()
     private val admission = CallAdmission()
     private val watch = CapabilityWatch()
-    private val downs = mutableListOf<String>()
+    private val downs = mutableListOf<LinkDownReason>()
 
     /** What the 10 s permission sample would read. */
     private var sample = PhoneCapabilities(callControl = true, frameworkAudio = false)
@@ -60,7 +61,7 @@ class CapabilityWatchTest {
 
         override fun onLinkBinary(bytes: ByteString) {}
 
-        override fun onLinkDown(reason: String) {
+        override fun onLinkDown(reason: LinkDownReason, detail: String?) {
             downs += reason
             watch.helloGone()
         }
@@ -120,7 +121,7 @@ class CapabilityWatchTest {
         repeat(3) { assertFalse(refresh.run()) }
 
         assertEquals(1, factory.created.size)
-        assertEquals(emptyList<String>(), downs)
+        assertEquals(emptyList<LinkDownReason>(), downs)
         assertTrue(supervisor.isUp())
     }
 
@@ -138,7 +139,7 @@ class CapabilityWatchTest {
         }
 
         assertEquals(1, factory.created.size)
-        assertEquals(emptyList<String>(), downs)
+        assertEquals(emptyList<LinkDownReason>(), downs)
         assertTrue(supervisor.isUp())
     }
 
@@ -186,14 +187,14 @@ class CapabilityWatchTest {
         assertFalse(refresh.run())
         assertFalse(refresh.run())
         assertTrue(supervisor.isUp())
-        assertEquals(emptyList<String>(), downs)
+        assertEquals(emptyList<LinkDownReason>(), downs)
 
         // Reverted before the call ended: the next sample must not refresh.
         sample = PhoneCapabilities(callControl = true, frameworkAudio = false)
         callOwned = false
         assertFalse(refresh.run())
         assertTrue(supervisor.isUp())
-        assertEquals(emptyList<String>(), downs)
+        assertEquals(emptyList<LinkDownReason>(), downs)
 
         // Still different at the next samples after the call: now it refreshes.
         sample = PhoneCapabilities(callControl = false, frameworkAudio = true)
@@ -208,7 +209,7 @@ class CapabilityWatchTest {
         callOwned = true
         sample = PhoneCapabilities(callControl = false, frameworkAudio = true)
         repeat(3) { assertFalse(refresh.run()) }
-        assertEquals(emptyList<String>(), downs)
+        assertEquals(emptyList<LinkDownReason>(), downs)
 
         // The candidate already has its two agreeing samples; the first tick
         // after the call is admitted and refreshes.
@@ -232,7 +233,7 @@ class CapabilityWatchTest {
             // Nor may a second sample drop the link on top of the first.
             assertFalse(refresh.run())
             assertTrue(supervisor.isUp())
-            assertEquals(emptyList<String>(), downs)
+            assertEquals(emptyList<LinkDownReason>(), downs)
         } finally {
             action!!.close()
         }
@@ -246,8 +247,8 @@ class CapabilityWatchTest {
     fun aChangeWhileDownIsLeftToTheNextHello() {
         openLink()
         sample = PhoneCapabilities(callControl = false, frameworkAudio = true)
-        factory.last().down("network_lost")
-        assertEquals(listOf("network_lost"), downs)
+        factory.last().down(LinkDownReason.NETWORK_LOST)
+        assertEquals(listOf(LinkDownReason.NETWORK_LOST), downs)
 
         // Nothing to refresh while down; the next hello reads the sample itself.
         assertFalse(refresh.run())
@@ -255,7 +256,7 @@ class CapabilityWatchTest {
         factory.last().open()
 
         assertTrue(helloOf(factory.last()).capabilities.frameworkAudio)
-        assertEquals(listOf("network_lost"), downs)
+        assertEquals(listOf(LinkDownReason.NETWORK_LOST), downs)
     }
 
     // ------------------------------------------------------------------
@@ -325,6 +326,6 @@ class CapabilityWatchTest {
 
         fun open() = listener!!.onLinkOpened()
 
-        fun down(reason: String) = listener!!.onLinkDown(reason)
+        fun down(reason: LinkDownReason) = listener!!.onLinkDown(reason)
     }
 }

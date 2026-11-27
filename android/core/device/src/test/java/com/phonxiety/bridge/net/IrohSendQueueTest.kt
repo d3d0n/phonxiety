@@ -1,5 +1,6 @@
 package com.phonxiety.bridge.net
 
+import com.phonxiety.bridge.model.LinkDownReason
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -191,10 +192,10 @@ class IrohSendQueueTest {
      */
     @Test
     fun aFullControlQueueSchedulesOneBacklogFailure() {
-        assertEquals("control_backlog", IrohControlSender.BACKLOG_REASON)
+        assertEquals(LinkDownReason.CONTROL_BACKLOG, IrohControlSender.BACKLOG_REASON)
         val queue = IrohSendQueue(IrohSendQueue.CONTROL_CAPACITY, backlog)
         val tasks = mutableListOf<() -> Unit>()
-        val reasons = Collections.synchronizedList(mutableListOf<String>())
+        val reasons = Collections.synchronizedList(mutableListOf<LinkDownReason>())
         val reportThread = AtomicReference<Thread?>(null)
         val sender = IrohControlSender(
             queue = queue,
@@ -229,7 +230,7 @@ class IrohSendQueueTest {
     fun aClosedControlQueueSchedulesNoBacklogFailure() {
         val queue = IrohSendQueue(IrohSendQueue.CONTROL_CAPACITY, backlog)
         val tasks = mutableListOf<() -> Unit>()
-        val reasons = mutableListOf<String>()
+        val reasons = mutableListOf<LinkDownReason>()
         val sender = IrohControlSender(queue, schedule = { tasks += it }, reportDown = { reasons += it })
 
         queue.close()

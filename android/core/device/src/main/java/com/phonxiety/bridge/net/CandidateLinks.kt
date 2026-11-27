@@ -4,6 +4,7 @@ import android.content.Context
 import com.phonxiety.bridge.BridgeConfig
 import com.phonxiety.bridge.BridgeLog
 import com.phonxiety.bridge.IdleLinkAction
+import com.phonxiety.bridge.model.LinkDownReason
 import com.phonxiety.bridge.model.LinkKind
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -121,13 +122,13 @@ internal class CandidateLinkFactory(
         if (candidate == null) {
             selected = null
             // No candidate at all: an iroh pairing can still be built from its ticket.
-            return irohFactory?.create() ?: ProbeFailureLink("no_candidate")
+            return irohFactory?.create() ?: ProbeFailureLink(LinkDownReason.NO_CANDIDATE)
         }
         BridgeLog.d(TAG) { "link candidate ${candidate.label} (${decision.reason})" }
         current = candidate
         selected = SelectedCandidate(candidate.kind, candidate.host)
         val link = when (candidate.kind) {
-            LinkKind.IROH -> irohFactory?.create() ?: ProbeFailureLink("iroh_unavailable")
+            LinkKind.IROH -> irohFactory?.create() ?: ProbeFailureLink(LinkDownReason.IROH_UNAVAILABLE)
             else -> addressFactory(candidate).create()
         }
         return ReportingLink(candidate, link)
@@ -243,9 +244,9 @@ internal class CandidateLinkFactory(
 
                     override fun onLinkBinary(bytes: ByteString) = listener.onLinkBinary(bytes)
 
-                    override fun onLinkDown(reason: String) {
+                    override fun onLinkDown(reason: LinkDownReason, detail: String?) {
                         noteDown(candidate)
-                        listener.onLinkDown(reason)
+                        listener.onLinkDown(reason, detail)
                     }
                 }
             )
@@ -265,7 +266,7 @@ internal class CandidateLinkFactory(
     }
 
     /** A link that fails at once with [reason]; used when no transport could be built. */
-    private class ProbeFailureLink(private val reason: String) : DeviceLink {
+    private class ProbeFailureLink(private val reason: LinkDownReason) : DeviceLink {
         override val backlogBytes: Long get() = 0L
 
         override fun start(listener: DeviceLink.Listener) {

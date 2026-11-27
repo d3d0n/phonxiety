@@ -1,6 +1,7 @@
 package com.phonxiety.bridge.net
 
 import com.phonxiety.bridge.BridgeConfig
+import com.phonxiety.bridge.model.LinkDownReason
 import java.util.Collections
 import java.util.concurrent.atomic.AtomicBoolean
 import okhttp3.Protocol
@@ -61,7 +62,7 @@ class WebSocketLinkTest {
 
             override fun onLinkBinary(bytes: ByteString) = Unit
 
-            override fun onLinkDown(reason: String) {
+            override fun onLinkDown(reason: LinkDownReason, detail: String?) {
                 downThreads += Thread.currentThread()
             }
         }

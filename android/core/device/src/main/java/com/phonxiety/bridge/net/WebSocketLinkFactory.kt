@@ -2,6 +2,7 @@ package com.phonxiety.bridge.net
 
 import android.annotation.SuppressLint
 import com.phonxiety.bridge.BridgeConfig
+import com.phonxiety.bridge.model.LinkDownReason
 import java.security.MessageDigest
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
@@ -206,7 +207,7 @@ internal class WebSocketLink(
                 .header("Authorization", "Bearer ${config.token}")
                 .build()
         } catch (_: Exception) {
-            down(listener, "invalid_url")
+            down(listener, LinkDownReason.INVALID_URL)
             return
         }
         val adapter = object : WebSocketListener() {
@@ -231,21 +232,21 @@ internal class WebSocketLink(
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                 runCatching { webSocket.close(1000, null) }
-                down(listener, "closing")
+                down(listener, LinkDownReason.CLOSING)
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                down(listener, "closed")
+                down(listener, LinkDownReason.CLOSED)
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                down(listener, "failure")
+                down(listener, LinkDownReason.FAILURE)
             }
         }
         val created = try {
             connect(request, adapter)
         } catch (_: Exception) {
-            down(listener, "creation_failed")
+            down(listener, LinkDownReason.CREATION_FAILED)
             return
         }
         socket = created
@@ -271,7 +272,7 @@ internal class WebSocketLink(
         socket = null
     }
 
-    private fun down(listener: DeviceLink.Listener, reason: String) {
+    private fun down(listener: DeviceLink.Listener, reason: LinkDownReason) {
         if (!downOnce.compareAndSet(false, true)) return
         listener.onLinkDown(reason)
     }

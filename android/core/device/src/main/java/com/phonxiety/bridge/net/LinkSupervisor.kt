@@ -1,6 +1,7 @@
 package com.phonxiety.bridge.net
 
 import com.phonxiety.bridge.BridgeLog
+import com.phonxiety.bridge.model.LinkDownReason
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
@@ -53,7 +54,7 @@ internal class LinkSupervisor(
         /**
          * Called once the link is current and counted as live.  The engine
          * queues `hello` here through [sendHello] and returns whether that send
-         * was accepted; false reports the link down as `hello_failed`.
+         * was accepted; false reports the link down as [LinkDownReason.HELLO_FAILED].
          */
         fun onLinkOpened(): Boolean
 
@@ -65,9 +66,10 @@ internal class LinkSupervisor(
 
         /**
          * The link is down and no longer current.  The supervisor schedules
-         * the reconnect after this returns.
+         * the reconnect after this returns; [detail] is the native close text
+         * behind [LinkDownReason.OTHER], null for a typed reason.
          */
-        fun onLinkDown(reason: String)
+        fun onLinkDown(reason: LinkDownReason, detail: String?)
     }
 
     companion object {
@@ -255,7 +257,7 @@ internal class LinkSupervisor(
             link
         } ?: return
         BridgeLog.w(TAG, "host activity deadline expired")
-        handleDown(stale, "host_timeout")
+        handleDown(stale, LinkDownReason.HOST_TIMEOUT)
         runCatching { stale.cancel() }
     }
 
@@ -296,7 +298,7 @@ internal class LinkSupervisor(
             attempt.start(Listener(attempt))
         } catch (t: Throwable) {
             BridgeLog.w(TAG) { "link attempt start failed: ${t.javaClass.simpleName}" }
-            handleDown(attempt, "connect_failed")
+            handleDown(attempt, LinkDownReason.CONNECT_FAILED)
             runCatching { attempt.cancel() }
             return
         }
@@ -305,7 +307,7 @@ internal class LinkSupervisor(
 
     /**
      * Arms the one deadline for [owner]: an attempt that neither opens nor
-     * reports down inside [ATTEMPT_TIMEOUT_MS] is dropped as `connect_timeout`
+     * reports down inside [ATTEMPT_TIMEOUT_MS] is dropped as [LinkDownReason.CONNECT_TIMEOUT]
      * so the backoff re-dials.  A link that opened in the meantime keeps no
      * deadline at all.
      */
@@ -338,7 +340,7 @@ internal class LinkSupervisor(
             retireCurrentLocked()
         }
         if (!notify) return
-        notifyDown("connect_timeout")
+        notifyDown(LinkDownReason.CONNECT_TIMEOUT)
         runCatching { owner.cancel() }
     }
 
@@ -351,7 +353,7 @@ internal class LinkSupervisor(
     /**
      * Caller holds [lock] and the attempt is current: hands the slot back.
      * Clearing the deadline here is what keeps an open racing the deadline from
-     * being torn down as `connect_timeout`.
+     * being torn down as [LinkDownReason.CONNECT_TIMEOUT].
      */
     private fun retireCurrentLocked(): Boolean {
         link = null
@@ -395,7 +397,7 @@ internal class LinkSupervisor(
 
         override fun onLinkBinary(bytes: ByteString) = this@LinkSupervisor.handleBinary(owner, bytes)
 
-        override fun onLinkDown(reason: String) = this@LinkSupervisor.handleDown(owner, reason)
+        override fun onLinkDown(reason: LinkDownReason, detail: String?) = this@LinkSupervisor.handleDown(owner, reason, detail)
     }
 
     private fun handleOpen(owner: DeviceLink) {
@@ -440,7 +442,7 @@ internal class LinkSupervisor(
         if (!hello) {
             // The failed transport is cancelled too: nothing abandoned here may
             // keep readers, writers or subscriptions alive beside the reconnect.
-            handleDown(owner, "hello_failed")
+            handleDown(owner, LinkDownReason.HELLO_FAILED)
             runCatching { owner.cancel() }
         }
     }
@@ -461,7 +463,7 @@ internal class LinkSupervisor(
         callbacks.onLinkBinary(bytes)
     }
 
-    private fun handleDown(owner: DeviceLink, reason: String) {
+    private fun handleDown(owner: DeviceLink, reason: LinkDownReason, detail: String? = null) {
         val notify = synchronized(lock) {
             // Only the current attempt may report down.  A retired attempt that
             // surfaces late (e.g. after its deadline) is no longer the link, and
@@ -475,13 +477,13 @@ internal class LinkSupervisor(
             retireCurrentLocked()
         }
         if (!notify) return
-        notifyDown(reason)
+        notifyDown(reason, detail)
     }
 
     /** The slot is already given up: tell the engine and arm the backoff. */
-    private fun notifyDown(reason: String) {
-        BridgeLog.w(TAG, "device link down: $reason")
-        callbacks.onLinkDown(reason)
+    private fun notifyDown(reason: LinkDownReason, detail: String? = null) {
+        BridgeLog.w(TAG, "device link down: ${reason.wire}${detail?.let { " ($it)" }.orEmpty()}")
+        callbacks.onLinkDown(reason, detail)
         scheduleReconnect()
     }
 
@@ -523,7 +525,7 @@ internal class LinkSupervisor(
      * after the connection mode changed.  Reports down, so the reconnect runs
      * through the usual backoff; false when nothing is live.
      */
-    fun reconnect(reason: String): Boolean {
+    fun reconnect(reason: LinkDownReason): Boolean {
         val current = synchronized(lock) {
             if (!running || !linkUp) null else link
         } ?: return false

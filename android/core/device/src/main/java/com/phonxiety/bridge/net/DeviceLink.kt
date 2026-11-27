@@ -1,5 +1,6 @@
 package com.phonxiety.bridge.net
 
+import com.phonxiety.bridge.model.LinkDownReason
 import com.phonxiety.bridge.model.LinkKind
 import okio.ByteString
 
@@ -18,7 +19,12 @@ internal interface DeviceLink {
         fun onLinkOpened()
         fun onLinkText(text: String)
         fun onLinkBinary(bytes: ByteString)
-        fun onLinkDown(reason: String)
+
+        /**
+         * The link ended for [reason]; [detail] keeps a native close text the
+         * typed reason cannot name ([LinkDownReason.OTHER]) for diagnostics.
+         */
+        fun onLinkDown(reason: LinkDownReason, detail: String? = null)
     }
 
     /** Begins the connection attempt.  May call back before returning. */

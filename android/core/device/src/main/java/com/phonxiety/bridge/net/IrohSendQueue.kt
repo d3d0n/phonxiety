@@ -1,5 +1,6 @@
 package com.phonxiety.bridge.net
 
+import com.phonxiety.bridge.model.LinkDownReason
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.channels.Channel
@@ -122,11 +123,11 @@ internal enum class OfferResult { ACCEPTED, FULL, CLOSED }
 internal class IrohControlSender(
     private val queue: IrohSendQueue,
     private val schedule: (() -> Unit) -> Unit,
-    private val reportDown: (String) -> Unit
+    private val reportDown: (LinkDownReason) -> Unit
 ) {
     internal companion object {
         /** The link-down reason a full control queue reports. */
-        const val BACKLOG_REASON = "control_backlog"
+        val BACKLOG_REASON = LinkDownReason.CONTROL_BACKLOG
     }
 
     private val scheduled = AtomicBoolean(false)

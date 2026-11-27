@@ -6,6 +6,7 @@ import com.phonxiety.bridge.BridgeLog
 import com.phonxiety.bridge.PhoneSettings
 import com.phonxiety.bridge.PhoneSettingsStore
 import com.phonxiety.bridge.model.DeviceOutbound
+import com.phonxiety.bridge.model.LinkDownReason
 import com.phonxiety.bridge.net.ConnectionMode
 import com.phonxiety.bridge.net.IrohSupport
 import com.phonxiety.bridge.net.LinkSupervisor
@@ -73,7 +74,7 @@ internal class SettingsSync(
         applyWifiLock()
         // A new mode applies to the next attempt: the current link was chosen under the old one.
         if (modeChanged && !ownsCall()) {
-            runCatching { scheduler.execute { runCatching { links().reconnect("connection_mode_changed") } } }
+            runCatching { scheduler.execute { runCatching { links().reconnect(LinkDownReason.CONNECTION_MODE_CHANGED) } } }
         }
         if (push && hello.delivered && links().isUp() && (codecChanged || bitrateChanged)) {
             wire(
@@ -139,7 +140,7 @@ internal class SettingsSync(
     fun considerSwitch() {
         if (!isRunning() || !links().isUp() || ownsCall()) return
         if (ConnectionMode.of(phoneSettings.connectionMode) != ConnectionMode.AUTO) return
-        if (links().considerSwitch()) links().reconnect("candidate_better")
+        if (links().considerSwitch()) links().reconnect(LinkDownReason.CANDIDATE_BETTER)
     }
 
     /** The coroutine collector that keeps [phoneSettings] current while the engine runs. */
