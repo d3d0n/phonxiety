@@ -214,8 +214,8 @@ internal class IrohLink(
                 fail(listener, reason, detail)
             }
             scope.launch { echoDatagrams(link, { cancelled.get() }, { downOnce.get() }) }
-            // The 1 s path sample feeds the UI route and the supervisor's
-            // background direct-path probe; it is not a watchdog of its own.
+            // The 1 s path sample feeds the UI route and link selection's relay
+            // score; it is not a watchdog of its own.
             scope.launch { paths.sample(link) }
             // Android's default-network callback is the only network-change source.
             // The iroh-ffi `Endpoint.watchNetworkChange` wrapper is not used: it loops on
@@ -283,39 +283,27 @@ internal class IrohLink(
             BridgeLog.i(TAG, "${reason.wire}: a call or another link action owns the link, keeping the iroh endpoint")
             return
         }
-        when (network.admitRecycle(ownsCall())) {
-            IrohNetworkDecision.RECYCLE -> withAdmission(action) {
-                lifecycle.run(recycle = true) {
-                    BridgeLog.i(TAG, "${reason.wire}: recreating the iroh endpoint")
-                    fail(listener, reason)
-                }
-            }
-
-            IrohNetworkDecision.DURING_CALL -> {
-                BridgeLog.i(TAG, "${reason.wire} during a call: keeping the iroh endpoint")
-                action.release()
-            }
-
-            IrohNetworkDecision.HELD -> {
-                BridgeLog.i(TAG, "${reason.wire} inside the recycle cooldown: keeping the iroh link")
-                action.release()
-            }
+        // The policy is asked only while this link can still end: a callback
+        // that resumes after the link finished must not spend the cooldown the
+        // replacement link's own network change will need.
+        var decision: IrohNetworkDecision? = null
+        val admitted = admission.attachIf(action) {
+            network.admitRecycle(ownsCall()).also { decision = it } == IrohNetworkDecision.RECYCLE
         }
-    }
-
-    /**
-     * Runs [act] with [action] handed to the link's terminal transition: the
-     * winning failure releases it after the engine has seen the link down.
-     * A finished link has no transition left, so the token comes back here and
-     * null tells the caller nothing happened.
-     */
-    private fun <T> withAdmission(action: IdleLinkAction, act: () -> T): T? {
-        if (!admission.attach(action)) {
+        if (!admitted) {
             action.release()
-            return null
+            when (decision) {
+                IrohNetworkDecision.DURING_CALL -> BridgeLog.i(TAG, "${reason.wire} during a call: keeping the iroh endpoint")
+                IrohNetworkDecision.HELD -> BridgeLog.i(TAG, "${reason.wire} inside the recycle cooldown: keeping the iroh link")
+                IrohNetworkDecision.RECYCLE, null -> Unit
+            }
+            return
         }
         try {
-            return act()
+            lifecycle.run(recycle = true) {
+                BridgeLog.i(TAG, "${reason.wire}: recreating the iroh endpoint")
+                fail(listener, reason)
+            }
         } catch (t: Throwable) {
             // Nothing was published: give the door back instead of leaving it shut.
             admission.finish()

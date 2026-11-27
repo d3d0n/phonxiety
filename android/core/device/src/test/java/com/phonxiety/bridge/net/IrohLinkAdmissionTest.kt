@@ -30,7 +30,7 @@ class IrohLinkAdmissionTest {
         val token = admission.tryBeginIdleLinkAction { false }!!
         // The recycle took the token; the shutdown it started woke the closed
         // watcher, which won `downOnce` and is still inside the link-down callback.
-        assertTrue(gate.attach(token))
+        assertTrue(gate.attachIf(token) { true })
 
         val aboutToWait = CountDownLatch(1)
         val reserved = AtomicBoolean(false)
@@ -61,7 +61,7 @@ class IrohLinkAdmissionTest {
         val admission = CallAdmission()
         val gate = IrohLinkAdmission()
         val token = admission.tryBeginIdleLinkAction { false }!!
-        assertTrue(gate.attach(token))
+        assertTrue(gate.attachIf(token) { true })
 
         // The recycle's own fail() lost the terminal transition: it returns
         // without touching the gate.  Nothing opens the door.
@@ -81,7 +81,7 @@ class IrohLinkAdmissionTest {
         val gate = IrohLinkAdmission()
         var linkUp = true
         val token = admission.tryBeginIdleLinkAction { false }!!
-        assertTrue(gate.attach(token))
+        assertTrue(gate.attachIf(token) { true })
 
         // LinkSupervisor.handleDown drops the link under its lock before the
         // engine's callback runs; the transition then releases the token.
@@ -105,7 +105,7 @@ class IrohLinkAdmissionTest {
 
         var handled = false
         val token = admission.tryBeginIdleLinkAction { false }!!
-        if (gate.attach(token)) handled = true else token.release()
+        if (gate.attachIf(token) { true }) handled = true else token.release()
 
         assertFalse(handled)
         assertTrue(admission.awaitIdle(0))
@@ -119,7 +119,7 @@ class IrohLinkAdmissionTest {
         val admission = CallAdmission()
         val gate = IrohLinkAdmission()
         val token = admission.tryBeginIdleLinkAction { false }!!
-        assertTrue(gate.attach(token))
+        assertTrue(gate.attachIf(token) { true })
 
         gate.finish()
         gate.finish()
@@ -129,7 +129,7 @@ class IrohLinkAdmissionTest {
         // A finished link refuses every later token; its caller releases it, so
         // the next action can still be admitted.
         val later = admission.tryBeginIdleLinkAction { false }!!
-        assertFalse(gate.attach(later))
+        assertFalse(gate.attachIf(later) { true })
         later.release()
         assertTrue(admission.awaitIdle(0))
     }

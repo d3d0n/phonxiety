@@ -27,9 +27,16 @@ internal class IrohLinkAdmission {
     private var finished = false
     private var held: IdleLinkAction? = null
 
-    /** Hands [action] to the terminal transition; false means the caller must release it itself. */
-    fun attach(action: IdleLinkAction): Boolean = synchronized(lock) {
+    /**
+     * Hands [action] to the terminal transition when [admit] agrees, deciding
+     * under the same lock [finish] takes: a link that already finished never
+     * asks [admit], so a stale network callback cannot spend the recycle
+     * cooldown on a link that has nothing left to recycle.  False means the
+     * caller must release [action] itself.
+     */
+    fun attachIf(action: IdleLinkAction, admit: () -> Boolean): Boolean = synchronized(lock) {
         if (finished) return false
+        if (!admit()) return false
         check(held == null) { "one idle-link token at a time" }
         held = action
         true
