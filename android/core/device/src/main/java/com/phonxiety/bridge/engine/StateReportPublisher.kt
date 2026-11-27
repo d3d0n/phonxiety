@@ -50,9 +50,7 @@ internal class StateReportPublisher(
     private class Terminal(
         val callId: String,
         val cause: DisconnectCause?,
-        val causeKey: String?,
-        /** The call's plan revision when this report was refused. */
-        val revision: Long
+        val causeKey: String?
     )
 
     private class ReplayTicket(
@@ -167,8 +165,8 @@ internal class StateReportPublisher(
             // The replay owns this call's ended frame right now.  A newer cause is
             // kept for the next accepted hello instead of racing the replay frame.
             if (state == "ended" && replayCause != causeKey) {
-                val revision = ++call.reportRevision
-                rememberTerminalLocked(call.callId, cause, causeKey, revision)
+                ++call.reportRevision
+                rememberTerminalLocked(call.callId, cause, causeKey)
             }
             return Decision(plan, 0L, send = false)
         }
@@ -201,12 +199,12 @@ internal class StateReportPublisher(
                 if (plan.recordCauseKey) call.reportedCauseKey = causeKey
                 if (state == "ended") terminals.removeAll { it.callId == call.callId }
             } else if (state == "ended") {
-                rememberTerminalLocked(call.callId, cause, causeKey, revision)
+                rememberTerminalLocked(call.callId, cause, causeKey)
             }
         } else if (!sent && state == "ended" && !sending.containsKey(call.callId)) {
             // A newer non-terminal plan superseded this refusal; the newer state may
             // be recorded, but the call's terminal report must not be lost.
-            rememberTerminalLocked(call.callId, cause, causeKey, call.reportRevision)
+            rememberTerminalLocked(call.callId, cause, causeKey)
         }
         if (sent && state == "ended" && call.reportRevision != revision) {
             // The frame reached the daemon even though a newer plan took the record;
@@ -217,16 +215,15 @@ internal class StateReportPublisher(
 
     /**
      * Picks the next terminal report a replay may send, or null when nothing is
-     * ready.  A call with a report in flight, or a newer plan than the retained
-     * one, is left for the send that owns it; [replaying] then keeps a normal
-     * report of the same call from racing this frame.
+     * ready.  A call with a report in flight is left for the send that owns it;
+     * [replaying] then keeps a normal report of the same call from racing this
+     * frame.  A terminal slot that survived a newer non-terminal report is
+     * still delivered: the call did end, and nothing else will clear it.
      */
     private fun claimReplay(): ReplayTicket? = synchronized(session.lock) {
         for (terminal in terminals) {
             if (sending.containsKey(terminal.callId) || replaying.containsKey(terminal.callId)) continue
             val live = session.owned?.takeIf { it.callId == terminal.callId && !it.finished }
-            // A newer plan already owns the record; its accepted send clears the slot.
-            if (live != null && live.reportRevision != terminal.revision) continue
             val revision = if (live == null) 0L else ++live.reportRevision
             replaying[terminal.callId] = terminal.causeKey
             return ReplayTicket(terminal, live, revision)
@@ -242,9 +239,9 @@ internal class StateReportPublisher(
         }
     }
 
-    private fun rememberTerminalLocked(callId: String, cause: DisconnectCause?, causeKey: String?, revision: Long) {
+    private fun rememberTerminalLocked(callId: String, cause: DisconnectCause?, causeKey: String?) {
         terminals.removeAll { it.callId == callId }
-        terminals.addLast(Terminal(callId, cause, causeKey, revision))
+        terminals.addLast(Terminal(callId, cause, causeKey))
         while (terminals.size > MAX_PENDING_TERMINAL) terminals.removeFirst()
     }
 
