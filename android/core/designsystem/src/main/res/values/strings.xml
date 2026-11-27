@@ -5,6 +5,8 @@
     <string name="designsystem_action_working">Working</string>
     <string name="designsystem_show_details">Show details</string>
     <string name="designsystem_hide_details">Hide details</string>
+    <string name="designsystem_action_retry">Retry</string>
+    <string name="designsystem_action_open_doctor">Open Doctor</string>
 
     <string name="designsystem_value_yes">Yes</string>
     <string name="designsystem_value_no">No</string>

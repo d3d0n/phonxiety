@@ -18,6 +18,7 @@ dependencies {
     api(libs.androidx.compose.foundation)
     implementation(libs.androidx.compose.material.icons.core)
     implementation(libs.androidx.compose.ui.tooling.preview)
+    api(project(":core:model"))
 
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)

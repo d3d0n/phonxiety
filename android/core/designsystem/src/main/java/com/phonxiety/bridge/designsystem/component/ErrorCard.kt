@@ -32,31 +32,43 @@ import androidx.compose.ui.unit.dp
 import com.phonxiety.bridge.designsystem.LocalPhonxietyType
 import com.phonxiety.bridge.designsystem.LocalStatusColors
 import com.phonxiety.bridge.designsystem.R
+import com.phonxiety.bridge.model.FailureKind
 
 /**
  * A failure with its evidence attached: what failed, what to do, and the captured shell/daemon
  * output behind a disclosure, because a failure without its output cannot be diagnosed from a
  * screenshot. The card sits on a neutral surface; the icon and the error semantics carry the
  * failure, so a long error page does not read as a wall of red.
+ *
+ * [kind] decides the action. A transport failure offers a retry; a daemon failure offers the
+ * Doctor; a refused request only explains itself, because repeating it would be refused again.
+ * A caller with a more specific recovery (an install retry, the phone's own call screen) passes
+ * [actionLabel] and [onAction], and that action wins.
  */
 @Composable
 fun ErrorCard(
     title: String,
     message: String,
+    kind: FailureKind,
     modifier: Modifier = Modifier,
     output: String? = null,
     initiallyExpanded: Boolean = false,
     actionLabel: String? = null,
-    onAction: (() -> Unit)? = null
+    onAction: (() -> Unit)? = null,
+    onRetry: (() -> Unit)? = null,
+    onOpenDoctor: (() -> Unit)? = null
 ) {
     ErrorCardContent(
         title = title,
         message = message,
+        kind = kind,
         modifier = modifier,
         output = output,
         initiallyExpanded = initiallyExpanded,
         actionLabel = actionLabel,
         onAction = onAction,
+        onRetry = onRetry,
+        onOpenDoctor = onOpenDoctor,
         dismissLabel = null,
         onDismiss = null
     )
@@ -70,22 +82,28 @@ fun ErrorCard(
 fun ErrorCard(
     title: String,
     message: String,
+    kind: FailureKind,
     modifier: Modifier = Modifier,
     output: String? = null,
     initiallyExpanded: Boolean = false,
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null,
+    onRetry: (() -> Unit)? = null,
+    onOpenDoctor: (() -> Unit)? = null,
     dismissLabel: String,
     onDismiss: () -> Unit
 ) {
     ErrorCardContent(
         title = title,
         message = message,
+        kind = kind,
         modifier = modifier,
         output = output,
         initiallyExpanded = initiallyExpanded,
         actionLabel = actionLabel,
         onAction = onAction,
+        onRetry = onRetry,
+        onOpenDoctor = onOpenDoctor,
         dismissLabel = dismissLabel,
         onDismiss = onDismiss
     )
@@ -96,16 +114,20 @@ fun ErrorCard(
 private fun ErrorCardContent(
     title: String,
     message: String,
+    kind: FailureKind,
     modifier: Modifier,
     output: String?,
     initiallyExpanded: Boolean,
     actionLabel: String?,
     onAction: (() -> Unit)?,
+    onRetry: (() -> Unit)?,
+    onOpenDoctor: (() -> Unit)?,
     dismissLabel: String?,
     onDismiss: (() -> Unit)?
 ) {
     var expanded by rememberSaveable(output) { mutableStateOf(initiallyExpanded) }
     val status = LocalStatusColors.current
+    val resolved = errorCardAction(kind, actionLabel, onAction, onRetry, onOpenDoctor)
     Surface(
         modifier = modifier
             .fillMaxWidth()
@@ -158,7 +180,7 @@ private fun ErrorCardContent(
                     }
                 }
             }
-            if ((actionLabel != null && onAction != null) || (dismissLabel != null && onDismiss != null)) {
+            if (resolved != null || (dismissLabel != null && onDismiss != null)) {
                 FlowRow(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
@@ -167,8 +189,8 @@ private fun ErrorCardContent(
                     if (dismissLabel != null && onDismiss != null) {
                         TextButton(onClick = onDismiss) { Text(dismissLabel) }
                     }
-                    if (actionLabel != null && onAction != null) {
-                        TextButton(onClick = onAction) { Text(actionLabel) }
+                    if (resolved != null) {
+                        TextButton(onClick = resolved.action) { Text(resolved.label) }
                     }
                 }
             }
