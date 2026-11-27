@@ -93,19 +93,22 @@ class CallFrontReturn(
         userLeft = false
         abandonWait()
         // The screen is seen again without a return: the cover either opportunity waited for is over.
+        val placed = LiveCallFront.placedCallId()
+        BridgeLog.i(TAG) { "resume: the live screen is back; closing both permits (placed=$placed)" }
         LiveCallFront.closeOpportunity()
         LiveCallFront.closeAnswerCover()
-        val placed = LiveCallFront.placedCallId()
         screenWasShown = placed != null
         if (placed != null && isAnswered(placed)) {
             // The live screen came forward over an answered call, so Telecom's answered screen is
             // already behind it: the next cover is a hold or a reopened dialer, not the answer.
+            BridgeLog.i(TAG) { "resume: $placed is already answered; its answer permit is retired" }
             LiveCallFront.retireAnswerCover(placed)
         }
     }
 
     /** Home and Recents; the system in-call screen appearing is not a user leave. */
     fun onUserLeaveHint() {
+        BridgeLog.i(TAG) { "leave: the user walked away; closing both permits (placed=${LiveCallFront.placedCallId()})" }
         userLeft = true
         screenWasShown = false
         abandonWait()
@@ -119,6 +122,9 @@ class CallFrontReturn(
      * deadline it opened with. A finishing activity has no successor, so it closes that wait.
      */
     fun onDestroy(recreating: Boolean) {
+        BridgeLog.i(TAG) {
+            "destroy: recreating=$recreating placed=${LiveCallFront.placedCallId()}"
+        }
         abandonWait()
         // A destroyed activity cannot return, and the initial cover is over either way.
         LiveCallFront.closeOpportunity()
@@ -127,9 +133,14 @@ class CallFrontReturn(
 
     /** The record of a call that already ended cannot return, so it is dropped here. */
     fun onStart() {
+        BridgeLog.i(TAG) {
+            "start: placed=${LiveCallFront.placedCallId()} published=" +
+                (call()?.let { "${it.callId}/${it.phase}" } ?: "none")
+        }
         val placed = LiveCallFront.placedCallId() ?: return
         val current = call()
         if (current != null && current.callId == placed && !recoverable(current)) {
+            BridgeLog.i(TAG) { "start: $placed is ${current.phase}; its record is dropped" }
             LiveCallFront.forget(placed)
             return
         }
@@ -158,6 +169,12 @@ class CallFrontReturn(
 
     /** The cover, as either lifecycle change reports it: the initial cover or the answer's. */
     private fun coverObserved(source: String, canReturn: Boolean) {
+        val now = clock()
+        BridgeLog.i(TAG) {
+            "cover $source: canReturn=$canReturn placed=${LiveCallFront.placedCallId()} " +
+                "awaits=${LiveCallFront.awaitsCover(now)} pending=${LiveCallFront.pendingCallId(now)} " +
+                "answerPending=${LiveCallFront.answerCoverPending(now)}"
+        }
         abandonWait()
         if (!canReturn) {
             // This change may not start the activity, but a wait opened earlier for this call is
@@ -166,7 +183,6 @@ class CallFrontReturn(
             adoptAnswerWait()
             return
         }
-        val now = clock()
         if (LiveCallFront.awaitsCover(now)) {
             // Only a cover inside the initial opportunity arms the placement wait. Covers by a call
             // this phone did not place, and covers after the reply timed out, fall through.
@@ -188,6 +204,12 @@ class CallFrontReturn(
         // The answer raises Telecom's screen again over the live screen. The opportunity opens at
         // this cover so the return stays inside the window where this activity may start itself; the
         // wait then covers the daemon reporting the answer a link round-trip later.
+        LiveCallFront.placedCallId()?.let { placed ->
+            BridgeLog.i(TAG) {
+                "cover $source: no unspent placement return for $placed " +
+                    "(spent, closed or past its deadline)"
+            }
+        }
         if (anotherCall()) {
             // Telecom is showing another call above this one: that screen is not the answer's, so
             // it is left in front and this call's permit is not spent on it. A wait this call
@@ -200,10 +222,7 @@ class CallFrontReturn(
             }
             return
         }
-        if (!armAnswerCover(now) && !LiveCallFront.answerCoverPending(now)) {
-            BridgeLog.i(TAG) { "cover $source: no placed call of this phone is waiting for the answer" }
-            return
-        }
+        if (!armAnswerCover(now) && !LiveCallFront.answerCoverPending(now)) return
         val deadline = openAnswerDeadline(now) ?: return
         BridgeLog.i(TAG) {
             "cover $source: arming the return over the answer cover for ${LiveCallFront.placedCallId()}"
@@ -224,6 +243,9 @@ class CallFrontReturn(
         val now = clock()
         if (!LiveCallFront.answerCoverPending(now)) return
         val deadline = openAnswerDeadline(now) ?: return
+        BridgeLog.i(TAG) {
+            "answer: adopted the open wait for ${LiveCallFront.placedCallId()}"
+        }
         stage = Stage.ANSWER
         attemptsLeft = ANSWER_ATTEMPTS
         answerExpiresAt = deadline
@@ -233,11 +255,35 @@ class CallFrontReturn(
     private fun armAnswerCover(now: Long): Boolean {
         // Without a live screen seen since the placement, the answer screen is not ours to replace:
         // the user left on purpose, or the initial return was never issued.
-        if (!screenWasShown) return false
-        val placed = LiveCallFront.placedCallId() ?: return false
-        val current = call() ?: return false
-        if (current.callId != placed || !recoverable(current)) return false
-        return LiveCallFront.armAnswerCover(now)
+        if (!screenWasShown) {
+            BridgeLog.i(TAG) { "answer: refused; the live screen was not seen since the placement" }
+            return false
+        }
+        val placed = LiveCallFront.placedCallId()
+        if (placed == null) {
+            BridgeLog.i(TAG) { "answer: refused; no call was placed from this phone" }
+            return false
+        }
+        val current = call()
+        if (current == null) {
+            BridgeLog.i(TAG) { "answer: refused; $placed is not published yet" }
+            return false
+        }
+        if (current.callId != placed) {
+            BridgeLog.i(TAG) {
+                "answer: refused; the published call is ${current.callId} (${current.phase}), not $placed"
+            }
+            return false
+        }
+        if (!recoverable(current)) {
+            BridgeLog.i(TAG) { "answer: refused; $placed is ${current.phase}" }
+            return false
+        }
+        if (!LiveCallFront.armAnswerCover(now)) {
+            BridgeLog.i(TAG) { "answer: refused; the permit for $placed is already spent" }
+            return false
+        }
+        return true
     }
 
     private fun attempt() {
@@ -265,8 +311,8 @@ class CallFrontReturn(
                 retry()
             } else {
                 BridgeLog.w(TAG) {
-                    "initial: the placement reply never marked this phone's call; " +
-                        "the cover opportunity closes"
+                    "initial: nothing is left to wait for; the opportunity for " +
+                        "${LiveCallFront.placedCallId()} is closed or past its deadline"
                 }
                 LiveCallFront.closeOpportunity()
             }
