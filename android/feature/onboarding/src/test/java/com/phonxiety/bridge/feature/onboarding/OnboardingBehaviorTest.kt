@@ -14,7 +14,10 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.hasImeAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -22,8 +25,13 @@ import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performImeAction
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
@@ -326,6 +334,58 @@ class OnboardingBehaviorTest {
         val apatch = OnboardingSamples.apatch.copy(version = "e8e4651")
         show(OnboardingUiState(wizard = WizardState.ReadyToInstall(apatch)))
         composeRule.onAllNodesWithText("APatch").onFirst().assertExists()
+    }
+
+    @Test
+    fun thePairingFieldAsksForNoCorrectionsAndSubmitsFromTheKeyboard() {
+        val pairs = mutableListOf<String>()
+        host(OnboardingCallbacks(onPairLink = { pairs += it }))
+        show(OnboardingUiState(wizard = sample("needs_pairing")))
+        composeRule.onNodeWithText("Paste pairing link").performClick()
+        composeRule.waitForIdle()
+
+        val field = composeRule.onNode(hasSetTextAction())
+        field.assert(hasImeAction(ImeAction.Done))
+        field.performTextInput("phonxiety://pair?token=abc")
+        field.performImeAction()
+
+        assertEquals(listOf("phonxiety://pair?token=abc"), pairs)
+        // The IME action and the field's own options are one decision, so both are asserted here.
+        assertEquals(KeyboardCapitalization.None, PAIRING_FIELD_KEYBOARD.capitalization)
+        assertEquals(false, PAIRING_FIELD_KEYBOARD.autoCorrectEnabled)
+        assertEquals(KeyboardType.Uri, PAIRING_FIELD_KEYBOARD.keyboardType)
+    }
+
+    @Test
+    fun thePermissionConstantsAddOnlyInvisibleBreakOpportunities() {
+        val display = breakableConstant("CAPTURE_AUDIO_OUTPUT")
+
+        assertEquals("CAPTURE_\u200BAUDIO_\u200BOUTPUT", display)
+        assertEquals("CAPTURE_AUDIO_OUTPUT", display.replace("\u200B", ""))
+    }
+
+    /**
+     * At 320 dp with 200 % text the longest constant needs three lines. A break inside a word is
+     * what the old screen did (`CAPTURE_AUDIO_OU` / `TPUT`); the underscore is the only boundary
+     * the display string offers, so every line but the last has to end on one.
+     */
+    @Test
+    fun thePermissionConstantsBreakOnlyAfterTheirUnderscores() {
+        host(fontScale = 2f, widthDp = 320)
+        show(OnboardingUiState(wizard = sample("ready_to_install")))
+        val constant = "START_FOREGROUND_SERVICES_FROM_BACKGROUND"
+        val node = composeRule.onNodeWithText(constant).performScrollTo().fetchSemanticsNode()
+        val results = mutableListOf<TextLayoutResult>()
+        node.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(results)
+        val layout = results.single()
+
+        assertTrue("the constant has to wrap at this size", layout.lineCount > 1)
+        for (line in 0 until layout.lineCount - 1) {
+            val text = layout.layoutInput.text.text.substring(layout.getLineStart(line), layout.getLineEnd(line))
+            assertTrue("line $line breaks mid-word: '$text'", text.trimEnd('\u200B').endsWith("_"))
+        }
+        // The node still reads the exact constant, without the display-only characters.
+        assertEquals(constant, node.config[SemanticsProperties.Text].joinToString("") { it.text })
     }
 
     private fun contentContainer(): Rect = composeRule.onNodeWithTag(CONTENT_TAG).fetchSemanticsNode().boundsInRoot

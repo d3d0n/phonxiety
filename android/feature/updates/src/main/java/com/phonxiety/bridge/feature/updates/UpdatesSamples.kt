@@ -17,6 +17,7 @@ import com.phonxiety.bridge.data.updates.UpdateCheck
 import com.phonxiety.bridge.data.updates.UpdateCheckError
 import com.phonxiety.bridge.data.updates.UpdateCompat
 import com.phonxiety.bridge.data.updates.UpdateManifest
+import com.phonxiety.bridge.data.updates.UpdateTarget
 
 /**
  * Fixed data for previews and screenshot tests: a 0.4.0 release published by the daemon, compared
@@ -98,9 +99,12 @@ object UpdatesSamples {
 
     fun upToDate(): UpdatesUiState = UpdatesUiState(check = check())
 
-    fun updateAvailable(): UpdatesUiState = UpdatesUiState(
-        check = check(installed(appVersionCode = 3, appVersion = "0.3.0", moduleVersionCode = 3, moduleVersion = "0.3.0"))
+    /** The check behind [updateAvailable]: a phone on 0.3.0 against the 0.4.0 release. */
+    fun updateOffered(): UpdateCheck = check(
+        installed(appVersionCode = 3, appVersion = "0.3.0", moduleVersionCode = 3, moduleVersion = "0.3.0")
     )
+
+    fun updateAvailable(): UpdatesUiState = UpdatesUiState(check = updateOffered())
 
     fun incompatible(): UpdatesUiState = UpdatesUiState(
         check = check(
@@ -276,5 +280,14 @@ object UpdatesSamples {
         ),
         rollbackPlan = appOnlyRollback(),
         rollbackAppInstall = AppInstallState.Installing(sessionId = null)
+    )
+
+    /** The install dialogs: a row is still offering the update, and the target waits on its ask. */
+    fun updateConfirmingApp(): UpdatesUiState = updateAvailable().copy(
+        updateConfirmation = UpdateTarget.APP
+    )
+
+    fun updateConfirmingModule(): UpdatesUiState = updateAvailable().copy(
+        updateConfirmation = UpdateTarget.MODULE
     )
 }

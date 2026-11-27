@@ -52,6 +52,8 @@ class UpdatesScreenBehaviourTest {
         val refresh: () -> Unit = {},
         val installApp: () -> Unit = {},
         val installModule: () -> Unit = {},
+        val confirmUpdate: () -> Unit = {},
+        val dismissUpdate: () -> Unit = {},
         val rollback: () -> Unit = {},
         val confirmRollback: () -> Unit = {},
         val dismissRollback: () -> Unit = {},
@@ -68,6 +70,8 @@ class UpdatesScreenBehaviourTest {
                         onRefresh = callbacks.refresh,
                         onInstallApp = callbacks.installApp,
                         onInstallModule = callbacks.installModule,
+                        onConfirmUpdate = callbacks.confirmUpdate,
+                        onDismissUpdate = callbacks.dismissUpdate,
                         onRollback = callbacks.rollback,
                         onConfirmRollback = callbacks.confirmRollback,
                         onDismissRollback = callbacks.dismissRollback,
@@ -126,6 +130,44 @@ class UpdatesScreenBehaviourTest {
         composeRule.onNodeWithText("Reinstall").performClick()
 
         assertEquals(1, confirmations)
+    }
+
+    @Test
+    fun theAppUpdateDialogNamesTheVersionsItReplacesAndRunsOnlyOnConfirm() {
+        var confirmations = 0
+        var installs = 0
+        render(
+            UpdatesSamples.updateConfirmingApp(),
+            Callbacks(installApp = { installs++ }, confirmUpdate = { confirmations++ })
+        )
+
+        composeRule
+            .onNodeWithText("This replaces the running app 0.3.0 with 0.4.0.", substring = true)
+            .assertIsDisplayed()
+        composeRule.onNodeWithText("Install").performClick()
+
+        assertEquals(1, confirmations)
+        assertEquals("the row's tap asked, the dialog runs the install", 0, installs)
+    }
+
+    @Test
+    fun theModuleUpdateDialogSaysItRebootsAndCanBeCancelled() {
+        var confirmations = 0
+        var dismissals = 0
+        render(
+            UpdatesSamples.updateConfirmingModule(),
+            Callbacks(
+                confirmUpdate = { confirmations++ },
+                dismissUpdate = { dismissals++ }
+            )
+        )
+
+        composeRule.onNodeWithText("Install module 0.4.0?").assertIsDisplayed()
+        composeRule.onNodeWithText("then reboots the phone", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Cancel").performClick()
+
+        assertEquals(0, confirmations)
+        assertEquals(1, dismissals)
     }
 
     @Test

@@ -83,6 +83,8 @@ class UpdatesScreenshotTest(private val matrixCase: UpdatesMatrixCase) {
                                 onRefresh = {},
                                 onInstallApp = {},
                                 onInstallModule = {},
+                                onConfirmUpdate = {},
+                                onDismissUpdate = {},
                                 onRollback = {},
                                 onConfirmRollback = {},
                                 onDismissRollback = {},
@@ -186,6 +188,8 @@ class UpdatesDialogScreenshotTest(private val case: UpdatesDialogCase) {
                             onRefresh = {},
                             onInstallApp = {},
                             onInstallModule = {},
+                            onConfirmUpdate = {},
+                            onDismissUpdate = {},
                             onRollback = {},
                             onConfirmRollback = {},
                             onDismissRollback = {},
@@ -269,7 +273,9 @@ enum class UpdatesState(val slug: String, private val observation: () -> Updates
 
 enum class UpdatesDialogState(val slug: String, private val observation: () -> UpdatesUiState) {
     MODULE("rollback_confirm", UpdatesSamples::rollbackConfirming),
-    APP_ONLY("rollback_confirm_app", UpdatesSamples::rollbackConfirmingAppOnly);
+    APP_ONLY("rollback_confirm_app", UpdatesSamples::rollbackConfirmingAppOnly),
+    UPDATE_APP("update_confirm_app", UpdatesSamples::updateConfirmingApp),
+    UPDATE_MODULE("update_confirm_module", UpdatesSamples::updateConfirmingModule);
 
     fun build(): UpdatesUiState = observation()
 }
@@ -310,6 +316,8 @@ class UpdatesLowerSectionTest {
                             onRefresh = {},
                             onInstallApp = {},
                             onInstallModule = {},
+                            onConfirmUpdate = {},
+                            onDismissUpdate = {},
                             onRollback = {},
                             onConfirmRollback = {},
                             onDismissRollback = {},

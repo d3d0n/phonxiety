@@ -169,6 +169,18 @@
     <string name="updates_dialog_module_confirm">Roll back and reboot</string>
     <string name="updates_dialog_call_blocked">A call is running. The rollback waits until it ends.</string>
 
+    <!-- Update confirmations: the object, the consequence, and only then the action. -->
+    <string name="updates_dialog_update_app_title">Install %1$s?</string>
+    <string name="updates_dialog_update_app_title_generic">Install the update?</string>
+    <string name="updates_dialog_update_app_body">This replaces the running app %1$s with %2$s. The bridge restarts and a call in progress ends.</string>
+    <string name="updates_dialog_update_app_body_unknown">This replaces the running app. The bridge restarts and a call in progress ends.</string>
+    <string name="updates_dialog_update_app_confirm">Install</string>
+    <string name="updates_dialog_update_module_title">Install module %1$s?</string>
+    <string name="updates_dialog_update_module_title_generic">Install the module update?</string>
+    <string name="updates_dialog_update_module_body_reboot">This rebuilds the module from this app and installs it as root, then reboots the phone to mount the new overlay. A call in progress ends.</string>
+    <string name="updates_dialog_update_module_body">This rebuilds the module from this app and installs it as root. A call in progress ends.</string>
+    <string name="updates_dialog_update_module_confirm">Install</string>
+
     <!-- App install failures: cause first, then the next step. -->
     <string name="updates_install_failed_download_title">The download failed</string>
     <string name="updates_install_failed_download_message">The release could not be downloaded. Check the device link, then try again.</string>

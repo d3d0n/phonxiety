@@ -46,6 +46,8 @@ class RollbackSectionTest {
                         onRefresh = {},
                         onInstallApp = {},
                         onInstallModule = {},
+                        onConfirmUpdate = {},
+                        onDismissUpdate = {},
                         onRollback = onRollback,
                         onConfirmRollback = onConfirmRollback,
                         onDismissRollback = {},

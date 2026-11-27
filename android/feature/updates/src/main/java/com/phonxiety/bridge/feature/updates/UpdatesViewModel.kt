@@ -9,6 +9,8 @@ import com.phonxiety.bridge.data.updates.RollbackPlan
 import com.phonxiety.bridge.data.updates.RollbackRecovery
 import com.phonxiety.bridge.data.updates.RollbackState
 import com.phonxiety.bridge.data.updates.UpdateCheck
+import com.phonxiety.bridge.data.updates.UpdateStatus
+import com.phonxiety.bridge.data.updates.UpdateTarget
 import com.phonxiety.bridge.data.updates.UpdatesService
 import com.phonxiety.bridge.model.CallPhase
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -35,6 +37,11 @@ data class UpdatesUiState(
      */
     val appInstall: AppInstallState = AppInstallState.Idle,
     val moduleInstall: ModuleInstallState = ModuleInstallState.Idle,
+    /**
+     * The install the person tapped, waiting for its confirmation. An app install replaces the
+     * running app and a module install reboots the phone, so neither starts without this.
+     */
+    val updateConfirmation: UpdateTarget? = null,
     val rollbackPlan: RollbackPlan? = null,
     val rollbackRecovery: RollbackRecovery? = null,
     /** Set while a confirm dialog is up; a rollback never runs without it. */
@@ -61,6 +68,9 @@ class UpdatesViewModel @Inject constructor(
     private val confirmation = MutableStateFlow<RollbackPlan?>(null)
     private val recoveryDismissed = MutableStateFlow(false)
 
+    /** The install tapped on a row, asked back once before it runs. */
+    private val pendingUpdate = MutableStateFlow<UpdateTarget?>(null)
+
     /** True while the app-install flow on screen is a rollback, not an update install. */
     private val appRollback = MutableStateFlow(false)
 
@@ -86,12 +96,13 @@ class UpdatesViewModel @Inject constructor(
         val moduleRollback: RollbackState
     )
 
-    /** The screen's own state: the check, the confirm dialog, and the two dismissals. */
+    /** The screen's own state: the check, the confirm dialogs, and the two dismissals. */
     private data class LocalState(
         val loading: Boolean,
         val confirmation: RollbackPlan?,
         val recoveryDismissed: Boolean,
-        val appRollback: Boolean
+        val appRollback: Boolean,
+        val pendingUpdate: UpdateTarget?
     )
 
     private val services = combine(
@@ -104,8 +115,14 @@ class UpdatesViewModel @Inject constructor(
         ServiceState(app, module, plan, recovery, rollback)
     }
 
-    private val local = combine(checking, confirmation, recoveryDismissed, appRollback) { loading, confirming, dismissed, rollbackApp ->
-        LocalState(loading, confirming, dismissed, rollbackApp)
+    private val local = combine(
+        checking,
+        confirmation,
+        recoveryDismissed,
+        appRollback,
+        pendingUpdate
+    ) { loading, confirming, dismissed, rollbackApp, update ->
+        LocalState(loading, confirming, dismissed, rollbackApp, update)
     }
 
     val state: StateFlow<UpdatesUiState> = combine(
@@ -119,6 +136,20 @@ class UpdatesViewModel @Inject constructor(
             check = checked,
             appInstall = current.appInstall.takeUnless { localState.appRollback } ?: AppInstallState.Idle,
             moduleInstall = current.moduleInstall,
+            updateConfirmation = localState.pendingUpdate?.takeIf { target ->
+                // The offer must still be the one tapped: a re-read check can withdraw it, and an
+                // install that has started owns the row until it finishes or fails.
+                val row = when (target) {
+                    UpdateTarget.APP -> checked?.verdict?.app
+                    UpdateTarget.MODULE -> checked?.verdict?.module
+                    UpdateTarget.DAEMON -> null
+                }
+                row != null &&
+                    row.status == UpdateStatus.UPDATE_AVAILABLE &&
+                    !row.needsAppFirst &&
+                    current.appInstall is AppInstallState.Idle &&
+                    current.moduleInstall is ModuleInstallState.Idle
+            },
             rollbackPlan = current.rollbackPlan,
             rollbackRecovery = current.rollbackRecovery,
             rollbackConfirmation = localState.confirmation?.takeIf { planned ->
@@ -161,11 +192,11 @@ class UpdatesViewModel @Inject constructor(
         }
     }
 
+    /** The app row's action: it asks once, then [confirmUpdate] runs it. */
     fun installApp() {
         if (callActive.value) return
-        val manifest = check.value?.manifest ?: return
-        appRollback.value = false
-        viewModelScope.launch { service.installApp(manifest) }
+        if (check.value?.manifest == null) return
+        pendingUpdate.value = UpdateTarget.APP
     }
 
     /**
@@ -176,8 +207,35 @@ class UpdatesViewModel @Inject constructor(
         if (callActive.value) return
         val checked = check.value ?: return
         if (checked.verdict?.module?.needsAppFirst == true) return
+        if (checked.manifest == null) return
+        pendingUpdate.value = UpdateTarget.MODULE
+    }
+
+    /** The confirmation the dialog is showing: the one place an install starts from a row. */
+    fun confirmUpdate() {
+        val target = pendingUpdate.value ?: return
+        pendingUpdate.value = null
+        // The dialog's own state can outlive the call it was opened before; a call still wins.
+        if (callActive.value) return
+        val checked = check.value ?: return
         val manifest = checked.manifest ?: return
-        viewModelScope.launch { service.installModule(manifest) }
+        when (target) {
+            UpdateTarget.APP -> {
+                appRollback.value = false
+                viewModelScope.launch { service.installApp(manifest) }
+            }
+
+            UpdateTarget.MODULE -> {
+                if (checked.verdict?.module?.needsAppFirst == true) return
+                viewModelScope.launch { service.installModule(manifest) }
+            }
+
+            UpdateTarget.DAEMON -> Unit
+        }
+    }
+
+    fun dismissUpdateConfirmation() {
+        pendingUpdate.value = null
     }
 
     /**
@@ -221,6 +279,7 @@ class UpdatesViewModel @Inject constructor(
 
     fun dismiss() {
         confirmation.value = null
+        pendingUpdate.value = null
         recoveryDismissed.value = false
         appRollback.value = false
         service.dismiss()

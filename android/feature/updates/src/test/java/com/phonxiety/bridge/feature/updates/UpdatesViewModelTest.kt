@@ -1,22 +1,13 @@
 package com.phonxiety.bridge.feature.updates
 
-import com.phonxiety.bridge.data.BridgeStateRepository
 import com.phonxiety.bridge.data.updates.AppInstallState
 import com.phonxiety.bridge.data.updates.InstallFailure
 import com.phonxiety.bridge.data.updates.ModuleInstallState
 import com.phonxiety.bridge.data.updates.RollbackPendingReason
-import com.phonxiety.bridge.data.updates.RollbackPlan
 import com.phonxiety.bridge.data.updates.RollbackRecovery
-import com.phonxiety.bridge.data.updates.RollbackState
 import com.phonxiety.bridge.data.updates.UpdateCheck
-import com.phonxiety.bridge.data.updates.UpdateManifest
-import com.phonxiety.bridge.data.updates.UpdatesService
-import com.phonxiety.bridge.model.BridgeState
-import com.phonxiety.bridge.model.CallPhase
-import com.phonxiety.bridge.model.CallState
+import com.phonxiety.bridge.data.updates.UpdateTarget
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -60,8 +51,8 @@ class UpdatesViewModelTest {
     }
 
     @Test
-    fun `install uses the manifest from the last check`() = runTest(testDispatcher.scheduler) {
-        val service = FakeUpdatesService()
+    fun `install asks first and uses the manifest from the last check`() = runTest(testDispatcher.scheduler) {
+        val service = FakeUpdatesService().apply { result = UpdatesSamples.updateOffered() }
         val viewModel = UpdatesViewModel(service, bridge)
         backgroundScope.launch { viewModel.state.collect {} }
         advanceUntilIdle()
@@ -69,7 +60,50 @@ class UpdatesViewModelTest {
         viewModel.installApp()
         advanceUntilIdle()
 
+        assertEquals(UpdateTarget.APP, viewModel.state.value.updateConfirmation)
+        assertEquals("nothing installs before the confirmation", null, service.installedManifest)
+
+        viewModel.confirmUpdate()
+        advanceUntilIdle()
+
         assertEquals(UpdatesSamples.manifest, service.installedManifest)
+        assertEquals(null, viewModel.state.value.updateConfirmation)
+    }
+
+    @Test
+    fun `dismissing the update confirmation starts nothing`() = runTest(testDispatcher.scheduler) {
+        val service = FakeUpdatesService().apply { result = UpdatesSamples.updateOffered() }
+        val viewModel = UpdatesViewModel(service, bridge)
+        backgroundScope.launch { viewModel.state.collect {} }
+        advanceUntilIdle()
+
+        viewModel.installApp()
+        advanceUntilIdle()
+        viewModel.dismissUpdateConfirmation()
+        advanceUntilIdle()
+
+        assertEquals(null, service.installedManifest)
+        assertEquals(null, viewModel.state.value.updateConfirmation)
+    }
+
+    @Test
+    fun `a call that starts before the confirmation refuses the install`() = runTest(testDispatcher.scheduler) {
+        val service = FakeUpdatesService().apply { result = UpdatesSamples.updateOffered() }
+        val viewModel = UpdatesViewModel(service, bridge)
+        backgroundScope.launch { viewModel.state.collect {} }
+        advanceUntilIdle()
+
+        viewModel.installApp()
+        advanceUntilIdle()
+        assertEquals(UpdateTarget.APP, viewModel.state.value.updateConfirmation)
+
+        bridge.startCall()
+        advanceUntilIdle()
+        viewModel.confirmUpdate()
+        advanceUntilIdle()
+
+        assertEquals(null, service.installedManifest)
+        assertEquals(null, viewModel.state.value.updateConfirmation)
     }
 
     @Test
@@ -183,6 +217,7 @@ class UpdatesViewModelTest {
         assertEquals(0, service.moduleInstalls)
         assertEquals(0, service.rollbackCalls)
         assertEquals(null, viewModel.state.value.rollbackConfirmation)
+        assertEquals(null, viewModel.state.value.updateConfirmation)
     }
 
     @Test
@@ -206,6 +241,7 @@ class UpdatesViewModelTest {
         advanceUntilIdle()
 
         assertEquals("the module is never rebuilt from the old app", 0, service.moduleInstalls)
+        assertEquals("and it never even asks", null, viewModel.state.value.updateConfirmation)
 
         // Once the app update has landed the same row installs, and its payload is the new app.
         service.result = UpdatesSamples.check(
@@ -216,6 +252,9 @@ class UpdatesViewModelTest {
         assertFalse(viewModel.state.value.check?.verdict?.module?.needsAppFirst ?: true)
 
         viewModel.installModule()
+        advanceUntilIdle()
+        assertEquals(UpdateTarget.MODULE, viewModel.state.value.updateConfirmation)
+        viewModel.confirmUpdate()
         advanceUntilIdle()
 
         assertEquals(1, service.moduleInstalls)
@@ -253,12 +292,17 @@ class UpdatesViewModelTest {
 
     @Test
     fun `an update install never lends its state to the rollback section`() = runTest(testDispatcher.scheduler) {
-        val service = FakeUpdatesService().apply { rollbackPlan.value = UpdatesSamples.appOnlyRollback() }
+        val service = FakeUpdatesService().apply {
+            rollbackPlan.value = UpdatesSamples.appOnlyRollback()
+            result = UpdatesSamples.updateOffered()
+        }
         val viewModel = UpdatesViewModel(service, bridge)
         backgroundScope.launch { viewModel.state.collect {} }
         advanceUntilIdle()
 
         viewModel.installApp()
+        advanceUntilIdle()
+        viewModel.confirmUpdate()
         advanceUntilIdle()
         service.appInstall.value = AppInstallState.Failed(InstallFailure.INSTALL_FAILED, "the installer refused")
         advanceUntilIdle()
@@ -302,56 +346,5 @@ class UpdatesViewModelTest {
         advanceUntilIdle()
         assertFalse(viewModel.state.value.rollbackRecoveryDismissed)
         assertTrue(viewModel.state.value.rollbackRecovery is RollbackRecovery.Pending)
-    }
-
-    private class FakeUpdatesService : UpdatesService {
-        var result: UpdateCheck = UpdatesSamples.check()
-        var checked = 0
-        var installedManifest: UpdateManifest? = null
-        var moduleInstalls = 0
-
-        override val appInstall = MutableStateFlow<AppInstallState>(AppInstallState.Idle)
-        override val moduleInstall = MutableStateFlow<ModuleInstallState>(ModuleInstallState.Idle)
-        override val rollbackPlan = MutableStateFlow<RollbackPlan?>(null)
-        override val rollbackRecovery = MutableStateFlow<RollbackRecovery?>(null)
-        override val moduleRollback = MutableStateFlow<RollbackState>(RollbackState.Idle)
-        var rollbackCalls = 0
-
-        override suspend fun check(channel: String?): UpdateCheck {
-            checked++
-            return result
-        }
-
-        override suspend fun installApp(manifest: UpdateManifest) {
-            installedManifest = manifest
-        }
-
-        override suspend fun installModule(manifest: UpdateManifest) {
-            moduleInstalls++
-        }
-
-        override suspend fun rollbackApp() {
-            rollbackCalls++
-        }
-
-        override fun dismiss() = Unit
-    }
-
-    /** A bridge whose call phase the tests move: a running call blocks every disruptive action. */
-    private class FakeBridgeState : BridgeStateRepository {
-        private val flow = MutableStateFlow(BridgeState())
-
-        override val state: StateFlow<BridgeState> = flow
-
-        fun startCall() {
-            flow.value = BridgeState(
-                call = CallState(
-                    callId = "call-1",
-                    destinationMasked = "+998 90 123 45 67",
-                    phase = CallPhase.ACTIVE,
-                    startedAtEpochMs = 0L
-                )
-            )
-        }
     }
 }

@@ -36,7 +36,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -49,6 +48,7 @@ import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
+import com.phonxiety.bridge.designsystem.LocalPhonxietyType
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -201,7 +201,7 @@ private fun CameraQrPreview(
     if (message == null) {
         AndroidView(factory = { previewView }, modifier = modifier)
     } else {
-        // The headline is ours; the platform's own words stay visible as evidence, in monospace.
+        // The headline is ours; the platform's own words stay visible as evidence, in the code face.
         Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(
                 text = stringResource(R.string.onboarding_scanner_failed),
@@ -209,7 +209,7 @@ private fun CameraQrPreview(
             )
             Text(
                 text = message,
-                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                style = LocalPhonxietyType.current.code(MaterialTheme.typography.bodySmall),
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
