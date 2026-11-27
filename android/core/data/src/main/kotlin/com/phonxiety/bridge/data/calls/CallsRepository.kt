@@ -93,21 +93,21 @@ interface CallsRepository {
 @Singleton
 class DefaultCallsRepository @Inject constructor(
     private val api: DaemonApi,
-    private val dao: CallDao
+    private val cache: CallCache
 ) : CallsRepository {
     private val json: Json = DaemonJson
 
-    override fun observeCalls(filter: CallFilter): Flow<List<CallSummary>> = dao.observeMatching(filter.outcome, filter.farEnd, filter.query.trim()).map { rows ->
+    override fun observeCalls(filter: CallFilter): Flow<List<CallSummary>> = cache.list.observeMatching(filter.outcome, filter.farEnd, filter.query.trim()).map { rows ->
         rows.map { it.toSummary() }
     }
 
-    override fun observeCall(callId: String): Flow<CallSummary?> = dao.observe(callId).map { it?.toSummary() }
+    override fun observeCall(callId: String): Flow<CallSummary?> = cache.list.observe(callId).map { it?.toSummary() }
 
-    override fun observeDetail(callId: String): Flow<CallSnapshot?> = dao.observe(callId).map { it?.detailJson?.let(::decode) }
+    override fun observeDetail(callId: String): Flow<CallSnapshot?> = cache.detail.observeJson(callId).map { it?.let(::decode) }
 
-    override fun observeTranscript(callId: String): Flow<List<TranscriptTurn>> = dao.observeTranscript(callId).map { rows -> rows.map { it.toTurn() } }
+    override fun observeTranscript(callId: String): Flow<List<TranscriptTurn>> = cache.detail.observeTranscript(callId).map { rows -> rows.map { it.toTurn() } }
 
-    override fun observeFarEnds(): Flow<List<String>> = dao.observeFarEnds()
+    override fun observeFarEnds(): Flow<List<String>> = cache.list.observeFarEnds()
 
     override suspend fun page(filter: CallFilter, before: Double?, limit: Int): CallPageResult = withContext(Dispatchers.IO) {
         when (val outcome = api.calls(limit = limit, before = before, outcome = filter.outcome, farEnd = filter.farEnd)) {
@@ -126,22 +126,18 @@ class DefaultCallsRepository @Inject constructor(
     }
 
     override suspend fun detail(callId: String, refresh: Boolean): CallDetailResult = withContext(Dispatchers.IO) {
-        val existing = dao.get(callId)
         if (!refresh) {
-            return@withContext CallDetailResult(existing?.detailJson?.let(::decode), null, cached = true)
+            val cached = cache.detail.get(callId)?.detailJson?.let(::decode)
+            return@withContext CallDetailResult(cached, null, cached = true)
         }
         when (val outcome = api.call(callId)) {
             is ApiOutcome.Ok -> {
-                val snapshot = outcome.value
-                dao.upsert(listOf(snapshot.toEntity(existing, encode(snapshot), now())))
-                if (snapshot.transcript.isNotEmpty()) {
-                    dao.upsertTranscript(snapshot.transcript.map { it.toEntity(callId) })
-                }
-                CallDetailResult(snapshot, null, cached = false)
+                cacheDetail(callId, outcome.value)
+                CallDetailResult(outcome.value, null, cached = false)
             }
 
             is ApiOutcome.Failure -> CallDetailResult(
-                snapshot = existing?.detailJson?.let(::decode),
+                snapshot = cache.detail.get(callId)?.detailJson?.let(::decode),
                 failure = outcome,
                 cached = true
             )
@@ -152,8 +148,10 @@ class DefaultCallsRepository @Inject constructor(
         when (val outcome = api.transcript(callId, cursor, limit)) {
             is ApiOutcome.Ok -> {
                 val page = outcome.value
-                if (page.transcript.isNotEmpty()) {
-                    dao.upsertTranscript(page.transcript.map { it.toEntity(callId) })
+                // A turn is only cached under a call whose detail row exists: the transcript
+                // table hangs off it by a foreign key, and only an opened call pages turns.
+                if (page.transcript.isNotEmpty() && cache.detail.exists(callId)) {
+                    cache.transaction { detail.upsertTranscript(page.transcript.map { it.toEntity(callId) }) }
                 }
                 TranscriptResult(
                     turns = page.transcript,
@@ -177,9 +175,9 @@ class DefaultCallsRepository @Inject constructor(
     override suspend fun addMark(callId: String, mark: String, note: String?): ApiOutcome<MarksResponse> = withContext(Dispatchers.IO) {
         val outcome = api.addMark(callId, mark, note)
         if (outcome is ApiOutcome.Ok) {
-            val existing = dao.get(callId)
+            val existing = cache.list.get(callId)
             if (existing != null) {
-                dao.upsert(listOf(existing.copy(marks = outcome.value.marks.size, cachedAt = now())))
+                cache.list.upsert(listOf(existing.copy(marks = outcome.value.marks.size, cachedAt = now())))
             }
         }
         outcome
@@ -188,8 +186,8 @@ class DefaultCallsRepository @Inject constructor(
     override suspend fun delete(callId: String): ApiOutcome<DeleteCallResult> = withContext(Dispatchers.IO) {
         val outcome = api.deleteCall(callId)
         if (outcome is ApiOutcome.Ok) {
-            dao.deleteTranscript(callId)
-            dao.delete(callId)
+            // One delete; the detail row and every transcript turn go with it by cascade.
+            cache.transaction { list.delete(callId) }
         }
         outcome
     }
@@ -212,11 +210,25 @@ class DefaultCallsRepository @Inject constructor(
     private suspend fun cacheSummaries(calls: List<CallSummary>) {
         if (calls.isEmpty()) return
         val now = now()
-        val rows = ArrayList<CallEntity>(calls.size)
-        for (summary in calls) {
-            rows += summary.toEntity(dao.get(summary.callId), now)
+        cache.transaction {
+            val rows = ArrayList<CallSummaryEntity>(calls.size)
+            for (summary in calls) {
+                rows += summary.toEntity(list.get(summary.callId), now)
+            }
+            list.upsert(rows)
         }
-        dao.upsert(rows)
+    }
+
+    /** The summary row, the record and its transcript land in one transaction or not at all. */
+    private suspend fun cacheDetail(callId: String, snapshot: CallSnapshot) {
+        val now = now()
+        cache.transaction {
+            list.upsert(listOf(snapshot.toEntity(list.get(callId), now)))
+            detail.upsert(CallDetailEntity(callId = callId, detailJson = encode(snapshot), detailFetchedAt = now))
+            if (snapshot.transcript.isNotEmpty()) {
+                detail.upsertTranscript(snapshot.transcript.map { it.toEntity(callId) })
+            }
+        }
     }
 
     private fun encode(snapshot: CallSnapshot): String = json.encodeToString(CallSnapshot.serializer(), snapshot)

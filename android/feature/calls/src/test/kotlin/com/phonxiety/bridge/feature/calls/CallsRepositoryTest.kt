@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.phonxiety.bridge.data.ApiOutcome
+import com.phonxiety.bridge.data.calls.CallCache
 import com.phonxiety.bridge.data.calls.CallCacheDatabase
 import com.phonxiety.bridge.data.calls.CallFilter
 import com.phonxiety.bridge.data.calls.DefaultCallsRepository
@@ -42,7 +43,7 @@ class CallsRepositoryTest {
         database = Room.inMemoryDatabaseBuilder(context, CallCacheDatabase::class.java)
             .allowMainThreadQueries()
             .build()
-        repository = DefaultCallsRepository(api, database.callDao())
+        repository = DefaultCallsRepository(api, CallCache(database))
     }
 
     @After
@@ -119,6 +120,10 @@ class CallsRepositoryTest {
 
     @Test
     fun transcriptPagesAccumulateInTheCache() = runTest {
+        // The screen pages a transcript only for a call it has already opened: the transcript
+        // table hangs off the record by a foreign key, so the record is cached first.
+        api.detail = ApiOutcome.Ok(200, detailSnapshot())
+        repository.detail("call-1")
         api.transcriptPages += ApiOutcome.Ok(
             200,
             TranscriptPage(
@@ -145,7 +150,8 @@ class CallsRepositoryTest {
         assertTrue(first.hasMore)
         assertTrue(second.complete)
         assertEquals(listOf<Long?>(2L, 3L), api.transcriptCursors)
-        assertEquals(listOf(3L, 4L), repository.observeTranscript("call-1").first().map { it.sequence })
+        // The opened record cached its own first turn; the two pages accumulate after it.
+        assertEquals(listOf(1L, 3L, 4L), repository.observeTranscript("call-1").first().map { it.sequence })
     }
 
     @Test
@@ -179,6 +185,26 @@ class CallsRepositoryTest {
 
         assertEquals(listOf("agreed"), api.markRequests)
         assertEquals(2, repository.observeCalls(CallFilter()).first().single().marks)
+    }
+
+    @Test
+    fun aTranscriptWriteThatFailsLeavesNoDetailBehind() = runTest {
+        // A trigger refuses one turn: the record and its transcript must land together or not at all.
+        database.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER fail_sequence_99 BEFORE INSERT ON call_transcript " +
+                "WHEN NEW.sequence = 99 BEGIN SELECT RAISE(ABORT, 'boom'); END"
+        )
+        api.detail = ApiOutcome.Ok(
+            200,
+            detailSnapshot(transcript = listOf(TranscriptTurn(99, "agent", "Hello", 1_764_000_006.0, true)))
+        )
+
+        val thrown = runCatching { repository.detail("call-1") }
+
+        assertTrue("the write must fail", thrown.isFailure)
+        assertNull("the record did not land", repository.observeDetail("call-1").first())
+        assertTrue("the summary did not land", repository.observeCalls(CallFilter()).first().isEmpty())
+        assertTrue("the transcript did not land", repository.observeTranscript("call-1").first().isEmpty())
     }
 
     @Test

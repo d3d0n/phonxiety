@@ -102,6 +102,8 @@ class CallDetailViewModel @Inject constructor(
     val state: StateFlow<CallDetailUiState> = _state.asStateFlow()
 
     private var boundCallId: String? = null
+    private var detailJob: Job? = null
+    private var refreshJob: Job? = null
     private var transcriptJob: Job? = null
     private var playerJob: Job? = null
 
@@ -109,7 +111,14 @@ class CallDetailViewModel @Inject constructor(
         if (callId.isBlank() || boundCallId == callId) return
         boundCallId = callId
         _state.value = CallDetailUiState(callId = callId)
+        detailJob?.cancel()
         transcriptJob?.cancel()
+        refreshJob?.cancel()
+        // The cache is the record the screen draws: a refresh writes through and its emission
+        // arrives here, so the screen and the stored copy can never disagree.
+        detailJob = viewModelScope.launch {
+            repository.observeDetail(callId).collect { snapshot -> applySnapshot(snapshot) }
+        }
         transcriptJob = viewModelScope.launch {
             repository.observeTranscript(callId).collect { turns ->
                 _state.update { it.copy(transcript = turns.ifEmpty { it.snapshot?.transcript ?: it.transcript }) }
@@ -118,36 +127,39 @@ class CallDetailViewModel @Inject constructor(
         refresh()
     }
 
+    /** One snapshot writer: whatever the cache holds is what the screen shows. */
+    private fun applySnapshot(snapshot: CallSnapshot?) {
+        _state.update {
+            it.copy(
+                snapshot = snapshot,
+                marks = snapshot?.marks ?: it.marks,
+                transcript = it.transcript.ifEmpty { snapshot?.transcript.orEmpty() },
+                hasMoreTranscript = snapshot?.hasMore ?: it.hasMoreTranscript,
+                loading = if (snapshot != null) false else it.loading,
+                missing = if (snapshot != null) false else it.missing
+            )
+        }
+    }
+
+    /**
+     * Asks the daemon for the record; it writes through the cache, whose emission is what changes
+     * the snapshot. A refresh already in flight is joined, not repeated: one pull, one request.
+     */
     fun refresh() {
         val callId = boundCallId ?: return
+        if (refreshJob?.isActive == true) return
         _state.update { it.copy(refreshing = true, error = null) }
-        viewModelScope.launch {
-            val result = repository.detail(callId, refresh = true)
-            val snapshot = result.snapshot
-            val failure = result.failure
-            if (snapshot == null && failure != null) {
-                _state.update {
-                    it.copy(
-                        refreshing = false,
-                        loading = false,
-                        offline = failure.code !in MISSING_CODES,
-                        missing = failure.code in MISSING_CODES,
-                        error = CallsFailure.of(failure.message, failure.code)
-                    )
-                }
-                return@launch
-            }
+        refreshJob = viewModelScope.launch {
+            val failure = repository.detail(callId, refresh = true).failure
             _state.update {
                 it.copy(
-                    snapshot = snapshot,
-                    marks = snapshot?.marks ?: it.marks,
-                    transcript = it.transcript.ifEmpty { snapshot?.transcript.orEmpty() },
-                    hasMoreTranscript = snapshot?.hasMore ?: false,
-                    loading = false,
                     refreshing = false,
-                    offline = failure != null,
-                    error = failure?.let { f -> CallsFailure.of(f.message, f.code) },
-                    missing = false
+                    // A success leaves the record to the cache's emission; only a refusal ends
+                    // the wait here, with the cache still on screen when it holds a copy.
+                    loading = if (failure != null) false else it.loading,
+                    offline = failure != null && failure.code !in MISSING_CODES,
+                    missing = failure != null && failure.code in MISSING_CODES,
+                    error = failure?.let { f -> CallsFailure.of(f.message, f.code) }
                 )
             }
         }

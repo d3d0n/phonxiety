@@ -15,6 +15,7 @@ import com.phonxiety.bridge.model.DeleteCallResult
 import com.phonxiety.bridge.model.MarksResponse
 import com.phonxiety.bridge.model.TranscriptTurn
 import java.io.File
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -38,6 +39,9 @@ import org.robolectric.annotation.Config
 /**
  * The delete question belongs to the screen state, and the confirmation consumes it before the
  * daemon is asked: a second tap has nothing left to confirm, so the record is deleted once.
+ *
+ * The snapshot has one writer, the cache's flow. A refresh asks the daemon, which writes through;
+ * a refresh that fails leaves the cached record where it was.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -45,7 +49,6 @@ import org.robolectric.annotation.Config
 class CallDetailViewModelTest {
     private val dispatcher = StandardTestDispatcher()
     private lateinit var repository: RecordingCallsRepository
-    private lateinit var viewModel: CallDetailViewModel
 
     private val context: Context = ApplicationProvider.getApplicationContext()
 
@@ -53,8 +56,6 @@ class CallDetailViewModelTest {
     fun setUp() {
         Dispatchers.setMain(dispatcher)
         repository = RecordingCallsRepository()
-        viewModel = CallDetailViewModel(context, repository, SilentPlayer)
-        viewModel.bind(CALL_ID)
     }
 
     @After
@@ -62,8 +63,13 @@ class CallDetailViewModelTest {
         Dispatchers.resetMain()
     }
 
+    private fun viewModel(): CallDetailViewModel = CallDetailViewModel(context, repository, SilentPlayer).also {
+        it.bind(CALL_ID)
+    }
+
     @Test
     fun theQuestionOpensAndClosesWithoutDeleting() = runTest(dispatcher) {
+        val viewModel = viewModel()
         viewModel.requestDelete()
         assertTrue(viewModel.state.value.confirmingDelete)
 
@@ -76,6 +82,7 @@ class CallDetailViewModelTest {
 
     @Test
     fun confirmingDeletesExactlyOnce() = runTest(dispatcher) {
+        val viewModel = viewModel()
         viewModel.requestDelete()
 
         var finished = 0
@@ -92,13 +99,86 @@ class CallDetailViewModelTest {
 
     @Test
     fun confirmingWithoutAQuestionDeletesNothing() = runTest(dispatcher) {
+        val viewModel = viewModel()
         viewModel.confirmDelete {}
         advanceUntilIdle()
         assertEquals(emptyList<String>(), repository.deleted)
     }
 
+    @Test
+    fun onlyTheDatabaseChangesTheDetailSnapshot() = runTest(dispatcher) {
+        repository.detailFlow.value = CACHED
+        repository.networkSnapshot = CALL.copy(summary = "Answered by the daemon")
+        val viewModel = viewModel()
+
+        advanceUntilIdle()
+
+        // The daemon's answer is not drawn directly: it only lands through the cache's flow.
+        assertEquals(CACHED, viewModel.state.value.snapshot)
+    }
+
+    @Test
+    fun aDatabaseUpdateReachesTheScreenWhileTheRefreshIsStillRunning() = runTest(dispatcher) {
+        val gate = CompletableDeferred<Unit>()
+        repository.gate = gate
+        val viewModel = viewModel()
+        advanceUntilIdle()
+        assertTrue(viewModel.state.value.refreshing)
+
+        repository.detailFlow.value = UPDATED
+        advanceUntilIdle()
+
+        assertEquals(UPDATED, viewModel.state.value.snapshot)
+        assertTrue("the refresh has not finished", viewModel.state.value.refreshing)
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertFalse(viewModel.state.value.refreshing)
+    }
+
+    @Test
+    fun concurrentRefreshesMakeOneNetworkRequest() = runTest(dispatcher) {
+        val gate = CompletableDeferred<Unit>()
+        repository.gate = gate
+        val viewModel = viewModel()
+        advanceUntilIdle()
+        assertEquals(1, repository.detailRequests)
+
+        // A pull while the first request is still open joins it instead of asking again.
+        viewModel.refresh()
+        viewModel.refresh()
+        advanceUntilIdle()
+        assertEquals("one request while one is in flight", 1, repository.detailRequests)
+
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(1, repository.detailRequests)
+
+        // Once it has finished, a new pull is a new request.
+        viewModel.refresh()
+        advanceUntilIdle()
+        assertEquals(2, repository.detailRequests)
+    }
+
+    @Test
+    fun aFailedRefreshLeavesTheCachedRecordOnScreen() = runTest(dispatcher) {
+        repository.detailFlow.value = CACHED
+        repository.detailFailure = ApiOutcome.Failure(503, "link_down", "the device link is down")
+        val viewModel = viewModel()
+
+        advanceUntilIdle()
+
+        assertEquals(CACHED, viewModel.state.value.snapshot)
+        assertTrue(viewModel.state.value.offline)
+        assertFalse(viewModel.state.value.refreshing)
+        assertFalse(viewModel.state.value.loading)
+    }
+
     private companion object {
         const val CALL_ID = "call-1"
+
+        val CALL = CallSnapshot(callId = CALL_ID, destination = "+998901234567", state = "ended", callOutcome = "answered")
+        val CACHED = CALL.copy(summary = "Table for two on Thursday")
+        val UPDATED = CALL.copy(summary = "Table moved to Friday")
     }
 }
 
@@ -116,15 +196,22 @@ private object SilentPlayer : CallAudioPlayer {
     override fun release() = Unit
 }
 
-/** A repository that answers one finished call and records every deletion it is asked for. */
+/** A repository whose cache flow and network answer the test drives separately. */
 private class RecordingCallsRepository : CallsRepository {
     val deleted = mutableListOf<String>()
+    val detailFlow = MutableStateFlow<CallSnapshot?>(CALL)
+    var networkSnapshot: CallSnapshot? = null
+    var detailFailure: ApiOutcome.Failure? = null
+    var detailRequests = 0
+
+    /** When set, a detail request waits for it: the test decides when the refresh finishes. */
+    var gate: CompletableDeferred<Unit>? = null
 
     override fun observeCalls(filter: CallFilter): Flow<List<CallSummary>> = flowOf(emptyList())
 
     override fun observeCall(callId: String): Flow<CallSummary?> = flowOf(null)
 
-    override fun observeDetail(callId: String): Flow<CallSnapshot?> = flowOf(CALL)
+    override fun observeDetail(callId: String): Flow<CallSnapshot?> = detailFlow
 
     override fun observeTranscript(callId: String): Flow<List<TranscriptTurn>> = flowOf(emptyList())
 
@@ -132,7 +219,11 @@ private class RecordingCallsRepository : CallsRepository {
 
     override suspend fun page(filter: CallFilter, before: Double?, limit: Int): CallPageResult = CallPageResult(emptyList(), hasMore = false, nextBefore = null, failure = null)
 
-    override suspend fun detail(callId: String, refresh: Boolean): CallDetailResult = CallDetailResult(CALL, failure = null, cached = false)
+    override suspend fun detail(callId: String, refresh: Boolean): CallDetailResult {
+        detailRequests++
+        gate?.await()
+        return CallDetailResult(networkSnapshot, failure = detailFailure, cached = networkSnapshot == null)
+    }
 
     override suspend fun transcript(callId: String, cursor: Long?, limit: Int): TranscriptResult = TranscriptResult(emptyList(), nextCursor = null, hasMore = false, complete = true, failure = null)
 

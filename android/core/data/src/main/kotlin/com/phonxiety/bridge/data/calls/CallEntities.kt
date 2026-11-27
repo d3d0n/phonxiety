@@ -1,6 +1,8 @@
 package com.phonxiety.bridge.data.calls
 
 import androidx.room.Entity
+import androidx.room.ForeignKey
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.CallSummary
@@ -10,12 +12,20 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
 /**
- * One call as the list and the detail screen need it: the daemon's summary fields plus the last
- * full record, kept as JSON so an opened call still renders with no link. A summary refresh never
- * blanks a value the detail record already filled in.
+ * One call as the list needs it: the daemon's summary fields and nothing else. The full record
+ * lives in [CallDetailEntity], so scrolling and filtering history never read a record's JSON.
+ * Every filter and sort column carries an index: the list is a SQL query, not an in-memory pass.
  */
-@Entity(tableName = "calls")
-data class CallEntity(
+@Entity(
+    tableName = "calls",
+    indices = [
+        Index("callOutcome"),
+        Index("farEnd"),
+        Index("createdAt"),
+        Index("cachedAt")
+    ]
+)
+data class CallSummaryEntity(
     @PrimaryKey val callId: String,
     val state: String?,
     val destination: String?,
@@ -33,13 +43,46 @@ data class CallEntity(
     val marks: Int,
     val hasRecording: Boolean,
     val live: Boolean,
-    val detailJson: String?,
-    val detailFetchedAt: Long?,
     val cachedAt: Long
 )
 
-/** One transcript turn, cached per call so a paged transcript survives the process. */
-@Entity(tableName = "call_transcript", primaryKeys = ["callId", "sequence"])
+/**
+ * The opened call's full record, kept as the daemon's JSON so the detail screen renders with no
+ * link. One row per call, removed with its summary by [ForeignKey.CASCADE].
+ */
+@Entity(
+    tableName = "call_detail",
+    foreignKeys = [
+        ForeignKey(
+            entity = CallSummaryEntity::class,
+            parentColumns = ["callId"],
+            childColumns = ["callId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ]
+)
+data class CallDetailEntity(
+    @PrimaryKey val callId: String,
+    val detailJson: String?,
+    val detailFetchedAt: Long?
+)
+
+/**
+ * One transcript turn, cached per call so a paged transcript survives the process. Deleting the
+ * call's detail row removes every turn with it; nothing else has to remember the second table.
+ */
+@Entity(
+    tableName = "call_transcript",
+    primaryKeys = ["callId", "sequence"],
+    foreignKeys = [
+        ForeignKey(
+            entity = CallDetailEntity::class,
+            parentColumns = ["callId"],
+            childColumns = ["callId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ]
+)
 data class TranscriptEntity(
     val callId: String,
     val sequence: Long,
@@ -49,7 +92,7 @@ data class TranscriptEntity(
     val finalTurn: Boolean
 )
 
-fun CallEntity.toSummary(): CallSummary = CallSummary(
+fun CallSummaryEntity.toSummary(): CallSummary = CallSummary(
     callId = callId,
     state = state,
     destination = destination,
@@ -87,7 +130,7 @@ fun TranscriptTurn.toEntity(callId: String): TranscriptEntity = TranscriptEntity
 )
 
 /** A summary page entry, merged into whatever the detail screen already stored. */
-fun CallSummary.toEntity(existing: CallEntity?, now: Long): CallEntity = CallEntity(
+fun CallSummary.toEntity(existing: CallSummaryEntity?, now: Long): CallSummaryEntity = CallSummaryEntity(
     callId = callId,
     state = state ?: existing?.state,
     destination = destination ?: existing?.destination,
@@ -105,17 +148,15 @@ fun CallSummary.toEntity(existing: CallEntity?, now: Long): CallEntity = CallEnt
     marks = marks,
     hasRecording = hasRecording || existing?.hasRecording == true,
     live = live,
-    detailJson = existing?.detailJson,
-    detailFetchedAt = existing?.detailFetchedAt,
     cachedAt = now
 )
 
 /** A full record: the JSON is what the detail screen decodes, the columns feed the list. */
-fun CallSnapshot.toEntity(existing: CallEntity?, detailJson: String, now: Long): CallEntity {
+fun CallSnapshot.toEntity(existing: CallSummaryEntity?, now: Long): CallSummaryEntity {
     val request = request ?: JsonObject(emptyMap())
     val destination = destination ?: request.string("destination") ?: existing?.destination
     val goal = request.string("goal") ?: existing?.goal
-    return CallEntity(
+    return CallSummaryEntity(
         callId = callId,
         state = state ?: existing?.state,
         destination = destination,
@@ -133,13 +174,11 @@ fun CallSnapshot.toEntity(existing: CallEntity?, detailJson: String, now: Long):
         marks = marks.size,
         hasRecording = hasRecording(existing),
         live = live != null,
-        detailJson = detailJson,
-        detailFetchedAt = now,
         cachedAt = now
     )
 }
 
-private fun CallSnapshot.durationSeconds(existing: CallEntity?): Double? {
+private fun CallSnapshot.durationSeconds(existing: CallSummaryEntity?): Double? {
     val ended = endedAt
     val connected = connectedAt
     if (ended == null || connected == null) return existing?.durationSeconds
@@ -147,7 +186,7 @@ private fun CallSnapshot.durationSeconds(existing: CallEntity?): Double? {
 }
 
 /** A recording exists when the archive names a file, either the web copy or the master. */
-private fun CallSnapshot.hasRecording(existing: CallEntity?): Boolean {
+private fun CallSnapshot.hasRecording(existing: CallSummaryEntity?): Boolean {
     val descriptor = recording ?: return existing?.hasRecording == true
     val compressed = descriptor["compressed"] as? JsonObject
     val candidates = listOf(descriptor["file"], compressed?.get("file"))
