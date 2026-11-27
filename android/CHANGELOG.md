@@ -45,6 +45,8 @@ and run cellular calls through this phone.
 
 - Unpairing, installing an update, deleting a call, hanging up from the live call screen, a doctor repair and the lab's test call each ask first. A second tap never repeats them, and the question survives rotating the phone.
 - "Install again" after a failed update works, and an update offer that disappears no longer reopens its question by itself.
+- **Error messages offer the step that can help.** A dropped link or a timeout offers Retry, a failure on the computer offers the Doctor, and a request the computer refused explains why without a Retry that would only be refused again.
+- Retry repeats exactly what failed: a failed save sends your edits again, a failed new call opens its review instead of dialling at once, a missing update document offers Check again, and the Lab repeats its failed audio action on the same call with the same tone.
 
 ## Reliability
 
