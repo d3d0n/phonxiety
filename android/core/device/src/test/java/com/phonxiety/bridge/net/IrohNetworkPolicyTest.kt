@@ -1,10 +1,7 @@
 package com.phonxiety.bridge.net
 
-import com.phonxiety.bridge.CallAdmission
 import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -31,26 +28,44 @@ class IrohNetworkPolicyTest {
     }
 
     @Test
-    fun aFinishedLinkNeverAsksThePolicySoTheReplacementCanStillRecycle() {
-        val calls = CallAdmission()
-        val old = IrohLinkAdmission()
-        // The old link ends while its network callback is still on its way.
-        old.finish()
+    fun aClosingLinkNeverAsksThePolicySoTheReplacementCanStillRecycle() {
+        val recycled = mutableListOf<Long>()
+        val record = { generation: Long -> recycled.add(generation) }
         val asked = AtomicInteger()
-        val stale = calls.tryBeginIdleLinkAction { false }!!
-        val attached = old.attachIf(stale) {
-            asked.incrementAndGet()
-            policy.admitRecycle(callOwned = false) == IrohNetworkDecision.RECYCLE
-        }
-        assertFalse(attached)
-        stale.release()
+        // The old link is failing: its lifecycle is closed, while its link-down
+        // publication (and the admission's finish) has not happened yet.
+        val old = IrohLinkLifecycle(recycleEndpoint = record, isClosed = { false })
+        old.bind(1)
+        old.close()
+        val stale = old.run(
+            recycle = true,
+            admit = { asked.incrementAndGet() == 0 || policy.admitRecycle(callOwned = false) == IrohNetworkDecision.RECYCLE }
+        ) { }
+        assertEquals(IrohActionOutcome.LINK_CLOSED, stale)
         assertEquals(0, asked.get())
 
-        // The replacement link's own network change is not held by a cooldown
-        // the stale callback never spent.
-        val replacement = IrohLinkAdmission()
-        val fresh = calls.tryBeginIdleLinkAction { false }!!
-        assertTrue(replacement.attachIf(fresh) { policy.admitRecycle(callOwned = false) == IrohNetworkDecision.RECYCLE })
-        replacement.finish()
+        // The replacement's own network change is not held by a cooldown the
+        // stale callback never spent.
+        val replacement = IrohLinkLifecycle(recycleEndpoint = record, isClosed = { false })
+        replacement.bind(2)
+        val fresh = replacement.run(
+            recycle = true,
+            admit = { policy.admitRecycle(callOwned = false) == IrohNetworkDecision.RECYCLE }
+        ) { }
+        assertEquals(IrohActionOutcome.EXECUTED, fresh)
+        assertEquals(listOf(2L), recycled)
+    }
+
+    @Test
+    fun aRefusedRecycleTouchesNothing() {
+        val recycled = mutableListOf<Long>()
+        val record = { generation: Long -> recycled.add(generation) }
+        var reported = false
+        val live = IrohLinkLifecycle(recycleEndpoint = record, isClosed = { false })
+        live.bind(1)
+        val outcome = live.run(recycle = true, admit = { false }) { reported = true }
+        assertEquals(IrohActionOutcome.REFUSED, outcome)
+        assertEquals(emptyList<Long>(), recycled)
+        assertEquals(false, reported)
     }
 }

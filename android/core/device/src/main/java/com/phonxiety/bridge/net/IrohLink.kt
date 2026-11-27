@@ -283,24 +283,20 @@ internal class IrohLink(
             BridgeLog.i(TAG, "${reason.wire}: a call or another link action owns the link, keeping the iroh endpoint")
             return
         }
-        // The policy is asked only while this link can still end: a callback
-        // that resumes after the link finished must not spend the cooldown the
-        // replacement link's own network change will need.
-        var decision: IrohNetworkDecision? = null
-        val admitted = admission.attachIf(action) {
-            network.admitRecycle(ownsCall()).also { decision = it } == IrohNetworkDecision.RECYCLE
-        }
-        if (!admitted) {
+        if (!admission.attach(action)) {
             action.release()
-            when (decision) {
-                IrohNetworkDecision.DURING_CALL -> BridgeLog.i(TAG, "${reason.wire} during a call: keeping the iroh endpoint")
-                IrohNetworkDecision.HELD -> BridgeLog.i(TAG, "${reason.wire} inside the recycle cooldown: keeping the iroh link")
-                IrohNetworkDecision.RECYCLE, null -> Unit
-            }
             return
         }
-        try {
-            lifecycle.run(recycle = true) {
+        // The policy is asked under the lifecycle monitor, only while this link
+        // is live: a callback that resumes while the link is failing or after it
+        // finished must not spend the cooldown the replacement link's own
+        // network change will need.
+        var decision: IrohNetworkDecision? = null
+        val outcome = try {
+            lifecycle.run(
+                recycle = true,
+                admit = { network.admitRecycle(ownsCall()).also { decision = it } == IrohNetworkDecision.RECYCLE }
+            ) {
                 BridgeLog.i(TAG, "${reason.wire}: recreating the iroh endpoint")
                 fail(listener, reason)
             }
@@ -308,6 +304,14 @@ internal class IrohLink(
             // Nothing was published: give the door back instead of leaving it shut.
             admission.finish()
             throw t
+        }
+        if (outcome != IrohActionOutcome.REFUSED) return
+        // The link stays live: take the token back so the door opens again.
+        admission.detach(action)
+        when (decision) {
+            IrohNetworkDecision.DURING_CALL -> BridgeLog.i(TAG, "${reason.wire} during a call: keeping the iroh endpoint")
+            IrohNetworkDecision.HELD -> BridgeLog.i(TAG, "${reason.wire} inside the recycle cooldown: keeping the iroh link")
+            IrohNetworkDecision.RECYCLE, null -> Unit
         }
     }
 

@@ -6,7 +6,10 @@ internal enum class IrohActionOutcome {
     EXECUTED,
 
     /** The link was already finished (cancelled or down): nothing was touched. */
-    LINK_CLOSED
+    LINK_CLOSED,
+
+    /** The link is live but the caller's admission refused: nothing was touched. */
+    REFUSED
 }
 
 /**
@@ -58,11 +61,14 @@ internal class IrohLinkLifecycle(
 
     /**
      * Recycles this link's endpoint generation when [recycle] is true and then
-     * runs [reportDown].
+     * runs [reportDown].  [admit] decides under the same monitor, only while
+     * the link is live: a finished link never asks it, so a cooldown it would
+     * start is never spent on a link that has nothing left to act on.
      */
-    fun run(recycle: Boolean, reportDown: () -> Unit): IrohActionOutcome {
+    fun run(recycle: Boolean, admit: () -> Boolean = { true }, reportDown: () -> Unit): IrohActionOutcome {
         synchronized(monitor) {
             if (closed || isClosed()) return IrohActionOutcome.LINK_CLOSED
+            if (!admit()) return IrohActionOutcome.REFUSED
             if (recycle && generation != NO_GENERATION) recycleEndpoint(generation)
         }
         reportDown()
