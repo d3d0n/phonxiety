@@ -247,13 +247,13 @@ Calls, keys, tokens and the daemon log live under `~/.local/share/phonxiety/`. A
 - `audio/` — Opus, conversion, pacing, recording, the shareable copy
 - `store.py`, `models.py`, `settings.py`, `runtime.py`, `power.py` — SQLite, request models, settings, wiring, keeping the Mac awake
 
-**Phone** (`android/app/src/main/java/com/phonxiety/bridge/`)
+**Phone** (`android/`) — one app in Gradle modules; [`android/README.md`](android/README.md) maps each module, what it owns and the rules it keeps
 
-- `BridgeEngine.kt` — the device protocol on the phone: hello, commands, call ownership
-- `PhoneAudio.kt`, `HandsetMute.kt` — call audio in and out, microphone state
-- `net/` — the phone link: `LinkSupervisor` (connect, reconnect, host watchdog), iroh and WebSocket transports, framing
-- `BridgeService.kt`, `BridgeInCallService.kt`, `BootReceiver.kt` — foreground service, Telecom, start on boot
-- `MainActivity.kt`, `BridgeConfig.kt`, `AppStorage.kt`, `CallLedger.kt` — status screen, pairing, storage
+- `core/device` — the bridge: the device protocol, call ownership, call audio, Telecom, the link to the computer (`net/`)
+- `core/data` — the daemon's app API client, the call cache, app and module updates
+- `feature/` — the screens: setup, dashboard, live call, calls, lab, settings, updates, doctor, widgets
+- `app` — the activity, navigation and notification actions
+- `magisk/` — the root module
 
 **Tasks** (`mise.toml`, `mise-tasks/`) — `setup`, `test`, `daemon`, `pair`, `phone:build`, `phone:install`, `phone:pair`, `daemon:install`
 
