@@ -118,8 +118,15 @@ data class LiveCallUiState(
      */
     val pendingHangUp: Boolean = false,
     /**
+     * A hang-up did not go through: [error] is that failure, and its card keeps the hang-up's own
+     * wording whatever happened to the action beside it. A later attempt, or the call's end,
+     * clears it.
+     */
+    val hangUpFailed: Boolean = false,
+    /**
      * A hang-up did not go through, so the error offers the phone's own call screen: the daemon
-     * could not end the call, but the platform still can. Hidden when the platform refuses.
+     * could not end the call, but the platform still can. Hidden when the platform refuses, which
+     * leaves [hangUpFailed] and its copy in place.
      */
     val callScreenAction: Boolean = false,
     val error: UiText? = null,
@@ -224,14 +231,14 @@ class LiveCallViewModel @Inject constructor(
         val snapshot = _state.value
         val text = snapshot.instruction.trim()
         if (text.isEmpty() || snapshot.busy || snapshot.hangingUp) return
-        _state.update { it.copy(busy = true, error = null, errorCode = null, callScreenAction = false) }
+        _state.update { it.copy(busy = true, error = null, errorCode = null, callScreenAction = false, hangUpFailed = false) }
         viewModelScope.launch {
             when (val outcome = api.instruction(snapshot.callId, text)) {
                 is ApiOutcome.Ok -> _state.update {
-                    it.copy(busy = false, instruction = "", error = null, errorCode = null, callScreenAction = false)
+                    it.copy(busy = false, instruction = "", error = null, errorCode = null, callScreenAction = false, hangUpFailed = false)
                 }
 
-                is ApiOutcome.Failure -> _state.update { it.copy(busy = false, error = UiText.Literal(outcome.message), errorCode = outcome.code, callScreenAction = false) }
+                is ApiOutcome.Failure -> _state.update { it.copy(busy = false, error = UiText.Literal(outcome.message), errorCode = outcome.code, callScreenAction = false, hangUpFailed = false) }
             }
         }
     }
@@ -239,15 +246,15 @@ class LiveCallViewModel @Inject constructor(
     fun togglePause() {
         val snapshot = _state.value
         if (snapshot.busy || snapshot.hangingUp) return
-        _state.update { it.copy(busy = true, error = null, errorCode = null, callScreenAction = false) }
+        _state.update { it.copy(busy = true, error = null, errorCode = null, callScreenAction = false, hangUpFailed = false) }
         viewModelScope.launch {
             val outcome = if (snapshot.muted) api.resume(snapshot.callId) else api.pause(snapshot.callId)
             when (outcome) {
                 is ApiOutcome.Ok -> _state.update {
-                    it.copy(busy = false, muted = outcome.value.muted, error = null, errorCode = null, callScreenAction = false)
+                    it.copy(busy = false, muted = outcome.value.muted, error = null, errorCode = null, callScreenAction = false, hangUpFailed = false)
                 }
 
-                is ApiOutcome.Failure -> _state.update { it.copy(busy = false, error = UiText.Literal(outcome.message), errorCode = outcome.code, callScreenAction = false) }
+                is ApiOutcome.Failure -> _state.update { it.copy(busy = false, error = UiText.Literal(outcome.message), errorCode = outcome.code, callScreenAction = false, hangUpFailed = false) }
             }
         }
     }
@@ -255,7 +262,7 @@ class LiveCallViewModel @Inject constructor(
     fun summarizeNow() {
         val snapshot = _state.value
         if (snapshot.summarizing || snapshot.hangingUp) return
-        _state.update { it.copy(summarizing = true, error = null, errorCode = null, callScreenAction = false) }
+        _state.update { it.copy(summarizing = true, error = null, errorCode = null, callScreenAction = false, hangUpFailed = false) }
         viewModelScope.launch {
             when (val outcome = api.summarize(snapshot.callId)) {
                 is ApiOutcome.Ok -> _state.update {
@@ -266,7 +273,7 @@ class LiveCallViewModel @Inject constructor(
                     )
                 }
 
-                is ApiOutcome.Failure -> _state.update { it.copy(summarizing = false, error = UiText.Literal(outcome.message), errorCode = outcome.code, callScreenAction = false) }
+                is ApiOutcome.Failure -> _state.update { it.copy(summarizing = false, error = UiText.Literal(outcome.message), errorCode = outcome.code, callScreenAction = false, hangUpFailed = false) }
             }
         }
     }
@@ -274,11 +281,11 @@ class LiveCallViewModel @Inject constructor(
     fun sendDtmf(digits: String) {
         val snapshot = _state.value
         if (digits.isBlank() || snapshot.busy || snapshot.hangingUp) return
-        _state.update { it.copy(busy = true, error = null, errorCode = null, callScreenAction = false) }
+        _state.update { it.copy(busy = true, error = null, errorCode = null, callScreenAction = false, hangUpFailed = false) }
         viewModelScope.launch {
             when (val outcome = api.dtmf(snapshot.callId, digits)) {
                 is ApiOutcome.Ok -> _state.update { it.copy(busy = false) }
-                is ApiOutcome.Failure -> _state.update { it.copy(busy = false, error = UiText.Literal(outcome.message), errorCode = outcome.code, callScreenAction = false) }
+                is ApiOutcome.Failure -> _state.update { it.copy(busy = false, error = UiText.Literal(outcome.message), errorCode = outcome.code, callScreenAction = false, hangUpFailed = false) }
             }
         }
     }
@@ -286,11 +293,11 @@ class LiveCallViewModel @Inject constructor(
     fun mark(kind: String, note: String? = null) {
         val snapshot = _state.value
         if (snapshot.busy || snapshot.hangingUp) return
-        _state.update { it.copy(busy = true, error = null, errorCode = null, callScreenAction = false) }
+        _state.update { it.copy(busy = true, error = null, errorCode = null, callScreenAction = false, hangUpFailed = false) }
         viewModelScope.launch {
             when (val outcome = api.addMark(snapshot.callId, kind, note)) {
                 is ApiOutcome.Ok -> _state.update { it.copy(busy = false, marks = outcome.value.marks) }
-                is ApiOutcome.Failure -> _state.update { it.copy(busy = false, error = UiText.Literal(outcome.message), errorCode = outcome.code, callScreenAction = false) }
+                is ApiOutcome.Failure -> _state.update { it.copy(busy = false, error = UiText.Literal(outcome.message), errorCode = outcome.code, callScreenAction = false, hangUpFailed = false) }
             }
         }
     }
@@ -338,6 +345,7 @@ class LiveCallViewModel @Inject constructor(
                 hangingUp = true,
                 pendingHangUp = false,
                 callScreenAction = false,
+                hangUpFailed = false,
                 error = null,
                 errorCode = null
             )
@@ -351,14 +359,21 @@ class LiveCallViewModel @Inject constructor(
                     _state.update { it.copy(busy = false) }
                 }
 
-                is ApiOutcome.Failure -> _state.update {
-                    it.copy(
-                        busy = false,
-                        hangingUp = false,
-                        error = UiText.Literal(outcome.message),
-                        errorCode = outcome.code,
-                        callScreenAction = true
-                    )
+                is ApiOutcome.Failure -> _state.update { current ->
+                    // A late failure on a call that already ended is news about a call that is
+                    // over: it releases the latch and installs nothing on the ended screen.
+                    if (current.ended) {
+                        current.copy(busy = false, hangingUp = false)
+                    } else {
+                        current.copy(
+                            busy = false,
+                            hangingUp = false,
+                            hangUpFailed = true,
+                            error = UiText.Literal(outcome.message),
+                            errorCode = outcome.code,
+                            callScreenAction = true
+                        )
+                    }
                 }
             }
         }
@@ -489,7 +504,7 @@ class LiveCallViewModel @Inject constructor(
                 ended = ended,
                 hangingUp = it.hangingUp && !ended,
                 pendingHangUp = it.pendingHangUp && !ended
-            )
+            ).withCallEnded(ended)
         }
     }
 
@@ -519,7 +534,7 @@ class LiveCallViewModel @Inject constructor(
                             ended = ended,
                             hangingUp = it.hangingUp && !ended,
                             pendingHangUp = it.pendingHangUp && !ended
-                        )
+                        ).withCallEnded(ended)
                     }
                 }
 
@@ -632,7 +647,7 @@ internal fun reduceCallEvents(
                     ended = ended,
                     hangingUp = next.hangingUp && !ended,
                     pendingHangUp = next.pendingHangUp && !ended
-                )
+                ).withCallEnded(ended)
             }
 
             "ended" -> next = next.copy(
@@ -643,7 +658,7 @@ internal fun reduceCallEvents(
                 ended = true,
                 hangingUp = false,
                 pendingHangUp = false
-            )
+            ).withCallEnded(true)
         }
     }
     turns?.let { list -> next = next.copy(turns = list) }
@@ -658,6 +673,15 @@ private fun CallEvent.secondsEpochMs(): Long = at?.let(::parseIsoSeconds)?.let {
 private val TERMINAL_STATES = setOf("ended", "cancelled", "failed", "unknown")
 
 private fun isTerminalState(state: String?): Boolean = state in TERMINAL_STATES
+
+/**
+ * The call's own end retires the hang-up failure: its card and its action both describe a call
+ * that is still up, so neither outlives that call. A failure of any other action is left alone.
+ */
+internal fun LiveCallUiState.withCallEnded(ended: Boolean): LiveCallUiState {
+    if (!ended || !hangUpFailed) return this
+    return copy(hangUpFailed = false, callScreenAction = false, error = null, errorCode = null)
+}
 
 /** `2026-11-26T10:00:00+00:00` → epoch seconds; the transcript only needs the relative order. */
 internal fun parseIsoSeconds(value: String): Double? {

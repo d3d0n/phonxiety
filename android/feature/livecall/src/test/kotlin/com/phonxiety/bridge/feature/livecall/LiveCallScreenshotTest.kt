@@ -128,6 +128,7 @@ class LiveCallScreenshotTest {
                             onDismissHangUp = onDismissHangUp,
                             onReload = {},
                             onOpenCallScreen = {},
+                            onRetryHangUp = {},
                             onOpenDetail = {},
                             nowEpochMs = NOW
                         )
@@ -521,6 +522,7 @@ class LiveCallScreenshotTest {
                         onDismissHangUp = { state.value = state.value.copy(pendingHangUp = false) },
                         onReload = {},
                         onOpenCallScreen = {},
+                        onRetryHangUp = {},
                         onOpenDetail = {},
                         nowEpochMs = NOW
                     )
@@ -616,6 +618,8 @@ class LiveCallScreenshotTest {
                             state.value = state.value.copy(
                                 pendingHangUp = false,
                                 hangingUp = false,
+                                hangUpFailed = true,
+                                callScreenAction = true,
                                 error = UiText.Literal("the bridge service is not running"),
                                 errorCode = "link_down"
                             )
@@ -623,6 +627,7 @@ class LiveCallScreenshotTest {
                         onDismissHangUp = { state.value = state.value.copy(pendingHangUp = false) },
                         onReload = {},
                         onOpenCallScreen = {},
+                        onRetryHangUp = {},
                         onOpenDetail = {},
                         nowEpochMs = NOW
                     )

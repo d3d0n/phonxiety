@@ -79,6 +79,7 @@ class LiveCallRecreationTest {
                         onDismissHangUp = viewModel::dismissHangUp,
                         onReload = viewModel::reload,
                         onOpenCallScreen = viewModel::openCallScreen,
+                        onRetryHangUp = viewModel::hangUp,
                         onOpenDetail = {}
                     )
                 }

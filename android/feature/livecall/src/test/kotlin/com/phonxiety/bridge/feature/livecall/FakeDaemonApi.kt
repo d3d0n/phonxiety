@@ -30,6 +30,7 @@ import com.phonxiety.bridge.model.TranscriptPage
 import com.phonxiety.bridge.model.ValidationIssue
 import com.phonxiety.bridge.model.ValidationResult
 import java.io.OutputStream
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.serialization.json.JsonObject
 
 /**
@@ -62,6 +63,12 @@ class FakeDaemonApi : DaemonApi {
     var dtmf: ApiOutcome<DtmfResult> = ApiOutcome.Ok(200, DtmfResult())
     var marks: ApiOutcome<MarksResponse> = ApiOutcome.Ok(200, MarksResponse())
     var hangup: ApiOutcome<CallSnapshot> = ApiOutcome.Failure(500, "not_configured", "no hangup handler")
+
+    /**
+     * When set, a hang-up waits for it before answering, so a test can land an event in between
+     * and see what a late answer installs on the screen.
+     */
+    var hangupGate: CompletableDeferred<Unit>? = null
 
     override suspend fun info(): ApiOutcome<DaemonInfo> {
         infoCalls++
@@ -122,6 +129,7 @@ class FakeDaemonApi : DaemonApi {
     override suspend fun hangup(callId: String): ApiOutcome<CallSnapshot> {
         hangupRequests += callId
         hangupCalls++
+        hangupGate?.await()
         return hangup
     }
 

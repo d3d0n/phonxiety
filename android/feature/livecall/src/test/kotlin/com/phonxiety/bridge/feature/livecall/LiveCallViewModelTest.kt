@@ -15,6 +15,7 @@ import com.phonxiety.bridge.model.MarksResponse
 import com.phonxiety.bridge.model.SummaryResult
 import com.phonxiety.bridge.model.TranscriptTurn
 import com.phonxiety.bridge.model.VoiceControls
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.StateFlow
@@ -355,6 +356,103 @@ class LiveCallViewModelTest {
         assertTrue(viewModel.state.value.hangingUp)
         api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(endedEvent(1))))
         advanceUntilIdle()
+    }
+
+    @Test
+    fun aHangUpFailureOutlivesTheRefusedCallScreenAndRetriesTheHangUp() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        api.info = ApiOutcome.Ok(200, DaemonInfo(voiceControls = VoiceControls(hangup = true)))
+        api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "active"))
+        api.hangup = ApiOutcome.Failure(403, "forbidden", "the daemon refused")
+
+        val viewModel = viewModel(api, FakeCallScreenOpener(shown = false))
+        viewModel.bind(CALL_ID)
+        runCurrent()
+
+        viewModel.requestHangUp()
+        runCurrent()
+        viewModel.confirmHangUp()
+        runCurrent()
+        viewModel.openCallScreen()
+        runCurrent()
+
+        val refused = viewModel.state.value
+        assertFalse("the platform refused: the action disappears", refused.callScreenAction)
+        assertTrue("but the failure keeps its own identity", refused.hangUpFailed)
+        assertNotNull("and its own wording", refused.error)
+        assertEquals("forbidden", refused.errorCode)
+
+        // A retry from the card is the hang-up again, not a reload of the record.
+        val infoBefore = api.infoCalls
+        viewModel.hangUp()
+        runCurrent()
+        assertEquals("the retry reaches the daemon", 2, api.hangupCalls)
+        assertEquals("and does not reload instead", infoBefore, api.infoCalls)
+
+        api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(endedEvent(1))))
+        advanceUntilIdle()
+    }
+
+    @Test
+    fun aHangUpFailureEndsWithTheCall() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        api.info = ApiOutcome.Ok(200, DaemonInfo(voiceControls = VoiceControls(hangup = true)))
+        api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "active"))
+        api.hangup = ApiOutcome.Failure(503, "link_down", "the daemon is not reachable")
+
+        val viewModel = viewModel(api)
+        viewModel.bind(CALL_ID)
+        runCurrent()
+        viewModel.requestHangUp()
+        runCurrent()
+        viewModel.confirmHangUp()
+        runCurrent()
+        assertTrue(viewModel.state.value.hangUpFailed)
+
+        // The phone's own call screen ends the call while the failure is still on screen.
+        api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(endedEvent(1))))
+        advanceUntilIdle()
+
+        val ended = viewModel.state.value
+        assertTrue("the call ended", ended.ended)
+        assertFalse("the failure went with it", ended.hangUpFailed)
+        assertNull("its message too", ended.error)
+        assertNull(ended.errorCode)
+        assertFalse("and its action", ended.callScreenAction)
+    }
+
+    @Test
+    fun aLateHangUpFailureInstallsNothingOnAnEndedCall() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        api.info = ApiOutcome.Ok(200, DaemonInfo(voiceControls = VoiceControls(hangup = true)))
+        api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "active"))
+        api.hangup = ApiOutcome.Failure(503, "link_down", "the daemon is not reachable")
+        val gate = CompletableDeferred<Unit>()
+        api.hangupGate = gate
+
+        val viewModel = viewModel(api)
+        viewModel.bind(CALL_ID)
+        runCurrent()
+        viewModel.hangUp()
+        runCurrent()
+        assertTrue("the hang-up is in flight", viewModel.state.value.hangingUp)
+
+        // The end arrives before the daemon answers the hang-up.
+        api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(endedEvent(1))))
+        advanceUntilIdle()
+        assertTrue(viewModel.state.value.ended)
+
+        gate.complete(Unit)
+        runCurrent()
+
+        val late = viewModel.state.value
+        assertTrue("the call stays ended", late.ended)
+        assertFalse("the latch is released", late.hangingUp)
+        assertFalse("no busy state is left", late.busy)
+        assertFalse("nothing is installed after the end", late.hangUpFailed)
+        assertNull(late.error)
+        assertNull(late.errorCode)
+        assertFalse(late.callScreenAction)
     }
 
     @Test

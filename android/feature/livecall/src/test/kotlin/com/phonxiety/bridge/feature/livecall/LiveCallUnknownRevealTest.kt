@@ -119,6 +119,7 @@ class LiveCallUnknownRevealTest {
                         onDismissHangUp = {},
                         onReload = {},
                         onOpenCallScreen = {},
+                        onRetryHangUp = {},
                         onOpenDetail = {},
                         nowEpochMs = NOW
                     )

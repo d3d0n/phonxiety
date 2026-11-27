@@ -112,6 +112,7 @@ internal fun ControlsColumn(
     onMark: (String) -> Unit,
     onReload: () -> Unit,
     onOpenCallScreen: () -> Unit,
+    onRetryHangUp: () -> Unit,
     modifier: Modifier,
     showError: Boolean = true
 ) {
@@ -125,6 +126,8 @@ internal fun ControlsColumn(
                     message = message,
                     code = state.errorCode,
                     onReload = onReload,
+                    hangUpFailed = state.hangUpFailed,
+                    onRetryHangUp = onRetryHangUp,
                     onOpenCallScreen = if (state.callScreenAction) onOpenCallScreen else null
                 )
             }
@@ -425,27 +428,41 @@ private fun DtmfCard(onDtmf: (String) -> Unit, enabled: Boolean) {
     }
 }
 
-/** The call's own failure, with the daemon's code behind Details and one action beside it. */
+/**
+ * The call's own failure, with the daemon's code behind Details and one action beside it.
+ *
+ * A failed hang-up keeps its own title and message for as long as it lasts, because it describes
+ * something different from a refused instruction or summary: the call is still up. What can be
+ * done about it does change: while the phone's own call screen is available it is the first offer,
+ * and once the platform refuses it the card retries the daemon-side hang-up instead. Never the
+ * generic reload — that would report a fact, not end the call. Every other failure keeps the
+ * daemon-side retry.
+ */
 @Composable
 internal fun LiveCallError(
     message: UiText,
     code: String?,
     onReload: () -> Unit,
     modifier: Modifier = Modifier,
+    hangUpFailed: Boolean = false,
+    onRetryHangUp: () -> Unit = {},
     onOpenCallScreen: (() -> Unit)? = null
 ) {
-    // A failed hang-up leaves the call up: the card says so and leads to the platform's own
-    // in-call controls. Every other failure keeps the daemon-side retry.
+    val callScreen = if (hangUpFailed) onOpenCallScreen else null
+    val actionLabel = when {
+        callScreen != null -> stringResource(R.string.live_call_open_call_screen)
+        hangUpFailed -> stringResource(R.string.live_call_hang_up)
+        else -> stringResource(R.string.live_call_retry)
+    }
+    val action = callScreen ?: if (hangUpFailed) onRetryHangUp else onReload
     ErrorCard(
         title = stringResource(
-            if (onOpenCallScreen != null) R.string.live_call_hang_up_failed_title else R.string.live_call_action_failed_title
+            if (hangUpFailed) R.string.live_call_hang_up_failed_title else R.string.live_call_action_failed_title
         ),
         message = message.asString(),
         output = code,
-        actionLabel = stringResource(
-            if (onOpenCallScreen != null) R.string.live_call_open_call_screen else R.string.live_call_retry
-        ),
-        onAction = onOpenCallScreen ?: onReload,
+        actionLabel = actionLabel,
+        onAction = action,
         modifier = modifier
     )
 }

@@ -88,6 +88,7 @@ fun LiveCallRoute(
         onDismissHangUp = viewModel::dismissHangUp,
         onReload = viewModel::reload,
         onOpenCallScreen = viewModel::openCallScreen,
+        onRetryHangUp = viewModel::hangUp,
         onOpenDetail = onOpenDetail,
         nowEpochMs = now,
         modifier = modifier
@@ -114,6 +115,7 @@ fun LiveCallScreen(
     onDismissHangUp: () -> Unit,
     onReload: () -> Unit,
     onOpenCallScreen: () -> Unit,
+    onRetryHangUp: () -> Unit,
     onOpenDetail: (String) -> Unit,
     modifier: Modifier = Modifier,
     nowEpochMs: Long = System.currentTimeMillis()
@@ -154,6 +156,7 @@ fun LiveCallScreen(
                     onDismissHangUp = onDismissHangUp,
                     onReload = onReload,
                     onOpenCallScreen = onOpenCallScreen,
+                    onRetryHangUp = onRetryHangUp,
                     onOpenDetail = onOpenDetail,
                     nowEpochMs = nowEpochMs
                 )
@@ -177,6 +180,7 @@ private fun LiveCallBody(
     onDismissHangUp: () -> Unit,
     onReload: () -> Unit,
     onOpenCallScreen: () -> Unit,
+    onRetryHangUp: () -> Unit,
     onOpenDetail: (String) -> Unit,
     nowEpochMs: Long
 ) {
@@ -194,6 +198,7 @@ private fun LiveCallBody(
             onMark = onMark,
             onReload = onReload,
             onOpenCallScreen = onOpenCallScreen,
+            onRetryHangUp = onRetryHangUp,
             showError = showError,
             modifier = modifier
         )
@@ -242,6 +247,8 @@ private fun LiveCallBody(
                                 message = message,
                                 code = state.errorCode,
                                 onReload = onReload,
+                                hangUpFailed = state.hangUpFailed,
+                                onRetryHangUp = onRetryHangUp,
                                 onOpenCallScreen = if (state.callScreenAction) onOpenCallScreen else null,
                                 modifier = Modifier.padding(bottom = 8.dp)
                             )
