@@ -98,7 +98,8 @@ class IrohFrameReadTest {
         val payload = """{"type":"api","id":"x","app_token":"TOKEN-abcdefghij"}"""
         val dir: File = Files.createTempDirectory("frame-tap-token").toFile()
         val scope = CoroutineScope(Dispatchers.IO)
-        val dump = FrameTapDump(isEnabled = { true }, dir = dir, clock = { 1L }, scope = scope)
+        val dump = FrameTapDump(dir = dir, clock = { 1L }, scope = scope)
+        dump.noteSetting(true)
         val seen = mutableListOf<FrameRecord>()
         val sink = object : FrameTapSink {
             override val enabled: Boolean = true

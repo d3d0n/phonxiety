@@ -2,6 +2,9 @@ package com.phonxiety.bridge.net
 
 import java.io.File
 import java.nio.file.Files
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.test.runTest
 import okhttp3.Request
 import okhttp3.WebSocket
@@ -13,9 +16,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The address link's send path: synchronous hand-off in call order, refusal
- * reported up, the socket's own queue as the backlog, and outbound metadata in
- * the dump.
+ * The address link's send path: synchronous hand-off in call order, a refusal
+ * reported only as false, the socket's own queue as the backlog, and outbound
+ * metadata in the dump.
  */
 class SocketSenderTest {
     /** The socket as OkHttp presents it: `send` returns whether it took the frame. */
@@ -59,28 +62,25 @@ class SocketSenderTest {
         assertEquals(listOf("text:hello", "binary:3", "text:after"), socket.calls)
     }
 
+    /** A refusal is only a false: OkHttp's own listener reports the link down. */
     @Test
-    fun aRefusedBinaryFrameReportsFalse() {
+    fun aRefusedFrameIsOnlyAFalse() {
         val socket = FakeSocket(accepts = false)
-        var refusals = 0
-        val sender = SocketSender({ socket }, onRefused = { refusals++ })
+        val sender = SocketSender({ socket })
 
         assertFalse("the socket refused the frame", sender.sendBinary(bytes))
         assertEquals(listOf("binary:3"), socket.calls)
-        assertEquals("the refusal is reported once", 1, refusals)
 
         assertFalse("text is refused the same way", sender.sendText("hello"))
-        assertEquals(2, refusals)
+        assertEquals("both attempts reached the socket", listOf("binary:3", "text:hello"), socket.calls)
     }
 
     @Test
-    fun noSocketIsARefusalWithoutATerminalReport() {
-        var refusals = 0
-        val sender = SocketSender({ null }, onRefused = { refusals++ })
+    fun noSocketIsARefusal() {
+        val sender = SocketSender({ null })
 
         assertFalse(sender.sendText("hello"))
         assertFalse(sender.sendBinary(bytes))
-        assertEquals("nothing was live to report down", 0, refusals)
     }
 
     @Test
@@ -102,7 +102,8 @@ class SocketSenderTest {
     @Test
     fun outboundFramesReachTheDumpWithoutPayload() = runTest {
         val dir: File = Files.createTempDirectory("socket-sender-tap").toFile()
-        val dump = FrameTapDump(isEnabled = { true }, dir = dir, clock = { 1L }, scope = this)
+        val dump = FrameTapDump(dir = dir, clock = { 1L }, scope = this)
+        dump.noteSetting(true)
         val session = FrameTapSession(dump, linkId = 4L)
         val socket = FakeSocket()
         val sender = SocketSender({ socket }, tap = session)
@@ -123,10 +124,50 @@ class SocketSenderTest {
         dir.deleteRecursively()
     }
 
+    /**
+     * The metadata is recorded after the hand-off, outside the send lock: a
+     * tap that blocks (a busy disk) must not stall the next frame.  Under the
+     * old order the second send would wait on the sender's monitor while the
+     * first frame's dump is still in progress.
+     */
+    @Test
+    fun theTapDoesNotHoldTheSendLock() {
+        val socket = FakeSocket()
+        val tapEntered = CountDownLatch(1)
+        val releaseTap = CountDownLatch(1)
+        val calls = AtomicInteger(0)
+        val tap = object : FrameTapSink {
+            override val enabled: Boolean = true
+
+            override fun frame(direction: FrameDirection, stream: FrameStream, kind: Int, bytes: Int) {
+                if (calls.incrementAndGet() == 1) {
+                    tapEntered.countDown()
+                    releaseTap.await()
+                }
+            }
+        }
+        val sender = SocketSender({ socket }, tap)
+
+        val first = Thread { sender.sendText("first") }.apply { start() }
+        assertTrue("the first frame reached the tap", tapEntered.await(5, TimeUnit.SECONDS))
+
+        // The first frame is already in OkHttp's hands: the tap's slowness
+        // must not be able to hold the next send.
+        val second = Thread { sender.sendText("second") }.apply { start() }
+        second.join(2_000)
+        assertFalse("the tap never holds the send lock", second.isAlive)
+
+        releaseTap.countDown()
+        first.join(5_000)
+        second.join(5_000)
+        assertEquals("both hand-offs happened in call order", listOf("text:first", "text:second"), socket.calls)
+    }
+
     @Test
     fun aRefusedFrameIsNotDumped() = runTest {
         val dir: File = Files.createTempDirectory("socket-sender-refused").toFile()
-        val dump = FrameTapDump(isEnabled = { true }, dir = dir, clock = { 1L }, scope = this)
+        val dump = FrameTapDump(dir = dir, clock = { 1L }, scope = this)
+        dump.noteSetting(true)
         val session = FrameTapSession(dump, linkId = 4L)
         val sender = SocketSender({ FakeSocket(accepts = false) }, tap = session)
         try {

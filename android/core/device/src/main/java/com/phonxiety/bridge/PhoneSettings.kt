@@ -55,8 +55,8 @@ object PhoneCodec {
  * no relays at all, and [relayUrls] is that own list.
  *
  * [frameTap] turns on the transport frame dump: direction, stream, frame type, byte size
- * and the link's correlation id only — never payload bytes.  Off by default, and read
- * when a link attempt starts, so a change takes effect on the next dial.
+ * and the link's correlation id only — never payload bytes.  Off by default; a change
+ * applies to links that are already running, not only to the next dial.
  */
 data class PhoneSettings(
     val preferredCodec: String = PhoneCodec.AUTO,

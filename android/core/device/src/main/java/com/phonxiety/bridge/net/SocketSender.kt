@@ -16,13 +16,27 @@ import okio.ByteString
  *
  * A refused send (OkHttp's queue full, or the socket already gone) returns
  * false to the caller, so [LinkSupervisor.sendFrame] and live capture count the
- * frame as unsent instead of assuming delivery.  [onRefused] runs outside the
- * lock, so a terminal report never holds it.
+ * frame as unsent instead of assuming delivery.
+ *
+ * A refusal is never a terminal event here.  Every false from [WebSocket.send]
+ * is one of two OkHttp conditions, and both leave the listener in charge of the
+ * report: `failed`/`enqueuedClose`, where `onFailure`/`onClosing`/`onClosed`
+ * has fired or is scheduled, or the 16 MiB queue bound, where OkHttp closes the
+ * socket itself and the same close callbacks follow.  So the link goes down
+ * through OkHttp's own listener on OkHttp's thread, never through the producer
+ * that happened to hit the refusal.  That is what keeps this send path out of
+ * the engine-lock versus supervisor-monitor cycle: [LinkSupervisor]'s send
+ * methods hold the supervisor monitor while they call here, and a synchronous
+ * down report would walk into the engine lock from inside it.
+ *
+ * The frame tap records the accepted frame *after* the lock is released: the
+ * hand-off stays under the lock, the metadata write does not, so a slow dump
+ * can never hold up another producer.  Tap order therefore need not match wire
+ * order exactly, and the sequence number is taken by the tap itself.
  */
 internal class SocketSender(
     private val socket: () -> WebSocket?,
-    private val tap: FrameTapSink = FrameTapSink.None,
-    private val onRefused: () -> Unit = {}
+    private val tap: FrameTapSink = FrameTapSink.None
 ) {
     private val lock = Any()
 
@@ -35,12 +49,8 @@ internal class SocketSender(
 
     private fun send(kind: Int, bytes: Int, handOff: (WebSocket) -> Boolean): Boolean {
         val target = socket() ?: return false
-        val accepted = synchronized(lock) {
-            val sent = handOff(target)
-            if (sent && tap.enabled) tap.frame(FrameDirection.OUT, FrameStream.SOCKET, kind, bytes)
-            sent
-        }
-        if (!accepted) onRefused()
+        val accepted = synchronized(lock) { handOff(target) }
+        if (accepted && tap.enabled) tap.frame(FrameDirection.OUT, FrameStream.SOCKET, kind, bytes)
         return accepted
     }
 }

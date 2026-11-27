@@ -2,6 +2,13 @@ package com.phonxiety.bridge.net
 
 import java.io.File
 import java.nio.file.Files
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -33,7 +40,6 @@ class FrameTapTest {
     @Test
     fun offWritesNothing() = runTest {
         val dump = FrameTapDump(
-            isEnabled = { false },
             dir = dir,
             clock = { 1L },
             scope = this
@@ -50,12 +56,12 @@ class FrameTapTest {
     @Test
     fun recordsAreBoundedAndRotate() = runTest {
         val dump = FrameTapDump(
-            isEnabled = { true },
             dir = dir,
             clock = { 1L },
             scope = this,
             maxBytes = 240
         )
+        dump.noteSetting(true)
         repeat(30) { dump.record(record(it.toLong())) }
         dump.close()
         dump.job.join()
@@ -72,12 +78,12 @@ class FrameTapTest {
     @Test
     fun aFullTapDropsAndCounts() = runTest {
         val dump = FrameTapDump(
-            isEnabled = { true },
             dir = dir,
             clock = { 1L },
             scope = this,
             capacity = 2
         )
+        dump.noteSetting(true)
         // Nothing has consumed the queue yet: two fit, the rest are dropped and counted.
         repeat(5) { dump.record(record(it.toLong())) }
         dump.close()
@@ -91,11 +97,11 @@ class FrameTapTest {
     @Test
     fun eachRecordHasDirectionStreamKindSizeLinkAndSeq() = runTest {
         val dump = FrameTapDump(
-            isEnabled = { true },
             dir = dir,
             clock = { 5_000L },
             scope = this
         )
+        dump.noteSetting(true)
         dump.record(
             FrameRecord(
                 atMs = 5_000L,
@@ -115,9 +121,7 @@ class FrameTapTest {
 
     @Test
     fun disablingDiscardsRecordsStillQueued() = runTest {
-        var on = true
         val dump = FrameTapDump(
-            isEnabled = { on },
             dir = dir,
             clock = { 1L },
             scope = this
@@ -126,7 +130,6 @@ class FrameTapTest {
         // Nothing has run the appender yet: both records are still queued.
         dump.record(record(1))
         dump.record(record(2))
-        on = false
         dump.noteSetting(false)
         dump.close()
         dump.job.join()
@@ -134,20 +137,23 @@ class FrameTapTest {
         assertFalse("a disabled tap writes nothing already queued", file(FrameTapDump.CURRENT).exists())
     }
 
+    /**
+     * Controlled interleaving: the test scheduler holds the appender back, so
+     * the record is queued under the first enable, the tap is disabled and
+     * enabled again, and only then does the appender run.  The record captured
+     * under the dead generation is dropped; the one captured under the new
+     * enable is written.
+     */
     @Test
     fun reEnablingNeverWritesTheOlderGenerationsRecords() = runTest {
-        var on = true
         val dump = FrameTapDump(
-            isEnabled = { on },
             dir = dir,
             clock = { 1L },
             scope = this
         )
         dump.noteSetting(true)
         dump.record(record(1))
-        on = false
         dump.noteSetting(false)
-        on = true
         dump.noteSetting(true)
         dump.record(record(2))
         dump.close()
@@ -168,12 +174,12 @@ class FrameTapTest {
             File(this, "keep").writeText("x")
         }
         val dump = FrameTapDump(
-            isEnabled = { true },
             dir = dir,
             clock = { 1L },
             scope = this,
             maxBytes = 60
         )
+        dump.noteSetting(true)
         repeat(20) { dump.record(record(it.toLong())) }
         dump.close()
         dump.job.join()
@@ -181,5 +187,58 @@ class FrameTapTest {
         assertTrue("the failed rotation leaves the directory in place", previous.isDirectory)
         val current = file(FrameTapDump.CURRENT)
         assertTrue("the bound holds without a rotation: ${current.length()}", current.length() <= 60L)
+    }
+
+    /**
+     * Controlled interleaving through the seam: the appender is paused inside
+     * its write, so it already holds `admission` and has already passed the
+     * generation check.  A disable arriving now cannot land between the check
+     * and the write, so it waits until the write finishes; the record whose
+     * check already passed is written.
+     */
+    @Test
+    fun disablingWhileTheAppenderWritesWaitsForTheWrite() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        val dump = FrameTapDump(
+            dir = dir,
+            clock = { 1L },
+            scope = scope,
+            beforeWrite = {
+                entered.countDown()
+                release.await()
+            }
+        )
+        try {
+            dump.noteSetting(true)
+            dump.record(record(1))
+            assertTrue("the appender reached its write", entered.await(5, TimeUnit.SECONDS))
+
+            val toggled = CountDownLatch(1)
+            val toggler = Thread {
+                dump.noteSetting(false)
+                toggled.countDown()
+            }.apply { start() }
+
+            assertFalse(
+                "the disable waits for the check-and-write section",
+                toggled.await(300, TimeUnit.MILLISECONDS)
+            )
+
+            release.countDown()
+            assertTrue("the disable lands once the write finishes", toggled.await(5, TimeUnit.SECONDS))
+            toggler.join(5_000)
+        } finally {
+            release.countDown()
+            dump.close()
+            runBlocking { dump.job.join() }
+            scope.cancel()
+        }
+
+        assertTrue(
+            "the record admitted before the toggle is written",
+            file(FrameTapDump.CURRENT).readText().contains("1001,7,1,")
+        )
     }
 }

@@ -6,8 +6,8 @@ import com.phonxiety.bridge.PhoneSettingsStore
 import com.phonxiety.bridge.bridgeScope
 import java.io.File
 import java.io.FileOutputStream
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -92,14 +92,12 @@ internal object FrameTap {
     private val lock = Any()
     private val links = AtomicLong(0)
 
-    @Volatile private var enabled = false
-
-    private var dump: FrameTapDump? = null
+    @Volatile private var dump: FrameTapDump? = null
 
     /** One attempt's tap: off while the preference is off, dumping to the shared files otherwise. */
     fun of(context: Context): FrameTapSink = FrameTapSession(shared(context), links.incrementAndGet())
 
-    fun enabled(): Boolean = enabled
+    fun enabled(): Boolean = dump?.enabled ?: false
 
     private fun shared(context: Context): FrameTapDump {
         synchronized(lock) {
@@ -107,14 +105,12 @@ internal object FrameTap {
             val app = context.applicationContext
             val scope = bridgeScope("phonxiety-frame-tap", Dispatchers.IO)
             val created = FrameTapDump(
-                isEnabled = { enabled },
                 dir = AppStorage.deviceProtected(app).filesDir,
                 clock = { System.currentTimeMillis() },
                 scope = scope
             )
             scope.launch {
                 PhoneSettingsStore.of(app).settings.collect { settings ->
-                    enabled = settings.frameTap
                     created.noteSetting(settings.frameTap)
                 }
             }
@@ -139,12 +135,13 @@ internal object FrameTap {
  * dropped instead of letting the current file grow past [MAX_BYTES].
  */
 internal class FrameTapDump(
-    private val isEnabled: () -> Boolean,
     private val dir: File,
     private val clock: () -> Long,
     scope: CoroutineScope,
     private val capacity: Int = 1024,
-    private val maxBytes: Int = MAX_BYTES
+    private val maxBytes: Int = MAX_BYTES,
+    /** Test seam: runs under [admission] after a record's generation check and before its write. */
+    private val beforeWrite: (() -> Unit)? = null
 ) {
     internal companion object {
         /** Bytes kept per file; two files in total. */
@@ -154,18 +151,28 @@ internal class FrameTapDump(
         const val PREVIOUS = "frame-tap.1.log"
     }
 
+    /** The toggle as one immutable value, so a reader can never see `enabled` and its generation split. */
+    private class Snapshot(val enabled: Boolean, val generation: Long)
+
     private val records = Channel<Queued>(capacity)
     private val dropped = AtomicLong(0)
 
-    /** Bumped on every setting change; records from an older one are discarded. */
-    private val generation = AtomicLong(0)
+    /** The live enable state and its generation, read and replaced as one unit. */
+    private val state = AtomicReference(Snapshot(enabled = false, generation = 0))
 
-    private val setting = AtomicBoolean(false)
+    /**
+     * Serializes the appender's admission of a record (its generation check and
+     * its write, as one critical section) with [noteSetting].  A setting change
+     * therefore either lands before a record's check, dropping that record, or
+     * waits for the write in flight; it never lands between the check and the
+     * write.
+     */
+    private val admission = Any()
 
     /** The one appender; completes once [close] is called and the queue is drained. */
     internal val job: Job = scope.launch { append() }
 
-    val enabled: Boolean get() = isEnabled()
+    val enabled: Boolean get() = state.get().enabled
 
     fun clockMs(): Long = clock()
 
@@ -173,17 +180,25 @@ internal class FrameTapDump(
     private class Queued(val line: String, val generation: Long)
 
     /**
-     * The setting changed: every record queued before this call belongs to a
-     * dead generation.  [FrameTap]'s watcher calls this for each emission, so a
-     * disable discards what is queued and a re-enable never resurrects it.
+     * The setting changed: take the new state under [admission], so the
+     * generation advances in the same critical section the appender checks it
+     * in.  [FrameTap]'s watcher calls this for each emission, so a disable
+     * discards what is queued and a re-enable never resurrects it.
      */
     fun noteSetting(on: Boolean) {
-        if (setting.getAndSet(on) != on) generation.incrementAndGet()
+        synchronized(admission) {
+            val current = state.get()
+            if (current.enabled != on) state.set(Snapshot(on, current.generation + 1))
+        }
     }
 
     fun record(record: FrameRecord) {
-        if (!isEnabled()) return
-        val queued = Queued(record.encode(), generation.get())
+        // The snapshot is read before the record is built: the generation the
+        // record is tagged with always matches the enable state it was taken
+        // under, never a half-applied toggle.
+        val snapshot = state.get()
+        if (!snapshot.enabled) return
+        val queued = Queued(record.encode(), snapshot.generation)
         if (records.trySend(queued).isFailure) dropped.incrementAndGet()
     }
 
@@ -197,28 +212,34 @@ internal class FrameTapDump(
         val previous = File(dir, PREVIOUS)
         var size = current.length()
         for (queued in records) {
-            // A toggle since this record was queued invalidates it: nothing
-            // from a disabled window is written, and re-enabling does not
-            // resurrect what an earlier enable queued.
-            if (!isEnabled() || queued.generation != generation.get()) continue
-            val lost = dropped.getAndSet(0)
-            val text = (if (lost > 0) "dropped=$lost\n" else "") + queued.line + "\n"
-            val bytes = text.toByteArray(Charsets.UTF_8)
-            if (size + bytes.size > maxBytes) {
-                runCatching { previous.delete() }
-                if (!runCatching { current.renameTo(previous) }.getOrDefault(false)) {
-                    // Without a fresh file this record would pass the bound:
-                    // the bound wins, and `size` keeps the real file length.
-                    dropped.incrementAndGet()
-                    continue
+            // The generation check and the write share one lock: a toggle
+            // either runs before this record is admitted, dropping it, or
+            // waits here for the write to finish.  Nothing from a disabled
+            // window is written, and re-enabling does not resurrect what an
+            // earlier enable queued.
+            synchronized(admission) {
+                val snapshot = state.get()
+                if (!snapshot.enabled || queued.generation != snapshot.generation) return@synchronized
+                beforeWrite?.invoke()
+                val lost = dropped.getAndSet(0)
+                val text = (if (lost > 0) "dropped=$lost\n" else "") + queued.line + "\n"
+                val bytes = text.toByteArray(Charsets.UTF_8)
+                if (size + bytes.size > maxBytes) {
+                    runCatching { previous.delete() }
+                    if (!runCatching { current.renameTo(previous) }.getOrDefault(false)) {
+                        // Without a fresh file this record would pass the bound:
+                        // the bound wins, and `size` keeps the real file length.
+                        dropped.incrementAndGet()
+                        return@synchronized
+                    }
+                    size = 0
                 }
-                size = 0
-            }
-            if (runCatching {
-                    FileOutputStream(current, true).use { it.write(bytes) }
-                }.isSuccess
-            ) {
-                size += bytes.size
+                if (runCatching {
+                        FileOutputStream(current, true).use { it.write(bytes) }
+                    }.isSuccess
+                ) {
+                    size += bytes.size
+                }
             }
         }
     }

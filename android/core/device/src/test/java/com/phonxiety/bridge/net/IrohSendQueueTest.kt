@@ -60,7 +60,7 @@ class IrohSendQueueTest {
             while (backlog.get() > 0) yield()
             drained.countDown()
         }
-        withTimeout(5_000) { drained.await() }
+        assertTrue("the queue drained", drained.await(5, TimeUnit.SECONDS))
         queue.close()
         job.join()
 

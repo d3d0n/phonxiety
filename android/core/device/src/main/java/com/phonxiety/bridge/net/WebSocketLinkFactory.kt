@@ -172,25 +172,26 @@ private class PinnedTrustManager(pinHex: String) : X509TrustManager {
     }
 }
 
-private class WebSocketLink(
+internal class WebSocketLink(
     private val client: OkHttpClient,
     private val config: BridgeConfig.Address,
-    private val tap: FrameTapSink
+    private val tap: FrameTapSink,
+    private val connect: (Request, WebSocketListener) -> WebSocket = { request, listener ->
+        client.newWebSocket(request, listener)
+    }
 ) : DeviceLink {
     private val downOnce = AtomicBoolean(false)
     private val cancelled = AtomicBoolean(false)
 
     @Volatile private var socket: WebSocket? = null
 
-    /** The attempt's listener, kept so a refused send can report the socket dead. */
-    @Volatile private var listener: DeviceLink.Listener? = null
-
     /**
      * Frames go straight to OkHttp's queue.  On this socket the audio freeze
      * overrides a queue of our own: nothing stands between capture and `send`,
-     * and the backlog is the socket's `queueSize` alone.
+     * and the backlog is the socket's `queueSize` alone.  A refused send never
+     * reports down from here: OkHttp's listener does, on its own thread.
      */
-    private val sender = SocketSender(socket = { socket }, tap = tap) { writeFailed() }
+    private val sender = SocketSender(socket = { socket }, tap = tap)
 
     override val backlogBytes: Long get() = sender.backlogBytes
 
@@ -199,7 +200,6 @@ private class WebSocketLink(
     override fun route(): DeviceLink.Route = DeviceLink.Route(relay = false, rttMs = null)
 
     override fun start(listener: DeviceLink.Listener) {
-        this.listener = listener
         val request = try {
             Request.Builder()
                 .url(config.url)
@@ -243,7 +243,7 @@ private class WebSocketLink(
             }
         }
         val created = try {
-            client.newWebSocket(request, adapter)
+            connect(request, adapter)
         } catch (_: Exception) {
             down(listener, "creation_failed")
             return
@@ -269,12 +269,6 @@ private class WebSocketLink(
         downOnce.set(true)
         socket?.cancel()
         socket = null
-    }
-
-    /** A refused send means OkHttp's queue or the socket is gone: report the link down once. */
-    private fun writeFailed() {
-        val target = listener ?: return
-        down(target, "write_failed")
     }
 
     private fun down(listener: DeviceLink.Listener, reason: String) {
