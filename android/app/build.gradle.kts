@@ -1,6 +1,5 @@
 plugins {
-    alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.compose)
+    id("phonxiety.android.application")
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt)
@@ -40,19 +39,8 @@ if (signingRequired) {
 android {
     namespace = "com.phonxiety.bridge"
 
-    compileSdk {
-        version = release(37) { minorApiLevel = 1 }
-    }
-    buildToolsVersion = "37.0.0"
-
     defaultConfig {
         applicationId = "com.phonxiety.bridge"
-        minSdk {
-            version = release(34)
-        }
-        targetSdk {
-            version = release(37)
-        }
         versionCode = 5
         versionName = "0.4.1"
 
@@ -61,19 +49,6 @@ android {
             // this filter JNA's @aar contributes libjnidispatch.so for five
             // more ABIs that can never be paired with libiroh_ffi.so.
             abiFilters += "arm64-v8a"
-        }
-    }
-
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    testOptions {
-        unitTests {
-            isReturnDefaultValues = true
-            // The entry-point tests read the app's own strings and draw its notifications.
-            isIncludeAndroidResources = true
         }
     }
 
@@ -94,12 +69,6 @@ android {
             // System.loadLibrary("jnidispatch") and System.loadLibrary("iroh_ffi").
             useLegacyPackaging = false
         }
-    }
-
-    lint {
-        warningsAsErrors = true
-        abortOnError = true
-        checkDependencies = true
     }
 
     signingConfigs {

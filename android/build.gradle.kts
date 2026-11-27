@@ -23,7 +23,6 @@ plugins {
     alias(libs.plugins.ksp) apply false
     alias(libs.plugins.hilt) apply false
     alias(libs.plugins.roborazzi) apply false
-    alias(libs.plugins.ktlint) apply false
 }
 
 // `-PskipScreenshots` leaves the Roborazzi-capturing tests out of every module's
@@ -53,8 +52,7 @@ subprojects {
     }
 }
 
-// ktlint as a formatting-only gate.  The Gradle plugin is declared above for
-// editor integration; the check itself runs the CLI so it sees exactly the
+// ktlint as a formatting-only gate, run through its CLI so it sees exactly the
 // same file set for every module and needs no per-module configuration.
 val ktlintCli: Configuration = configurations.create("ktlintCli") {
     isCanBeConsumed = false
@@ -62,7 +60,7 @@ val ktlintCli: Configuration = configurations.create("ktlintCli") {
 }
 
 dependencies {
-    ktlintCli("com.pinterest.ktlint:ktlint-cli:1.8.0:all")
+    ktlintCli("com.pinterest.ktlint:ktlint-cli:${libs.versions.ktlint.get()}:all")
 }
 
 fun ktlintSources(): FileTree = fileTree(rootDir) {

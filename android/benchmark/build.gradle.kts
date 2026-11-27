@@ -1,5 +1,5 @@
 plugins {
-    alias(libs.plugins.android.test)
+    id("phonxiety.android.test")
     alias(libs.plugins.baselineprofile)
 }
 
@@ -10,24 +10,8 @@ plugins {
 android {
     namespace = "com.phonxiety.bridge.benchmark"
 
-    compileSdk {
-        version = release(37) { minorApiLevel = 1 }
-    }
-    buildToolsVersion = "37.0.0"
-
     defaultConfig {
-        minSdk {
-            version = release(34)
-        }
-        targetSdk {
-            version = release(37)
-        }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-    }
-
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
     }
 
     // The profile is collected from the same APK users install: minified,

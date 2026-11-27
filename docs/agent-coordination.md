@@ -10,7 +10,8 @@ live calls, and the integration branch `main`.
 
 ## Hotspots (one owner per wave)
 
-- `android/gradle/libs.versions.toml`, `android/settings.gradle.kts`, `android/build.gradle.kts`
+- `android/gradle/libs.versions.toml`, `android/settings.gradle.kts`, `android/build.gradle.kts`,
+  `android/build-logic/**`
 - `android/app/**` navigation host and `Routes.kt`
 - `src/phonxiety/app_api.py` route table, `src/phonxiety/settings.py`
 - Shared contracts: `contracts/**` (`/app/v1` request/response files both suites run against;

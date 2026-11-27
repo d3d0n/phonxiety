@@ -1,44 +1,10 @@
 plugins {
-    alias(libs.plugins.android.library)
-    alias(libs.plugins.kotlin.compose)
+    id("phonxiety.android.feature")
     alias(libs.plugins.kotlin.serialization)
-    alias(libs.plugins.ksp)
-    alias(libs.plugins.hilt)
-    alias(libs.plugins.roborazzi)
 }
 
 android {
     namespace = "com.phonxiety.bridge.feature.settings"
-    compileSdk {
-        version = release(37) { minorApiLevel = 1 }
-    }
-
-    defaultConfig {
-        minSdk {
-            version = release(34)
-        }
-    }
-
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    buildFeatures {
-        compose = true
-    }
-
-    lint {
-        warningsAsErrors = true
-        abortOnError = true
-    }
-
-    testOptions {
-        unitTests {
-            isReturnDefaultValues = true
-            isIncludeAndroidResources = true
-        }
-    }
 }
 
 dependencies {
@@ -61,17 +27,4 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.androidx.compose.ui.tooling.preview)
     ksp(libs.hilt.compiler)
-    debugImplementation(libs.androidx.compose.ui.tooling)
-
-    testImplementation(testFixtures(project(":core:designsystem")))
-    testImplementation(libs.junit)
-    testImplementation(libs.kotlinx.coroutines.test)
-    testImplementation(libs.turbine)
-    testImplementation(libs.robolectric)
-    testImplementation(libs.androidx.test.junit)
-    testImplementation(libs.androidx.compose.ui.test.junit4)
-    testImplementation(libs.roborazzi)
-    testImplementation(libs.roborazzi.compose)
-    testImplementation(libs.roborazzi.accessibility.check)
-    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }

@@ -1,6 +1,8 @@
 import org.gradle.api.initialization.resolve.RepositoriesMode
 
 pluginManagement {
+    // The build logic of this build: conventions that a module applies by id.
+    includeBuild("build-logic")
     repositories {
         google()
         mavenCentral()

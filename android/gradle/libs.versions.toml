@@ -8,7 +8,6 @@ ksp = "2.3.14"
 hilt = "2.60.1"
 androidxHilt = "1.4.0"
 ktlint = "1.8.0"
-ktlintPlugin = "14.2.0"
 
 # AndroidX / Compose.
 composeBom = "2026.11.01"
@@ -128,6 +127,14 @@ androidx-test-uiautomator = { module = "androidx.test.uiautomator:uiautomator", 
 androidx-benchmark-macro-junit4 = { module = "androidx.benchmark:benchmark-macro-junit4", version.ref = "benchmark" }
 androidx-profileinstaller = { module = "androidx.profileinstaller:profileinstaller", version.ref = "profileinstaller" }
 
+# Build logic.  The conventions in `build-logic` compile against the plugin
+# artifacts the modules run, so the versions here are the ones that matter.
+androidGradlePlugin = { module = "com.android.tools.build:gradle", version.ref = "agp" }
+composeCompilerGradlePlugin = { module = "org.jetbrains.kotlin:compose-compiler-gradle-plugin", version.ref = "kotlin" }
+hiltGradlePlugin = { module = "com.google.dagger:hilt-android-gradle-plugin", version.ref = "hilt" }
+kspGradlePlugin = { module = "com.google.devtools.ksp:symbol-processing-gradle-plugin", version.ref = "ksp" }
+roborazziGradlePlugin = { module = "io.github.takahirom.roborazzi:roborazzi-gradle-plugin", version.ref = "roborazzi" }
+
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 android-library = { id = "com.android.library", version.ref = "agp" }
@@ -138,4 +145,3 @@ kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", versi
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 hilt = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
 roborazzi = { id = "io.github.takahirom.roborazzi", version.ref = "roborazzi" }
-ktlint = { id = "org.jlleitschuh.gradle.ktlint", version.ref = "ktlintPlugin" }

@@ -7,6 +7,8 @@ __pycache__/
 /.tools/
 /.phonxiety/
 /android/.gradle/
+/android/build-logic/.gradle/
+/android/build-logic/.kotlin/
 /android/**/build/
 /android/local.properties
 /android/.kotlin/
