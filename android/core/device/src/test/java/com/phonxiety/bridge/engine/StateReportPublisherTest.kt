@@ -6,6 +6,7 @@ import com.phonxiety.bridge.model.DisconnectCause
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -67,6 +68,50 @@ class StateReportPublisherTest {
         // The slot is cleared only by the accepted send: nothing is repeated.
         publisher.replayRetained()
         assertEquals(1, wire.accepted.size)
+    }
+
+    /**
+     * The ticket is kept before the frame leaves.  An `ended` whose refusal is
+     * still on its way back when the next hello is accepted goes out with that
+     * hello, once, instead of waiting for another reconnect, and the late
+     * refusal leaves nothing behind.  That `LinkEvents` replays after an
+     * accepted hello is [HelloReplayTest]'s part.
+     */
+    @Test(timeout = 10_000)
+    fun anEndingStillBeingRefusedWhenTheHelloIsAcceptedGoesOutWithThatHello() {
+        val refusing = AtomicReference<Thread>()
+        val sendEntered = CountDownLatch(1)
+        val releaseRefusal = CountDownLatch(1)
+        val accepted: MutableList<DeviceOutbound.CallState> = Collections.synchronizedList(mutableListOf())
+        val publisher = StateReportPublisher(session(), FakeCallStore(), EngineStateStore()) { message ->
+            if (Thread.currentThread() === refusing.get()) {
+                // The link that took this frame is going down; its refusal arrives late.
+                sendEntered.countDown()
+                releaseRefusal.await()
+                false
+            } else {
+                accepted += message as DeviceOutbound.CallState
+                true
+            }
+        }
+        val reporter = Thread { publisher.report(call(), "ended", cause) }
+        refusing.set(reporter)
+        reporter.start()
+        try {
+            assertTrue(sendEntered.await(5, TimeUnit.SECONDS))
+            // The next hello is accepted while the first send has not returned.
+            publisher.replayRetained()
+            val replayed = accepted.toList()
+            assertEquals(listOf("call-1" to "ended"), replayed.map { it.callId to it.state })
+            assertEquals(cause, replayed.single().disconnectCause)
+        } finally {
+            releaseRefusal.countDown()
+        }
+        reporter.join()
+
+        // The late refusal does not bring the delivered ending back.
+        publisher.replayRetained()
+        assertEquals(1, accepted.toList().size)
     }
 
     @Test
@@ -153,7 +198,7 @@ class StateReportPublisherTest {
      * an earlier `dialing` is already visible while its send is still blocked
      * and a slower send cannot undo the newer `active`.
      */
-    @Test
+    @Test(timeout = 10_000)
     fun aSlowerDialingSendCannotOverwriteTheRecordedActive() {
         val store = FakeCallStore()
         val session = session(store)
@@ -168,34 +213,31 @@ class StateReportPublisherTest {
         val owned = session.owned!!
         val dialingInFlight = CountDownLatch(1)
         val releaseDialing = CountDownLatch(1)
-        val dialingReturned = CountDownLatch(1)
         val publisher = StateReportPublisher(session, store, EngineStateStore()) { message ->
             if (message is DeviceOutbound.CallState && message.state == "dialing") {
-                // Hold the earlier frame until the newer state has been recorded.
+                // Held until the test lets go: only the explicit release below ends this send.
                 dialingInFlight.countDown()
-                releaseDialing.await(5, TimeUnit.SECONDS)
+                releaseDialing.await()
             }
             true
         }
 
-        val dialing = Thread {
-            publisher.report(owned, "dialing", null)
-            dialingReturned.countDown()
-        }
+        val dialing = Thread { publisher.report(owned, "dialing", null) }
         dialing.start()
-        assertTrue(dialingInFlight.await(5, TimeUnit.SECONDS))
+        try {
+            assertTrue(dialingInFlight.await(5, TimeUnit.SECONDS))
 
-        // The plan was recorded under the lock, before the blocked send.
-        assertEquals("dialing", owned.reportedState)
-        assertEquals("dialing", store.snapshot.pending?.state)
+            // The plan was recorded under the lock, before the blocked send.
+            assertEquals("dialing", owned.reportedState)
+            assertEquals("dialing", store.snapshot.pending?.state)
 
-        publisher.report(owned, "active", null)
-        assertEquals("active", owned.reportedState)
-        assertEquals("active", store.snapshot.pending?.state)
-
-        releaseDialing.countDown()
-        assertTrue(dialingReturned.await(5, TimeUnit.SECONDS))
-        dialing.join(5_000)
+            publisher.report(owned, "active", null)
+            assertEquals("active", owned.reportedState)
+            assertEquals("active", store.snapshot.pending?.state)
+        } finally {
+            releaseDialing.countDown()
+        }
+        dialing.join()
 
         assertEquals("active", owned.reportedState)
         assertEquals("active", store.snapshot.pending?.state)

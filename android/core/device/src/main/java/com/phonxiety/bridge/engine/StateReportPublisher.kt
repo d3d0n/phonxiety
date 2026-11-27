@@ -56,9 +56,11 @@ internal class StateReportPublisher(
     private val retained = ArrayDeque<RetainedEnd>()
 
     /**
-     * One call-state report.  Called with or without the session lock held, as
-     * its two callers do today: the plan and its record happen under that
-     * lock, and the send follows the planning critical section.
+     * One call-state report.  The Telecom state and details callbacks call it
+     * holding the session lock, so their send happens under it, as before the
+     * engine was split; call-added, `finishOwned` and pending-dial expiry call
+     * it without the lock.  Either way the plan and its record happen under the
+     * lock, before the send.
      */
     fun report(call: CallSession.OwnedCall, state: String, cause: DisconnectCause?) {
         val causeKey = cause?.let { "${it.code}|${it.label}|${it.reason}" }

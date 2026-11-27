@@ -1,7 +1,6 @@
 package com.phonxiety.bridge.engine
 
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -171,37 +170,44 @@ class CallSessionTest {
         assertNull(session.owned)
     }
 
-    @Test
+    /**
+     * A dial that arrives while an idle link action holds the door waits for it
+     * inside the admission monitor, then reserves.  The dial thread's own state
+     * is the synchronization point: it is `TIMED_WAITING` only inside
+     * `awaitIdle`'s wait, so the test sees the dial parked at the door before it
+     * releases the action.  A dial that did not wait would instead be refused
+     * under the lock and end without ever parking.
+     */
+    @Test(timeout = 10_000)
     fun aDialUnderAnIdleLinkActionWaitsForTheDoor() {
         val session = session()
-        val action = session.admission.tryBeginIdleLinkAction { false }
-        val dialStarted = CountDownLatch(1)
+        val action = session.admission.tryBeginIdleLinkAction { false }!!
+        val outcome = AtomicReference<Result<CallSession.DialOutcome>>()
 
         val dial = Thread {
-            runCatching {
-                session.beginDial(
-                    callId = "call-1",
-                    destination = "+998901234567",
-                    phoneAccount = null,
-                    // The dial reads this before it waits for the door: it says the
-                    // attempt is under way without polling or sleeping.
-                    unrelatedCall = {
-                        dialStarted.countDown()
-                        false
-                    },
-                    linkUp = { true },
-                    running = { true }
-                )
-            }
+            outcome.set(
+                runCatching {
+                    session.beginDial(
+                        callId = "call-1",
+                        destination = "+998901234567",
+                        phoneAccount = null,
+                        unrelatedCall = { false },
+                        linkUp = { true },
+                        running = { true }
+                    )
+                }
+            )
         }
         dial.start()
-        assertTrue(dialStarted.await(5, TimeUnit.SECONDS))
+        while (dial.isAlive && dial.state != Thread.State.TIMED_WAITING) Thread.yield()
 
-        // The action is still in flight; the dial must not have reserved.
+        // Parked at the door with the action still in flight: nothing reserved.
+        assertTrue("the dial did not wait for the action", dial.isAlive)
         assertNull(session.owned)
 
-        action?.release()
-        dial.join(5_000)
+        action.release()
+        dial.join()
+        assertTrue(outcome.get().getOrThrow() is CallSession.DialOutcome.Reserved)
         assertNotNull(session.owned)
     }
 }

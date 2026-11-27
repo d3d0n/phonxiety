@@ -88,8 +88,9 @@ internal class CallSession(
      * critical section, so a second dial can never reserve over the first and
      * a failed write leaves nothing owned.
      *
-     * [unrelatedCall], [linkUp] and [running] are read under [lock] and must not
-     * block.
+     * [linkUp] and [running] are read under [lock] and must not block;
+     * [unrelatedCall] is read before the wait, outside the lock, because
+     * Telecom's call list is an IPC.
      */
     fun beginDial(
         callId: String,

@@ -224,7 +224,7 @@ class HelloReplayTest {
             listOf("hello", "ended", "request"),
             second.sentText.toList().map { kindOf(it, ended) }
         )
-        assertEquals(1, second.sentText.count { it == ended })
+        assertEquals(1, second.sentText.toList().count { it == ended })
 
         harness.requests.stop(RequestFailure.ShuttingDown)
         assertTrue(request.isCompleted)
@@ -234,7 +234,7 @@ class HelloReplayTest {
         harness.scheduler.runDue()
         val third = harness.factory.last()
         third.open()
-        assertEquals(0, third.sentText.count { it == ended })
+        assertEquals(0, third.sentText.toList().count { it == ended })
         assertEquals(listOf("hello"), third.sentText.toList().map { kindOf(it, ended) })
     }
 }

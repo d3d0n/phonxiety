@@ -21,7 +21,6 @@ import com.phonxiety.bridge.net.LinkSupervisor
 import com.phonxiety.bridge.os.Permissions
 import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -36,7 +35,7 @@ import kotlinx.serialization.json.jsonObject
  * call fields under the session lock, reads the link fields after that lock is
  * released, then reads the crash records and encodes the answer; it was the
  * same thread before the engine was split.  The telemetry loop runs on the
- * engine scope on its own interval.
+ * engine scope on its own interval and ends when that scope is cancelled.
  */
 internal class DiagnosticsService(
     private val context: Context,
@@ -53,20 +52,14 @@ internal class DiagnosticsService(
     }
 
     private val startedElapsed = SystemClock.elapsedRealtime()
-    private var telemetryJob: Job? = null
 
     fun start(scope: CoroutineScope) {
-        telemetryJob = scope.launch {
+        scope.launch {
             while (isActive && isRunning()) {
                 runCatching { sampleDeviceState() }.getOrNull()?.let { store.device(it) }
                 delay(TELEMETRY_INTERVAL_MS)
             }
         }
-    }
-
-    fun stop() {
-        telemetryJob?.cancel()
-        telemetryJob = null
     }
 
     fun handle(id: String) {

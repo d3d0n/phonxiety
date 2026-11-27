@@ -397,7 +397,9 @@ internal class TelecomObserver(
 
     /**
      * Restores the ledger snapshot into the session.  The caller holds
-     * [CallSession.lock], as the engine's start does around its live-call read.
+     * [CallSession.lock]: the engine's start takes it around this restore,
+     * after reading the live calls outside it, since Telecom's call list is an
+     * IPC.
      */
     fun restoreLedgerLocked(liveCalls: List<Call>) {
         val snapshot = dials.current()
