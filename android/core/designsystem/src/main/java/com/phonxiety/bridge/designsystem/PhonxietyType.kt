@@ -3,10 +3,33 @@ package com.phonxiety.bridge.designsystem
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+
+/**
+ * The code face: endpoint ids, numbers, timings and captured output. One token so no screen picks
+ * a font family of its own. [code] keeps the caller's size, weight and colour and only swaps the
+ * face; [tabular] pins the figures so a changing number never shifts its neighbours.
+ */
+@Immutable
+class PhonxietyType(
+    val codeFamily: FontFamily = FontFamily.Monospace,
+    val tabularFigures: String = "tnum"
+) {
+    /** The style in the code face, optionally with tabular figures. */
+    fun code(base: TextStyle, tabular: Boolean = false): TextStyle = base.copy(
+        fontFamily = codeFamily,
+        fontFeatureSettings = if (tabular) tabularFigures else base.fontFeatureSettings
+    )
+}
+
+/** The type token set of the current theme; [PhonxietyTheme] provides it. */
+val LocalPhonxietyType = staticCompositionLocalOf { PhonxietyType() }
 
 /** Larger radii than the Material baseline: Expressive surfaces read as tiles, not cards. */
 internal val PhonxietyShapes: Shapes = Shapes(

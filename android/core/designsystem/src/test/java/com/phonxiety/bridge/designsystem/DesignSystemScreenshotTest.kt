@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -28,6 +29,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.phonxiety.bridge.designsystem.component.ActionEmphasis
+import com.phonxiety.bridge.designsystem.component.AnimatedValueText
 import com.phonxiety.bridge.designsystem.component.EmptyState
 import com.phonxiety.bridge.designsystem.component.ErrorCard
 import com.phonxiety.bridge.designsystem.component.KeyValueRow
@@ -40,6 +42,7 @@ import com.phonxiety.bridge.designsystem.component.SectionCard
 import com.phonxiety.bridge.designsystem.component.SetupStep
 import com.phonxiety.bridge.designsystem.component.SetupStepList
 import com.phonxiety.bridge.designsystem.component.SetupStepState
+import com.phonxiety.bridge.designsystem.component.SheetScaffold
 import com.phonxiety.bridge.designsystem.component.StatTile
 import com.phonxiety.bridge.designsystem.component.StatTone
 import com.phonxiety.bridge.designsystem.component.StatusPill
@@ -136,7 +139,7 @@ class DesignSystemScreenshotTest(private val matrixCase: MatrixCase) {
     }
 }
 
-enum class Preview { PILLS, METERS, CARDS, STACKING, STEPS, ACTIONS, ERROR, STATES, CONTROLS }
+enum class Preview { PILLS, METERS, CARDS, STACKING, STEPS, ACTIONS, ERROR, STATES, CONTROLS, SHEETS, MOTION }
 
 data class Variant(
     val widthDp: Int,
@@ -338,5 +341,67 @@ private fun PreviewBody(preview: Preview) {
                 KeyValueRow(label = "Missing value", value = "—", mono = true)
             }
         }
+
+        Preview.SHEETS -> {
+            Surface(
+                shape = MaterialTheme.shapes.extraLarge,
+                color = MaterialTheme.colorScheme.surfaceContainerLow
+            ) {
+                SheetScaffold(
+                    title = "Pair with your computer",
+                    subtitle = "Paste the link from the dashboard, or scan its code.",
+                    navigationBarInsets = WindowInsets(0)
+                ) {
+                    KeyValueRow(label = "Pairing link", value = "phonxiety://pair?c=6c3a1f9b", mono = true)
+                    PrimaryActionButton(label = "Scan the code", onClick = {})
+                }
+            }
+            Surface(
+                shape = MaterialTheme.shapes.extraLarge,
+                color = MaterialTheme.colorScheme.surfaceContainerLow
+            ) {
+                SheetScaffold(
+                    title = "Choose a recording",
+                    navigationBarInsets = WindowInsets(0)
+                ) {
+                    KeyValueRow(label = "Latest call", value = "6c3a1f9b", mono = true)
+                }
+            }
+        }
+
+        Preview.MOTION -> {
+            SectionCard(title = "Live call", status = { StatusPill("Reconnecting", StatusTone.WARNING) }) {
+                AnimatedStat(label = "State", value = "Reconnecting", mono = true)
+                AnimatedStat(label = "Duration", value = "04:12", mono = true, tabular = true)
+                AnimatedStat(label = "Requests in flight", value = "2", mono = true, tabular = true)
+            }
+            SectionCard(title = "Daemon") {
+                AnimatedStat(label = "Agent answer", value = "Table for two at 20:30")
+            }
+        }
+    }
+}
+
+/**
+ * A labelled value whose number or word changes in place, the shape a status tile takes: the label
+ * stays put above, only the value animates. Stacked rather than side by side so a long value at a
+ * large text size never squeezes the label.
+ */
+@Composable
+private fun AnimatedStat(label: String, value: String, mono: Boolean = false, tabular: Boolean = false) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        AnimatedValueText(
+            text = value,
+            style = if (mono) {
+                LocalPhonxietyType.current.code(MaterialTheme.typography.titleMedium, tabular = tabular)
+            } else {
+                MaterialTheme.typography.bodyMedium
+            }
+        )
     }
 }

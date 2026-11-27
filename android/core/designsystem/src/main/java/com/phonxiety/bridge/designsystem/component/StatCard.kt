@@ -23,11 +23,11 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.phonxiety.bridge.designsystem.LocalPhonxietyType
 import com.phonxiety.bridge.designsystem.LocalStatusColors
 import java.text.NumberFormat
 import java.util.Locale
@@ -126,8 +126,9 @@ fun StatTile(
 ) {
     val status = LocalStatusColors.current
     val locale = LocalConfiguration.current.locales[0]
+    val type = LocalPhonxietyType.current
     val valueStyle = MaterialTheme.typography.titleMedium.let { style ->
-        if (mono) style.copy(fontFamily = FontFamily.Monospace, fontFeatureSettings = "tnum") else style
+        if (mono) type.code(style, tabular = true) else style
     }
     Column(modifier = modifier) {
         Text(
@@ -173,7 +174,7 @@ fun KeyValueRow(
     valueMaxLines: Int = Int.MAX_VALUE
 ) {
     val valueStyle = MaterialTheme.typography.bodyMedium.let { style ->
-        if (mono) style.copy(fontFamily = FontFamily.Monospace, fontFeatureSettings = "tnum") else style
+        if (mono) LocalPhonxietyType.current.code(style, tabular = true) else style
     }
     val labelStyle = MaterialTheme.typography.bodyMedium
     val measurer = rememberTextMeasurer()

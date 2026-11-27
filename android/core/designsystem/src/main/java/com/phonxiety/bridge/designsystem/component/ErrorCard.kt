@@ -28,8 +28,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.error
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import com.phonxiety.bridge.designsystem.LocalPhonxietyType
 import com.phonxiety.bridge.designsystem.LocalStatusColors
 import com.phonxiety.bridge.designsystem.R
 
@@ -152,8 +152,7 @@ private fun ErrorCardContent(
                             Text(
                                 text = output,
                                 modifier = Modifier.padding(10.dp),
-                                style = MaterialTheme.typography.bodySmall,
-                                fontFamily = FontFamily.Monospace
+                                style = LocalPhonxietyType.current.code(MaterialTheme.typography.bodySmall)
                             )
                         }
                     }

@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
@@ -85,7 +84,7 @@ fun StatusPill(
                     .background(dotColor.copy(alpha = pulseAlpha), CircleShape)
             )
             Spacer(Modifier.width(6.dp))
-            Text(
+            AnimatedValueText(
                 text = label,
                 style = MaterialTheme.typography.labelMedium,
                 color = pair.content
