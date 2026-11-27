@@ -47,7 +47,8 @@ Checks before writing anything: dist/phonxiety-bridge-<module.prop version>.zip 
 one published (an older zip is never used), the module.prop inside that zip and the APK embedded in
 it match the APK being published, the module and APK versions agree, minSdk is read from the APK,
 and the SHA-256 values and the APK's signing certificate are computed from the bytes that are
-published.
+published. With the default changelog, dist/CHANGELOG.md must start with
+"# Phonxiety bridge <module.prop version>": notes still headed "# Unreleased" are never published.
 EOF
 }
 
@@ -85,6 +86,15 @@ MODULE_VERSION="$(awk -F= '/^version=/{print $2; exit}' "$MAGISK/module.prop")"
 MODULE_VERSION_CODE="$(awk -F= '/^versionCode=/{print $2; exit}' "$MAGISK/module.prop")"
 [ -n "$MODULE_VERSION" ] || die "module.prop has no version"
 [ -n "$MODULE_VERSION_CODE" ] || die "module.prop has no versionCode"
+
+# The managers show the release's CHANGELOG.md, uploaded from dist/. Between releases it is headed
+# "# Unreleased"; publishing then would show users a draft, or the previous release's notes.
+if [ "$CHANGELOG" = "$URL_BASE/CHANGELOG.md" ]; then
+    [ -f "$DIST/CHANGELOG.md" ] || die "missing dist/CHANGELOG.md, the notes the root manager shows"
+    CHANGELOG_HEADING="$(head -n 1 "$DIST/CHANGELOG.md")"
+    [ "$CHANGELOG_HEADING" = "# Phonxiety bridge $MODULE_VERSION" ] \
+        || die "dist/CHANGELOG.md starts with '$CHANGELOG_HEADING'; head it '# Phonxiety bridge $MODULE_VERSION' to publish $MODULE_VERSION"
+fi
 
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/phonxiety-publish.XXXXXX")"
 SERVE_TMP_APK=""
