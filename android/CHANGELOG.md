@@ -34,7 +34,7 @@ and run cellular calls through this phone.
 ## Calls
 
 - After you answer over the system call screen, the live call screen comes back on top, once per call. It never covers another call.
-- Hanging up from the notification or the tile asks the computer first, when the link is up, and otherwise ends the call on the phone at once.
+- Hanging up from the notification or the tile asks the computer first, when the link is up, and otherwise ends Phonxiety's own call on the phone at once. Another call on the phone, incoming or on hold, is never touched, and a call still being placed is cancelled as soon as the phone sees it.
 
 ## Safer actions
 
