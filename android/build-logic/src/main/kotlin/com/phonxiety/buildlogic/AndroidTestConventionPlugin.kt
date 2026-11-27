@@ -5,7 +5,10 @@ import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.kotlin.dsl.getByType
 
-/** A test-only module that instruments the app on a device. */
+/**
+ * A test-only module that instruments the app on a device.  It ships nothing,
+ * so lint keeps its default severity here.
+ */
 class AndroidTestConventionPlugin : Plugin<Project> {
     override fun apply(target: Project) {
         with(target) {

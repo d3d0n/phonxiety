@@ -23,7 +23,6 @@ class AndroidFeatureConventionPlugin : Plugin<Project> {
                 for (alias in sharedTestLibraries) {
                     add("testImplementation", library(alias))
                 }
-                add("debugImplementation", library("androidx-compose-ui-tooling"))
                 add("debugImplementation", library("androidx-compose-ui-test-manifest"))
             }
         }

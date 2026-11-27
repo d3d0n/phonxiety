@@ -22,9 +22,9 @@ internal object AndroidSdk {
 }
 
 /**
- * The configuration every module shares: SDK levels, one Java level and one
- * lint severity policy.  A module script then only owns what makes that module
- * different from its neighbours.
+ * The configuration every module shares: SDK levels and one Java level.  A
+ * module script then only owns what makes that module different from its
+ * neighbours.
  */
 internal fun Project.configureAndroidSdk(android: CommonExtension) {
     android.compileSdk {
@@ -36,6 +36,13 @@ internal fun Project.configureAndroidSdk(android: CommonExtension) {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+}
+
+/**
+ * The lint policy of the code that ships: any warning fails the build.  The
+ * benchmark module ships nothing and keeps lint's own defaults.
+ */
+internal fun configureStrictLint(android: CommonExtension) {
     android.lint.apply {
         warningsAsErrors = true
         abortOnError = true

@@ -12,6 +12,7 @@ class AndroidLibraryConventionPlugin : Plugin<Project> {
             pluginManager.apply("com.android.library")
             val android = extensions.getByType<LibraryExtension>()
             configureAndroidSdk(android)
+            configureStrictLint(android)
             configureJvmUnitTests(android)
         }
     }

@@ -12,6 +12,7 @@ class AndroidApplicationConventionPlugin : Plugin<Project> {
             pluginManager.apply("com.android.application")
             val android = extensions.getByType<ApplicationExtension>()
             configureAndroidSdk(android)
+            configureStrictLint(android)
             android.defaultConfig.targetSdk { version = release(AndroidSdk.TARGET_API) }
             // The app is the module that ships: lint has to see its libraries too.
             android.lint.checkDependencies = true
