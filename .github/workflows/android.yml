@@ -158,7 +158,8 @@ jobs:
             android/**/build/test-results/**
           if-no-files-found: ignore
 
-  # Static analysis only; lint needs the compiled sources, not the APK.
+  # Static analysis only: lint needs the compiled sources, not the APK, and
+  # ktlint checks formatting.
   lint:
     if: github.event_name != 'push' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -170,9 +171,9 @@ jobs:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/android-setup
 
-      - name: Lint
+      - name: Lint and formatting
         working-directory: android
-        run: mise exec -- ./gradlew --no-daemon --console=plain lint
+        run: mise exec -- ./gradlew --no-daemon --console=plain lint ktlintCheck
 
       - name: Upload lint reports
         if: always()
