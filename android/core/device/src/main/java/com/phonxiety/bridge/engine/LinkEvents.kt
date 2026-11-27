@@ -98,7 +98,13 @@ internal class LinkEvents(
         hello.delivered = false
         linkGeneration.incrementAndGet()
         appInfo.linkDown()
-        requests.linkDown()
+        if (reason == LinkDownReason.HELLO_FAILED) {
+            // A request waiting for this handshake can never be sent on it: it gets a typed answer
+            // now instead of waiting out its deadline. The next connection waits afresh.
+            requests.helloFailed()
+        } else {
+            requests.linkDown()
+        }
         capabilityWatch.helloGone()
         settings.applyWifiLock()
         store.linkDown(

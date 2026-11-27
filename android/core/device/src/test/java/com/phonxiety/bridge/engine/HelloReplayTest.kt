@@ -5,6 +5,7 @@ import com.phonxiety.bridge.AppInfoRefresh
 import com.phonxiety.bridge.BridgeConfig
 import com.phonxiety.bridge.CapabilityWatch
 import com.phonxiety.bridge.EngineStateStore
+import com.phonxiety.bridge.model.DeviceApiResult
 import com.phonxiety.bridge.model.DeviceOutbound
 import com.phonxiety.bridge.model.DeviceProtocol
 import com.phonxiety.bridge.model.DisconnectCause
@@ -85,11 +86,15 @@ class HelloReplayTest {
         private var listener: DeviceLink.Listener? = null
         val sentText: MutableList<String> = java.util.Collections.synchronizedList(mutableListOf())
 
+        /** When set, the transport refuses every frame, so the hello cannot be queued. */
+        var refuseText: Boolean = false
+
         override fun start(listener: DeviceLink.Listener) {
             this.listener = listener
         }
 
         override fun sendText(message: String): Boolean {
+            if (refuseText) return false
             sentText += message
             return true
         }
@@ -266,5 +271,49 @@ class HelloReplayTest {
         assertEquals(LinkDownReason.OTHER, native.reason)
         assertEquals("timed out by peer", native.detail)
         assertEquals("timed out by peer", native.message)
+    }
+
+    /**
+     * A transport whose hello is refused answers the request that was waiting for the handshake
+     * with `hello_failed` at once, through the real supervisor and [LinkEvents]; the next
+     * connection carries requests as before.
+     */
+    @Test
+    fun aRefusedHelloAnswersTheWaitingRequestAndTheNextLinkStillWorks() {
+        val harness = Harness(RuntimeEnvironment.getApplication())
+        harness.supervisor.start()
+        harness.factory.last().open()
+        harness.factory.last().down(LinkDownReason.CLOSED)
+
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        var result: DeviceApiResult? = null
+        val request = scope.launch(Dispatchers.Unconfined) {
+            result = harness.requests.exchange("req-1", """{"type":"api","id":"req-1"}""", 60_000)
+        }
+        assertEquals(1, harness.table.size())
+
+        harness.scheduler.runDue()
+        val refused = harness.factory.last()
+        refused.refuseText = true
+        refused.open()
+
+        assertTrue("the waiting request is answered, not left to its deadline", request.isCompleted)
+        assertEquals(503, result?.status)
+        assertEquals("hello_failed", result?.error?.code)
+        assertEquals(0, harness.table.size())
+
+        harness.scheduler.runDue()
+        val next = harness.factory.last()
+        next.open()
+        val followUp = scope.launch(Dispatchers.Unconfined) {
+            harness.requests.exchange("req-2", """{"type":"api","id":"req-2"}""", 60_000)
+        }
+        assertEquals(
+            "the next connection still carries requests",
+            listOf("request"),
+            next.sentText.toList().filter { it.contains("req-2") }.map { "request" }
+        )
+        harness.requests.stop(RequestFailure.ShuttingDown)
+        assertTrue(followUp.isCompleted)
     }
 }

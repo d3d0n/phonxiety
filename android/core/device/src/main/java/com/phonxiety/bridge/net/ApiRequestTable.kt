@@ -29,6 +29,9 @@ internal sealed class RequestFailure(
     /** Too many requests were already waiting; the table refuses another. */
     object TooMany : RequestFailure("link_down", "too many requests are already pending", 503)
 
+    /** The link never completed its handshake: a request waiting for readiness cannot be sent. */
+    object HelloFailed : RequestFailure("hello_failed", "the device link could not complete its handshake", 503)
+
     /** The deadline (readiness wait included) ran out. */
     object Timeout : RequestFailure("timeout", "the daemon did not answer in time", 504)
 
@@ -93,6 +96,14 @@ internal class ApiRequestTable(private val capacity: Int = 64) {
      */
     fun failAll(failure: RequestFailure, includeWaiting: Boolean): Int = synchronized(lock) {
         val doomed = entries.values.filter { includeWaiting || it.sent }
+        doomed.forEach { entries.remove(it.id) }
+        doomed.forEach { it.answer.complete(failure.result(it.id)) }
+        doomed.size
+    }
+
+    /** Completes [failure] into the requests still waiting for the link's readiness. */
+    fun failWaiting(failure: RequestFailure): Int = synchronized(lock) {
+        val doomed = entries.values.filter { !it.sent }
         doomed.forEach { entries.remove(it.id) }
         doomed.forEach { it.answer.complete(failure.result(it.id)) }
         doomed.size

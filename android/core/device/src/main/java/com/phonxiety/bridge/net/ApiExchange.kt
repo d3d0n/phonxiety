@@ -82,6 +82,16 @@ internal class ApiExchange(
         table.failAll(RequestFailure.LinkDown, includeWaiting = false)
     }
 
+    /**
+     * The link's hello failed: a request that was waiting for readiness is answered with the typed
+     * reason instead of waiting out its deadline, and the next connection attempt carries on as it
+     * always did.
+     */
+    fun helloFailed() {
+        readiness.fail(RequestFailure.HelloFailed)
+        table.failWaiting(RequestFailure.HelloFailed)
+    }
+
     /** Terminal: every pending request, waiting or sent, completes with [failure]. */
     fun stop(failure: RequestFailure) {
         readiness.stop(failure)

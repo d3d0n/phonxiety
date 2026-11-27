@@ -251,4 +251,63 @@ class RequestPathTest {
 
         assertEquals(listOf("""command:{"type":"command","id":"c1"}"""), order)
     }
+
+    @Test
+    fun aFailedHelloAnswersTheWaitingRequestWithItsTypedReason() = runTest {
+        val table = ApiRequestTable()
+        val sent = mutableListOf<String>()
+        val exchange = ApiExchange(table, LinkReadiness(), { 0L }, { wire ->
+            sent += wire
+            true
+        })
+        var result: DeviceApiResult? = null
+
+        val job = launch { result = exchange.exchange("r1", "wire-r1", 30_000) }
+        runCurrent()
+        assertEquals(1, table.size())
+
+        exchange.transportOpened()
+        runCurrent()
+        exchange.helloFailed()
+        runCurrent()
+
+        job.join()
+        assertEquals("the waiting request is answered instead of waiting out its deadline", 503, result?.status)
+        assertEquals("hello_failed", result?.error?.code)
+        assertTrue("nothing was sent on a link whose handshake failed", sent.isEmpty())
+        assertEquals(0, table.size())
+
+        // The failure is not terminal: the next connection carries requests exactly as before.
+        exchange.transportOpened()
+        exchange.helloQueued()
+        var next: DeviceApiResult? = null
+        val followUp = launch { next = exchange.exchange("r2", "wire-r2", 30_000) }
+        runCurrent()
+        assertEquals(listOf("wire-r2"), sent)
+        table.complete(answer("r2"))
+        followUp.join()
+        assertEquals(200, next?.status)
+    }
+
+    @Test
+    fun aTransportOpeningAsTheHelloFailsDoesNotStealTheAnswer() = runTest {
+        val table = ApiRequestTable()
+        val exchange = ApiExchange(table, LinkReadiness(), { 0L }, { true })
+        var result: DeviceApiResult? = null
+
+        val job = launch { result = exchange.exchange("r1", "wire-r1", 30_000) }
+        runCurrent()
+        exchange.transportOpened()
+        runCurrent()
+
+        // The failed attempt's answer and the next transport's open land together: the request
+        // that was waiting on the failed hello still gets its typed reason, not a fresh wait.
+        exchange.helloFailed()
+        exchange.transportOpened()
+        runCurrent()
+
+        job.join()
+        assertEquals("hello_failed", result?.error?.code)
+        assertEquals(0, table.size())
+    }
 }
