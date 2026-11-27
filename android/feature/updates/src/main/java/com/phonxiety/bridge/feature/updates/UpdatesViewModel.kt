@@ -211,10 +211,13 @@ class UpdatesViewModel @Inject constructor(
         pendingUpdate.value = UpdateTarget.MODULE
     }
 
-    /** The confirmation the dialog is showing: the one place an install starts from a row. */
+    /**
+     * The confirmation the dialog is showing: the one place an install starts from a row. The
+     * pending target is consumed first, atomically, so a double tap starts nothing twice.
+     */
     fun confirmUpdate() {
         val target = pendingUpdate.value ?: return
-        pendingUpdate.value = null
+        if (!pendingUpdate.compareAndSet(target, null)) return
         // The dialog's own state can outlive the call it was opened before; a call still wins.
         if (callActive.value) return
         val checked = check.value ?: return
@@ -260,9 +263,13 @@ class UpdatesViewModel @Inject constructor(
         viewModelScope.launch { service.rollbackApp() }
     }
 
+    /**
+     * Consumes the pending plan atomically before starting, so a double tap on the dialog runs one
+     * rollback; with nothing pending it starts nothing, rather than running an unconfirmed one.
+     */
     fun confirmRollback() {
-        val confirmed = confirmation.value
-        confirmation.value = null
+        val confirmed = confirmation.value ?: return
+        if (!confirmation.compareAndSet(confirmed, null)) return
         if (callActive.value) return
         appRollback.value = confirmed is RollbackPlan.AppOnly
         viewModelScope.launch { service.rollbackApp() }

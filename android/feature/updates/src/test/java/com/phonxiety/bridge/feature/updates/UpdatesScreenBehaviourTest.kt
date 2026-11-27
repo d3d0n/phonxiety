@@ -163,7 +163,12 @@ class UpdatesScreenBehaviourTest {
         )
 
         composeRule.onNodeWithText("Install module 0.4.0?").assertIsDisplayed()
-        composeRule.onNodeWithText("then reboots the phone", substring = true).assertIsDisplayed()
+        composeRule
+            .onNodeWithText(
+                "This rebuilds the module from this app and installs it as root, then reboots the phone " +
+                    "to mount the new overlay. A call in progress ends."
+            )
+            .assertIsDisplayed()
         composeRule.onNodeWithText("Cancel").performClick()
 
         assertEquals(0, confirmations)

@@ -107,6 +107,76 @@ class UpdatesViewModelTest {
     }
 
     @Test
+    fun `a second confirm runs no second app install`() = runTest(testDispatcher.scheduler) {
+        val service = FakeUpdatesService().apply { result = UpdatesSamples.updateOffered() }
+        val viewModel = UpdatesViewModel(service, bridge)
+        backgroundScope.launch { viewModel.state.collect {} }
+        advanceUntilIdle()
+
+        viewModel.installApp()
+        advanceUntilIdle()
+        viewModel.confirmUpdate()
+        viewModel.confirmUpdate()
+        advanceUntilIdle()
+
+        assertEquals(1, service.appInstalls)
+        assertEquals(null, viewModel.state.value.updateConfirmation)
+    }
+
+    @Test
+    fun `a second confirm runs no second module install`() = runTest(testDispatcher.scheduler) {
+        val service = FakeUpdatesService().apply {
+            // The app already runs this release, so the module row is the one that offers.
+            result = UpdatesSamples.check(UpdatesSamples.installed(moduleVersionCode = 3, moduleVersion = "0.3.0"))
+        }
+        val viewModel = UpdatesViewModel(service, bridge)
+        backgroundScope.launch { viewModel.state.collect {} }
+        advanceUntilIdle()
+
+        viewModel.installModule()
+        advanceUntilIdle()
+        viewModel.confirmUpdate()
+        viewModel.confirmUpdate()
+        advanceUntilIdle()
+
+        assertEquals(1, service.moduleInstalls)
+        assertEquals(null, viewModel.state.value.updateConfirmation)
+    }
+
+    @Test
+    fun `a second confirm runs no second rollback`() = runTest(testDispatcher.scheduler) {
+        val service = FakeUpdatesService().apply { rollbackPlan.value = UpdatesSamples.moduleRollback() }
+        val viewModel = UpdatesViewModel(service, bridge)
+        backgroundScope.launch { viewModel.state.collect {} }
+        advanceUntilIdle()
+
+        viewModel.rollback()
+        advanceUntilIdle()
+        assertEquals(UpdatesSamples.moduleRollback(), viewModel.state.value.rollbackConfirmation)
+
+        viewModel.confirmRollback()
+        viewModel.confirmRollback()
+        advanceUntilIdle()
+
+        assertEquals(1, service.rollbackCalls)
+        assertEquals(null, viewModel.state.value.rollbackConfirmation)
+    }
+
+    @Test
+    fun `a stale confirm with nothing pending starts no rollback`() = runTest(testDispatcher.scheduler) {
+        val service = FakeUpdatesService().apply { rollbackPlan.value = UpdatesSamples.appOnlyRollback() }
+        val viewModel = UpdatesViewModel(service, bridge)
+        backgroundScope.launch { viewModel.state.collect {} }
+        advanceUntilIdle()
+
+        // Never asked: the dialog was never opened, so a stray confirm runs nothing.
+        viewModel.confirmRollback()
+        advanceUntilIdle()
+
+        assertEquals(0, service.rollbackCalls)
+    }
+
+    @Test
     fun `a finished install triggers another check`() = runTest(testDispatcher.scheduler) {
         val service = FakeUpdatesService()
         val viewModel = UpdatesViewModel(service, bridge)

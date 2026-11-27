@@ -20,6 +20,7 @@ internal class FakeUpdatesService : UpdatesService {
     var result: UpdateCheck = UpdatesSamples.check()
     var checked = 0
     var installedManifest: UpdateManifest? = null
+    var appInstalls = 0
     var moduleInstalls = 0
     var rollbackCalls = 0
 
@@ -35,6 +36,7 @@ internal class FakeUpdatesService : UpdatesService {
     }
 
     override suspend fun installApp(manifest: UpdateManifest) {
+        appInstalls++
         installedManifest = manifest
     }
 

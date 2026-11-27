@@ -287,7 +287,9 @@ object UpdatesSamples {
         updateConfirmation = UpdateTarget.APP
     )
 
-    fun updateConfirmingModule(): UpdatesUiState = updateAvailable().copy(
+    /** The app already runs, so the module row is the only one offering: its dialog asks alone. */
+    fun updateConfirmingModule(): UpdatesUiState = UpdatesUiState(
+        check = check(installed(moduleVersionCode = 3, moduleVersion = "0.3.0")),
         updateConfirmation = UpdateTarget.MODULE
     )
 }
