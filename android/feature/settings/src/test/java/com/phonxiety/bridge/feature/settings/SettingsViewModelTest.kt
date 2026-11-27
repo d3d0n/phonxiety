@@ -327,10 +327,10 @@ class SettingsViewModelTest {
         prefs.settings.value = PhoneSettings(maxBitrate = 32_000)
         val log = AutoTuneLogStore(File(context.filesDir, "settings/auto-tune.json"))
         log.append(
-            AutoTuneLogEntry(id = "first", atMs = 1, key = TuneKey.MAX_BITRATE.key, from = "32000", to = "16000")
+            AutoTuneLogEntry(id = "first", atMs = 1, key = TuneKey.MAX_BITRATE.key, from = "32000", to = "16000", reasonId = TuneReason.BITRATE_LOWER_P95_LOSS)
         )
         log.append(
-            AutoTuneLogEntry(id = "second", atMs = 2, key = TuneKey.MAX_BITRATE.key, from = "16000", to = "64000")
+            AutoTuneLogEntry(id = "second", atMs = 2, key = TuneKey.MAX_BITRATE.key, from = "16000", to = "64000", reasonId = TuneReason.BITRATE_RICHER)
         )
         prefs.settings.value = PhoneSettings(maxBitrate = 64_000)
         val vm = viewModel()
@@ -350,7 +350,7 @@ class SettingsViewModelTest {
         prefs.settings.value = PhoneSettings(maxBitrate = 32_000)
         val log = AutoTuneLogStore(File(context.filesDir, "settings/auto-tune.json"))
         log.append(
-            AutoTuneLogEntry(id = "only", atMs = 1, key = TuneKey.MAX_BITRATE.key, from = "32000", to = "64000")
+            AutoTuneLogEntry(id = "only", atMs = 1, key = TuneKey.MAX_BITRATE.key, from = "32000", to = "64000", reasonId = TuneReason.BITRATE_RICHER)
         )
         prefs.settings.value = PhoneSettings(maxBitrate = 64_000)
         val vm = viewModel()
