@@ -1,5 +1,6 @@
 package com.phonxiety.bridge.feature.dashboard
 
+import android.os.Looper
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -7,6 +8,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -29,6 +33,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.github.takahirom.roborazzi.captureRoboImage
+import com.phonxiety.bridge.designsystem.LocalMotionEnabled
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
 import com.phonxiety.bridge.designsystem.testing.Screenshot
 import com.phonxiety.bridge.designsystem.testing.assertAccessible
@@ -50,6 +55,7 @@ import org.junit.Test
 import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
@@ -95,6 +101,7 @@ class DashboardScreenshotTest {
     ) {
         composeRule.setContent {
             val density = LocalDensity.current
+            var confirming by remember { mutableStateOf(false) }
             CompositionLocalProvider(
                 LocalDensity provides Density(density.density, fontScale = fontScale)
             ) {
@@ -107,14 +114,23 @@ class DashboardScreenshotTest {
                             .background(MaterialTheme.colorScheme.background)
                     ) {
                         DashboardScreen(
-                            state = DashboardUiState(bridge = bridge, paired = paired),
+                            state = DashboardUiState(
+                                bridge = bridge,
+                                paired = paired,
+                                confirmingUnpair = confirming
+                            ),
                             onOpenSetup = {},
                             onOpenDoctor = {},
                             onNewCall = onNewCall,
                             onOpenLiveCall = onOpenLiveCall,
                             onRunLinkTest = onRunLinkTest,
                             onOpenUpdates = {},
-                            onUnpair = onUnpair,
+                            onRequestUnpair = { confirming = true },
+                            onDismissUnpair = { confirming = false },
+                            onConfirmUnpair = {
+                                confirming = false
+                                onUnpair()
+                            },
                             nowEpochMs = nowEpochMs
                         )
                     }
@@ -424,6 +440,50 @@ class DashboardScreenshotTest {
         fake = 2_500L
         composeRule.mainClock.advanceTimeBy(1_100)
         assertEquals(2_500L, seen)
+    }
+
+    /**
+     * The header's status is the design system's animated label, not a `Text` that is swapped out:
+     * one frame into a path change both the old and the new label are on screen while the swap
+     * runs, and the old one is gone when the motion ends. A plain text node would never show both.
+     */
+    @Test
+    fun theHeaderStatusLabelChangesInPlace() {
+        val bridge = mutableStateOf(DashboardSamples.direct)
+        composeRule.mainClock.autoAdvance = false
+        composeRule.setContent {
+            CompositionLocalProvider(LocalMotionEnabled provides true) {
+                PhonxietyTheme(dynamicColor = false) {
+                    DashboardScreen(
+                        state = DashboardUiState(bridge = bridge.value, paired = true),
+                        onOpenSetup = {},
+                        onOpenDoctor = {},
+                        onNewCall = {},
+                        onOpenLiveCall = {},
+                        onRunLinkTest = {},
+                        onOpenUpdates = {},
+                        onRequestUnpair = {},
+                        onDismissUnpair = {},
+                        onConfirmUnpair = {},
+                        nowEpochMs = DashboardSamples.now
+                    )
+                }
+            }
+        }
+        composeRule.mainClock.advanceTimeByFrame()
+        composeRule.onNodeWithText("Direct").assertExists()
+
+        bridge.value = DashboardSamples.direct.copy(
+            link = (DashboardSamples.direct.link as LinkState.Up).copy(path = PathKind.RELAY)
+        )
+        shadowOf(Looper.getMainLooper()).idle()
+        composeRule.mainClock.advanceTimeBy(40)
+        composeRule.onAllNodesWithText("Direct").assertCountEquals(1)
+        composeRule.onAllNodesWithText("Relay").assertCountEquals(1)
+
+        composeRule.mainClock.advanceTimeBy(1_000)
+        composeRule.onNodeWithText("Direct").assertDoesNotExist()
+        composeRule.onAllNodesWithText("Relay").assertCountEquals(1)
     }
 
     private fun openUnpairDialog() {

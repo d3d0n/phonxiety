@@ -11,17 +11,24 @@ import com.phonxiety.bridge.model.BridgeState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-/** Everything the dashboard shows: the live bridge state plus whether a daemon is paired. */
+/**
+ * Everything the dashboard shows: the live bridge state, whether a daemon is paired, and the
+ * unpair question while it is open. The confirmation is a value here — not a `remember` in the
+ * card — so a rotation reopens the screen with the same question and an answer is the ViewModel's
+ * to carry out.
+ */
 data class DashboardUiState(
     val bridge: BridgeState = BridgeState(),
     val paired: Boolean = false,
-    val simOperator: String? = null
+    val simOperator: String? = null,
+    val confirmingUnpair: Boolean = false
 )
 
 @HiltViewModel
@@ -33,12 +40,19 @@ constructor(
     private val pairingRepository: PairingRepository
 ) : ViewModel() {
     private val simOperator = readSimOperator(context)
+    private val confirmingUnpair = MutableStateFlow(false)
 
     val state: StateFlow<DashboardUiState> = combine(
         bridgeStateRepository.state,
-        pairingRepository.paired
-    ) { bridge, paired ->
-        DashboardUiState(bridge = bridge, paired = paired, simOperator = simOperator)
+        pairingRepository.paired,
+        confirmingUnpair
+    ) { bridge, paired, confirming ->
+        DashboardUiState(
+            bridge = bridge,
+            paired = paired,
+            simOperator = simOperator,
+            confirmingUnpair = confirming
+        )
     }
         .stateIn(
             scope = viewModelScope,
@@ -46,7 +60,18 @@ constructor(
             initialValue = DashboardUiState()
         )
 
+    /** Opens the unpair question; the card calls this, and the dialog follows the state. */
+    fun requestUnpair() {
+        confirmingUnpair.value = true
+    }
+
+    /** Closes the question without unpairing. */
+    fun dismissUnpair() {
+        confirmingUnpair.value = false
+    }
+
     fun unpair() {
+        confirmingUnpair.value = false
         viewModelScope.launch { pairingRepository.unpair() }
     }
 

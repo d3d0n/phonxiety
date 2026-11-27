@@ -3,11 +3,19 @@ package com.phonxiety.bridge.feature.dashboard
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import app.cash.turbine.test
-import com.phonxiety.bridge.data.BridgeStateRepository
-import com.phonxiety.bridge.data.PairResult
-import com.phonxiety.bridge.data.PairingRepository
 import com.phonxiety.bridge.designsystem.component.LinkPath
 import com.phonxiety.bridge.designsystem.formatDuration
+import com.phonxiety.bridge.feature.dashboard.cards.NetworkKind
+import com.phonxiety.bridge.feature.dashboard.cards.ThermalState
+import com.phonxiety.bridge.feature.dashboard.cards.callTiming
+import com.phonxiety.bridge.feature.dashboard.cards.formatDbm
+import com.phonxiety.bridge.feature.dashboard.cards.humanizeToken
+import com.phonxiety.bridge.feature.dashboard.cards.knownPermission
+import com.phonxiety.bridge.feature.dashboard.cards.networkKind
+import com.phonxiety.bridge.feature.dashboard.cards.playbackDropMillis
+import com.phonxiety.bridge.feature.dashboard.cards.secondsBetween
+import com.phonxiety.bridge.feature.dashboard.cards.thermalState
+import com.phonxiety.bridge.feature.dashboard.cards.toDesignPath
 import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.model.CallPhase
 import com.phonxiety.bridge.model.CallState
@@ -16,8 +24,6 @@ import com.phonxiety.bridge.model.LinkState
 import com.phonxiety.bridge.model.PathKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
@@ -82,6 +88,55 @@ class DashboardViewModelTest {
         testScheduler.advanceUntilIdle()
         assertFalse(pairing.paired.value)
         assertTrue(pairing.unpairCalls > 0)
+    }
+
+    @Test
+    fun theUnpairQuestionIsPartOfTheScreenState() = runTest(dispatcher) {
+        val viewModel = DashboardViewModel(
+            ApplicationProvider.getApplicationContext<Context>(),
+            FakeBridgeStateRepository(DIRECT),
+            FakePairingRepository(pairedNow = true)
+        )
+
+        viewModel.state.test {
+            awaitItem()
+            assertTrue(awaitItem().paired)
+
+            viewModel.requestUnpair()
+            testScheduler.advanceUntilIdle()
+            assertTrue("asking for the confirmation must move the state", awaitItem().confirmingUnpair)
+
+            viewModel.dismissUnpair()
+            testScheduler.advanceUntilIdle()
+            assertFalse(awaitItem().confirmingUnpair)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun answeringTheQuestionUnpairsAndClosesIt() = runTest(dispatcher) {
+        val pairing = FakePairingRepository(pairedNow = true)
+        val viewModel = DashboardViewModel(
+            ApplicationProvider.getApplicationContext<Context>(),
+            FakeBridgeStateRepository(DIRECT),
+            pairing
+        )
+
+        viewModel.state.test {
+            awaitItem()
+            assertTrue(awaitItem().paired)
+
+            viewModel.requestUnpair()
+            testScheduler.advanceUntilIdle()
+            assertTrue(awaitItem().confirmingUnpair)
+
+            viewModel.unpair()
+            testScheduler.advanceUntilIdle()
+            // The question is closed by the answer itself, and the pairing repository ran.
+            assertFalse(awaitItem().confirmingUnpair)
+            assertTrue(pairing.unpairCalls > 0)
+            cancelAndIgnoreRemainingEvents()
+        }
     }
 
     @Test
@@ -222,26 +277,5 @@ class DashboardViewModelTest {
                 reconnects = 0
             )
         )
-    }
-}
-
-private class FakeBridgeStateRepository(state: BridgeState) : BridgeStateRepository {
-    private val mutable = MutableStateFlow(state)
-    override val state: StateFlow<BridgeState> = mutable
-}
-
-private class FakePairingRepository(pairedNow: Boolean) : PairingRepository {
-    private val mutable = MutableStateFlow(pairedNow)
-    override val paired: StateFlow<Boolean> = mutable
-    var unpairCalls = 0
-
-    override suspend fun pair(link: String): PairResult {
-        mutable.value = true
-        return PairResult.Paired
-    }
-
-    override suspend fun unpair() {
-        unpairCalls++
-        mutable.value = false
     }
 }

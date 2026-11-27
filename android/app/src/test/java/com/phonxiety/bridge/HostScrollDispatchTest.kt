@@ -2,19 +2,22 @@ package com.phonxiety.bridge
 
 import android.content.Context
 import android.content.Intent
-import android.content.pm.ApplicationInfo
 import android.os.Looper
-import androidx.activity.compose.setContent
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
-import com.phonxiety.bridge.designsystem.PhonxietyTheme
-import com.phonxiety.bridge.designsystem.ScrollToTopRegistry
 import com.phonxiety.bridge.feature.onboarding.SetupPreferences
-import org.junit.Assert.assertEquals
+import java.io.File
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -23,10 +26,11 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 /**
- * The re-tap contract through the real host: the action registered under the section's key is the
- * one that runs. The host is composed with the registry the test holds, and the fake replaces the
- * section root's own action for a moment, so a navigator that stopped using the host's registry —
- * or stopped dispatching at a root — leaves the counter at zero.
+ * The re-tap contract through the real host and the real dashboard: the section root registers its
+ * own scroll action with the registry the host installs, and tapping the active Home tab runs it.
+ * The test holds no registry, so the list only moves if the host provided its own
+ * [com.phonxiety.bridge.designsystem.LocalScrollToTop], the dashboard registered against it, and
+ * the navigator dispatched the section's key.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -37,48 +41,38 @@ class HostScrollDispatchTest {
     private val context: Context = ApplicationProvider.getApplicationContext()
 
     @Test
-    fun reTappingTheActiveSectionAtItsRootRunsTheActionRegisteredUnderItsKey() {
+    fun reTappingTheActiveHomeTabBringsTheRealDashboardBackToTheTop() {
         SetupPreferences(context).ready = true
-        val flags = context.applicationInfo.flags
-        context.applicationInfo.flags = flags or ApplicationInfo.FLAG_DEBUGGABLE
+        val config = File(context.createDeviceProtectedStorageContext().filesDir, CONFIG_FILE)
+        config.parentFile?.mkdirs()
+        // A pairing file makes the real dashboard render its full set of cards, which is taller
+        // than the viewport and therefore has somewhere to scroll back from.
+        config.writeText(PAIRED_CONFIG)
         try {
-            val registry = ScrollToTopRegistry()
-            var dashboardScrolls = 0
-            var otherScrolls = 0
-
-            ActivityScenario.launch<MainActivity>(Intent(context, MainActivity::class.java)).use { scenario ->
+            ActivityScenario.launch<MainActivity>(Intent(context, MainActivity::class.java)).use {
                 shadowOf(Looper.getMainLooper()).idle()
                 composeRule.settleHost()
 
-                scenario.onActivity { activity ->
-                    activity.setContent {
-                        PhonxietyTheme(dynamicColor = false) {
-                            PhonxietyNavigationHost(
-                                signal = null,
-                                start = DashboardKey,
-                                strip = LinkStripState.Hidden,
-                                onSignalConsumed = {},
-                                scrollToTop = registry
-                            )
-                        }
-                    }
-                }
-                composeRule.settleHost()
-
-                composeRule.runOnIdle {
-                    registry.register(Section.DASHBOARD.scrollToTopKey) { dashboardScrolls++ }
-                    registry.register(Section.CALLS.scrollToTopKey) { otherScrolls++ }
-                }
+                composeRule.onAllNodes(hasScrollAction()).onFirst()
+                    .performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, 4_000f) }
+                composeRule.waitForIdle()
+                composeRule.onNodeWithText("Bridge control").assertIsNotDisplayed()
 
                 composeRule.onNode(hasText("Home") and hasClickAction()).performClick()
 
-                composeRule.runOnIdle {
-                    assertEquals("the active section's action did not run", 1, dashboardScrolls)
-                    assertEquals("another section's action ran", 0, otherScrolls)
+                composeRule.waitUntil(SCROLL_BACK_MS) {
+                    runCatching { composeRule.onNodeWithText("Bridge control").assertIsDisplayed() }.isSuccess
                 }
+                composeRule.onNodeWithText("Bridge control").assertIsDisplayed()
             }
         } finally {
-            context.applicationInfo.flags = flags
+            config.delete()
         }
+    }
+
+    private companion object {
+        const val CONFIG_FILE = "config.json"
+        const val PAIRED_CONFIG = """{"url":"wss://127.0.0.1:18763/device","token":"dashboard-scroll-test"}"""
+        const val SCROLL_BACK_MS = 5_000L
     }
 }
