@@ -7,8 +7,7 @@ import java.io.File
  * restart. Doctor writes here only when it acted, never for a check it merely read.
  *
  * A line names a stable [DoctorLogEvent] plus its arguments, so the copy stays translatable and a
- * resource-id change never rewrites history. A line written before the events existed keeps its
- * text as a legacy entry.
+ * resource-id change never rewrites history.
  */
 class FileDoctorChangeLog(
     private val file: File,
@@ -36,9 +35,6 @@ class FileDoctorChangeLog(
 
     private fun format(entry: DoctorChangeEntry): String {
         val event = entry.event
-        // A legacy line was written verbatim by an older build: keep its bytes, escaping only the
-        // structured form, so a backslash or a pipe it contains survives every later append.
-        if (event == null) return "${entry.atEpochMs}|${entry.legacyText.orEmpty()}"
         if (entry.args.isEmpty()) return "${entry.atEpochMs}|${event.name}"
         val args = entry.args.joinToString(ARG_SEPARATOR.toString()) { escape(it) }
         return "${entry.atEpochMs}|${event.name}|$args"
@@ -52,7 +48,7 @@ class FileDoctorChangeLog(
         val second = rest.indexOf(FIELD_SEPARATOR)
         val head = if (second < 0) rest else rest.substring(0, second)
         val event = DoctorLogEvent.entries.firstOrNull { it.name == head }
-            ?: return DoctorChangeEntry(atEpochMs = at, legacyText = rest)
+            ?: return null
         // Keep every position, an empty one included: a fix that produced no output still carries
         // its single empty argument, and dropping it makes the rendered template lose its value.
         val args = if (second < 0) {

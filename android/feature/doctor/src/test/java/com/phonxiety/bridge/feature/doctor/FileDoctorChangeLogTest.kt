@@ -7,8 +7,8 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 
 /**
- * The log stores events, not rendered sentences, so a later build can still read an old line and
- * a line written before the events existed keeps its text.
+ * The log stores events, not rendered sentences, so a line means the same in every build; a line
+ * without a known event is skipped.
  */
 class FileDoctorChangeLogTest {
     @get:Rule
@@ -51,13 +51,11 @@ class FileDoctorChangeLogTest {
     }
 
     @Test
-    fun aLineFromBeforeTheEventsKeepsItsText() {
+    fun aLineWithoutAKnownEventIsSkipped() {
         val file = File(folder.root, "doctor.log")
         file.writeText("123|Restarted the bridge service to reopen the link\n")
 
-        val entry = store(file).entries().single()
-        assertEquals(null, entry.event)
-        assertEquals("Restarted the bridge service to reopen the link", entry.legacyText)
+        assertEquals(emptyList<DoctorChangeEntry>(), store(file).entries())
     }
 
     @Test
@@ -69,22 +67,6 @@ class FileDoctorChangeLogTest {
         val entries = log.entries()
         assertEquals(listOf(""), entries.first().args)
         assertEquals(emptyList<String>(), entries.last().args)
-    }
-
-    @Test
-    fun aLegacyLineIsReadAndWrittenVerbatim() {
-        val file = File(folder.root, "doctor.log")
-        val oldText = "The daemon printed C:\\temp | exit \\f and \\a here"
-        file.writeText("123|The daemon printed C:\\temp | exit \\f and \\a here\n")
-
-        val log = store(file)
-        assertEquals(oldText, log.entries().single().legacyText)
-
-        // Recording a new event rewrites the file; the old payload must come back byte for byte.
-        log.record(DoctorChangeEntry(atEpochMs = 456, event = DoctorLogEvent.BRIDGE_RESTARTED))
-        val reloaded = store(file).entries()
-        assertEquals(oldText, reloaded.first { it.event == null }.legacyText)
-        assertEquals(DoctorLogEvent.BRIDGE_RESTARTED, reloaded.last().event)
     }
 
     @Test

@@ -36,10 +36,6 @@ enum class TuneReason(@param:StringRes val textRes: Int) {
     BITRATE_LOWER_LOSS(R.string.settings_reason_bitrate_lower_loss),
     BITRATE_RICHER(R.string.settings_reason_bitrate_richer),
     CODEC_CELLULAR(R.string.settings_reason_codec_cellular);
-
-    companion object {
-        fun of(name: String?): TuneReason? = entries.firstOrNull { it.name == name }
-    }
 }
 
 /**

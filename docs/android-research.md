@@ -61,7 +61,7 @@ The build file's own comments are correct: AGP 8.x cannot compile API 37, AGP 9.
 
 ## Persistence
 
-**Now.** Plain files in device-protected storage, written atomically by `AppStorage.writeAtomically` (tmp file → `fd.sync()` → rename → directory fsync → owner-only mode), plus `migratePreferences` for the old `SharedPreferences` file. `BridgeConfig` and `CallLedger` are JSON; the iroh secret key is a raw file.
+**Now.** Plain files in device-protected storage, written atomically by `AppStorage.writeAtomically` (tmp file → `fd.sync()` → rename → directory fsync → owner-only mode). `BridgeConfig` and `CallLedger` are JSON; the iroh secret key is a raw file.
 
 **Best practice.** DataStore 1.3.0 is stable (2026-10-21) and gives serialised, transactional, coroutine-based reads/writes over typed data with atomic replacement ([DataStore releases](https://developer.android.com/jetpack/androidx/releases/datastore#1.3.0)); it works inside a device-protected context. It replaces `SharedPreferences`, not hand-rolled crash-safe files.
 
@@ -113,7 +113,7 @@ The build file's own comments are correct: AGP 8.x cannot compile API 37, AGP 9.
 
 **Best practice.** JUnit 5 still has no first-party Android runner; `android-junit5` provides one and documents AGP 8.2+, with AGP 9 support **not verified** ([android-junit5](https://github.com/mannodermaus/android-junit5)). Robolectric 4.18.1 (2026-11-18) supports SDK 37 ([releases](https://github.com/robolectric/robolectric/releases/tag/robolectric-4.18.1)). Roborazzi 1.79.0 (2026-11-12) is the screenshot-testing option on Robolectric native graphics ([releases](https://github.com/takahirom/roborazzi/releases)); the platform guide compares the host-side options ([screenshot testing](https://developer.android.com/training/testing/ui-tests/screenshot)). For flows, `runTest` + a test dispatcher is the documented approach ([test flows](https://developer.android.com/kotlin/flow/test)), Turbine for hot flows. The architecture guidance is blunt that layers should be tested with fakes, not mocks.
 
-**Recommendation: adopt partially (S/M).** Keep JUnit 4 — 13 passing tests are not worth an unsupported plugin risk. Add `kotlinx-coroutines-test` and (optionally) Turbine together with the concurrency change, since that is what makes the engine testable; add Robolectric 4.18.1 only when `AppStorage`, `BridgeConfig` or `Permissions` need JVM tests, which is a real gap today (device-protected storage, atomic write and migration are untested). Skip Roborazzi and Compose UI tests: there is no Compose, and a screenshot of a status screen has no regression value for a headless bridge.
+**Recommendation: adopt partially (S/M).** Keep JUnit 4 — 13 passing tests are not worth an unsupported plugin risk. Add `kotlinx-coroutines-test` and (optionally) Turbine together with the concurrency change, since that is what makes the engine testable; add Robolectric 4.18.1 only when `AppStorage`, `BridgeConfig` or `Permissions` need JVM tests, which is a real gap today (device-protected storage and atomic write are untested). Skip Roborazzi and Compose UI tests: there is no Compose, and a screenshot of a status screen has no regression value for a headless bridge.
 
 ## Static analysis
 

@@ -55,9 +55,7 @@ class PhoneSettingsFrameTapTest {
     private fun store(): PhoneSettingsStore {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO).also { scopes += it }
         return PhoneSettingsStore(
-            dataStore = PreferenceDataStoreFactory.create(scope = scope, produceFile = { file }),
-            legacy = LegacyPhoneSettingsFile(File(root, "ce/datastore/phone-settings.preferences_pb")) { false },
-            scope = scope
+            dataStore = PreferenceDataStoreFactory.create(scope = scope, produceFile = { file })
         )
     }
 }

@@ -98,7 +98,6 @@ internal object HandsetMute {
 
     private fun prefs(context: Context): SharedPreferences {
         val app = context.applicationContext
-        AppStorage.migratePreferences(app, PREFS)
         return AppStorage.deviceProtected(app).getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     }
 }

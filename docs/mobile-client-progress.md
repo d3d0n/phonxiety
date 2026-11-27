@@ -52,7 +52,7 @@ What each phase of [`mobile-client-plan.md`](mobile-client-plan.md) produced on 
   - the Lab names "Test call placed" and the call ID on its own line, then the result card (`lab-test-call-placed.png`);
   - on the lock screen during a call only the system's ongoing-call notification shows; the bridge's two notifications are on silent channels with private visibility, so nothing about the agent or the transcript reaches the lock screen (`lock-screen-during-call.png`).
 - **Found in that pass and fixed:**
-  - the phone settings were read before unlock and came up as defaults for the whole process; they now live in device-protected storage, the old file migrates once it is readable and stays for a rollback (`settings-before-unlock.txt`);
+  - the phone settings were read before unlock and came up as defaults for the whole process; they now live in device-protected storage, so the engine reads the stored codec and relay settings before unlock;
   - a leading "+" typed into the Lab test number was erased;
   - result fields the agent left empty read "null"; they now read "Not reported";
   - the live header timer counted from placing the call, so it disagreed with the system's call chip and jumped back at the end. The bridge now records the answer once, from Telecom's connect time, and keeps it across replays, recovery and a lost link; the screen counts from it. In call `f2d46b55` the header and the system chip both read 00:10 ten seconds after the answer, and the ended header read the 15 s the call lasted (`live-call-timer.png`);

@@ -88,19 +88,6 @@ class CandidateBindingTest {
     }
 
     @Test
-    fun aFailedLegacyBindingNeverProbesTheNewTokenAgainstTheOldDaemon() {
-        val file = storeFile()
-        file.writeText("""{"candidates":[{"url":"$lanA","cert_sha256":"$pinA","source":"daemon"}]}""")
-        assertTrue(File(file.parentFile, file.name + ".tmp").mkdirs())
-        val store = CandidateStore(file)
-        val configB = BridgeConfig.validateIroh("ticket-b", "token-b")
-
-        assertNull(store.bind(CandidateMerge.identity(configB)))
-
-        assertEquals(emptyList<Pair<String, String>>(), probed(configB, store, "token-b"))
-    }
-
-    @Test
     fun aRotatedCertificateLeavesThePreviousCertificateAddressOutOfTheProbe() {
         val store = CandidateStore(storeFile())
         val before = BridgeConfig.validateIroh("ticket-a", "token-a", certSha256 = pinA)

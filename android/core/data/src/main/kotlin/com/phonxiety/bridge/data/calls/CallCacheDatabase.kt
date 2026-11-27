@@ -84,10 +84,6 @@ class CallCache @Inject constructor(private val database: CallCacheDatabase) {
     suspend fun <R> transaction(block: suspend CallCache.() -> R): R = database.withTransaction { this@CallCache.block() }
 }
 
-/**
- * Version 2 splits the one wide row into a list row and a detail row, with the transcript keyed
- * to the detail. The cache is a disposable copy of the daemon's records, so the upgrade drops it.
- */
 @Database(
     entities = [CallSummaryEntity::class, CallDetailEntity::class, TranscriptEntity::class],
     version = 2,

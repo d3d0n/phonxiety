@@ -35,8 +35,8 @@ val StoredCandidate.isTailnet: Boolean
 @Serializable
 private data class CandidateDocument(
     val candidates: List<StoredCandidate> = emptyList(),
-    /** Which pairing these addresses belong to; an older document has none. */
-    val pairing: String? = null
+    /** Which pairing these addresses belong to. */
+    val pairing: String
 )
 
 /**
@@ -59,26 +59,26 @@ class CandidateStore(private val file: File) {
 
     /** The addresses and the pairing identity from one read. */
     fun snapshot(): Snapshot = synchronized(lock) {
-        val document = document()
+        val document = document() ?: return Snapshot(emptyList(), null)
         Snapshot(document.candidates, document.pairing)
     }
 
     fun load(): List<StoredCandidate> = snapshot().candidates
 
-    /** The pairing the stored addresses belong to, or null for a document from before identities. */
+    /** The pairing the stored addresses belong to, or null when nothing is stored. */
     fun pairingIdentity(): String? = snapshot().pairing
 
-    private fun document(): CandidateDocument = try {
+    private fun document(): CandidateDocument? = try {
         if (!file.isFile || file.length() > MAX_BYTES) {
-            CandidateDocument()
+            null
         } else {
             json.decodeFromString(CandidateDocument.serializer(), file.readText(Charsets.UTF_8))
         }
     } catch (_: Exception) {
-        CandidateDocument()
+        null
     }
 
-    private fun writeDocument(pairing: String?, candidates: List<StoredCandidate>): Boolean = try {
+    private fun writeDocument(pairing: String, candidates: List<StoredCandidate>): Boolean = try {
         file.parentFile?.mkdirs()
         val clean = CandidateStore.dedupe(candidates)
         AppStorage.writeAtomically(
@@ -102,7 +102,7 @@ class CandidateStore(private val file: File) {
      * an address of the current one.
      */
     fun merge(expected: String, learned: List<StoredCandidate>): List<StoredCandidate>? = synchronized(lock) {
-        val current = document()
+        val current = document() ?: return null
         if (current.pairing != expected) return null
         val merged = CandidateStore.dedupe(current.candidates + learned)
         if (!writeDocument(current.pairing, merged)) return null
@@ -118,7 +118,7 @@ class CandidateStore(private val file: File) {
      */
     fun bind(pairing: String): Snapshot? = synchronized(lock) {
         val current = document()
-        if (current.pairing == pairing) return Snapshot(current.candidates, pairing)
+        if (current != null && current.pairing == pairing) return Snapshot(current.candidates, pairing)
         if (!writeDocument(pairing, emptyList())) return null
         Snapshot(emptyList(), pairing)
     }
@@ -126,7 +126,7 @@ class CandidateStore(private val file: File) {
     /** [bind], then merge this pairing's own addresses (the QR's) in the same write. */
     fun rebind(pairing: String, candidates: List<StoredCandidate>): Snapshot? = synchronized(lock) {
         val current = document()
-        val next = if (current.pairing == pairing) {
+        val next = if (current != null && current.pairing == pairing) {
             CandidateStore.dedupe(current.candidates + candidates)
         } else {
             CandidateStore.dedupe(candidates)

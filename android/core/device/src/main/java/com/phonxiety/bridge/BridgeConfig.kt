@@ -195,8 +195,7 @@ data class PairingRead(
  *   {"iroh":"<EndpointTicket>","token":"..."}
  *
  * The file is written atomically (temporary file, fsync, rename) with owner-only
- * mode.  A credential-protected copy from 0.2.0 is migrated once after unlock.
- * The host pairing task may also write the file through a root shell, so the
+ * mode.  The host pairing task may also write the file through a root shell, so the
  * loader tolerates the file appearing while the app runs.  The token is never
  * logged.
  */
@@ -219,7 +218,6 @@ object BridgeConfigLoader {
      * addresses can never come from two different snapshots.
      */
     fun read(context: Context): PairingRead = synchronized(lock) {
-        AppStorage.migrateFile(context, FILE_NAME)
         val json = document(context)
         PairingRead(
             config = configOf(json),
@@ -244,7 +242,6 @@ object BridgeConfigLoader {
      * entries survive; the pin is applied by [candidates].
      */
     fun addresses(context: Context): PairingAddresses = synchronized(lock) {
-        AppStorage.migrateFile(context, FILE_NAME)
         runCatching { addressesOf(document(context)) }.getOrDefault(PairingAddresses())
     }
 
@@ -411,14 +408,10 @@ object BridgeConfigLoader {
 
     /** Removes the paired-daemon file; returns true when no config remains. */
     fun delete(context: Context): Boolean = synchronized(lock) {
-        AppStorage.migrateFile(context, FILE_NAME)
         val file = configFile(context)
         runCatching { File(file.parentFile, "$FILE_NAME.tmp").delete() }
         var removed = true
         if (file.exists() && !file.delete()) removed = false
-        // A locked user may still hold the pre-0.3.0 credential-protected copy.
-        val legacy = File(context.applicationContext.filesDir, FILE_NAME)
-        if (legacy.exists() && !legacy.delete()) removed = false
         removed
     }
 }

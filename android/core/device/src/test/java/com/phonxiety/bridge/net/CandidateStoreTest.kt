@@ -92,13 +92,15 @@ class CandidateStoreTest {
     }
 
     @Test
-    fun aDocumentWrittenBeforeIdentitiesIsReplacedByTheFirstBinding() {
+    fun aDocumentWithoutAnIdentityIsIgnored() {
         val file = File(createTempDirectory("candidates").toFile(), "link-candidates.json")
         file.writeText(
             """{"candidates":[{"url":"$lanA","cert_sha256":"$pinA","source":"daemon"}]}"""
         )
         val store = CandidateStore(file)
+
         assertNull(store.pairingIdentity())
+        assertTrue("an address with no pairing identity is not a candidate", store.load().isEmpty())
 
         val bound = store.bind(CandidateMerge.identity(config("ticket-b", pinB)))
 

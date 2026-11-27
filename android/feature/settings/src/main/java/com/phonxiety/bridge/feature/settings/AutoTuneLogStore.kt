@@ -14,9 +14,8 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 
 /**
- * One applied (or reverted) auto-tune change, as the change log shows it. [reasonId] and
- * [reasonArgs] carry the template and its measurements; [reason] keeps the prose written by a build
- * that predates them, so an upgrade never loses the record.
+ * One applied (or reverted) auto-tune change, as the change log shows it. [reasonId] is the
+ * template that fired and [reasonArgs] its measurements.
  */
 @Serializable
 data class AutoTuneLogEntry(
@@ -25,8 +24,7 @@ data class AutoTuneLogEntry(
     val key: String,
     val from: String,
     val to: String,
-    val reason: String = "",
-    val reasonId: String? = null,
+    val reasonId: TuneReason,
     val reasonArgs: List<String> = emptyList(),
     val reverted: Boolean = false
 ) {
@@ -60,15 +58,8 @@ data class AutoTuneLogEntry(
         else -> UiText.Literal("$key → $to")
     }
 
-    /** The measurement behind the change, resolved from its template when the entry has one. */
-    fun reasonText(): UiText {
-        val reason = TuneReason.of(reasonId)
-        return if (reason == null) {
-            UiText.Literal(this.reason)
-        } else {
-            UiText.Res(reason.textRes, reasonArgs)
-        }
-    }
+    /** The measurement behind the change, resolved from its template. */
+    fun reasonText(): UiText = UiText.Res(reasonId.textRes, reasonArgs)
 }
 
 /**

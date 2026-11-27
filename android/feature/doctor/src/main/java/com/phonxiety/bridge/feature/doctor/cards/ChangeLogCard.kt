@@ -55,8 +55,6 @@ internal fun ChangeLogCard(state: DoctorUiState) {
 
 @Composable
 private fun DoctorChangeEntry.text(): String = when (event) {
-    null -> legacyText.orEmpty()
-
     DoctorLogEvent.BRIDGE_RESTARTED -> stringResource(R.string.doctor_log_bridge_restarted)
 
     DoctorLogEvent.PERMISSION_ASKED -> stringResource(R.string.doctor_log_permission_asked, *args.toTypedArray())

@@ -21,7 +21,8 @@ object CallCacheModule {
     @Provides
     @Singleton
     fun database(@ApplicationContext context: Context): CallCacheDatabase = Room.databaseBuilder(context, CallCacheDatabase::class.java, "calls.db")
-        // The cache is a copy of the daemon's records; losing it costs a refresh, never data.
+        // The cache is a copy of the daemon's records, so any version mismatch — an upgrade or a
+        // downgrade — drops every table and refetches; losing it costs a refresh, never data.
         .fallbackToDestructiveMigration(dropAllTables = true)
         .build()
 }

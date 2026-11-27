@@ -64,10 +64,6 @@ internal class CallLedger(context: Context, private val bootId: String) : CallSt
 
     private val file = File(AppStorage.deviceProtected(context).filesDir, FILE_NAME)
 
-    init {
-        AppStorage.migrateFile(context, FILE_NAME)
-    }
-
     private var state: Snapshot = load()
 
     @Synchronized

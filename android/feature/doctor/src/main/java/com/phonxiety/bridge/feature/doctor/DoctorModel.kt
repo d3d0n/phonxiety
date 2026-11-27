@@ -237,15 +237,11 @@ enum class DoctorLogEvent {
     DAEMON_FIX_APPLIED_MORE
 }
 
-/**
- * One line of the change log. [legacyText] carries a line written before the copy moved to
- * resources, so an upgrade never loses the record.
- */
+/** One line of the change log. */
 data class DoctorChangeEntry(
     val atEpochMs: Long,
-    val event: DoctorLogEvent? = null,
-    val args: List<String> = emptyList(),
-    val legacyText: String? = null
+    val event: DoctorLogEvent,
+    val args: List<String> = emptyList()
 )
 
 /** Everything the Doctor screen renders. */

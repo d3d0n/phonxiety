@@ -1,13 +1,9 @@
 package com.phonxiety.bridge
 
-import android.content.BroadcastReceiver
 import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
-import androidx.datastore.preferences.core.PreferencesFileSerializer
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
@@ -15,21 +11,12 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import com.phonxiety.bridge.net.ConnectionMode
 import com.phonxiety.bridge.net.RelayModeSetting
 import com.phonxiety.bridge.net.RelayOptions
-import java.io.File
 import java.util.Locale
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 
 /** Codec values the phone can ask for: its own preference, not the daemon's own setting. */
 object PhoneCodec {
@@ -141,34 +128,6 @@ interface PhonePreferences {
 }
 
 /**
- * The settings file earlier versions kept in credential-protected storage,
- * `files/datastore/phone-settings.preferences_pb`.  That storage is readable only after the user
- * unlocks the phone, so every access is gated on [unlocked]: a locked device shows the file as
- * absent and the next attempt happens after unlock, never a default written over it.  The file
- * stays after the migration: a rollback to an earlier version reads its settings from it.
- */
-internal class LegacyPhoneSettingsFile(
-    private val file: File,
-    val unlocked: () -> Boolean
-) {
-    val exists: Boolean get() = file.isFile
-
-    /** Every preference the earlier version stored, or null while the file cannot be read. */
-    suspend fun read(): Preferences? = withContext(Dispatchers.IO) {
-        try {
-            file.inputStream().buffered().use { PreferencesFileSerializer.readFrom(it) }
-        } catch (e: Exception) {
-            BridgeLog.w(TAG, "phone settings: previous file unreadable: ${e.javaClass.simpleName}")
-            null
-        }
-    }
-
-    private companion object {
-        const val TAG = "PhonxietySettings"
-    }
-}
-
-/**
  * DataStore-backed [PhonePreferences], kept in device-protected storage.
  *
  * The engine reads the codec, connection mode and relay URLs at boot, before anyone unlocks the
@@ -176,29 +135,15 @@ internal class LegacyPhoneSettingsFile(
  * the defaults it read for the life of the process.  One instance per process: DataStore refuses
  * two active stores for one file, and the engine and the UI both need this one, so [of] hands out
  * the single instance instead of a new one per injection.
- *
- * Preferences written by earlier versions are migrated once, and only while they can be read.
- * Every access tries it, and [onUserUnlocked] tries again on the unlock broadcast, so a boot before
- * the first unlock ends with the stored values instead of the defaults.
  */
 class PhoneSettingsStore internal constructor(
-    private val dataStore: DataStore<Preferences>,
-    private val legacy: LegacyPhoneSettingsFile,
-    private val scope: CoroutineScope
+    private val dataStore: DataStore<Preferences>
 ) : PhonePreferences {
-    /** Serialises the migration, so a read and a write never race it into two copies. */
-    private val migrationLock = Mutex()
-
-    /** Set once nothing is left to migrate, so later reads do not look at the old file. */
-    @Volatile private var migrated = false
-
-    override val settings: Flow<PhoneSettings> = flow {
-        migrate()
-        emitAll(dataStore.data.map { preferences -> decode(preferences) }.distinctUntilChanged())
-    }
+    override val settings: Flow<PhoneSettings> = dataStore.data
+        .map { preferences -> decode(preferences) }
+        .distinctUntilChanged()
 
     override suspend fun update(block: (PhoneSettings) -> PhoneSettings): PhoneSettings {
-        migrate()
         var written = PhoneSettings()
         dataStore.edit { preferences ->
             val next = block(decode(preferences))
@@ -221,66 +166,7 @@ class PhoneSettingsStore internal constructor(
     }
 
     /** The stored values, read once; used by the engine before its first `hello`. */
-    suspend fun read(): PhoneSettings {
-        migrate()
-        return decode(dataStore.data.first())
-    }
-
-    /** The phone was unlocked: values that were unreadable at boot can be read now. */
-    fun onUserUnlocked() {
-        scope.launch { migrate() }
-    }
-
-    /**
-     * Applies the credential-protected file once.  A locked user leaves it alone and the next
-     * access after unlock tries again; what it holds wins over everything this store may already
-     * have written, because a default written while the real values were unreadable may not
-     * replace them.  The migration marker is written in the same edit, and the old file is left in
-     * place for a rollback, so it is never applied a second time over newer values.
-     */
-    private suspend fun migrate() {
-        if (migrated) return
-        withContext(Dispatchers.IO) {
-            migrationLock.withLock {
-                if (migrated) return@withLock
-                if (!legacy.unlocked()) return@withLock
-                if (!legacy.exists) {
-                    migrated = true
-                    return@withLock
-                }
-                // An earlier process already applied it; this file is a leftover, not a source.
-                if (dataStore.data.first()[MIGRATED_FROM_CREDENTIAL] == true) {
-                    migrated = true
-                    return@withLock
-                }
-                val stored = legacy.read() ?: return@withLock
-                dataStore.edit { preferences ->
-                    // The old file is a full snapshot of what the user chose, so it replaces
-                    // whatever this store holds; the defaults a locked boot answered with are not
-                    // choices and may not outlive them.
-                    preferences += stored
-                    preferences[MIGRATED_FROM_CREDENTIAL] = true
-                }
-                migrated = true
-            }
-        }
-    }
-
-    /** Listens for the unlock so a boot before it stops running on defaults. */
-    private fun watchUserUnlock(context: Context) {
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context, intent: Intent) {
-                if (intent.action == Intent.ACTION_USER_UNLOCKED) onUserUnlocked()
-            }
-        }
-        runCatching {
-            AppStorage.deviceProtected(context).registerReceiver(
-                receiver,
-                IntentFilter(Intent.ACTION_USER_UNLOCKED),
-                Context.RECEIVER_NOT_EXPORTED
-            )
-        }.onFailure { BridgeLog.w(TAG, "phone settings: no unlock callback: ${it.javaClass.simpleName}") }
-    }
+    suspend fun read(): PhoneSettings = decode(dataStore.data.first())
 
     private fun decode(preferences: Preferences): PhoneSettings = PhoneSettings.sanitized(
         preferredCodec = preferences[CODEC],
@@ -299,7 +185,6 @@ class PhoneSettingsStore internal constructor(
     )
 
     companion object {
-        private const val TAG = "PhonxietySettings"
         private const val FILE_NAME = "phone-settings"
 
         private val CODEC = stringPreferencesKey("preferred_codec")
@@ -316,9 +201,6 @@ class PhoneSettingsStore internal constructor(
         private val DAEMON_RELAY_URLS = stringPreferencesKey("daemon_relay_urls")
         private val FRAME_TAP = booleanPreferencesKey("frame_tap")
 
-        /** Set by the one migration, so a leftover old file is never applied twice. */
-        private val MIGRATED_FROM_CREDENTIAL = booleanPreferencesKey("migrated_from_credential_protected")
-
         @Volatile private var instance: PhoneSettingsStore? = null
 
         fun of(context: Context): PhoneSettingsStore = instance ?: synchronized(this) {
@@ -328,15 +210,9 @@ class PhoneSettingsStore internal constructor(
         private fun create(app: Context): PhoneSettingsStore {
             val scope = bridgeScope("phonxiety-settings", Dispatchers.IO)
             val file = AppStorage.dataStoreFile(AppStorage.deviceProtected(app).filesDir, FILE_NAME)
-            val store = PhoneSettingsStore(
-                dataStore = PreferenceDataStoreFactory.create(scope = scope, produceFile = { file }),
-                legacy = LegacyPhoneSettingsFile(AppStorage.dataStoreFile(app.filesDir, FILE_NAME)) {
-                    AppStorage.userUnlocked(app)
-                },
-                scope = scope
+            return PhoneSettingsStore(
+                dataStore = PreferenceDataStoreFactory.create(scope = scope, produceFile = { file })
             )
-            store.watchUserUnlock(app)
-            return store
         }
     }
 }

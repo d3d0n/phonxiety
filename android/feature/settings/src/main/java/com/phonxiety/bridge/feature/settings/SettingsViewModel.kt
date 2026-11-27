@@ -386,7 +386,7 @@ class SettingsViewModel @Inject constructor(
                     key = change.key.key,
                     from = change.from,
                     to = change.to,
-                    reasonId = change.reason.name,
+                    reasonId = change.reason,
                     reasonArgs = change.reasonArgs
                 )
             }

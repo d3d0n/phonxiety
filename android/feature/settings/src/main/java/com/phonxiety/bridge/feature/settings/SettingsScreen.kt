@@ -873,7 +873,7 @@ internal fun previewSettingsState(): SettingsUiState = SettingsUiState(
                 key = TuneKey.MAX_BITRATE.key,
                 from = "32000",
                 to = "16000",
-                reasonId = TuneReason.BITRATE_LOWER_P95_LOSS.name,
+                reasonId = TuneReason.BITRATE_LOWER_P95_LOSS,
                 reasonArgs = listOf("512\u00A0ms", "4%", "16\u00A0kbit/s")
             )
         ),
