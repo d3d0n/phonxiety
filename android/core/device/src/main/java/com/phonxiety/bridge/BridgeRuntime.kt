@@ -4,6 +4,7 @@ import android.telecom.Call
 import com.phonxiety.bridge.model.AppGateway
 import com.phonxiety.bridge.model.BridgeState
 import com.phonxiety.bridge.model.PairingGate
+import com.phonxiety.bridge.telecom.BridgeInCallService
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow

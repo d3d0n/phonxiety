@@ -1,4 +1,4 @@
-package com.phonxiety.bridge
+package com.phonxiety.bridge.audio
 
 /**
  * One playback mark: a `PXMK` frame the daemon sends on the audio stream once

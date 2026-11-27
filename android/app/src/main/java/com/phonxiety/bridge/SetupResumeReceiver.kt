@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import com.phonxiety.bridge.feature.onboarding.SetupPreferences
 import com.phonxiety.bridge.feature.onboarding.setupProgressStore
+import com.phonxiety.bridge.os.Notifications
 
 /**
  * After the reboot the wizard asked for, setup is only half applied until someone opens the app:

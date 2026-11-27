@@ -1,5 +1,7 @@
 package com.phonxiety.bridge
 
+import com.phonxiety.bridge.audio.MarkFrame
+import com.phonxiety.bridge.audio.PlaybackMarks
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull

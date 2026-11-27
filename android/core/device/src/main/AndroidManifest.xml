@@ -56,7 +56,7 @@
             storage.  It starts nothing while config.json is missing or invalid.
         -->
         <receiver
-            android:name="com.phonxiety.bridge.BootReceiver"
+            android:name="com.phonxiety.bridge.os.BootReceiver"
             android:directBootAware="true"
             android:exported="false">
             <intent-filter>
@@ -92,7 +92,7 @@
             It never declares IN_CALL_SERVICE_UI, so it is not a dialer replacement.
         -->
         <service
-            android:name="com.phonxiety.bridge.BridgeInCallService"
+            android:name="com.phonxiety.bridge.telecom.BridgeInCallService"
             android:directBootAware="true"
             android:exported="true"
             android:foregroundServiceType="microphone"

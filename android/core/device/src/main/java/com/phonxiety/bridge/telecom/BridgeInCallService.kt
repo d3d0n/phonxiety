@@ -1,11 +1,16 @@
-package com.phonxiety.bridge
+package com.phonxiety.bridge.telecom
 
 import android.app.NotificationManager
 import android.app.Service
 import android.content.pm.ServiceInfo
 import android.telecom.Call
 import android.telecom.InCallService
+import com.phonxiety.bridge.BridgeLog
+import com.phonxiety.bridge.BridgeRuntime
+import com.phonxiety.bridge.bridgeScope
 import com.phonxiety.bridge.model.CallState
+import com.phonxiety.bridge.os.NotificationSlot
+import com.phonxiety.bridge.os.Notifications
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.map

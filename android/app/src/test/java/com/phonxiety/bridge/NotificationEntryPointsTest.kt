@@ -18,6 +18,8 @@ import com.phonxiety.bridge.feature.onboarding.SetupPreferences
 import com.phonxiety.bridge.model.CallPhase
 import com.phonxiety.bridge.model.CallState
 import com.phonxiety.bridge.model.PathKind
+import com.phonxiety.bridge.os.BridgeNotice
+import com.phonxiety.bridge.os.Notifications
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue

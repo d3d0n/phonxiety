@@ -1,5 +1,7 @@
 package com.phonxiety.bridge
 
+import com.phonxiety.bridge.audio.PhoneAudio
+
 /**
  * Closes a detached stream's audio and clears its numbers, after the engine lock is released.
  * The stream is gone for good: a later cleanup of the same call finds nothing to reset, and a

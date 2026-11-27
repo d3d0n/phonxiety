@@ -1,8 +1,10 @@
-package com.phonxiety.bridge
+package com.phonxiety.bridge.os
 
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import com.phonxiety.bridge.BridgeConfigLoader
+import com.phonxiety.bridge.BridgeService
 
 /**
  * Restores the device link after a reboot or an app update, but only when a

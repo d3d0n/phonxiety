@@ -1,4 +1,4 @@
-package com.phonxiety.bridge
+package com.phonxiety.bridge.os
 
 import android.app.Notification
 import android.app.NotificationChannel

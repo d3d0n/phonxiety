@@ -1,4 +1,4 @@
-package com.phonxiety.bridge
+package com.phonxiety.bridge.audio
 
 import android.media.MediaCodec
 import android.media.MediaFormat

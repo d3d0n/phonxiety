@@ -1,6 +1,8 @@
-package com.phonxiety.bridge
+package com.phonxiety.bridge.telecom
 
 import android.content.Context
+import com.phonxiety.bridge.AppStorage
+import com.phonxiety.bridge.BridgeLog
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException

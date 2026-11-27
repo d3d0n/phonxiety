@@ -1,10 +1,14 @@
-package com.phonxiety.bridge
+package com.phonxiety.bridge.telecom
 
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.SharedPreferences
 import android.media.AudioManager
 import android.telecom.TelecomManager
+import com.phonxiety.bridge.AppStorage
+import com.phonxiety.bridge.BridgeLog
+import com.phonxiety.bridge.audio.AudioStartException
+import com.phonxiety.bridge.os.Permissions
 
 /** Persist the original microphone state before muting one owned call. */
 internal object HandsetMute {

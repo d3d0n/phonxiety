@@ -1,6 +1,6 @@
 package com.phonxiety.bridge.feature.onboarding
 
-import com.phonxiety.bridge.Permissions
+import com.phonxiety.bridge.os.Permissions
 import com.phonxiety.bridge.root.RuntimePermission
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue

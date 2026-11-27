@@ -1,5 +1,6 @@
 package com.phonxiety.bridge
 
+import com.phonxiety.bridge.os.Permissions
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

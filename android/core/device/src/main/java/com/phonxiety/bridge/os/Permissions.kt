@@ -1,4 +1,4 @@
-package com.phonxiety.bridge
+package com.phonxiety.bridge.os
 
 import android.content.Context
 import android.content.pm.PackageManager

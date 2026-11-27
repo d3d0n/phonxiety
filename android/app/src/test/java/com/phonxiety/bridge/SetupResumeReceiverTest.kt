@@ -8,6 +8,7 @@ import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import com.phonxiety.bridge.feature.onboarding.SetupPreferences
 import com.phonxiety.bridge.feature.onboarding.setupProgressStore
+import com.phonxiety.bridge.os.Notifications
 import com.phonxiety.bridge.root.InstallOperation
 import com.phonxiety.bridge.root.RootId
 import org.junit.Assert.assertEquals
