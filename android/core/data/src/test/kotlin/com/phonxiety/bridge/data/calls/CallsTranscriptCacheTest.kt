@@ -38,7 +38,6 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
@@ -81,7 +80,7 @@ class CallsTranscriptCacheTest {
 
     @After
     fun tearDown() {
-        transactions.release.countDown()
+        transactions.release()
         database.close()
     }
 
@@ -98,7 +97,7 @@ class CallsTranscriptCacheTest {
         assertTrue("the page reached its write", transactions.reached.await(5, TimeUnit.SECONDS))
 
         database.openHelper.writableDatabase.execSQL("DELETE FROM calls WHERE callId = 'call-1'")
-        transactions.release.countDown()
+        transactions.release()
 
         val result = page.await()
         assertNull("a call deleted mid-page is not a failure", result.exceptionOrNull())
@@ -135,29 +134,43 @@ class CallsTranscriptCacheTest {
 }
 
 /**
- * Holds the first task it is given until [release] opens: the exact point before a transaction's
- * first statement, with nothing of that transaction started yet.
+ * Holds the first task it is given until [release]: the exact point before a transaction's first
+ * statement, with nothing of that transaction started yet. The task waits as a value, not on a
+ * blocked thread, so only the test's release decides when it runs; holding and releasing take one
+ * lock, so a release can never miss a task being held.
  */
 private class GatedTransactionExecutor : Executor {
     private val pool = Executors.newFixedThreadPool(2)
-    private val armed = AtomicBoolean(false)
-    private val first = AtomicBoolean(true)
+    private val lock = Any()
+    private var armed = false
+    private var held: Runnable? = null
 
     /** Opened when the held task arrives. */
     val reached = CountDownLatch(1)
 
-    /** The held task runs once this opens. */
-    val release = CountDownLatch(1)
-
     fun holdFirstTask() {
-        first.set(true)
-        armed.set(true)
+        synchronized(lock) { armed = true }
+    }
+
+    /** Lets the held task run; harmless when nothing is held or it already ran. */
+    fun release() {
+        val task = synchronized(lock) {
+            armed = false
+            held.also { held = null }
+        }
+        task?.let(pool::execute)
     }
 
     override fun execute(command: Runnable) {
-        if (armed.get() && first.compareAndSet(true, false)) {
+        val hold = synchronized(lock) {
+            if (!armed) return@synchronized false
+            armed = false
+            held = command
+            true
+        }
+        if (hold) {
             reached.countDown()
-            assert(release.await(5, TimeUnit.SECONDS)) { "the test never released the held transaction" }
+            return
         }
         pool.execute(command)
     }
