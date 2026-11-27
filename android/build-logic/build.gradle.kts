@@ -12,6 +12,7 @@ dependencies {
     compileOnly(libs.androidGradlePlugin)
     compileOnly(libs.composeCompilerGradlePlugin)
     compileOnly(libs.hiltGradlePlugin)
+    compileOnly(libs.kotlinGradlePlugin)
     compileOnly(libs.kspGradlePlugin)
     compileOnly(libs.roborazziGradlePlugin)
 }

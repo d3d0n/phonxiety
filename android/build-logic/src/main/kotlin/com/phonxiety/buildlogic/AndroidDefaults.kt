@@ -6,7 +6,11 @@ import org.gradle.api.Project
 import org.gradle.api.artifacts.MinimalExternalModuleDependency
 import org.gradle.api.artifacts.VersionCatalogsExtension
 import org.gradle.api.provider.Provider
+import org.gradle.kotlin.dsl.configure
 import org.gradle.kotlin.dsl.getByType
+import org.gradle.kotlin.dsl.withType
+import org.jetbrains.kotlin.compose.compiler.gradle.ComposeCompilerGradlePluginExtension
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 /** One SDK level for every module, so an upgrade is a single edit. */
 internal object AndroidSdk {
@@ -50,11 +54,28 @@ internal fun configureJvmUnitTests(android: CommonExtension) {
     }
 }
 
-/** Turns on Compose: a Kotlin compiler mode, so the compiler plugin comes with it. */
+/**
+ * Turns on Compose: a Kotlin compiler mode, so the compiler plugin comes with it.
+ * The stability file is part of the switch, so no module can enable Compose
+ * without the model types its screens carry being declared stable.
+ */
 internal fun Project.configureCompose(android: CommonExtension) {
     pluginManager.apply("org.jetbrains.kotlin.plugin.compose")
     android.buildFeatures.compose = true
+    val stability = rootProject.layout.projectDirectory.file(STABILITY_CONFIGURATION)
+    extensions.configure<ComposeCompilerGradlePluginExtension> {
+        stabilityConfigurationFiles.add(stability)
+    }
+    // The compiler reads the file through the plugin, which does not declare it
+    // as a task input; without this an edited allowlist would leave every screen
+    // on its previous skip decisions until something else rebuilt it.
+    tasks.withType<KotlinCompile>().configureEach {
+        inputs.file(stability).withPropertyName("composeStabilityConfiguration")
+    }
 }
+
+/** One stability file for the whole build, next to the root script. */
+private const val STABILITY_CONFIGURATION = "compose-stability.conf"
 
 /** A library alias of the catalog of the build that applies this convention. */
 internal fun Project.library(alias: String): Provider<MinimalExternalModuleDependency> {
