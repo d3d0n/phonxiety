@@ -8,6 +8,7 @@ import com.phonxiety.bridge.BridgeRuntime
 import com.phonxiety.bridge.data.ApiOutcome
 import com.phonxiety.bridge.data.DaemonApi
 import com.phonxiety.bridge.model.CallSummary
+import com.phonxiety.bridge.model.LinkState
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
@@ -43,20 +44,25 @@ object WidgetStateStore {
 }
 
 /**
- * Ends the running call: the daemon's own `hangup` when the app API answers, and the Telecom call
- * the engine supervises when it does not. Either way the engine reports the end through the state.
+ * Ends the running call: the daemon's own `hangup` when the link is up and the daemon succeeds,
+ * and the Telecom call the engine supervises otherwise. Either way the engine reports the end
+ * through the state.
  *
- * [callId], [daemon] and [telecom] are the seams the Hang up receiver's tests use to prove that a
- * throwing daemon still falls through to Telecom; the app calls it with the live ones.
+ * The daemon is asked only over a live link. Without one, its request would wait for a reconnect
+ * and keep the call up for the whole bound, so an explicit hang-up goes straight to Telecom.
+ *
+ * [callId], [linkUp], [daemon] and [telecom] are the seams the Hang up receiver's tests use to
+ * prove that a throwing daemon still falls through to Telecom; the app calls it with the live ones.
  */
 object CallEnd {
     suspend fun hangUp(
         context: Context,
         callId: String? = BridgeRuntime.state.value.call?.callId,
+        linkUp: Boolean = BridgeRuntime.state.value.link is LinkState.Up,
         daemon: suspend () -> ApiOutcome<*>? = { callId?.let { id -> daemonApiOrNull(context)?.hangup(id) } },
         telecom: suspend () -> Unit = ::disconnectSupervised
     ) {
-        if (callId != null) {
+        if (callId != null && linkUp) {
             val outcome = try {
                 withTimeoutOrNull(HANGUP_TIMEOUT_MS) { daemon() }
             } catch (e: CancellationException) {

@@ -13,8 +13,8 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * The daemon half of the Hang up button: one attempt, bounded, and Telecom only when that
- * attempt did not end the call.
+ * The daemon half of the Hang up button: one attempt over a live link, bounded, and Telecom when
+ * the daemon did not succeed or when there is no link to ask over.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -22,13 +22,14 @@ class CallEndHangUpTest {
     private val context: Context = ApplicationProvider.getApplicationContext()
 
     @Test
-    fun theDaemonIsAskedOnceAndAnAnswerEndsTheCall() = runTest {
+    fun aDaemonSuccessSkipsTelecom() = runTest {
         val daemon = AtomicInteger(0)
         val telecom = AtomicInteger(0)
 
         CallEnd.hangUp(
             context,
             callId = "call-1",
+            linkUp = true,
             daemon = {
                 daemon.incrementAndGet()
                 ApiOutcome.Ok(200, Unit)
@@ -37,17 +38,18 @@ class CallEndHangUpTest {
         )
 
         assertEquals("the daemon was not asked exactly once", 1, daemon.get())
-        assertEquals("Telecom was used although the daemon ended the call", 0, telecom.get())
+        assertEquals("Telecom was used although the daemon succeeded", 0, telecom.get())
     }
 
     @Test
-    fun aDaemonThatDoesNotEndTheCallIsNotRetriedAndTelecomRuns() = runTest {
+    fun aDaemonThatDoesNotSucceedIsNotRetriedAndTelecomRuns() = runTest {
         val daemon = AtomicInteger(0)
         val telecom = AtomicInteger(0)
 
         CallEnd.hangUp(
             context,
             callId = "call-1",
+            linkUp = true,
             daemon = {
                 daemon.incrementAndGet()
                 ApiOutcome.Failure(500, "daemon_error", "no")
@@ -61,16 +63,43 @@ class CallEndHangUpTest {
 
     @Test
     fun aDaemonThatNeverAnswersGivesUpAtTheBoundAndUsesTelecom() = runTest {
+        val daemon = AtomicInteger(0)
         val telecom = AtomicInteger(0)
 
         CallEnd.hangUp(
             context,
             callId = "call-1",
-            daemon = { awaitCancellation() },
+            linkUp = true,
+            daemon = {
+                daemon.incrementAndGet()
+                awaitCancellation()
+            },
             telecom = { telecom.incrementAndGet() }
         )
 
+        assertEquals("the daemon was not asked exactly once", 1, daemon.get())
         assertEquals("the daemon attempt was not bounded at 5 s", 5_000L, testScheduler.currentTime)
+        assertEquals("the Telecom fallback did not run", 1, telecom.get())
+    }
+
+    @Test
+    fun withoutALinkTheDaemonIsNotAskedAndTelecomRunsAtOnce() = runTest {
+        val daemon = AtomicInteger(0)
+        val telecom = AtomicInteger(0)
+
+        CallEnd.hangUp(
+            context,
+            callId = "call-1",
+            linkUp = false,
+            daemon = {
+                daemon.incrementAndGet()
+                awaitCancellation()
+            },
+            telecom = { telecom.incrementAndGet() }
+        )
+
+        assertEquals("the daemon was asked without a link", 0, daemon.get())
+        assertEquals("the hang-up waited for a link", 0L, testScheduler.currentTime)
         assertEquals("the Telecom fallback did not run", 1, telecom.get())
     }
 }

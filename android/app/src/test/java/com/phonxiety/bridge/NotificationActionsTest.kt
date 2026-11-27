@@ -75,6 +75,7 @@ class NotificationActionsTest {
                 CallEnd.hangUp(
                     appContext,
                     callId = "call-1",
+                    linkUp = true,
                     daemon = { throw IOException("the daemon did not answer") },
                     telecom = { telecom.incrementAndGet() }
                 )
@@ -99,6 +100,7 @@ class NotificationActionsTest {
         CallEnd.hangUp(
             context,
             callId = "call-1",
+            linkUp = true,
             daemon = { ApiOutcome.Ok(200, Unit) },
             telecom = { telecom.incrementAndGet() }
         )
@@ -113,6 +115,7 @@ class NotificationActionsTest {
         CallEnd.hangUp(
             context,
             callId = "call-1",
+            linkUp = true,
             daemon = { throw IOException("the daemon did not answer") },
             telecom = { telecom.incrementAndGet() }
         )
@@ -127,6 +130,7 @@ class NotificationActionsTest {
         CallEnd.hangUp(
             context,
             callId = "call-1",
+            linkUp = true,
             daemon = { ApiOutcome.Failure(500, "daemon_error", "no") },
             telecom = { telecom.incrementAndGet() }
         )
@@ -142,6 +146,7 @@ class NotificationActionsTest {
         CallEnd.hangUp(
             context,
             callId = null,
+            linkUp = true,
             daemon = {
                 daemon.incrementAndGet()
                 ApiOutcome.Ok(200, Unit)
