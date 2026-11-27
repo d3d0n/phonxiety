@@ -41,8 +41,8 @@ android {
 
     defaultConfig {
         applicationId = "com.phonxiety.bridge"
-        versionCode = 6
-        versionName = "0.5.0"
+        versionCode = 7
+        versionName = "0.5.1"
 
         ndk {
             // `mise run phone:iroh` builds only arm64-v8a (Pixel 6a). Without
