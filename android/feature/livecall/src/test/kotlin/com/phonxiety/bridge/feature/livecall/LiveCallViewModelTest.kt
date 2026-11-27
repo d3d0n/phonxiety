@@ -11,6 +11,7 @@ import com.phonxiety.bridge.model.CallPhase
 import com.phonxiety.bridge.model.CallSnapshot
 import com.phonxiety.bridge.model.CallState
 import com.phonxiety.bridge.model.DaemonInfo
+import com.phonxiety.bridge.model.LiveCallHangUp
 import com.phonxiety.bridge.model.MarksResponse
 import com.phonxiety.bridge.model.SummaryResult
 import com.phonxiety.bridge.model.TranscriptTurn
@@ -260,7 +261,62 @@ class LiveCallViewModelTest {
     }
 
     @Test
-    fun anUnknownHangUpCannotBeConfirmed() = runTest(dispatcher) {
+    fun anInfoFailureStillLeavesHangUpAvailableThroughTheEndCallPath() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        api.info = ApiOutcome.Failure(503, "link_down", "the daemon is not reachable")
+        api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "active"))
+        val end = FakeCallEnd()
+
+        val viewModel = viewModel(api, end)
+        viewModel.bind(CALL_ID)
+        runCurrent()
+        assertEquals(
+            "the voice backend never answered",
+            ControlAvailability.UNKNOWN,
+            viewModel.state.value.controls.hangup
+        )
+
+        viewModel.requestHangUp()
+        runCurrent()
+        assertTrue("hang-up still asks first", viewModel.state.value.pendingHangUp)
+
+        viewModel.confirmHangUp()
+        runCurrent()
+        assertFalse("confirming closes the pending value", viewModel.state.value.pendingHangUp)
+        assertEquals("the end-of-call path runs once", 1, end.calls)
+        assertEquals("the unreported endpoint is not called", 0, api.hangupCalls)
+        assertTrue(viewModel.state.value.hangingUp)
+
+        api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(endedEvent(1))))
+        advanceUntilIdle()
+        assertTrue("the daemon's own end closes the screen", viewModel.state.value.ended)
+    }
+
+    @Test
+    fun aRefusedHangUpAlsoUsesTheEndCallPath() = runTest(dispatcher) {
+        val api = FakeDaemonApi()
+        api.info = ApiOutcome.Ok(200, DaemonInfo(voiceControls = VoiceControls(hangup = false)))
+        api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "active"))
+        val end = FakeCallEnd()
+
+        val viewModel = viewModel(api, end)
+        viewModel.bind(CALL_ID)
+        runCurrent()
+        assertEquals(ControlAvailability.DISABLED, viewModel.state.value.controls.hangup)
+
+        viewModel.requestHangUp()
+        runCurrent()
+        viewModel.confirmHangUp()
+        runCurrent()
+
+        assertEquals(1, end.calls)
+        assertEquals(0, api.hangupCalls)
+        api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(endedEvent(1))))
+        advanceUntilIdle()
+    }
+
+    @Test
+    fun reloadAsksInfoAgainSoTheControlsCanSettle() = runTest(dispatcher) {
         val api = FakeDaemonApi()
         api.info = ApiOutcome.Failure(503, "link_down", "the daemon is not reachable")
         api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "active"))
@@ -268,13 +324,15 @@ class LiveCallViewModelTest {
         val viewModel = viewModel(api)
         viewModel.bind(CALL_ID)
         runCurrent()
+        assertEquals(1, api.infoCalls)
+        assertFalse(viewModel.state.value.controls.hangup.isEnabled)
 
-        viewModel.requestHangUp()
+        api.info = ApiOutcome.Ok(200, DaemonInfo(voiceControls = VoiceControls(hangup = true)))
+        viewModel.reload()
         runCurrent()
-        assertFalse("an unconfirmed control is never offered", viewModel.state.value.pendingHangUp)
-        viewModel.confirmHangUp()
-        runCurrent()
-        assertEquals(0, api.hangupCalls)
+
+        assertEquals("reload retries /info", 2, api.infoCalls)
+        assertEquals(ControlAvailability.ENABLED, viewModel.state.value.controls.hangup)
         api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(endedEvent(1))))
         advanceUntilIdle()
     }
@@ -336,6 +394,7 @@ class LiveCallViewModelTest {
     @Test
     fun hangingUpKeepsTheScreenInTheEndingStateUntilTheDaemonSaysEnded() = runTest(dispatcher) {
         val api = FakeDaemonApi()
+        api.info = ApiOutcome.Ok(200, DaemonInfo(voiceControls = VoiceControls(hangup = true)))
         api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "active"))
         api.hangup = ApiOutcome.Ok(200, snapshot(state = "ending"))
         api.events += ApiOutcome.Ok(200, page(revision = 1, events = listOf(stateEvent(1, "ending"))))
@@ -376,7 +435,7 @@ class LiveCallViewModelTest {
         val api = FakeDaemonApi()
         api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = null))
         val bridge = FakeBridgeState()
-        val viewModel = LiveCallViewModel(api, bridge)
+        val viewModel = LiveCallViewModel(api, bridge, FakeCallEnd())
         viewModel.bind(CALL_ID)
         runCurrent()
 
@@ -445,7 +504,7 @@ class LiveCallViewModelTest {
         // The snapshot answers after Telecom already dialed, and still says "preparing".
         api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "preparing"))
         val bridge = FakeBridgeState()
-        val viewModel = LiveCallViewModel(api, bridge)
+        val viewModel = LiveCallViewModel(api, bridge, FakeCallEnd())
         viewModel.bind(CALL_ID)
         runCurrent()
         assertEquals("preparing", viewModel.state.value.state)
@@ -472,7 +531,7 @@ class LiveCallViewModelTest {
         api.info = ApiOutcome.Ok(200, DaemonInfo(voiceControls = VoiceControls(hangup = true)))
         api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "preparing"))
         val bridge = FakeBridgeState()
-        val viewModel = LiveCallViewModel(api, bridge)
+        val viewModel = LiveCallViewModel(api, bridge, FakeCallEnd())
         viewModel.bind(CALL_ID)
         runCurrent()
 
@@ -529,7 +588,7 @@ class LiveCallViewModelTest {
         val placedAt = (System.currentTimeMillis() - 600_000) / 1_000.0
         api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "preparing", createdAt = placedAt, connectedAt = null))
         val bridge = FakeBridgeState()
-        val viewModel = LiveCallViewModel(api, bridge)
+        val viewModel = LiveCallViewModel(api, bridge, FakeCallEnd())
         viewModel.bind(CALL_ID)
         runCurrent()
 
@@ -604,7 +663,7 @@ class LiveCallViewModelTest {
             BridgeState(call = CallState(CALL_ID, "+998 ·· 67", CallPhase.ACTIVE, connectedAtMs - 80_000, connectedAtMs))
         )
 
-        val viewModel = LiveCallViewModel(api, bridge)
+        val viewModel = LiveCallViewModel(api, bridge, FakeCallEnd())
         viewModel.bind(CALL_ID)
         runCurrent()
 
@@ -631,7 +690,7 @@ class LiveCallViewModelTest {
         val placedAt = (System.currentTimeMillis() - 600_000) / 1_000.0
         api.callSnapshot = ApiOutcome.Ok(200, snapshot(state = "active", createdAt = placedAt, connectedAt = null))
         val bridge = FakeBridgeState()
-        val viewModel = LiveCallViewModel(api, bridge)
+        val viewModel = LiveCallViewModel(api, bridge, FakeCallEnd())
         viewModel.bind(CALL_ID)
         runCurrent()
 
@@ -675,7 +734,7 @@ class LiveCallViewModelTest {
             snapshot(state = "active", createdAt = (System.currentTimeMillis() - 60_000) / 1_000.0, connectedAt = null)
         )
         val bridge = FakeBridgeState()
-        val viewModel = LiveCallViewModel(api, bridge)
+        val viewModel = LiveCallViewModel(api, bridge, FakeCallEnd())
         viewModel.bind(CALL_ID)
         runCurrent()
 
@@ -711,7 +770,7 @@ class LiveCallViewModelTest {
         val api = FakeDaemonApi()
         api.callSnapshot = ApiOutcome.Failure(404, "call_not_found", "no call")
         val bridge = FakeBridgeState()
-        val viewModel = LiveCallViewModel(api, bridge)
+        val viewModel = LiveCallViewModel(api, bridge, FakeCallEnd())
         viewModel.bind(CALL_ID)
         runCurrent()
 
@@ -736,10 +795,22 @@ class LiveCallViewModelTest {
         advanceUntilIdle()
     }
 
-    private fun viewModel(api: FakeDaemonApi): LiveCallViewModel = LiveCallViewModel(api, FakeBridgeState())
+    private fun viewModel(
+        api: FakeDaemonApi,
+        callEnd: LiveCallHangUp = FakeCallEnd()
+    ): LiveCallViewModel = LiveCallViewModel(api, FakeBridgeState(), callEnd)
 
     private companion object {
         const val CALL_ID = "call-2026-11-26"
+    }
+}
+
+/** The end-of-call path the ViewModel reaches when the daemon has not vouched for a hang-up. */
+class FakeCallEnd : LiveCallHangUp {
+    var calls = 0
+
+    override suspend fun hangUp() {
+        calls++
     }
 }
 

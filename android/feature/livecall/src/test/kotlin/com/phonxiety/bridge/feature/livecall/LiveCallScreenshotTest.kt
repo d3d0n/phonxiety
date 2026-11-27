@@ -453,71 +453,34 @@ class LiveCallScreenshotTest {
         composeRule.onNodeWithText("Type an instruction, then send.").assertExists()
     }
 
-    /** An unknown control is disabled and says why: it is never an enabled button the daemon refuses. */
+    /**
+     * An unknown control is disabled and says why: it is never an enabled button the daemon
+     * refuses. Hang-up is the exception, because ending a live call never depends on `/info`.
+     */
     @Test
-    fun anUnknownControlIsDisabledWithItsReason() {
+    fun anUnknownControlIsDisabledWithItsReasonWhileHangUpIsOffered() {
         setScreen(state = LiveCallSamples.live.copy(controls = LiveControls()))
-        composeRule.onNodeWithText("Hang up").assertIsNotEnabled()
+        composeRule.onNodeWithText("Hang up").assertIsEnabled()
+
+        openControls()
         composeRule
             .onAllNodesWithText("Waiting for the daemon to say what this call supports.")
             .onFirst()
             .assertIsDisplayed()
-
-        openControls()
         // The instruction's field is not editable before its availability is known.
         composeRule.onNodeWithText("Tell the agent").assertIsNotEnabled()
         composeRule.onNodeWithText("Instruction").assertDoesNotExist()
     }
 
     /**
-     * The confirmation belongs to the screen's state, not to composition memory: an activity
-     * recreated over the same call opens with the dialog still up.
+     * The hang-up is offered however little `/info` said, so a system UI that covers the screen
+     * never leaves the call without an end. The confirmation itself is proven on a real activity
+     * recreation in [LiveCallRecreationTest].
      */
     @Test
-    fun theHangUpConfirmationSurvivesRecreation() {
-        val state = LiveCallSamples.live.copy(pendingHangUp = true)
-        val mounted = mutableStateOf(true)
-        composeRule.setContent {
-            PhonxietyTheme(dynamicColor = false) {
-                Box(
-                    modifier = Modifier
-                        .testTag(SCREEN_TAG)
-                        .width(411.dp)
-                        .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.background)
-                ) {
-                    if (mounted.value) {
-                        LiveCallScreen(
-                            state = state,
-                            onBack = {},
-                            onInstructionChange = {},
-                            onSendInstruction = {},
-                            onTogglePause = {},
-                            onSummarize = {},
-                            onDtmf = {},
-                            onMark = {},
-                            onHangUp = {},
-                            onConfirmHangUp = {},
-                            onDismissHangUp = {},
-                            onReload = {},
-                            onOpenDetail = {},
-                            nowEpochMs = NOW
-                        )
-                    }
-                }
-            }
-        }
-        composeRule.onNodeWithText("Hang up now?").assertExists()
-
-        // The activity is destroyed and rebuilt; only the ViewModel's state comes back.
-        mounted.value = false
-        composeRule.waitForIdle()
-        composeRule.onNodeWithText("Hang up now?").assertDoesNotExist()
-
-        mounted.value = true
-        composeRule.waitForIdle()
-        composeRule.onNodeWithText("Hang up now?").assertExists()
-        composeRule.onNodeWithText("Keep talking").assertExists()
+    fun aRefusedControlStillOffersTheHangUp() {
+        setScreen(state = LiveCallSamples.live.copy(controls = LiveControls(hangup = ControlAvailability.DISABLED)))
+        composeRule.onNodeWithText("Hang up").assertIsEnabled()
     }
 
     /** Once `/info` confirms the control, the same screen offers it. */

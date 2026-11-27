@@ -21,8 +21,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -325,8 +323,9 @@ private fun ControlsDisclosure(open: Boolean, onToggle: () -> Unit) {
  * The one action that must always be reachable: hang up while the call runs, open the record once
  * it has ended. It lives outside the transcript and the control column, so no scroll hides it.
  *
- * An unknown hang-up control is disabled with its reason: the daemon has not said it can end this
- * call, and a button that would fail is worse than one that explains itself.
+ * Hang-up is the one control that never waits for `/info`: the end-of-call path works whether or
+ * not the voice backend says it honours a hang-up, so a live call is always endable. The other
+ * unknown controls keep explaining why they are disabled.
  */
 @Composable
 private fun PinnedActionRow(
@@ -350,43 +349,14 @@ private fun PinnedActionRow(
                 emphasis = ActionEmphasis.TONAL
             )
         } else {
-            when (state.controls.hangup) {
-                ControlAvailability.ENABLED -> HangUpButton(
-                    state = state,
-                    onRequestHangUp = onHangUp,
-                    onConfirmHangUp = onConfirmHangUp,
-                    onDismissHangUp = onDismissHangUp,
-                    modifier = Modifier.weight(1f)
-                )
-
-                ControlAvailability.UNKNOWN -> UnknownHangUp(modifier = Modifier.weight(1f))
-
-                ControlAvailability.DISABLED -> Unit
-            }
-        }
-    }
-}
-
-/** The hang-up a daemon has not vouched for: present, disabled, and explaining itself. */
-@Composable
-private fun UnknownHangUp(modifier: Modifier = Modifier) {
-    Column(modifier = modifier.fillMaxWidth()) {
-        Button(
-            onClick = {},
-            modifier = Modifier.fillMaxWidth(),
-            enabled = false,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.error,
-                contentColor = MaterialTheme.colorScheme.onError
+            HangUpButton(
+                state = state,
+                onRequestHangUp = onHangUp,
+                onConfirmHangUp = onConfirmHangUp,
+                onDismissHangUp = onDismissHangUp,
+                modifier = Modifier.weight(1f)
             )
-        ) {
-            Text(stringResource(R.string.live_call_hang_up))
         }
-        Text(
-            text = stringResource(R.string.live_call_control_checking),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
     }
 }
 

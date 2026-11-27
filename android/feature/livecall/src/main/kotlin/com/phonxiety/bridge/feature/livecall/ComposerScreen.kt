@@ -44,6 +44,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
@@ -150,11 +151,19 @@ fun ComposerScreen(
 ) {
     val focusManager = LocalFocusManager.current
     val fields = remember { ComposerFieldFocus() }
-    // The number is the first thing a call needs: the brief opens with it focused. The request
-    // waits for the first frame, when the field is attached and can take the focus.
+    // The number is the first thing a call needs: the brief opens with it focused, once per entry.
+    // The claim is saveable so a recreation does not repeat the request, and the sheet is an
+    // overlay in this same composition: while it is up the field under it must not grab the focus
+    // back from the review the user is reading.
+    var focusClaimed by rememberSaveable { mutableStateOf(false) }
+    val shown = rememberUpdatedState(state)
     LaunchedEffect(fields) {
+        if (focusClaimed) return@LaunchedEffect
+        // Wait for the first frame, when the field is attached and can take the focus.
         withFrameNanos { }
-        fields.destination.requestFocus()
+        focusClaimed = true
+        val visible = shown.value
+        if (!visible.confirming && !visible.placing) fields.destination.requestFocus()
     }
     Box(modifier = modifier.fillMaxSize()) {
         ScreenScaffold(title = stringResource(R.string.composer_title), onBack = onBack) {

@@ -12,13 +12,15 @@ import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollToIndex
-import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.dp
 import com.phonxiety.bridge.designsystem.PhonxietyTheme
+import com.phonxiety.bridge.model.CallEvent
 import com.phonxiety.bridge.model.PartialTurn
 import com.phonxiety.bridge.model.TranscriptTurn
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -27,7 +29,8 @@ import org.robolectric.annotation.Config
 
 /**
  * The transcript's rows are keyed by what they are: a final turn by its sequence and a partial by
- * its role. When the daemon settles a partial into a final turn, the list keeps every row where it
+ * its role. The daemon settles a partial into a final turn in one update — the turn is added and
+ * its role's partial is removed together — and the list keeps the row the reader is on where it
  * was; a reader's first visible line does not jump under their eyes.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -37,11 +40,17 @@ class LiveCallTranscriptStabilityTest {
     val composeRule = createComposeRule()
 
     @Test
-    fun aPartialBecomingAFinalTurnDoesNotMoveTheFirstVisibleRow() {
+    fun aSettledPartialDoesNotMoveTheFirstVisibleRow() {
         val turns = longTurns().take(10)
-        val partials = List(25) { index ->
-            PartialTurn(role = "speaker$index", text = "Partial line ${index + 1} is still being spoken", at = null)
-        }
+        val anchor = PartialTurn(role = "assistant", text = ANCHOR_WORDS, at = null)
+        val settling = PartialTurn(role = "user", text = SETTLING_WORDS, at = null)
+        // Enough rows under the anchor that the list can park it at the top of the viewport
+        // instead of clamping at the end, where a change of content height moves everything.
+        val extras = List(18) { index -> "speaker$index" }
+            .mapIndexed { index, role ->
+                PartialTurn(role = role, text = "Line ${index + 1} is still being spoken while the far end finishes", at = null)
+            }
+        val partials = listOf(anchor, settling) + extras
         val live = LiveCallSamples.live.copy(turns = turns, partials = partials)
         val state = mutableStateOf(live)
         composeRule.setContent {
@@ -73,38 +82,58 @@ class LiveCallTranscriptStabilityTest {
             }
         }
 
-        // Park the list on the first partial: heading 0, turns 1..10, the partial is index 11 and
-        // the partials below it give the list enough content to scroll it to the top.
-        composeRule.onNodeWithTag(TRANSCRIPT_LIST_TAG).performScrollToIndex(turns.size + 1)
+        // Park the list on the first partial: heading 0, turns 1..10, the anchor at 11. The other
+        // speaker's partial sits under it, and the turns below give the list enough content to
+        // scroll the anchor to the top of the viewport.
+        val anchorIndex = 1 + turns.size
+        composeRule.onNodeWithTag(TRANSCRIPT_LIST_TAG).performScrollToIndex(anchorIndex)
         composeRule.waitForIdle()
-        val firstPartial = partials.first()
+        val listTop = composeRule.onNodeWithTag(TRANSCRIPT_LIST_TAG).getUnclippedBoundsInRoot().top
         val before = composeRule
-            .onNode(hasText(firstPartial.text.orEmpty(), substring = true))
+            .onNode(hasText(ANCHOR_WORDS, substring = true))
             .getUnclippedBoundsInRoot()
-
-        // A record snapshot can carry the settled turn while the partial feed still shows the
-        // words: the turn is inserted above the row being read.
-        val settled = TranscriptTurn(
-            sequence = 11,
-            role = firstPartial.role,
-            text = "The line settles into a numbered turn",
-            at = 1_764_000_040.0,
-            finalTurn = true
+        assertTrue(
+            "the anchor is the first visible row keyed into the list: ${before.top} vs $listTop",
+            before.top - listTop < 40.dp
         )
-        state.value = live.copy(turns = turns + settled)
+
+        // The daemon's own transition: the final turn is added and its role's partial is removed
+        // in the same reduced state, which puts the new turn above every partial.
+        val settled = reduceCallEvents(
+            live,
+            listOf(
+                CallEvent(
+                    type = "transcript",
+                    revision = 1,
+                    role = "user",
+                    text = SETTLED_WORDS,
+                    sequence = 11,
+                    at = "2026-11-26T10:00:40+00:00"
+                )
+            ),
+            mutableSetOf()
+        )
+        state.value = settled
         composeRule.waitForIdle()
 
-        val during = composeRule
-            .onNode(hasText(firstPartial.text.orEmpty(), substring = true))
+        assertEquals("the final turn was added", 11, settled.turns.size)
+        assertEquals("its role's partial went with it", listOf(anchor) + extras, settled.partials)
+
+        val after = composeRule
+            .onNode(hasText(ANCHOR_WORDS, substring = true))
             .getUnclippedBoundsInRoot()
-        assertEquals("the row the reader was on did not move", before.top.value, during.top.value, 0.5f)
-
-        // The partial's own clear completes the conversion; the numbered turn is what remains.
-        state.value = live.copy(turns = turns + settled, partials = partials.drop(1))
-        composeRule.waitForIdle()
-        composeRule.onNodeWithTag(TRANSCRIPT_LIST_TAG).performScrollToIndex(turns.size + 1)
-        composeRule.waitForIdle()
-        composeRule.onNode(hasText(settled.text.orEmpty(), substring = true)).assertExists()
+        assertEquals(
+            "the row at the top of the viewport kept its offset",
+            before.top.value,
+            after.top.value,
+            0.5f
+        )
+        assertTrue(
+            "the same keyed row is still the first visible row: ${after.top} vs $listTop",
+            after.top - listTop < 40.dp
+        )
+        // Nothing corrected the scroll: the control for a reader parked mid-history is still there.
+        composeRule.onNodeWithText("Jump to live").assertExists()
     }
 
     private fun longTurns(): List<TranscriptTurn> = List(30) { index ->
@@ -121,9 +150,9 @@ class LiveCallTranscriptStabilityTest {
         const val SCREEN_TAG = "live_call_transcript_stability"
         const val NOW = 1_764_000_074_000L
 
-        const val PARTIAL_WORDS = "let me check that with the kitchen"
-
-        val PARTIAL = PartialTurn(role = "user", text = PARTIAL_WORDS, at = null)
+        const val ANCHOR_WORDS = "let me check that with the kitchen"
+        const val SETTLING_WORDS = "Thursday at eight would be ideal"
+        const val SETTLED_WORDS = "Thursday at eight it is, under Rasulov"
 
         val phrases = listOf(
             "the table is confirmed for Thursday at eight",

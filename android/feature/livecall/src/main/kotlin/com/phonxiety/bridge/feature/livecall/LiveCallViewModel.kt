@@ -12,6 +12,7 @@ import com.phonxiety.bridge.model.CallEvent
 import com.phonxiety.bridge.model.CallMark
 import com.phonxiety.bridge.model.CallPhase
 import com.phonxiety.bridge.model.CallSnapshot
+import com.phonxiety.bridge.model.LiveCallHangUp
 import com.phonxiety.bridge.model.PartialTurn
 import com.phonxiety.bridge.model.TranscriptTurn
 import com.phonxiety.bridge.model.VoiceControls
@@ -183,7 +184,8 @@ private val PHONE_PHASES_THAT_ADVANCE_PREPARING = setOf("dialing", "active")
 @HiltViewModel
 class LiveCallViewModel @Inject constructor(
     private val api: DaemonApi,
-    private val bridgeState: BridgeStateRepository
+    private val bridgeState: BridgeStateRepository,
+    private val callEnd: LiveCallHangUp
 ) : ViewModel() {
     private val _state = MutableStateFlow(LiveCallUiState())
     val state: StateFlow<LiveCallUiState> = _state.asStateFlow()
@@ -290,13 +292,13 @@ class LiveCallViewModel @Inject constructor(
     }
 
     /**
-     * Asks for the confirmation a hang-up needs. Nothing reaches the daemon until
-     * [confirmHangUp], and an unknown hang-up control cannot be confirmed at all.
+     * Asks for the confirmation a hang-up needs. Ending the call does not depend on `/info`: the
+     * hang-up is offered for as long as the call is live, and [confirmHangUp] uses the end-of-call
+     * path whenever the voice backend has not vouched for its own `hangup`.
      */
     fun requestHangUp() {
         val snapshot = _state.value
         if (snapshot.missing || snapshot.busy || snapshot.hangingUp || snapshot.ended) return
-        if (!snapshot.controls.hangup.isEnabled) return
         _state.update { it.copy(pendingHangUp = true) }
     }
 
@@ -317,31 +319,52 @@ class LiveCallViewModel @Inject constructor(
         hangUp()
     }
 
+    /**
+     * Ends the call. When the daemon confirmed its own `hangup` for this call, that endpoint gets
+     * the request and its snapshot is applied. Otherwise — the answer is unknown or the voice
+     * backend refuses the control — the end follows the same path as the notification and the
+     * tile: a bounded daemon attempt, then the Telecom call this device supervises, so a live call
+     * is always endable.
+     */
     fun hangUp() {
         val snapshot = _state.value
         if (snapshot.busy || snapshot.hangingUp || snapshot.ended) return
         _state.update { it.copy(busy = true, hangingUp = true, pendingHangUp = false, error = null, errorCode = null) }
-        viewModelScope.launch {
-            when (val outcome = api.hangup(snapshot.callId)) {
-                is ApiOutcome.Ok -> {
-                    // The answer may already be terminal; if it is only "ending", the events loop
-                    // keeps the screen in the ending state until the daemon says ended.
-                    applySnapshot(outcome.value)
-                    _state.update { it.copy(busy = false) }
-                }
+        if (snapshot.controls.hangup.isEnabled) {
+            viewModelScope.launch {
+                when (val outcome = api.hangup(snapshot.callId)) {
+                    is ApiOutcome.Ok -> {
+                        // The answer may already be terminal; if it is only "ending", the events loop
+                        // keeps the screen in the ending state until the daemon says ended.
+                        applySnapshot(outcome.value)
+                        _state.update { it.copy(busy = false) }
+                    }
 
-                is ApiOutcome.Failure -> _state.update {
-                    it.copy(busy = false, hangingUp = false, error = UiText.Literal(outcome.message), errorCode = outcome.code)
+                    is ApiOutcome.Failure -> _state.update {
+                        it.copy(busy = false, hangingUp = false, error = UiText.Literal(outcome.message), errorCode = outcome.code)
+                    }
                 }
+            }
+        } else {
+            viewModelScope.launch {
+                // The engine reports the end through the bridge state and the events loop, so the
+                // screen stays in the ending state until the daemon's terminal state arrives.
+                callEnd.hangUp()
+                _state.update { it.copy(busy = false) }
             }
         }
     }
 
-    /** Re-reads the record after a lost link, so the transcript gap is filled from the daemon. */
+    /**
+     * Re-reads the record after a lost link, so the transcript gap is filled from the daemon, and
+     * asks `/info` again: an answer that never arrived is exactly why the controls are still
+     * unknown, and a reload is when the user expects them to settle.
+     */
     fun reload() {
         val callId = boundCallId ?: return
         viewModelScope.launch {
             _state.update { it.copy(loading = true) }
+            loadInfo()
             loadDetail(callId)
         }
     }
