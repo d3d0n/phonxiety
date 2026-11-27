@@ -9,9 +9,11 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -28,7 +30,7 @@ class IrohSendQueueTest {
         queue: IrohSendQueue,
         write: suspend (ByteArray) -> Unit,
         onWriteFailed: () -> Unit
-    ) = queue.drain(FrameStream.CONTROL, Framing.KIND_TEXT, FrameTapSink.None, write, onWriteFailed)
+    ) = queue.drain(FrameStream.CONTROL, Framing.KIND_TEXT, write, onWriteFailed)
 
     @Test
     fun helloIsWrittenFirstOnControl() = runBlocking {
@@ -58,7 +60,7 @@ class IrohSendQueueTest {
             while (backlog.get() > 0) yield()
             drained.countDown()
         }
-        assertTrue("the writer drained the accepted frames", drained.await(5, TimeUnit.SECONDS))
+        withTimeout(5_000) { drained.await() }
         queue.close()
         job.join()
 
@@ -72,17 +74,11 @@ class IrohSendQueueTest {
         assertEquals("the control queue the link uses is 128 frames", 128, IrohSendQueue.CONTROL_CAPACITY)
         val capacity = IrohSendQueue.CONTROL_CAPACITY
         val queue = IrohSendQueue(capacity, backlog)
-        val gate = CompletableDeferred<Unit>()
-        var offered = 0
-        val job = launch(Dispatchers.Default) {
-            drainTo(queue, write = { gate.await() }, onWriteFailed = { error("no write may fail") })
-        }
-        // Let the writer take the first frame and block inside write().
-        yield()
 
+        // Fill the queue before any writer exists: the bound is the queue's,
+        // not a race with a writer that may or may not have taken a frame.
         repeat(capacity) {
             assertTrue("frame ${it + 1} fits the bounded queue", queue.offer(frame()))
-            offered++
         }
         val acceptedBytes = capacity.toLong() * 4L
         assertEquals(acceptedBytes, backlog.get())
@@ -91,11 +87,27 @@ class IrohSendQueueTest {
         assertFalse("the queue is full", queue.offer(frame()))
         assertEquals(acceptedBytes, backlog.get())
 
-        gate.complete(Unit)
+        // The writer drains exactly what the bound accepted, and the queue
+        // accepts again once it is empty.
+        val written = AtomicInteger(0)
+        val drained = CompletableDeferred<Unit>()
+        val job = launch(Dispatchers.Default) {
+            drainTo(
+                queue,
+                write = { if (written.incrementAndGet() == capacity) drained.complete(Unit) },
+                onWriteFailed = { error("no write may fail") }
+            )
+        }
+        withTimeout(5_000) { drained.await() }
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (backlog.get() > 0 && System.nanoTime() < deadline) yield()
+        assertEquals(0L, backlog.get())
+        assertEquals(capacity, written.get())
+
+        assertTrue("an empty queue accepts again", queue.offer(frame()))
         queue.close()
         job.join()
         assertEquals(0L, backlog.get())
-        assertEquals(capacity, offered)
     }
 
     @Test
@@ -167,5 +179,30 @@ class IrohSendQueueTest {
         // A second writer finds a closed, empty queue: no second report.
         drainTo(queue, write = { attempts++ }, onWriteFailed = { failures.incrementAndGet() })
         assertEquals(1, failures.get())
+    }
+
+    @Test
+    fun theTapOffQueuesTheRawArrayWithoutAWrapper() = runBlocking {
+        val raw = frame(8, 3)
+        // Off: the queue holds the caller's own array, so no record and no
+        // per-frame wrapper is allocated on the hot path.
+        assertSame("the tap off stores the raw array", raw, queuedEntry(raw, 8, FrameTapSink.None))
+        val on = object : FrameTapSink {
+            override val enabled: Boolean = true
+
+            override fun frame(direction: FrameDirection, stream: FrameStream, kind: Int, bytes: Int) = Unit
+        }
+        assertTrue("the tap on tags the frame", queuedEntry(raw, 8, on) is QueuedFrame)
+
+        // Through the queue itself: the writer receives the very same instance.
+        val queue = IrohSendQueue(4, backlog)
+        val written = mutableListOf<ByteArray>()
+        assertTrue(queue.offer(raw, payload = 8))
+        val job = launch(Dispatchers.Default) {
+            drainTo(queue, write = { written += it }, onWriteFailed = { error("no write may fail") })
+        }
+        queue.close()
+        job.join()
+        assertSame(raw, written.single())
     }
 }

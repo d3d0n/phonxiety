@@ -60,10 +60,10 @@ internal class IrohLink(
     private val backlog = AtomicLong(0)
 
     /** Control frames behind their one writer; bounded so a stall refuses instead of growing. */
-    private val controlOutbound = IrohSendQueue(IrohSendQueue.CONTROL_CAPACITY, backlog)
+    private val controlOutbound = IrohSendQueue(IrohSendQueue.CONTROL_CAPACITY, backlog, tap)
 
     /** Audio frames behind their one writer; unlimited and capped only by the supervisor's backlog. */
-    private val audioOutbound = IrohSendQueue(IrohSendQueue.AUDIO_CAPACITY, backlog)
+    private val audioOutbound = IrohSendQueue(IrohSendQueue.AUDIO_CAPACITY, backlog, tap)
     private val downOnce = AtomicBoolean(false)
     private val cancelled = AtomicBoolean(false)
 
@@ -108,10 +108,14 @@ internal class IrohLink(
         return try {
             val stream = link.openBi()
             val send = stream.send()
-            val incoming = stream.recv()
-            val frame = Framing.encode(Framing.KIND_TEXT, header.toByteArray(Charsets.UTF_8)) ?: return null
+            val headerBytes = header.toByteArray(Charsets.UTF_8)
+            val frame = Framing.encode(Framing.KIND_TEXT, headerBytes) ?: return null
             runCatching { send.setPriority(CONTROL_PRIORITY) }
             send.writeAll(frame)
+            if (tap.enabled) tap.frame(FrameDirection.OUT, FrameStream.ATTACHMENT, Framing.KIND_TEXT, headerBytes.size)
+            // The header goes out first, as it always has; only then do we take
+            // the stream's read half.
+            val incoming = stream.recv()
             IrohAttachmentChannel(incoming.asFrameSource(), tap) {
                 irohIo.launch {
                     runCatching { send.finish() }
@@ -143,9 +147,11 @@ internal class IrohLink(
             // Control: one bidirectional stream, the auth frame first.
             val control = link.openBi()
             val controlSend = control.send()
-            val auth = Framing.encode(Framing.KIND_TEXT, authMessage())
+            val authPayload = authMessage()
+            val auth = Framing.encode(Framing.KIND_TEXT, authPayload)
                 ?: return fail(listener, "connect_failed")
             controlSend.writeAll(auth)
+            if (tap.enabled) tap.frame(FrameDirection.OUT, FrameStream.CONTROL, Framing.KIND_TEXT, authPayload.size)
             if (cancelled.get() || downOnce.get()) {
                 runCatching { link.close(0, "cancelled".toByteArray()) }
                 return
@@ -174,7 +180,6 @@ internal class IrohLink(
                 controlOutbound.drain(
                     stream = FrameStream.CONTROL,
                     kind = Framing.KIND_TEXT,
-                    tap = tap,
                     write = { controlSend.writeAll(it) },
                     onWriteFailed = { if (!cancelled.get()) fail(listener, "write_failed") }
                 )
@@ -183,7 +188,6 @@ internal class IrohLink(
                 audioOutbound.drain(
                     stream = FrameStream.AUDIO,
                     kind = Framing.KIND_BINARY,
-                    tap = tap,
                     write = { audioSend.writeAll(it) },
                     onWriteFailed = { if (!cancelled.get()) fail(listener, "write_failed") }
                 )
@@ -365,11 +369,15 @@ internal class IrohLink(
     }
 
     override fun sendBinary(frame: ByteArray, length: Int) {
+        offerBinary(frame, length)
+    }
+
+    override fun offerBinary(frame: ByteArray, length: Int): Boolean {
         val size = length.coerceIn(0, frame.size)
-        if (size == 0) return
-        val encoded = Framing.encode(Framing.KIND_BINARY, frame, size) ?: return
-        if (cancelled.get() || downOnce.get()) return
-        audioOutbound.offer(encoded, size)
+        if (size == 0) return false
+        val encoded = Framing.encode(Framing.KIND_BINARY, frame, size) ?: return false
+        if (cancelled.get() || downOnce.get()) return false
+        return audioOutbound.offer(encoded, size)
     }
 
     /**
