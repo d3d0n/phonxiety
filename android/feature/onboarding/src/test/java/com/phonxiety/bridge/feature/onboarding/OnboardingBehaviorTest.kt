@@ -356,43 +356,28 @@ class OnboardingBehaviorTest {
         assertEquals(KeyboardType.Uri, PAIRING_FIELD_KEYBOARD.keyboardType)
     }
 
-    @Test
-    fun thePermissionConstantsSplitOnlyAfterTheirUnderscores() {
-        val segments = constantSegments("CAPTURE_AUDIO_OUTPUT")
-
-        assertEquals(listOf("CAPTURE_", "AUDIO_", "OUTPUT"), segments)
-        assertEquals("no character is inserted or lost", "CAPTURE_AUDIO_OUTPUT", segments.joinToString(""))
-    }
-
     /**
-     * At 320 dp with 200 % text the longest constant needs three lines. A break inside a word is
-     * what the old screen did (`CAPTURE_AUDIO_OU` / `TPUT`); each `_`-terminated piece is its own
-     * text run, so the only boundary is an underscore.
+     * Each grant is one plain string in the code face: the node's semantics text, and the text
+     * that was laid out for it, are the constant itself, with nothing inserted or dropped. At
+     * 320 dp with 200 % text it still has to wrap somewhere, mid-word included.
      */
     @Test
-    fun thePermissionConstantsBreakOnlyAfterTheirUnderscores() {
+    fun thePermissionConstantsAreOneTextRunOfTheExactConstant() {
         host(fontScale = 2f, widthDp = 320)
         show(OnboardingUiState(wizard = sample("ready_to_install")))
         val constant = "START_FOREGROUND_SERVICES_FROM_BACKGROUND"
         val node = composeRule.onNodeWithText(constant).performScrollTo().fetchSemanticsNode()
-        val results = mutableListOf<TextLayoutResult>()
-        node.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(results)
 
         val nodeText = node.config[SemanticsProperties.Text].joinToString("") { it.text }
         assertEquals(constant, nodeText)
-        // The published layout is the rendered runs themselves: no display-only characters, so
-        // character bounds and text navigation stay on the node's own offsets.
-        assertEquals("the layout has to describe exactly the node's characters", nodeText, results.joinToString("") { it.layoutInput.text.text })
 
-        val lines = results.flatMap { result ->
-            (0 until result.lineCount).map { line ->
-                result.layoutInput.text.text.substring(result.getLineStart(line), result.getLineEnd(line))
-            }
-        }
-        assertTrue("the constant has to wrap at this size", lines.size > 1)
-        lines.dropLast(1).forEach { line ->
-            assertTrue("line breaks mid-word: '$line'", line.trimEnd().endsWith("_"))
-        }
+        val results = mutableListOf<TextLayoutResult>()
+        node.config[SemanticsActions.GetTextLayoutResult].action!!.invoke(results)
+        assertEquals(
+            "the layout has to describe exactly the node's characters",
+            constant,
+            results.joinToString("") { it.layoutInput.text.text }
+        )
     }
 
     private fun contentContainer(): Rect = composeRule.onNodeWithTag(CONTENT_TAG).fetchSemanticsNode().boundsInRoot

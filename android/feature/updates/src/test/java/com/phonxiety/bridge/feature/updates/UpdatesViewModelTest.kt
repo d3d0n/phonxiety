@@ -206,6 +206,28 @@ class UpdatesViewModelTest {
     }
 
     @Test
+    fun `a confirm re-checks the offer before the clearing collector runs`() = runTest(testDispatcher.scheduler) {
+        val service = FakeUpdatesService().apply { result = UpdatesSamples.updateOffered() }
+        val viewModel = UpdatesViewModel(service, bridge)
+        backgroundScope.launch { viewModel.state.collect {} }
+        advanceUntilIdle()
+
+        viewModel.installApp()
+        advanceUntilIdle()
+        assertEquals(UpdateTarget.APP, viewModel.state.value.updateConfirmation)
+
+        // An install started elsewhere takes both rows, which withdraws the offer. Its clearing
+        // collector has not run yet (the scheduler is not advanced), so the confirmation must
+        // re-check the offer itself before it spends anything.
+        service.appInstall.value = AppInstallState.Downloading(progress = 0.3f)
+        viewModel.confirmUpdate()
+        advanceUntilIdle()
+
+        assertEquals(0, service.appInstalls)
+        assertEquals(null, service.installedManifest)
+    }
+
+    @Test
     fun `a second confirm runs no second app install`() = runTest(testDispatcher.scheduler) {
         val service = FakeUpdatesService().apply { result = UpdatesSamples.updateOffered() }
         val viewModel = UpdatesViewModel(service, bridge)
