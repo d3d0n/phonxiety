@@ -115,7 +115,12 @@ object BridgeLog {
 
     fun e(tag: String, message: String) = write(ERROR, tag, message)
 
-    fun e(tag: String, message: String, throwable: Throwable) = write(ERROR, tag, "$message: ${throwable.javaClass.simpleName}", throwable)
+    /**
+     * An error with its cause. The sink (logcat) receives the original message, exactly as before
+     * the ring existed; only the ring line carries the throwable's class, because the ring has no
+     * stack trace of its own to show.
+     */
+    fun e(tag: String, message: String, throwable: Throwable) = write(ERROR, tag, message, "$message: ${throwable.javaClass.simpleName}", throwable)
 
     /** Debug line whose text is built only when the sink or the ring accepts it. */
     fun d(tag: String, message: () -> String) = writeLazily(DEBUG, tag, message)
@@ -158,15 +163,19 @@ object BridgeLog {
 
     private inline fun writeLazily(level: Int, tag: String, message: () -> String) {
         if (!accepted(level)) return
-        write(level, tag, message(), null)
+        val text = message()
+        write(level, tag, text, text, null)
     }
 
     /** True when either consumer takes a line of [level]; the only gate a lazy message pays. */
     private fun accepted(level: Int): Boolean = level >= minimumLevel || level >= sinkLevel
 
-    private fun write(level: Int, tag: String, message: String, error: Throwable? = null) {
+    private fun write(level: Int, tag: String, message: String, error: Throwable? = null) = write(level, tag, message, message, error)
+
+    /** [message] goes to the sink; [ring] is what the bounded ring keeps. */
+    private fun write(level: Int, tag: String, message: String, ring: String, error: Throwable? = null) {
         if (level >= sinkLevel) sink.write(Level.of(level), tag, message, error)
-        capture(level, tag, message)
+        capture(level, tag, ring)
     }
 
     private fun levelLetter(level: Int): String = when (level) {

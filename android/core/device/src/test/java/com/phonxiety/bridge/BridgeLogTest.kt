@@ -91,6 +91,24 @@ class BridgeLogTest {
     }
 
     @Test
+    fun `an error with a cause keeps the original text in the sink and names the class in the ring`() {
+        val received = mutableListOf<String>()
+        var receivedError: Throwable? = null
+        BridgeLog.sink = BridgeLog.Sink { _, _, message, error ->
+            received += message
+            receivedError = error
+        }
+
+        BridgeLog.e("T", "the link failed", IllegalStateException("broken"))
+
+        // logcat receives exactly what it received before the ring existed, with the throwable.
+        assertEquals(listOf("the link failed"), received)
+        assertTrue(receivedError is IllegalStateException)
+        // The ring has no stack trace, so its line names the throwable's class.
+        assertEquals(listOf("the link failed: IllegalStateException"), BridgeLog.snapshot().map { it.message })
+    }
+
+    @Test
     fun `a lazy message below both thresholds is never built`() {
         BridgeLog.minimumLevel = BridgeLog.ERROR
         BridgeLog.sinkLevel = BridgeLog.ERROR
