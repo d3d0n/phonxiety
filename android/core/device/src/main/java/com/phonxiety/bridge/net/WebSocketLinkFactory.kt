@@ -2,6 +2,7 @@ package com.phonxiety.bridge.net
 
 import android.annotation.SuppressLint
 import com.phonxiety.bridge.BridgeConfig
+import com.phonxiety.bridge.bridgeScope
 import java.security.MessageDigest
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
@@ -12,6 +13,10 @@ import javax.net.ssl.SSLSocketFactory
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 import kotlin.math.max
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import okhttp3.Call as HttpCall
 import okhttp3.Connection
 import okhttp3.EventListener
@@ -179,11 +184,16 @@ private class WebSocketLink(
 ) : DeviceLink {
     private val downOnce = AtomicBoolean(false)
     private val cancelled = AtomicBoolean(false)
+    private val scope = bridgeScope("phonxiety-websocket-link", Dispatchers.IO)
+    private val outbox = WebSocketOutbox()
+
+    /** Completed when the socket exists; the writer waits for it before its first send. */
+    private val opened = CompletableDeferred<WebSocket>()
 
     @Volatile private var socket: WebSocket? = null
 
     override val backlogBytes: Long
-        get() = socket?.queueSize() ?: 0L
+        get() = outbox.pendingBytes + (socket?.queueSize() ?: 0L)
 
     // One pinned TCP stream to a known address: there is no relay hop to report, and no
     // transport-level round trip until the daemon's heartbeat answers.
@@ -202,6 +212,7 @@ private class WebSocketLink(
         val adapter = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 if (socket == null) socket = webSocket
+                opened.complete(webSocket)
                 if (cancelled.get()) {
                     runCatching { webSocket.close(1000, "cancelled") }
                     return
@@ -239,40 +250,45 @@ private class WebSocketLink(
             return
         }
         socket = created
+        opened.complete(created)
+        scope.launch {
+            outbox.drain(
+                send = { frame ->
+                    val webSocket = opened.await()
+                    when (frame) {
+                        is SocketFrame.Text -> webSocket.send(frame.text)
+                        is SocketFrame.Binary -> webSocket.send(frame.payload)
+                    }
+                },
+                onWriteFailed = { down(listener, "write_failed") }
+            )
+        }
         if (cancelled.get()) created.cancel()
     }
 
-    override fun sendText(message: String): Boolean {
-        val webSocket = socket ?: return false
-        return try {
-            webSocket.send(message)
-        } catch (_: Exception) {
-            false
-        }
-    }
+    override fun sendText(message: String): Boolean = outbox.offerText(message)
 
     override fun sendBinary(frame: ByteArray, length: Int) {
-        val webSocket = socket ?: return
         val size = max(0, minOf(length, frame.size))
         if (size == 0) return
-        try {
-            // The caller checks the backlog; a refusal here means the socket is
-            // already gone and the listener reports it.
-            webSocket.send(frame.toByteString(0, size))
-        } catch (_: Exception) {
-            // Link loss is handled by the WebSocket listener.
-        }
+        // The caller checks the backlog; a frame the queue cannot take is
+        // dropped here and the single writer reports a dead socket.
+        outbox.offerBinary(frame.toByteString(0, size))
     }
 
     override fun cancel() {
         if (!cancelled.compareAndSet(false, true)) return
         downOnce.set(true)
+        outbox.close()
         socket?.cancel()
         socket = null
+        scope.cancel()
     }
 
     private fun down(listener: DeviceLink.Listener, reason: String) {
         if (!downOnce.compareAndSet(false, true)) return
+        outbox.close()
         listener.onLinkDown(reason)
+        scope.cancel()
     }
 }
