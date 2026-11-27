@@ -12,8 +12,9 @@ The harness is deliberately fail-closed:
 * the subprocess environment is built explicitly, never inherited wholesale; ``ADB`` points at
   the fake because the script honours ``${ADB:-adb}``, and an inherited value would point at the
   real tool;
-* a test may override only the ``FAKE_*`` control variables; any other key (``ADB``,
-  ``ANDROID_SERIAL``, ``PATH``, ``BASH_ENV``, ``ENV``, ...) fails the test;
+* a test may override only the ``FAKE_*`` control variables and the two ``PAIR_*`` wait
+  knobs; any other key (``ADB``, ``ANDROID_SERIAL``, ``PATH``, ``BASH_ENV``, ``ENV``, ...)
+  fails the test;
 * the final environment is checked immediately before the run: ``PATH`` starts at the fake
   directory, ``ADB`` is the fake, ``ANDROID_SERIAL`` is the sentinel, ``BASH_ENV`` and ``ENV``
   are absent, and ``shutil.which`` resolves both tools to the fakes;
@@ -56,8 +57,9 @@ OLD_CONFIG_TEXT = json.dumps(OLD_CONFIG)
 OLD_HASH = hashlib.sha256((OLD_CONFIG_TEXT + "\n").encode()).hexdigest()
 
 # The only environment keys a test may override.  Everything else is either fixed by the
-# harness (ADB, PATH, ANDROID_SERIAL) or could make the runtime load something else.
-FAKE_CONTROL_VARIABLES = frozenset(
+# harness (ADB, PATH, ANDROID_SERIAL) or could make the runtime load something else.  The
+# two PAIR_* keys shorten the script's waits so the exit-code paths stay fast.
+CONTROL_VARIABLES = frozenset(
     {
         "FAKE_ROOT_DENIED",
         "FAKE_PROCESS_REFUSES_STOP",
@@ -65,7 +67,16 @@ FAKE_CONTROL_VARIABLES = frozenset(
         "FAKE_PIDOF_STATUS",
         "FAKE_PIDOF_EMPTY",
         "FAKE_HASH_QUERY_ERROR",
+        "FAKE_HASH_QUERY_ERROR_AFTER_WRITE",
+        "FAKE_OLD_HASH",
         "FAKE_PAIR_RESULT",
+        "FAKE_UV_NOT_CONNECTED",
+        "FAKE_UV_FINAL_STATUS_ERROR",
+        "FAKE_SERVICE_START_FAILS",
+        "FAKE_SERVICE_NOT_STAYING",
+        "FAKE_SIGNAL_DURING_WRITE",
+        "PAIR_SERVICE_POLL_TRIES",
+        "PAIR_LINK_POLL_TRIES",
     }
 )
 
@@ -150,12 +161,19 @@ elif command.startswith("pidof"):
     else:
         print("PX_STATUS=1")
 elif command.startswith("am start-foreground-service"):
+    if flag("FAKE_SERVICE_START_FAILS"):
+        sys.exit(1)
     state["process"] = True
-    state["service"] = True
+    if not flag("FAKE_SERVICE_NOT_STAYING"):
+        state["service"] = True
     save()
 elif "PX_ABSENT" in command:
-    # The host's read of the current configuration, through root.
+    # The host's read of the current configuration, through root.  A query that fails only
+    # after the write attempt leaves the initial snapshot intact, so the classification read
+    # is the one that fails.
     if flag("FAKE_HASH_QUERY_ERROR"):
+        sys.exit(1)
+    if flag("FAKE_HASH_QUERY_ERROR_AFTER_WRITE") and state.get("write_attempted"):
         sys.exit(1)
     current = config_hash()
     if current == "absent":
@@ -169,25 +187,29 @@ elif command.startswith("su -c 'sh -s'"):
     if remote_log:
         with open(remote_log, "a") as handle:
             handle.write(json.dumps(script) + "\\n")
+    state["write_attempted"] = True
+    save()
+    if flag("FAKE_SIGNAL_DURING_WRITE"):
+        # Signal the script's whole session while it waits for the root command, mirroring
+        # an operator hitting Ctrl-C in the middle of the swap.
+        os.killpg(os.getpgid(0), 15)
+        sys.exit(1)
     outcome = os.environ.get("FAKE_PAIR_RESULT", "ok")
     if outcome == "ok":
         state["config"] = "new"
         save()
-        print("PX_BEFORE_MV")
         print("PX_REPLACED=1")
         print(os.environ["FAKE_ADB_HASH"] + "  /data/user_de/0/com.phonxiety.bridge/files/config.json")
         sys.exit(0)
     if outcome == "hash_fail":
         state["config"] = "new"
         save()
-        print("PX_BEFORE_MV")
         print("PX_REPLACED=1")
         print("0" * 64 + "  /data/user_de/0/com.phonxiety.bridge/files/config.json")
         sys.exit(0)
     if outcome == "replaced_unverified":
         state["config"] = "new"
         save()
-        print("PX_BEFORE_MV")
         print("PX_REPLACED=1")
         print("final file label mismatch", file=sys.stderr)
         sys.exit(1)
@@ -195,26 +217,28 @@ elif command.startswith("su -c 'sh -s'"):
         # The rename happened, but the marker that follows it never arrived.
         state["config"] = "new"
         save()
-        print("PX_BEFORE_MV")
         print(os.environ["FAKE_ADB_HASH"] + "  /data/user_de/0/com.phonxiety.bridge/files/config.json")
         sys.exit(0)
     if outcome == "failed_after_rename":
         # The rename happened, then the remote script failed before the marker.
         state["config"] = "new"
         save()
-        print("PX_BEFORE_MV")
         print("final file label mismatch", file=sys.stderr)
         sys.exit(1)
     if outcome == "unknown_after_rename":
         # The phone cannot say which file it now holds.
         state["config"] = "other"
         save()
-        print("PX_BEFORE_MV")
+        sys.exit(1)
+    if outcome == "silent_fail_before":
+        # The write path died without reaching its own abort report; the file is untouched.
         sys.exit(1)
     if outcome == "labeling_fail":
+        print("PX_ABORTED_BEFORE_MV")
         print("cannot label the temporary file", file=sys.stderr)
         sys.exit(1)
-    # Any other failure happens before the rename: no marker, file untouched.
+    # Any other failure happens before the rename and reports its own abort.
+    print("PX_ABORTED_BEFORE_MV")
     print("temporary file label mismatch", file=sys.stderr)
     sys.exit(1)
 else:
@@ -224,15 +248,20 @@ sys.exit(0)
 """.format(python=sys.executable)
 
 FAKE_UV = """#!{python}
-import sys
+import os, sys
 
 args = sys.argv[1:]
 if "pair" in args:
     print({config!r})
 elif "status" in args:
     if "--json" in args:
-        print('{{"connected": true}}')
+        if os.environ.get("FAKE_UV_NOT_CONNECTED") == "1":
+            print('{{"connected": false}}')
+        else:
+            print('{{"connected": true}}')
     else:
+        if os.environ.get("FAKE_UV_FINAL_STATUS_ERROR") == "1":
+            sys.exit(1)
         print("connected")
 """.format(python=sys.executable, config=CONFIG_TEXT)
 
@@ -297,7 +326,7 @@ class Fakes:
     def checked_environment(self, case: unittest.TestCase, overrides: dict[str, str]) -> dict[str, str]:
         """Refuses anything outside the control allow-list, then checks the final environment."""
         for key in overrides:
-            if key not in FAKE_CONTROL_VARIABLES:
+            if key not in CONTROL_VARIABLES:
                 case.fail(f"{key!r} is not a fake-control variable; refusing to override it")
         environment = self.environment()
         environment.update(overrides)
@@ -348,7 +377,7 @@ class HostPairScriptTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.fakes = Fakes(Path(self.temporary.name))
 
-    def run_script(self, **extra: str) -> subprocess.CompletedProcess[str]:
+    def run_script(self, new_session: bool = False, **extra: str) -> subprocess.CompletedProcess[str]:
         environment = self.fakes.checked_environment(self, extra)
         return subprocess.run(
             ["bash", str(SCRIPT)],
@@ -357,6 +386,7 @@ class HostPairScriptTests(unittest.TestCase):
             text=True,
             timeout=60,
             check=False,
+            start_new_session=new_session,
         )
 
     def assert_not_started(self) -> None:
@@ -498,21 +528,28 @@ class HostPairScriptTests(unittest.TestCase):
         self.assert_not_started()
 
     def test_a_missing_marker_after_the_rename_does_not_restore(self) -> None:
-        # The new bytes are on the phone; only the marker after the rename was lost.  The
-        # follow-up read proves the rename happened, so no restore is allowed.
+        # The new bytes are on the phone; only the marker after the rename was lost.  Without
+        # the remote script's own abort report nothing proves the writer is finished.
         result = self.run_script(FAKE_PAIR_RESULT="missing_marker")
 
         self.assertEqual(2, result.returncode)
-        self.assertIn("did not confirm it", result.stderr)
+        self.assertIn("root writer may still complete", result.stderr)
         self.assert_not_started()
-        hashes = [call for call in self.fakes.calls() if "sha256sum" in call]
-        self.assertTrue(hashes, "the host must re-read the file before deciding")
 
     def test_a_failure_after_the_rename_without_a_marker_does_not_restore(self) -> None:
         result = self.run_script(FAKE_PAIR_RESULT="failed_after_rename")
 
         self.assertEqual(2, result.returncode)
-        self.assertIn("replaced before the run failed", result.stderr)
+        self.assertIn("root writer may still complete", result.stderr)
+        self.assert_not_started()
+
+    def test_a_silent_failure_before_the_rename_does_not_restore(self) -> None:
+        # A dropped connection or a writer that died before its abort path proves nothing:
+        # the file is untouched, but the root writer may still complete the rename.
+        result = self.run_script(FAKE_PAIR_RESULT="silent_fail_before")
+
+        self.assertEqual(2, result.returncode)
+        self.assertIn("root writer may still complete", result.stderr)
         self.assert_not_started()
 
     def test_an_unknown_replacement_outcome_keeps_the_app_stopped(self) -> None:
@@ -520,6 +557,44 @@ class HostPairScriptTests(unittest.TestCase):
 
         self.assertEqual(2, result.returncode)
         self.assertIn("outcome is unknown", result.stderr)
+        self.assert_not_started()
+
+    def test_a_failed_classification_read_is_unknown_and_does_not_restore(self) -> None:
+        # The initial snapshot succeeds; only the read after the attempted write fails.
+        result = self.run_script(
+            FAKE_PAIR_RESULT="fail_before",
+            FAKE_HASH_QUERY_ERROR_AFTER_WRITE="1",
+        )
+
+        self.assertEqual(2, result.returncode)
+        self.assertIn("root writer may still complete", result.stderr)
+        self.assert_not_started()
+        calls = self.fakes.calls()
+        write_index = next(index for index, call in enumerate(calls) if "sh -s" in call)
+        reads = [index for index, call in enumerate(calls) if "sha256sum" in call]
+        self.assertGreaterEqual(len(reads), 2, "both the initial snapshot and the classification read must run")
+        self.assertLess(reads[0], write_index, "the initial snapshot is read before anything is stopped")
+        self.assertGreater(reads[-1], write_index, "the classification read must run after the attempted write")
+
+    def test_an_identical_old_and_new_hash_is_nothing_changed(self) -> None:
+        # The old file already holds exactly the bytes being written, so the faithful abort
+        # plus the unchanged file is the conservative "nothing changed" outcome: a restore is
+        # harmless because the bytes are the same either way.
+        self.fakes.set_state(config="old")
+        result = self.run_script(FAKE_PAIR_RESULT="fail_before", FAKE_OLD_HASH=CONFIG_HASH)
+
+        self.assertEqual(1, result.returncode)
+        self.assertIn("the old configuration is unchanged", result.stderr)
+        self.assert_restored()
+
+    def test_a_signal_during_the_write_is_classified_as_unknown(self) -> None:
+        # The script runs in its own session so the fake can signal it without reaching the
+        # test: an interrupt while the root writer is in flight must not restore anything.
+        result = self.run_script(new_session=True, FAKE_SIGNAL_DURING_WRITE="1")
+
+        self.assertEqual(2, result.returncode, result.stderr)
+        self.assertIn("interrupted after the app was stopped", result.stderr)
+        self.assertIn("root writer may still complete", result.stderr)
         self.assert_not_started()
 
     def test_a_service_already_stopped_is_not_started_by_a_failure(self) -> None:
@@ -553,22 +628,74 @@ class HostPairScriptTests(unittest.TestCase):
                     return index
             self.fail(f"{fragment!r} is missing from the remote script:\n{scripts[0]}")
 
+        mkdir_guard = position('[ ! -d "$DIR" ]')
+        dir_chcon = position('chcon "$DATA_LABEL" "$DIR"')
+        dir_label_check = position('[ "$DIR_LABEL" = "$DATA_LABEL" ]')
         chown = position("chown ")
         chmod_dir = position("chmod 700")
         chmod_file = position("chmod 600")
-        chcon = position("chcon ")
-        before_mv = position("echo PX_BEFORE_MV")
+        chcon = position('chcon "$LABEL" "$TMPFILE"')
+        abort_marker = position("echo PX_ABORTED_BEFORE_MV")
         mv = position("mv -f ")
         replaced = position("echo PX_REPLACED=1")
         hash_line = position("sha256sum ")
+        self.assertLess(mkdir_guard, dir_chcon)
+        self.assertLess(dir_chcon, dir_label_check)
         self.assertLess(chown, chcon)
         self.assertLess(chmod_dir, chcon)
         self.assertLess(chmod_file, chcon)
         self.assertLess(chcon, mv)
-        self.assertLess(before_mv, mv)
+        self.assertLess(abort_marker, mv)
         self.assertLess(mv, replaced)
         self.assertLess(replaced, hash_line)
         self.assertLess(chmod_dir, mv)
+
+    def test_the_remote_script_reads_each_paths_own_label(self) -> None:
+        result = self.run_script(FAKE_PAIR_RESULT="ok")
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        script = self.fakes.remote_scripts()[0]
+        self.assertIn('ls -Zd "$1"', script, "the label helper must read the directory itself, not its contents")
+        self.assertNotIn('ls -Z "$1"', script)
+
+    def test_the_remote_script_never_prints_the_retired_marker(self) -> None:
+        result = self.run_script(FAKE_PAIR_RESULT="ok")
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        script = self.fakes.remote_scripts()[0]
+        self.assertNotIn("PX_BEFORE_MV", script)
+
+    def test_a_service_that_does_not_start_exits_three(self) -> None:
+        result = self.run_script(FAKE_PAIR_RESULT="ok", FAKE_SERVICE_START_FAILS="1")
+
+        self.assertEqual(3, result.returncode)
+        self.assertIn("am start-foreground-service failed", result.stderr)
+
+    def test_a_service_that_does_not_stay_running_exits_three(self) -> None:
+        result = self.run_script(
+            FAKE_PAIR_RESULT="ok",
+            FAKE_SERVICE_NOT_STAYING="1",
+            PAIR_SERVICE_POLL_TRIES="0",
+        )
+
+        self.assertEqual(3, result.returncode)
+        self.assertIn("did not stay running", result.stderr)
+
+    def test_a_link_that_never_comes_up_exits_three(self) -> None:
+        result = self.run_script(
+            FAKE_PAIR_RESULT="ok",
+            FAKE_UV_NOT_CONNECTED="1",
+            PAIR_LINK_POLL_TRIES="0",
+        )
+
+        self.assertEqual(3, result.returncode)
+        self.assertIn("did not reach the daemon", result.stderr)
+
+    def test_a_final_status_failure_exits_three(self) -> None:
+        result = self.run_script(FAKE_PAIR_RESULT="ok", FAKE_UV_FINAL_STATUS_ERROR="1")
+
+        self.assertEqual(3, result.returncode)
+        self.assertIn("status could not be printed", result.stderr)
 
 
 if __name__ == "__main__":

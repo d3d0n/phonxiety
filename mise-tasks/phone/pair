@@ -14,6 +14,25 @@
 # `pidof` proves the previous writers are gone; it is not a lock against a
 # later explicit launch (a person or another tool starting the app), so the
 # replacement stays as short as possible.
+#
+# Once the app has been stopped, the previous service is restored only on the
+# root script's own report that it aborted before the rename
+# (`PX_ABORTED_BEFORE_MV`) together with a re-read of config.json that still
+# holds the old bytes.  Magisk runs the root command in a separately forked
+# daemon, and adbd signals only its immediate child, so a dropped connection
+# proves nothing and the writer may still complete; everything else is
+# reported as unknown and the app stays stopped.
+#
+# Exit codes:
+#   0  the configuration was replaced, verified and the service is up;
+#   1  nothing changed: refused before the app was stopped, or the old
+#      configuration was restored on positive evidence;
+#   2  unknown or replaced but unverified: the app stays stopped;
+#   3  the configuration was replaced and verified but the service or the
+#      link to the daemon did not come up.
+#
+# PAIR_SERVICE_POLL_TRIES and PAIR_LINK_POLL_TRIES shorten the two waits for
+# tests; their defaults are 40 and 30.
 set -euo pipefail
 
 ROOT="${MISE_PROJECT_ROOT:?run this task through mise: mise run phone:pair}"
@@ -43,11 +62,19 @@ EOF
 }
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
-die_unconfirmed() { printf 'error: %s\n' "$1" >&2; exit 2; }
+die_unknown() { printf 'error: %s\n' "$1" >&2; exit 2; }
+die_service() { printf 'error: %s\n' "$1" >&2; exit 3; }
 note() { printf '%s\n' "$1"; }
 
 cleanup() { if [ -n "$TMP" ]; then rm -rf "$TMP"; fi; }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+
+# Before the stop nothing has changed, so an interrupt is a plain refusal.
+interrupt_before_stop() {
+    printf 'error: interrupted before the app was stopped; the configuration was not touched\n' >&2
+    exit 1
+}
+trap interrupt_before_stop INT TERM HUP
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -182,30 +209,6 @@ phone_config_hash() {
     printf '%s\n' "$value"
 }
 
-# Only positive evidence may restore the service.  REPLACED=1 means the new bytes are
-# there (the marker arrived or the file now holds the new hash), 0 means the old bytes
-# are still there, and 2 means the phone could not answer, which proves nothing.
-classify_replacement() {
-    local current
-    if [ "$1" -eq 1 ]; then
-        REPLACED=1
-        return 0
-    fi
-    if ! current="$(phone_config_hash)"; then
-        REPLACED=2
-        return 0
-    fi
-    if [ "$current" = "$HASH" ]; then
-        REPLACED=1
-    elif [ "$OLD_HASH" = "absent" ] && [ "$current" = "absent" ]; then
-        REPLACED=0
-    elif [ "$current" = "$OLD_HASH" ]; then
-        REPLACED=0
-    else
-        REPLACED=2
-    fi
-}
-
 # The previous configuration, read before anything is stopped: the failure path compares
 # it with what the phone holds afterwards, and only an unchanged file permits a restore.
 OLD_HASH="$(phone_config_hash)" || die "could not read the current phone configuration; the app was not touched"
@@ -213,9 +216,27 @@ OLD_HASH="$(phone_config_hash)" || die "could not read the current phone configu
 HASH="$(shasum -a 256 "$TMP/config.json" | awk '{print $1}')"
 [ -n "$HASH" ] || die "could not hash the phone configuration"
 
+# The only permitted restore: the remote script itself reported, through its abort path,
+# that it stopped before the rename (PX_ABORTED_BEFORE_MV), and the file still holds
+# exactly the old bytes.  A root writer may outlive a dropped connection, so a re-read
+# alone proves nothing and anything less is unknown.
+restore_after_abort() {
+    local current
+    if ! current="$(phone_config_hash)"; then
+        die_unknown "the phone configuration replacement outcome is unknown; a root writer may still complete it; the app stays stopped"
+    fi
+    if [ "$current" = "$OLD_HASH" ]; then
+        restore_service
+        die "writing the phone configuration failed; the old configuration is unchanged"
+    fi
+    die_unknown "the phone configuration replacement outcome is unknown; a root writer may still complete it; the app stays stopped"
+}
+
 # The remote script runs as root and never sees the credential on a command
 # line: the file is staged next to its destination under a unique private name,
-# labelled with the app-data context, then renamed over config.json.
+# labelled with the app-data context, then renamed over config.json.  Every
+# failure before the rename prints the abort marker the host requires before it
+# may restore the old service; a failure after the rename prints no marker.
 {
     printf '%s\n' \
         '#!/system/bin/sh' \
@@ -225,30 +246,41 @@ HASH="$(shasum -a 256 "$TMP/config.json" | awk '{print $1}')"
         'DATA="/data/user_de/0/$APP"' \
         'DIR="$DATA/files"' \
         'TMPFILE=""' \
+        'abort() { echo PX_ABORTED_BEFORE_MV; echo "$1" >&2; exit 1; }' \
         'cleanup() { if [ -n "$TMPFILE" ]; then rm -f "$TMPFILE"; fi; }' \
         'trap cleanup EXIT HUP INT TERM' \
-        '[ -d "$DATA" ] || { echo "app data directory missing" >&2; exit 1; }' \
-        'mkdir -p "$DIR"' \
-        'label_of() { ls -Z "$1" 2>/dev/null | awk '"'"'{ for (i = 1; i <= NF; i++) if ($i ~ /^u:object_r:/) { print $i; exit } }'"'"'; }' \
+        'label_of() { ls -Zd "$1" 2>/dev/null | awk '"'"'{ for (i = 1; i <= NF; i++) if ($i ~ /^u:object_r:/) { print $i; exit } }'"'"'; }' \
+        '[ -d "$DATA" ] || abort "app data directory missing"' \
+        'DIR_CREATED=0' \
+        'if [ ! -d "$DIR" ]; then' \
+        '    mkdir -p "$DIR" || abort "cannot create the app files directory"' \
+        '    DIR_CREATED=1' \
+        'fi' \
+        'DATA_LABEL=$(label_of "$DATA")' \
+        '[ -n "$DATA_LABEL" ] || abort "cannot read the app-data label"' \
+        'if [ "$DIR_CREATED" -eq 1 ]; then' \
+        '    chcon "$DATA_LABEL" "$DIR" || abort "cannot label the app files directory"' \
+        '    DIR_LABEL=$(label_of "$DIR")' \
+        '    [ "$DIR_LABEL" = "$DATA_LABEL" ] || abort "app files directory label mismatch"' \
+        'fi' \
         'LABEL=$(label_of "$DIR/config.json")' \
-        '[ -n "$LABEL" ] || LABEL=$(label_of "$DATA")' \
-        '[ -n "$LABEL" ] || { echo "cannot read the app-data label" >&2; exit 1; }' \
+        '[ -n "$LABEL" ] || LABEL=$(label_of "$DIR")' \
+        '[ -n "$LABEL" ] || abort "cannot read the app-data label"' \
         'TMPFILE="$DIR/.config.json.$$.new"' \
-        '[ ! -e "$TMPFILE" ] || { echo "temporary file already exists" >&2; exit 1; }' \
+        '[ ! -e "$TMPFILE" ] || abort "temporary file already exists"' \
         "cat > \"\$TMPFILE\" <<'PX_CONFIG_EOF'"
     cat "$TMP/config.json"
     printf '%s\n' \
         'PX_CONFIG_EOF' \
-        'UID_=$(stat -c %u "$DATA")' \
-        'GID_=$(stat -c %g "$DATA")' \
-        'chown "$UID_:$GID_" "$DIR" "$TMPFILE"' \
-        'chmod 700 "$DIR"' \
-        'chmod 600 "$TMPFILE"' \
-        'chcon "$LABEL" "$TMPFILE" || { echo "cannot label the temporary file" >&2; exit 1; }' \
+        'UID_=$(stat -c %u "$DATA") || abort "cannot read the app-data owner"' \
+        'GID_=$(stat -c %g "$DATA") || abort "cannot read the app-data group"' \
+        'chown "$UID_:$GID_" "$DIR" "$TMPFILE" || abort "cannot set ownership"' \
+        'chmod 700 "$DIR" || abort "cannot set the app files directory mode"' \
+        'chmod 600 "$TMPFILE" || abort "cannot set the temporary file mode"' \
+        'chcon "$LABEL" "$TMPFILE" || abort "cannot label the temporary file"' \
         'TMP_LABEL=$(label_of "$TMPFILE")' \
-        '[ "$TMP_LABEL" = "$LABEL" ] || { echo "temporary file label mismatch" >&2; exit 1; }' \
-        'echo PX_BEFORE_MV' \
-        'mv -f "$TMPFILE" "$DIR/config.json"' \
+        '[ "$TMP_LABEL" = "$LABEL" ] || abort "temporary file label mismatch"' \
+        'mv -f "$TMPFILE" "$DIR/config.json" || abort "cannot replace the configuration file"' \
         'TMPFILE=""' \
         'echo PX_REPLACED=1' \
         'FINAL_LABEL=$(label_of "$DIR/config.json")' \
@@ -270,7 +302,7 @@ while [ "$i" -lt 20 ]; do
     PIDS="$(running_pids)"
     [ "$PIDS" = "error" ] && break
     [ -z "$PIDS" ] && break
-    sleep 0.25
+    sleep 0.25 || true
     i=$((i+1))
 done
 if [ "$PIDS" = "error" ]; then
@@ -279,82 +311,95 @@ if [ "$PIDS" = "error" ]; then
 fi
 [ -z "$PIDS" ] || { restore_service; die "the app process is still running (pids: $PIDS)"; }
 
+
+# From here the app may be stopped: errexit is off, every step is checked, and a signal
+# is classified like any other failure instead of escaping the decision.
 set +e
+ABORTED=0
+REPLACED_MARK=0
+REPLACEMENT_VERIFIED=0
+
+# An interrupt after the stop may not restore unless the positive evidence is already in
+# hand, and may not report success either.
+interrupt_after_stop() {
+    trap - INT TERM HUP
+    printf 'error: interrupted after the app was stopped\n' >&2
+    if [ "$REPLACEMENT_VERIFIED" -eq 1 ]; then
+        die_service "the new configuration is in place but the restart was interrupted"
+    fi
+    if [ "$ABORTED" -eq 1 ]; then
+        restore_after_abort
+    fi
+    die_unknown "the phone configuration replacement outcome is unknown; a root writer may still complete it; the app stays stopped"
+}
+trap interrupt_after_stop INT TERM HUP
+
 REMOTE_OUT="$("${ADB_CMD[@]}" shell "su -c 'sh -s'" < "$TMP/setup.sh" 2>&1)"
 REMOTE_STATUS=$?
-set -e
-MARKER=0
-if printf '%s\n' "$REMOTE_OUT" | grep -q 'PX_REPLACED=1'; then
-    MARKER=1
+
+REMOTE_TEXT="$(printf '%s\n' "$REMOTE_OUT" | tr -d '\r')"
+if printf '%s\n' "$REMOTE_TEXT" | grep -qx 'PX_ABORTED_BEFORE_MV'; then
+    ABORTED=1
+fi
+if printf '%s\n' "$REMOTE_TEXT" | grep -qx 'PX_REPLACED=1'; then
+    REPLACED_MARK=1
 fi
 
-if [ "$REMOTE_STATUS" -ne 0 ]; then
-    # The root script's own words say why it refused (a label, a missing directory), and its
-    # output never carries the credential.
-    printf '%s\n' "$REMOTE_OUT" | tr -d '\r' | grep -v '^PX_' >&2 || true
-    if [ "$MARKER" -eq 1 ]; then
-        die_unconfirmed "the phone configuration may be replaced but could not be verified; not restarting the bridge"
-    fi
-    classify_replacement "$MARKER"
-    case "$REPLACED" in
-        0)
-            # The file still holds the old bytes: the rename provably did not happen.
-            restore_service
-            die "writing the phone configuration failed" ;;
-        1)
-            die_unconfirmed "the phone configuration was replaced before the run failed; not restarting the bridge" ;;
-        *)
-            die_unconfirmed "the phone configuration replacement outcome is unknown; the app stays stopped" ;;
-    esac
-fi
+# The root script's own words say why it refused (a label, a missing directory); the
+# marker lines carry no credential.
+printf '%s\n' "$REMOTE_TEXT" | grep -v -e '^PX_' -e '^$' >&2
 
-REMOTE_HASH="$(printf '%s\n' "$REMOTE_OUT" | tr -d '\r' | awk 'NF && $0 !~ /^PX_/ {print $1; exit}' || true)"
-if [ "$MARKER" -eq 1 ] && [ "$REMOTE_HASH" = "$HASH" ]; then
-    : # the run's own marker and hash agree with the hash of the file that was sent
+if [ "$REPLACED_MARK" -eq 1 ] && [ "$REMOTE_STATUS" -eq 0 ]; then
+    REMOTE_HASH="$(printf '%s\n' "$REMOTE_TEXT" | awk 'NF && $0 !~ /^PX_/ {print $1; exit}')"
+    [ "$REMOTE_HASH" = "$HASH" ] \
+        || die_unknown "phone configuration hash mismatch after replacement; not restarting the bridge"
+    REPLACEMENT_VERIFIED=1
+elif [ "$REPLACED_MARK" -eq 1 ]; then
+    # The rename happened, but the run did not finish cleanly and its hash is not trusted.
+    die_unknown "the phone configuration may be replaced but could not be verified; not restarting the bridge"
+elif [ "$ABORTED" -eq 1 ]; then
+    restore_after_abort
 else
-    if [ "$MARKER" -eq 1 ]; then
-        die_unconfirmed "phone configuration hash mismatch after replacement; not restarting the bridge"
-    fi
-    classify_replacement "$MARKER"
-    case "$REPLACED" in
-        0)
-            restore_service
-            die "phone configuration hash mismatch" ;;
-        1)
-            die_unconfirmed "the phone configuration was replaced but the run did not confirm it; not restarting the bridge" ;;
-        *)
-            die_unconfirmed "the phone configuration replacement outcome is unknown; the app stays stopped" ;;
-    esac
+    # A transport failure, a missing or unexpected marker, or any other ambiguity: the
+    # root writer may still complete the rename, so nothing here permits a restore.
+    die_unknown "the phone configuration replacement outcome is unknown; a root writer may still complete it; the app stays stopped"
 fi
 
 # An explicit service start clears the stopped state left by force-stop, so the
 # restart works without an activity.
 note "Starting the bridge service..."
-"${ADB_CMD[@]}" shell am start-foreground-service --user 0 \
-    -n "$PACKAGE/.BridgeService" >/dev/null \
-    || die_unconfirmed "am start-foreground-service failed; the new configuration is in place but the app is stopped"
+if ! "${ADB_CMD[@]}" shell am start-foreground-service --user 0 \
+    -n "$PACKAGE/.BridgeService" >/dev/null 2>&1; then
+    die_service "am start-foreground-service failed; the new configuration is in place but the service is not up"
+fi
 
+SERVICE_TRIES="${PAIR_SERVICE_POLL_TRIES:-40}"
+case "$SERVICE_TRIES" in '' | *[!0-9]*) SERVICE_TRIES=40 ;; esac
 i=0
 running=0
-while [ "$i" -lt 40 ]; do
+while [ "$i" -lt "$SERVICE_TRIES" ]; do
     if "${ADB_CMD[@]}" shell dumpsys activity services "$PACKAGE" 2>/dev/null \
         | grep -q "BridgeService"; then
         running=1
         break
     fi
-    sleep 0.25
+    sleep 0.25 || true
     i=$((i+1))
 done
-[ "$running" -eq 1 ] || die_unconfirmed "the bridge service did not stay running; inspect: adb logcat -d -s PhonxietyBridge"
+[ "$running" -eq 1 ] \
+    || die_service "the bridge service did not stay running; inspect: adb logcat -d -s PhonxietyBridge"
 
 note "Phone paired. Waiting for it to reach the daemon..."
+LINK_TRIES="${PAIR_LINK_POLL_TRIES:-30}"
+case "$LINK_TRIES" in '' | *[!0-9]*) LINK_TRIES=30 ;; esac
 i=0
-while [ "$i" -lt 30 ]; do
+while [ "$i" -lt "$LINK_TRIES" ]; do
     if uv run --project "$ROOT" phonxiety status --json 2>/dev/null | grep -q '"connected": true'; then
-        uv run --project "$ROOT" phonxiety status
+        uv run --project "$ROOT" phonxiety status \
+            || die_service "the phone reached the daemon but the status could not be printed"
         exit 0
     fi
-    sleep 1
+    sleep 1 || true
     i=$((i+1))
 done
-die "the phone did not reach the daemon within 30 s: check that the daemon is running (mise run daemon) and that the phone has a network connection"
+die_service "the phone did not reach the daemon within the wait: check that the daemon is running (mise run daemon) and that the phone has a network connection"
