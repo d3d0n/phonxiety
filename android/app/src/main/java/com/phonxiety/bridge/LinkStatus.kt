@@ -7,15 +7,16 @@ import com.phonxiety.bridge.model.LinkState
 import com.phonxiety.bridge.model.PathKind
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
-import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.flow.transformLatest
+import kotlinx.coroutines.launch
 
 /** What the link strip currently says. */
 internal sealed interface LinkStripState {
@@ -52,25 +53,40 @@ internal val LinkSummary.isHealthyDirect: Boolean
 internal const val STRIP_HIDE_DELAY_MS = 1_500L
 
 /**
- * The strip's states: every degraded link shows a strip, and a direct healthy link keeps the one
- * already on screen for [hideDelayMs] and then hides — a boot that came up clean still gets a
+ * The strip's states: every degraded link shows a strip, and a direct healthy link shows the
+ * summary once, keeps it for [hideDelayMs] and then hides — a boot that came up clean still gets a
  * moment of confirmation instead of a flash of nothing.
+ *
+ * The hide timer is driven by the healthy-direct status alone. The round trip is sampled every
+ * second, and its display updates must neither restart the timer nor bring back a strip that has
+ * already hidden; only a change of the status does either.
  */
-@OptIn(ExperimentalCoroutinesApi::class)
 internal fun linkStripStates(
     links: Flow<LinkState>,
     hideDelayMs: Long = STRIP_HIDE_DELAY_MS
-): Flow<LinkStripState> = links
-    .map(::linkSummaryOf)
-    .distinctUntilChanged()
-    .transformLatest { summary ->
-        if (summary.isHealthyDirect) {
-            delay(hideDelayMs)
-            emit(LinkStripState.Hidden)
-        } else {
-            emit(LinkStripState.Visible(summary))
+): Flow<LinkStripState> = channelFlow {
+    var hidden = false
+    var hideTimer: Job? = null
+    links.map(::linkSummaryOf).distinctUntilChanged().collect { summary ->
+        if (!summary.isHealthyDirect) {
+            hidden = false
+            hideTimer?.cancel()
+            hideTimer = null
+            send(LinkStripState.Visible(summary))
+            return@collect
+        }
+        // A display-only change after the delay: the strip stays hidden, the timer untouched.
+        if (hidden) return@collect
+        send(LinkStripState.Visible(summary))
+        if (hideTimer == null) {
+            hideTimer = launch {
+                delay(hideDelayMs)
+                hidden = true
+                send(LinkStripState.Hidden)
+            }
         }
     }
+}
 
 /** The host-scoped strip: one collector over the bridge state while anything observes it. */
 @HiltViewModel

@@ -21,7 +21,6 @@ import com.phonxiety.bridge.feature.livecall.CallFrontReturn
 import com.phonxiety.bridge.feature.onboarding.SetupPreferences
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.yield
 
 /**
  * The single activity, and the app's only edge-to-edge owner: it calls [enableEdgeToEdge] once and
@@ -86,13 +85,12 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Reads the wizard's journal once, outside composition. The yield lets the first frame go out
-     * under the splash before the read runs, and the controller bounds it: a read that misses the
-     * deadline renders the dashboard rather than holding the splash.
+     * Reads the wizard's journal once, outside composition, on the controller's worker. The
+     * controller bounds it against a main-thread deadline, so a preference load that blocks its
+     * thread still renders the dashboard by [StartDestinationController.SPLASH_DEADLINE_MS].
      */
     private fun resolveStart() {
         lifecycleScope.launch {
-            yield()
             startDestination.resolve { SetupPreferences(applicationContext).ready }
         }
     }

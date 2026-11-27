@@ -13,6 +13,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -80,29 +82,32 @@ internal fun LinkStatusStrip(
     ) {
         Row(
             modifier = Modifier
-                .padding(start = 16.dp, end = 16.dp, top = topInset + 6.dp, bottom = 6.dp)
-                .semantics(mergeDescendants = true) {},
+                .padding(start = 16.dp, end = 16.dp, top = topInset + 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            // The indicator is the live region, and the round trip beside it is not part of it:
+            // a status change is announced, a round-trip sample is only redrawn.
+            val live = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
             val path = copy.path
             if (path != null) {
-                LinkPathPill(path = path)
-                summary.rttMs?.let { millis ->
-                    Text(
-                        text = stringResource(R.string.link_strip_rtt, millis),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                LinkPathPill(path = path, modifier = live)
             } else {
                 copy.label?.let { label ->
                     StatusPill(
                         label = stringResource(label),
                         tone = copy.tone,
+                        modifier = live,
                         pulse = copy.pulse
                     )
                 }
+            }
+            summary.rttMs?.let { millis ->
+                Text(
+                    text = stringResource(R.string.link_strip_rtt, millis),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }

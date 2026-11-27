@@ -34,6 +34,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
+import androidx.navigation3.runtime.EntryProviderScope
 import androidx.navigation3.runtime.NavBackStack
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.NavKey
@@ -106,8 +107,9 @@ internal fun PhonxietyNavigationHost(
         onSignalConsumed()
     }
 
-    val provider = entryProvider<NavKey> {
-        entry<OnboardingKey>(
+    fun providerFor(section: Section): (NavKey) -> NavEntry<NavKey> = entryProvider {
+        entryIn<OnboardingKey>(
+            section = section,
             metadata = NavDisplay.predictivePopTransitionSpec { wizardPredictivePop() }
         ) { key ->
             OnboardingRoute(
@@ -116,7 +118,7 @@ internal fun PhonxietyNavigationHost(
                 onOpenDoctor = { navigator.push(DoctorKey) }
             )
         }
-        entry<DashboardKey> {
+        entryIn<DashboardKey>(section) {
             DashboardRoute(
                 onOpenSetup = { navigator.push(OnboardingKey()) },
                 onOpenDoctor = { navigator.push(DoctorKey) },
@@ -126,35 +128,35 @@ internal fun PhonxietyNavigationHost(
                 onOpenUpdates = { navigator.push(UpdatesKey) }
             )
         }
-        entry<CallsKey> {
+        entryIn<CallsKey>(section) {
             CallsRoute(
                 onOpenCall = { callId -> navigator.push(CallDetailKey(callId)) },
                 onNewCall = { navigator.push(ComposerKey()) }
             )
         }
-        entry<LabKey> {
+        entryIn<LabKey>(section) {
             LabRoute(
                 onBack = onBack,
                 onOpenCall = { callId -> navigator.push(CallDetailKey(callId)) }
             )
         }
-        entry<SettingsKey> {
+        entryIn<SettingsKey>(section) {
             SettingsRoute(onBack = onBack)
         }
-        entry<UpdatesKey> {
+        entryIn<UpdatesKey>(section) {
             UpdatesRoute(onBack = onBack)
         }
-        entry<DoctorKey> {
+        entryIn<DoctorKey>(section) {
             DoctorRoute(onBack = onBack)
         }
-        entry<LiveCallKey> { key ->
+        entryIn<LiveCallKey>(section) { key ->
             LiveCallRoute(
                 callId = key.callId,
                 onBack = onBack,
                 onOpenDetail = { callId -> navigator.push(CallDetailKey(callId)) }
             )
         }
-        entry<CallDetailKey> { key ->
+        entryIn<CallDetailKey>(section) { key ->
             CallDetailRoute(
                 callId = key.callId,
                 onBack = onBack,
@@ -171,7 +173,7 @@ internal fun PhonxietyNavigationHost(
                 onOpenLive = { callId -> navigator.push(LiveCallKey(callId)) }
             )
         }
-        entry<ComposerKey> { key ->
+        entryIn<ComposerKey>(section) { key ->
             ComposerRoute(
                 onBack = onBack,
                 onPlaced = { callId ->
@@ -190,10 +192,10 @@ internal fun PhonxietyNavigationHost(
 
     // One decorated entry list per stack, so a tab that is not on screen keeps its ViewModels and
     // its saveable state instead of losing them to the next stack's pop.
-    val dashboardEntries = sectionEntries(dashboardStack, provider)
-    val callsEntries = sectionEntries(callsStack, provider)
-    val labEntries = sectionEntries(labStack, provider)
-    val settingsEntries = sectionEntries(settingsStack, provider)
+    val dashboardEntries = sectionEntries(dashboardStack, providerFor(Section.DASHBOARD))
+    val callsEntries = sectionEntries(callsStack, providerFor(Section.CALLS))
+    val labEntries = sectionEntries(labStack, providerFor(Section.LAB))
+    val settingsEntries = sectionEntries(settingsStack, providerFor(Section.SETTINGS))
     val entries = when (active) {
         Section.DASHBOARD -> dashboardEntries
         Section.CALLS -> callsEntries
@@ -209,10 +211,11 @@ internal fun PhonxietyNavigationHost(
 
     HostScrollRegistry(scrollToTop) {
         // The display's own back callback is disabled at a section root (there is nothing to pop),
-        // so the host answers back itself there: a non-Dashboard root goes home, the Dashboard
-        // root leaves the app. When the display can pop it takes the press and the host hears
-        // nothing, which keeps one pop per press.
-        BackHandler { onBack() }
+        // so the host answers back itself where it has somewhere to go: a destination above a
+        // root pops, and a non-Dashboard root goes home. At the Dashboard root and at a
+        // fresh-install wizard root there is no in-app destination left, so the handler is off and
+        // the system draws its predictive exit instead.
+        BackHandler(enabled = hostHandlesBack(currentStack, active)) { onBack() }
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -292,9 +295,16 @@ private fun navigationConfiguration(): SavedStateConfiguration = SavedStateConfi
     }
 }
 
-/** One stack's entries, with the state holder and the ViewModel store scoped to that stack. */
+/**
+ * One stack's entries, with the state holder and the ViewModel store scoped to that stack.
+ *
+ * The entries' content identities must already be namespaced by the section (see [entryIn]):
+ * two sections can hold the same destination — the Doctor opened from Dashboard and from Calls,
+ * one call's record opened from Calls and from the Lab — and the display keys composition and
+ * saveable state by that identity.
+ */
 @Composable
-private fun sectionEntries(
+internal fun sectionEntries(
     stack: NavBackStack<NavKey>,
     provider: (NavKey) -> NavEntry<NavKey>
 ): List<NavEntry<NavKey>> = rememberDecoratedNavEntries(
@@ -305,6 +315,35 @@ private fun sectionEntries(
     ),
     entryProvider = provider
 )
+
+/** The stable content identity of [key] inside [section]; see [entryIn]. */
+internal fun contentKeyOf(section: Section, key: NavKey): String = "${section.name}:$key"
+
+/**
+ * Registers one destination whose content identity includes [section]. The typed entry is the
+ * only place the key is available before the entry is built, so the qualifier is supplied here.
+ */
+internal inline fun <reified K : NavKey> EntryProviderScope<NavKey>.entryIn(
+    section: Section,
+    metadata: Map<String, Any> = emptyMap(),
+    noinline content: @Composable (K) -> Unit
+) {
+    entry<K>(clazzContentKey = { key -> contentKeyOf(section, key) }, metadata = metadata, content = content)
+}
+
+/**
+ * Whether the host answers back for [stack] in [active].
+ *
+ * A destination above a section's root pops within that section, and a non-Dashboard section root
+ * goes to Dashboard. The Dashboard root and a fresh-install wizard root leave the app, so the
+ * handler stays disabled there and the system's predictive exit is not swallowed.
+ */
+internal fun hostHandlesBack(stack: List<NavKey>, active: Section): Boolean = when {
+    stack.size > 1 -> true
+    stack.firstOrNull() is OnboardingKey -> false
+    active == Section.DASHBOARD -> false
+    else -> true
+}
 
 /** Bar on a phone, rail once the window is wide or the phone is turned on its side. */
 @Composable

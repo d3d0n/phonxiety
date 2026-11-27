@@ -77,10 +77,10 @@ class NotificationEntryPointsTest {
         }
     }
 
-    /** The start destination is resolved on the main dispatcher one turn after the launch. */
+    /** The start destination is resolved on a worker, so the rendered screen is the evidence. */
     private fun settle() {
         shadowOf(Looper.getMainLooper()).idle()
-        compose.waitForIdle()
+        compose.settleHost()
     }
 
     private fun assertScreen(key: NavKey) {

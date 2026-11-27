@@ -8,7 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.union
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -32,9 +32,10 @@ import com.phonxiety.bridge.designsystem.R
  * 16 dp side margins. Screens put their own scroll container inside [content].
  *
  * The scaffold is the screen's only inset and keyboard owner: the status bar, the cutout and the
- * navigation bar come from its own content insets, and [imeInsets] is applied to the content
- * exactly once — a screen must not add an `imePadding` of its own. [imeInsets] is a parameter so a
- * test can pin the keyboard's height; every real screen keeps the platform's inset.
+ * navigation bar come from its own content insets, and [imeInsets] joins them in the same
+ * `contentWindowInsets`: one bottom value places both the content and the snackbar, so the
+ * keyboard is paid once and a screen must not add an `imePadding` of its own. [imeInsets] is a
+ * parameter so a test can pin the keyboard's height; every real screen keeps the platform's inset.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -76,18 +77,16 @@ fun ScreenScaffold(
         },
         snackbarHost = snackbarHost,
         containerColor = MaterialTheme.colorScheme.background,
-        // Everything safeDrawing covers except the keyboard: the bars and the cutout are paid
-        // once here, and the keyboard is paid once by the content's [imeInsets] padding below.
-        // Splitting the same union in two keeps the bottom at max(navigation bar, keyboard)
-        // instead of their sum, so a screen with a field above the keyboard never gets a gap.
-        contentWindowInsets = WindowInsets.safeDrawing.exclude(WindowInsets.ime)
+        // One inset owner for the whole frame. The Scaffold pays the bars, the cutout and the
+        // keyboard, and its bottom value is what both the body and the snackbar are placed above,
+        // so the snackbar stays over the keyboard and the content is not padded twice.
+        contentWindowInsets = WindowInsets.safeDrawing.exclude(WindowInsets.ime).union(imeInsets)
     ) { paddingValues ->
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
                 .padding(horizontal = 16.dp)
-                .windowInsetsPadding(imeInsets)
         ) {
             content()
         }
