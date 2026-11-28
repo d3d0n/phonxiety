@@ -1,58 +1,62 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/logo/phonxiety-lockup-color-dark-bg.svg">
-    <source media="(prefers-color-scheme: light)" srcset="docs/brand/logo/phonxiety-lockup-color-light-bg.svg">
-    <img alt="phonxiety" src="docs/brand/logo/phonxiety-lockup-color-light-bg.svg" height="64">
-  </picture>
+  <img src="docs/brand/social/readme-header-1280x384.png" alt="phonxiety: your AI assistant makes the phone call" width="100%">
 </p>
 
 <p align="center">
-  <strong>Your AI assistant makes the phone call. From your own SIM, through your own phone.</strong>
+  phonxiety: an MCP server that makes real phone calls from your Android phone.
 </p>
 
 <p align="center">
-  <a href="#getting-started">Getting started</a> ·
-  <a href="#tools">Tools</a> ·
-  <a href="#works-today--not-yet">Limits</a> ·
-  <a href="#under-the-hood">Under the hood</a> ·
-  <a href="DESIGN.md">Design notes (RU)</a>
+  <a href="https://github.com/d3d0n/phonxiety/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/d3d0n/phonxiety?style=flat-square&label=release&labelColor=0A0710&color=5B2A86"></a>
+  <a href="https://github.com/d3d0n/phonxiety/actions/workflows/daemon.yml"><img alt="Daemon checks" src="https://img.shields.io/github/actions/workflow/status/d3d0n/phonxiety/daemon.yml?branch=main&style=flat-square&label=daemon&labelColor=0A0710"></a>
+  <a href="https://github.com/d3d0n/phonxiety/actions/workflows/android.yml"><img alt="Android checks" src="https://img.shields.io/github/actions/workflow/status/d3d0n/phonxiety/android.yml?branch=main&style=flat-square&label=android&labelColor=0A0710"></a>
+  <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache--2.0-5B2A86?style=flat-square&labelColor=0A0710"></a>
+  <br>
+  <img alt="Python 3.12 or later" src="https://img.shields.io/badge/python-3.12+-5B2A86?style=flat-square&labelColor=0A0710&logo=python&logoColor=F6D8FF">
+  <img alt="Android 14 or later, rooted" src="https://img.shields.io/badge/android-14%2B%20%C2%B7%20root-5B2A86?style=flat-square&labelColor=0A0710&logo=android&logoColor=F6D8FF">
+  <img alt="Computer: macOS" src="https://img.shields.io/badge/computer-macOS-5B2A86?style=flat-square&labelColor=0A0710&logo=apple&logoColor=F6D8FF">
+  <img alt="Protocol: MCP" src="https://img.shields.io/badge/protocol-MCP-5B2A86?style=flat-square&labelColor=0A0710&logo=modelcontextprotocol&logoColor=F6D8FF">
+  <img alt="Status: pre-alpha" src="https://img.shields.io/badge/status-pre--alpha-B3128F?style=flat-square&labelColor=0A0710">
+</p>
+
+<p align="center">
+  <a href="#what-a-call-looks-like">Example</a> |
+  <a href="#installation">Installation</a> |
+  <a href="#usage">Usage</a> |
+  <a href="#settings">Settings</a> |
+  <a href="#what-works-and-what-doesnt">What works</a> |
+  <a href="#troubleshooting">Troubleshooting</a> |
+  <a href="#how-it-works">How it works</a>
 </p>
 
 ---
 
-## What is it
+phonxiety lets a coding agent make a phone call. It has five parts:
 
-A daemon on your computer and a small app on a rooted Android phone. Connect it to Claude Code, Codex, OpenCode or any other MCP client, and your assistant can dial a number from your SIM, talk to whoever picks up, and come back with the answer.
+- **Daemon** on your Mac that runs the call
+- **Android app** that dials from the phone's SIM and carries the audio
+- **Voice model** that does the talking: Codex realtime, Gemini Live or Deepgram
+- **Text model** that reads the transcript and decides when the job is done
+- **MCP server and CLI** to place a call and read the result
 
-You hand over a brief: who to call, what to get, what not to agree to. A realtime voice agent holds the conversation. You get the outcome, the fields you asked for and the transcript.
+You give it a number and a goal. It calls, talks to whoever picks up, and gives you back a summary, the fields you asked for and the transcript. It works with Claude Code, Codex, OpenCode or any other MCP client.
 
-The call goes out over the cellular network with your number. The phone can stay locked, screen off, in a drawer.
+It has been tested on exactly one Mac and one Pixel 6a, and the phone has to be rooted. It may not work on your setup.
 
----
+> [!WARNING]
+> These are real calls. They go out from your number, your carrier bills you for them, and a real person picks up and talks to a machine. Every connected call is recorded, and nothing on the call says so. Check whether that is legal where you and the other person are.
 
-## Stuff you do with it
+## What a call looks like
 
-- **Hand over a brief, not a script.** "Book a first visit for Thursday or Friday after 15:00, find out the doctor and the room." The agent works out the wording on the line.
-- **Get fields, not a recording.** Ask for `appointment_day`, `appointment_time`, `doctor` — they come back filled in, next to a short summary and the transcript.
-- **Draw the lines.** "No other days, nothing provisional." The agent keeps to it even when the other side pushes.
-- **Let it wait.** "One minute, let me check" followed by silence does not end the call.
-- **Pull the plug.** `hangup_call` drops the line from your side at any moment.
-- **Check the line without dialing.** `phonxiety link-test` loads the phone link the way a call does and tells you whether it holds.
-- **Forget about the phone.** It finds your computer by key, with no VPN app and no open ports, and comes back by itself after a reboot.
+You write a brief: who to call, what to get, what not to agree to. The rest happens without you. These three are real calls from testing, with the author on a second phone playing the other side.
 
----
+**The dentist.** The brief: book Timur Karimov for a first visit, Thursday or Friday after 15:00, Thursday preferred. The receptionist said "one minute, let me check the schedule" and went silent for twenty seconds. The agent waited. She came back with two slots, then interrupted the reply: "wait, 15:30 is taken... no, that's Wednesday. Thursday is free, but 16:00, not 15:30." The agent took 16:00, asked what to bring, read the booking back and hung up.
 
-## Three little stories
+**The restaurant that says no.** A table for six on Saturday, no other days allowed. Saturday was full. The administrator offered Sunday at seven, then pushed: "let me book you anyway, cancel if you need to." The agent said no twice, wrote the offer down for you to decide, and said goodbye. Outcome: `declined`, with the alternative on record.
 
-All three are real calls from testing. The other side was the author on a second phone, playing the part.
+**Nobody picks up.** After the ring timeout the daemon hangs up and reports `no_answer`. There is no summary, because there was no conversation.
 
-**The dentist.** The brief: book Timur Karimov for a first visit, Thursday or Friday after 15:00, Thursday preferred. The receptionist said "one minute, let me check the schedule" and went silent for twenty seconds. The agent waited. She came back with two slots, then cut in on the agent's reply: "wait, 15:30 is taken... no, that's Wednesday. Thursday is free, but 16:00, not 15:30." The agent took 16:00, asked what to bring, read the booking back and hung up.
-
-**The restaurant that says no.** A table for six on Saturday; other days not allowed. Saturday was full. The administrator offered Sunday at seven, then pushed: "let me book you anyway, cancel if you need to." The agent declined twice, wrote down the offer for you to decide, said goodbye. Outcome: `declined`, alternative on record.
-
-**Nobody picks up.** After the ring timeout the daemon hangs up and reports `no_answer`. No summary, no invented conversation.
-
-What the first one returned, trimmed (the call was in Russian):
+This is what the dentist call returned, trimmed. The call was in Russian.
 
 ```json
 {
@@ -71,65 +75,97 @@ What the first one returned, trimmed (the call was in Russian):
 }
 ```
 
----
+## Installation
 
-## Works today · Not yet
+The only way to install phonxiety right now is from source. You need:
 
-| ✅ Works today | 🚧 Not yet |
-|---|---|
-| Outbound calls from your SIM through a rooted Pixel 6a | Any other phone: it was built and tested on exactly one |
-| Phone locked, screen off, no cable; reconnects after a reboot before the first unlock | Calls on mobile data alone or over a relay: audio is uncompressed and needs a direct path, so the phone has to be on Wi-Fi |
-| Phone and computer find each other by key: no VPN, no addresses, no open ports | The first minute after the phone joins Wi-Fi: the call waits for the line instead of dialing (39 s in the test) |
-| A one-second line check before every dial, so nobody is rung into silence | Surviving a dropped link mid-call: the phone hangs up |
-| Waiting on hold, taking a correction, refusing what the brief forbids | Telling a voicemail from a person: the agent starts greeting it |
-| The agent says goodbye and hangs up by itself | Hanging up quickly: about 5 s pass after the goodbye |
-| Outcome, summary, requested fields and transcript | A clean `error` field every time: a finished call can carry a false `playback_drain_timeout` |
-| No answer, ring timeout, hang-up on request | Keypad menus: implemented, never tried on a real call |
-| `phonxiety link-test` and per-call link counters in the logs | Pairing by QR in the app and a run in each MCP client: built, not tested |
-| | Incoming calls; more than one call at a time |
+- a Mac (nothing else has been tried);
+- [mise](https://mise.jdx.dev), which installs Python, uv, JDK 17, Gradle and Rust for you;
+- a Codex sign-in;
+- a rooted Pixel 6a with Magisk, Android 14 or later and a working SIM;
+- a USB cable, for the first install only;
+- Wi-Fi for the phone. Calls over mobile data don't work yet.
 
----
+Root is not optional. The app needs three permissions that Android only gives to system apps, and a Magisk module is how it gets them.
 
-## Getting started
+### The computer
 
-You need a Mac (the only computer it has run on), [mise](https://mise.jdx.dev), a Codex sign-in, and a rooted Pixel 6a with Magisk and a working SIM.
+1. Get the code:
 
-**The computer**
+   ```sh
+   git clone https://github.com/d3d0n/phonxiety.git
+   cd phonxiety
+   ```
 
-```sh
-mise install            # Python, uv, JDK 17, Gradle, Rust
-mise run setup          # dependencies into .venv
-uv run phonxiety auth   # its own Codex sign-in; ~/.codex/auth.json is left alone
-```
+2. Install the tools and the Python dependencies:
 
-**The Android toolchain, once**
+   ```sh
+   mise install
+   mise run setup
+   ```
 
-`mise install` does not bring the Android SDK. The phone tasks expect:
+3. Sign in to Codex:
 
-- an SDK at `.tools/android-sdk` in the project (that is where `ANDROID_HOME` points), with Google's [command-line tools](https://developer.android.com/studio#command-line-tools-only) unpacked to `cmdline-tools/latest/`;
-- the platform and build tools the app is compiled against:
+   ```sh
+   uv run phonxiety auth
+   ```
 
-  ```sh
-  .tools/android-sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root=.tools/android-sdk "platforms;android-37.0" "build-tools;37.0.0"
-  ```
+   The daemon keeps its own sign-in and doesn't touch `~/.codex/auth.json`.
 
-- `adb` on your `PATH`, or its location in `ADB=`.
+### The Android SDK
 
-The NDK and `cargo-ndk` are installed by the build itself on the first run.
+`mise install` doesn't bring the Android SDK, so you set it up by hand. The build looks for it in `.tools/android-sdk` inside the project.
 
-**The phone, once, over USB**
+1. Download Google's [command-line tools](https://developer.android.com/studio#command-line-tools-only) and unpack them to `.tools/android-sdk/cmdline-tools/latest/`.
 
-Enable USB debugging and allow root for the shell in Magisk, then:
+2. Install the platform and build tools:
 
-```sh
-mise run phone:build              # iroh for Android, the app, the Magisk module
-mise run phone:install --reboot   # installs the module and reboots the phone
-mise run phone:pair               # grants permissions, stores the daemon's key and a token
-```
+   ```sh
+   .tools/android-sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root=.tools/android-sdk "platforms;android-37.0" "build-tools;37.0.0"
+   ```
 
-The first build clones and compiles iroh for Android, so it needs network access and takes a while. The module is there because the app needs three privileged permissions that only a system app gets. The APK is signed with the debug key unless `PHONXIETY_KEYSTORE` is set. After pairing you can unplug the cable.
+3. Make sure `adb` is on your `PATH`, or point the `ADB` variable at it.
 
-**Your MCP client**
+The NDK and `cargo-ndk` are installed by the build on its first run.
+
+### The phone
+
+Plug the phone in, turn on USB debugging, and allow root for the shell in Magisk.
+
+1. Build the app and the Magisk module:
+
+   ```sh
+   mise run phone:build
+   ```
+
+   The first build clones and compiles iroh for Android, so it needs network access and takes a while.
+
+2. Install the module. This reboots the phone:
+
+   ```sh
+   mise run phone:install --reboot
+   ```
+
+3. Pair the phone with the daemon:
+
+   ```sh
+   mise run phone:pair
+   ```
+
+4. Check that it worked:
+
+   ```sh
+   uv run phonxiety status      # daemon, phone, route, ready to call
+   uv run phonxiety link-test   # load the link like a call, without dialing
+   ```
+
+If `status` says it is ready to call and `link-test` says the link holds, you can unplug the cable. You won't need it again: `adb connect 127.0.0.1:15555` reaches the phone through the daemon.
+
+The APK is signed with the debug key unless you set `PHONXIETY_KEYSTORE`.
+
+### Your MCP client
+
+Add this to the client's MCP configuration, with the real path to your clone:
 
 ```json
 {
@@ -142,47 +178,37 @@ The first build clones and compiles iroh for Android, so it needs network access
 }
 ```
 
-Or with Claude Code: `claude mcp add phonxiety -- uv run --project /absolute/path/to/phonxiety phonxiety-mcp`.
-
-The adapter starts the daemon when none is running. Then:
+In Claude Code it is one command:
 
 ```sh
-uv run phonxiety status      # daemon, phone, route, ready to call
-uv run phonxiety link-test   # load the link like a call, without dialing
-adb connect 127.0.0.1:15555  # adb to the phone through the iroh link, no cable needed
+claude mcp add phonxiety -- uv run --project /absolute/path/to/phonxiety phonxiety-mcp
 ```
 
-Settings:
+The client should now list three tools: `place_call`, `wait_call_result` and `hangup_call`. You don't have to start the daemon yourself, the MCP server starts it when it isn't running. If you want it running from login anyway, use `mise run daemon:install`.
 
-- `PHONXIETY_CODEX_TASK_MODEL` — the Codex text model that supervises the line (task agent), for every voice backend.
-- `PHONXIETY_VOICE_BACKEND` — who talks on the line: `codex` (default, Codex realtime over WebRTC, any language), `deepgram` (Deepgram Voice Agent: nova-3 listen, an OpenAI think model hosted by Deepgram, aura-2 speak; English voices by default) or `gemini` (Gemini Live native audio). Keypresses and hanging up are line actions the daemon executes directly: Gemini and Deepgram call the `send_dtmf` and `end_call` tools; Codex sends the delegation `DTMF <digits>` for keys and, having no tools, never asks to hang up: it only says goodbye, and the task agent, asked at the end of each of its turns, ends the call. Anything else goes to the task agent.
-- `DEEPGRAM_API_KEY` / `GEMINI_API_KEY` — keys for those backends, or the files `deepgram-api-key` / `gemini-api-key` in the state directory. Optional models: `PHONXIETY_DEEPGRAM_LANGUAGE` (`en`), `PHONXIETY_DEEPGRAM_LISTEN_MODEL` (`nova-3`), `PHONXIETY_DEEPGRAM_THINK_MODEL` (`gpt-4o-mini`), `PHONXIETY_DEEPGRAM_SPEAK_MODEL` (`aura-2-thalia-en`), `PHONXIETY_GEMINI_MODEL` (`gemini-3.8-live`), `PHONXIETY_GEMINI_VOICE` (`Puck`).
-- `PHONXIETY_CODEX_VOICE` — the Codex voice, `sol` by default. `PHONXIETY_CODEX_AUTH_FILE` — the daemon's own Codex login file.
-- `PHONXIETY_AUDIO_CODEC` — call audio on the phone link: `opus` by default, or `pcm`. Opus is used only when the phone app offers it.
-- `PHONXIETY_OPUS_BITRATE` — Opus bitrate in bit/s, `32000` by default, 6000 to 128000.
-- `PHONXIETY_IROH_RELAYS` — comma-separated iroh relay URLs that replace n0's public relays, e.g. your own `iroh-relay` behind HTTPS. Without the variable the daemon reads `iroh-relays` in the state directory, one URL per line, so the setting holds however the daemon is started. Public relays are rate-limited and may not carry PCM call audio. Leave your relay's access open, or allow new endpoints as they appear: every fresh app install, cleared app data or new computer key makes a new endpoint id, and a relay `access.allowlist` that still lists the old id answers "not authorized", so the phone and computer cannot meet through it.
-- `PHONXIETY_STATE_DIR` — calls, keys and logs; `~/.local/share/phonxiety` by default.
-- `PHONXIETY_PORT` — MCP and health on loopback, `18762` by default.
+### The skill
 
-No iroh? `uv run phonxiety pair --lan`, `--tailscale` or `--host` pairs by address over TLS WebSocket instead.
+If your agent reads skills (Claude Code, Codex, Oh My Pi), it can call without MCP:
 
----
+```sh
+mise run skills:install
+```
 
-## Skill
+This links `skills/phonxiety/SKILL.md` into every harness it finds and puts the `phonxiety` command in `~/.local/bin`. The skill tells the agent how to check the line, write a brief, wait for the result and read old calls.
 
-Agents that read skills (Claude Code, Codex, Oh My Pi) can call without MCP: `mise run skills:install` links `skills/phonxiety/SKILL.md` into each harness found on the machine and puts the `phonxiety` CLI into `~/.local/bin`. The skill covers checking the line, writing the brief, waiting for the result and reading the archive.
+## Usage
 
-## Tools
-
-Three tools. A call outlives the tool call that started it, so placing and waiting are separate.
+Tell your agent who to call, what to get and what not to agree to. It does the rest with three tools:
 
 | Tool | What it does |
 |---|---|
-| `place_call` | Takes the number, goal, context, constraints, limits and the result fields you want. Returns a `call_id` at once |
-| `wait_call_result` | Waits up to 45 s and returns the state, outcome, summary, fields and a page of the transcript. Call it again until the result is ready |
-| `hangup_call` | Ends the call. Before the dial it cancels it; after, it disconnects the line |
+| `place_call` | Takes the number, goal, context, constraints, limits and the result fields you want. Returns a `call_id` right away. |
+| `wait_call_result` | Waits up to 45 s and returns the state, outcome, summary, fields and a page of the transcript. Call it again until the call is over. |
+| `hangup_call` | Ends the call. Before the dial it cancels the call, after the dial it drops the line. |
 
-The same from a terminal:
+A phone call takes longer than a tool call, which is why placing a call and waiting for it are separate tools.
+
+The same thing from a terminal:
 
 ```sh
 uv run phonxiety call --destination +12025550123 \
@@ -193,22 +219,131 @@ uv run phonxiety result <call_id> --wait-s 45
 uv run phonxiety hangup <call_id>
 ```
 
-Limits per call: `max_duration_s` (10 to 3600, default 900) and `ring_timeout_s` (5 to 180, default 60). A `request_id` makes a retry safe: the same id never dials twice.
+`call` prints a `call_id`. Run `result` until `state` is `ended`, `cancelled`, `failed` or `unknown`. Run `hangup` whenever you want out.
 
----
+### Call options
 
-## What keeps a call in line
+`place_call` takes the same values as the command line.
 
-1. **No dial without a line check.** Before dialing, the daemon sends a second of call-sized frames to the phone and counts what comes back. If the link cannot carry audio, it waits up to 90 s, then fails with `phone_link_not_ready` and rings nobody.
-2. **The brief is fixed before the call.** Your assistant hands it over once and is not in the loop for each reply. Constraints travel with it.
-3. **Someone watches the line.** A text model reads the transcript whenever the line goes quiet, and with Codex after every turn of the agent, and decides whether the task is done. The voice model does not have to remember to hang up.
-4. **A lost link ends the call.** The daemon pings the phone every 2 s; the phone hangs up after 10 s without its computer. Nobody is left on a dead line.
-5. **Hard limits.** Ring timeout and maximum duration are enforced by the daemon, not by the model.
-6. **What was confirmed wins.** The other side's words reach the transcript through speech recognition and can be misheard. When the agent repeated a name or a number aloud and was not corrected, that version goes into the result.
+| Option | What it is | Default |
+|---|---|---|
+| `--destination` | An E.164 number like `+14155550123`, or a 3 to 6 digit service number. Emergency numbers are refused. | required |
+| `--goal` | What the agent has to get done. | required |
+| `--context` | Background the agent needs. | none |
+| `--constraints` | What it may and may not agree to: dates, budget, alternatives, what to disclose. | none |
+| `--result-field` | A field you want back. Repeat it for several fields. | none |
+| `--max-duration-s` | Longest the call may last, 10 to 3600 seconds. | 900 |
+| `--ring-timeout-s` | How long to let it ring, 5 to 180 seconds. | 60 |
+| `--request-id` | Makes a retry safe. The same id never dials twice. | none |
+| `--phone-account` | Which SIM to call from, as an Android phone account id. | the phone's default |
 
----
+### What it saves
 
-## Under the hood
+Every call is saved in `~/.local/share/phonxiety/calls/`:
+
+| File | What's in it |
+|---|---|
+| `<call_id>.json` | The request, timings, outcomes, fields and the full transcript. Also `far_end`, a guess at who answered: `person`, `ivr` or `voicemail`. |
+| `<call_id>.wav` | The recording, 48 kHz stereo. The other person is on the left, the agent on the right. Only for calls that connected. |
+| `<call_id>.m4a` | A small copy for sharing: both sides in one channel, long pauses cut. Only for calls that connected. |
+
+## Settings
+
+Everything is an environment variable. You can leave all of them alone and use Codex.
+
+| Variable | What it does | Default |
+|---|---|---|
+| `DEEPGRAM_API_KEY` | Key for the `deepgram` backend. A file named `deepgram-api-key` in the state directory works too. | none |
+| `GEMINI_API_KEY` | Key for the `gemini` backend. A file named `gemini-api-key` in the state directory works too. | none |
+| `PHONXIETY_AUDIO_CODEC` | Audio between the phone and the daemon: `opus` or `pcm`. | `opus` |
+| `PHONXIETY_CODEX_AUTH_FILE` | Where the daemon keeps its Codex sign-in. | in the state directory |
+| `PHONXIETY_CODEX_TASK_MODEL` | The Codex text model that supervises the call. Used with every voice backend. | |
+| `PHONXIETY_CODEX_VOICE` | The Codex voice. | `sol` |
+| `PHONXIETY_DEEPGRAM_LANGUAGE` | Deepgram language. | `en` |
+| `PHONXIETY_DEEPGRAM_LISTEN_MODEL` | Deepgram speech recognition model. | `nova-3` |
+| `PHONXIETY_DEEPGRAM_SPEAK_MODEL` | Deepgram voice. | `aura-2-thalia-en` |
+| `PHONXIETY_DEEPGRAM_THINK_MODEL` | The text model Deepgram runs for the conversation. | `gpt-4o-mini` |
+| `PHONXIETY_GEMINI_MODEL` | Gemini Live model. | `gemini-3.8-live` |
+| `PHONXIETY_GEMINI_VOICE` | Gemini voice. | `Puck` |
+| `PHONXIETY_IROH_RELAYS` | Comma-separated iroh relay URLs to use instead of the public ones. | n0's public relays |
+| `PHONXIETY_OPUS_BITRATE` | Opus bitrate in bit/s, 6000 to 128000. | `32000` |
+| `PHONXIETY_PORT` | Loopback port for MCP and health checks. | `18762` |
+| `PHONXIETY_STATE_DIR` | Where calls, keys and logs live. | `~/.local/share/phonxiety` |
+| `PHONXIETY_VOICE_BACKEND` | Who talks on the line: `codex`, `deepgram` or `gemini`. | `codex` |
+
+### Voice backends
+
+- `codex` is Codex realtime over WebRTC. It speaks any language.
+- `deepgram` is Deepgram Voice Agent: nova-3 listens, an OpenAI model hosted by Deepgram thinks, aura-2 speaks. The default voices are English.
+- `gemini` is Gemini Live native audio.
+
+Gemini and Deepgram press keys and hang up by calling the `send_dtmf` and `end_call` tools. Codex realtime has no tools, so it says `DTMF <digits>` when it wants keys pressed, and it never hangs up by itself: it says goodbye, and the text model ends the call. Either way it is the daemon that actually presses the keys and drops the line.
+
+### Your own relay
+
+When the phone and the computer can't reach each other directly, traffic goes through an iroh relay. The public relays are rate-limited and may not carry uncompressed call audio. You can run your own `iroh-relay` behind HTTPS and set `PHONXIETY_IROH_RELAYS`, or list the URLs one per line in a file named `iroh-relays` in the state directory.
+
+> [!CAUTION]
+> Don't put an allowlist on your relay unless you plan to maintain it. Every fresh app install, cleared app data or new computer key makes a new endpoint id. A relay that still lists the old id answers "not authorized", and the phone and the computer can't find each other.
+
+### No iroh
+
+If iroh doesn't work on your network, pair by address over TLS WebSocket instead: `uv run phonxiety pair --lan`, `--tailscale` or `--host`.
+
+## What keeps a call from going wrong
+
+A model on a live phone line can do embarrassing things. These are the checks that don't depend on the model behaving:
+
+1. **No dial without a line check.** Before dialing, the daemon sends a second of call-sized frames to the phone and counts what comes back. If the link can't carry audio, it waits up to 90 s, then fails with `phone_link_not_ready`. Nobody's phone rings.
+2. **The brief is fixed before the call.** Your agent hands it over once and isn't asked again mid-call. The constraints are part of the brief.
+3. **A second model watches.** A text model reads the transcript whenever the line goes quiet (with Codex, after every turn) and decides whether the job is done. The voice model doesn't have to remember to hang up.
+4. **A lost link ends the call.** The daemon pings the phone every 2 s. If the phone hears nothing for 10 s, it hangs up, so nobody is left listening to silence.
+5. **The limits are enforced by the daemon.** Ring timeout and maximum duration are timers, not instructions to a model.
+6. **Confirmed values win.** What the other person says goes through speech recognition and can be misheard. If the agent read a name or a number back and wasn't corrected, that version goes into the result.
+
+## What works and what doesn't
+
+Works:
+
+- [x] Outbound calls from your SIM through a rooted Pixel 6a
+- [x] Phone locked, screen off, no cable. It reconnects after a reboot, even before the first unlock
+- [x] Phone and computer find each other by key. No VPN, no addresses, no open ports
+- [x] Waiting on hold, taking a correction, refusing what the brief forbids
+- [x] Saying goodbye and hanging up
+- [x] No answer, ring timeout, hang-up on request
+- [x] Outcome, summary, requested fields and transcript
+- [x] `phonxiety link-test`, and per-call link counters in the logs
+
+Doesn't work yet:
+
+- [ ] Any other phone. It was built and tested on exactly one
+- [ ] Calls on mobile data alone or over a relay. Uncompressed audio needs a direct path, so the phone has to be on Wi-Fi
+- [ ] The first minute after the phone joins Wi-Fi. The call waits for the line instead of dialing (39 s in the test)
+- [ ] Surviving a dropped link mid-call. The phone hangs up
+- [ ] Telling voicemail from a person. The agent starts greeting the voicemail
+- [ ] Hanging up quickly. About 5 s pass after the goodbye
+- [ ] A clean `error` field. A call that finished fine can carry a false `playback_drain_timeout`
+- [ ] Incoming calls, or more than one call at a time
+
+Built but never tested:
+
+- [ ] Keypad menus on a real call
+- [ ] Pairing by QR code in the app
+- [ ] A run in each MCP client
+
+## Troubleshooting
+
+Start with `uv run phonxiety status`. It tells you whether the daemon is up, whether the phone is connected, by what route, and whether a call would go through. If the daemon runs in the background, `mise run daemon:logs` follows its log.
+
+| What you see | Why | What to do |
+|---|---|---|
+| The call fails with `phone_link_not_ready` and nobody is rung | The link can't carry call audio. The phone is on mobile data, or behind a relay, or joined Wi-Fi less than a minute ago. | Put the phone on Wi-Fi, wait a minute, run `uv run phonxiety link-test`, then call again. |
+| The phone won't connect and your relay says "not authorized" | The relay's allowlist has an old endpoint id. | Add the new id, or drop the allowlist. See [Your own relay](#your-own-relay). |
+| The phone won't connect over iroh at all | The network blocks it. | Pair by address. See [No iroh](#no-iroh). |
+| A call that went fine has `error: playback_drain_timeout` | A known false report. | Ignore it. Trust `call_outcome` and `task_outcome`. |
+| The result is `no_answer` | Nobody picked up before the ring timeout. | Call later, or raise `--ring-timeout-s`. |
+
+## How it works
 
 ```mermaid
 flowchart LR
@@ -220,66 +355,65 @@ flowchart LR
   P <-- cellular --> O[the other party]
 ```
 
-How one call goes:
+One call goes like this:
 
 1. `place_call` stores the request and returns. The daemon waits for the phone, checks the line, opens a voice session and tells the phone to dial.
-2. When the line is answered, the phone streams the downlink audio to the daemon and plays the agent's voice into the uplink. Audio is 48 kHz mono in 20 ms frames: Opus by default (~32 kbit/s), raw PCM (~768 kbit/s) with `PHONXIETY_AUDIO_CODEC=pcm` or with a phone app that predates Opus.
-3. The voice model talks, presses keys and hangs up through the daemon. The task agent steps in on silence, on any other request from the voice model, and once at the end.
-4. The daemon disconnects, writes the summary and fields, and keeps them by `call_id`. It also archives every call in `~/.local/share/phonxiety/calls/`: `<call_id>.json` with the request, timings, outcomes, fields, full transcript and who answered (`far_end`: `person`, `ivr` or `voicemail`, from the wording of the other side), and for connected calls `<call_id>.wav`, 48 kHz stereo with the other party on the left and the agent on the right, plus `<call_id>.m4a`, a small copy to share: both sides in one channel, long pauses cut. Nothing on the call announces the recording.
+2. When someone answers, the phone streams their audio to the daemon and plays the agent's voice into the call. Audio is 48 kHz mono in 20 ms frames. It is Opus by default, about 32 kbit/s. With `PHONXIETY_AUDIO_CODEC=pcm` it is raw PCM, about 768 kbit/s.
+3. The voice model talks. The text model steps in when the line goes quiet, when the voice model asks for something, and once at the end.
+4. The daemon drops the line, writes the summary and the fields, and saves the call.
 
-All audio handling (Opus, conversion, pacing, recording, the shareable copy) lives in `src/phonxiety/audio/` and runs on PyAV's bundled FFmpeg; `docs/audio-research.md` explains which parts use a library and why.
+The phone and the computer talk over [iroh](https://www.iroh.computer), which connects two machines by public key and punches through NAT. That is why there are no addresses to configure.
 
-Every text a model reads is a Jinja template in `src/phonxiety/prompts/`: the voice agent's instructions and brief, the context lines it receives during a call, and the task agent's prompts.
+All audio handling is in `src/phonxiety/audio/` and runs on PyAV's bundled FFmpeg. [`docs/audio-research.md`](docs/audio-research.md) says which parts use a library and why.
 
-Calls, keys, tokens and the daemon log live under `~/.local/share/phonxiety/`. At the end of every call both sides log how many frames went each way; on a link loss they log the counters of every iroh path.
+Every text a model reads is a Jinja template in `src/phonxiety/prompts/`. If you don't like how the agent talks, that is where to look.
+
+Calls, keys, tokens and the daemon log live under `~/.local/share/phonxiety/`. At the end of every call both sides log how many frames went each way.
 
 <details>
 <summary><strong>Code map</strong></summary>
 
 **Daemon** (`src/phonxiety/`)
 
-- `server.py`, `mcp.py`, `cli.py` — HTTP MCP server, stdio adapter, command line
-- `controller.py` — call lifecycle, line check before dialing, quiet-line supervision, result
-- `voice.py`, `auth.py` — Codex voice session over WebRTC and its sign-in
-- `task_agent.py` — the text model: reviews, keypad digits, summary
-- `device.py` — the phone protocol: commands, events, call-audio stream, link test
-- `net/` — the phone link: iroh and TLS WebSocket transports, framing, TLS identity
-- `audio/` — Opus, conversion, pacing, recording, the shareable copy
-- `store.py`, `models.py`, `settings.py`, `runtime.py`, `power.py` — SQLite, request models, settings, wiring, keeping the Mac awake
+- `server.py`, `mcp.py`, `cli.py`: HTTP MCP server, stdio adapter, command line
+- `controller.py`: call lifecycle, line check before dialing, quiet-line supervision, result
+- `voice.py`, `auth.py`: Codex voice session over WebRTC and its sign-in
+- `task_agent.py`: the text model: reviews, keypad digits, summary
+- `device.py`: the phone protocol: commands, events, call-audio stream, link test
+- `net/`: the phone link: iroh and TLS WebSocket transports, framing, TLS identity
+- `audio/`: Opus, conversion, pacing, recording, the shareable copy
+- `store.py`, `models.py`, `settings.py`, `runtime.py`, `power.py`: SQLite, request models, settings, wiring, keeping the Mac awake
 
-**Phone** (`android/`) — one app in Gradle modules; [`android/README.md`](android/README.md) maps each module, what it owns and the rules it keeps
+**Phone** (`android/`): one app in Gradle modules. [`android/README.md`](android/README.md) maps each module.
 
-- `core/device` — the bridge: the device protocol, call ownership, call audio, Telecom, the link to the computer (`net/`)
-- `core/data` — the daemon's app API client, the call cache, app and module updates
-- `feature/` — the screens: setup, dashboard, live call, calls, lab, settings, updates, doctor, widgets
-- `app` — the activity, navigation and notification actions
-- `magisk/` — the root module
+- `core/device`: the bridge: the device protocol, call ownership, call audio, Telecom, the link to the computer (`net/`)
+- `core/data`: the daemon's app API client, the call cache, app and module updates
+- `feature/`: the screens: setup, dashboard, live call, calls, lab, settings, updates, doctor, widgets
+- `app`: the activity, navigation and notification actions
+- `magisk/`: the root module
 
-**Tasks** (`mise.toml`, `mise-tasks/`) — `setup`, `test`, `daemon`, `pair`, `phone:build`, `phone:install`, `phone:pair`, `daemon:install`
+**Tasks** (`mise.toml`, `mise-tasks/`): run `mise tasks` to list them.
 
 </details>
 
-<details>
-<summary><strong>Checks</strong></summary>
+More reading: [`DESIGN.md`](DESIGN.md) has the design notes (in Russian), and [`docs/updates.md`](docs/updates.md) explains how app updates are published.
+
+### Running tests
 
 ```sh
 mise run test                 # unit tests, no phone, no network
 uv run phonxiety link-test    # the real link under call load
 ```
 
-</details>
+## What it isn't
 
----
-
-## What it is not
-
-- Not a VoIP or SIP service. The call leaves from your SIM, with your number, on your tariff.
+- Not a VoIP or SIP service. The call goes through the SIM in your phone.
 - Not plug-and-play. It needs a rooted phone and a Magisk module.
-- Not an OpenAI product. It uses Codex voice through your own sign-in, and that backend can change.
+- Not an OpenAI product. It uses Codex voice through your own sign-in, and that backend can change under us.
 - Not a dialer for lists. One request is one call to one number.
 
----
+## License
 
-<p align="center">
-  <sub>Unofficial · your SIM, your phone, your computer</sub>
-</p>
+[Apache 2.0](LICENSE). Use it, change it, ship it. If you do, keep the `LICENSE` and [`NOTICE`](NOTICE) files with it and say what you changed.
+
+The phonxiety name and logo aren't part of the license. Don't ship your fork under them.
