@@ -38,7 +38,7 @@ class DeepgramOptions:
     api_key: str
     language: str = "en"
     listen_model: str = "nova-3"
-    think_model: str = "gpt-4o-mini"
+    think_model: str = "gpt-6-luna"
     speak_model: str = "aura-2-thalia-en"
 
 

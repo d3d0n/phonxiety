@@ -262,7 +262,7 @@ Everything is an environment variable. You can leave all of them alone and use C
 | `PHONXIETY_DEEPGRAM_LANGUAGE` | Deepgram language. | `en` |
 | `PHONXIETY_DEEPGRAM_LISTEN_MODEL` | Deepgram speech recognition model. | `nova-3` |
 | `PHONXIETY_DEEPGRAM_SPEAK_MODEL` | Deepgram voice. | `aura-2-thalia-en` |
-| `PHONXIETY_DEEPGRAM_THINK_MODEL` | The text model Deepgram runs for the conversation. | `gpt-4o-mini` |
+| `PHONXIETY_DEEPGRAM_THINK_MODEL` | The text model Deepgram runs for the conversation. | `gpt-6-luna` |
 | `PHONXIETY_GEMINI_MODEL` | Gemini Live model. | `gemini-3.8-live` |
 | `PHONXIETY_GEMINI_VOICE` | Gemini voice. | `Puck` |
 | `PHONXIETY_IROH_RELAYS` | Comma-separated iroh relay URLs to use instead of the public ones. | n0's public relays |

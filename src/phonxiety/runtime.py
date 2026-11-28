@@ -24,7 +24,7 @@ def voice_factory(settings: Settings, auth: Any) -> Callable[[str, str, Any], An
             api_key=secret(settings.state_dir, "DEEPGRAM_API_KEY", "deepgram-api-key"),
             language=env("PHONXIETY_DEEPGRAM_LANGUAGE", "en"),
             listen_model=env("PHONXIETY_DEEPGRAM_LISTEN_MODEL", "nova-3"),
-            think_model=env("PHONXIETY_DEEPGRAM_THINK_MODEL", "gpt-4o-mini"),
+            think_model=env("PHONXIETY_DEEPGRAM_THINK_MODEL", "gpt-6-luna"),
             speak_model=env("PHONXIETY_DEEPGRAM_SPEAK_MODEL", "aura-2-thalia-en"),
         )
         return lambda instructions, brief, callbacks: DeepgramVoiceSession(
